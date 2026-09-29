@@ -20,7 +20,7 @@ every `git` invocation rather than relying on the user or host config:
 * `gc.auto=0`
 
 Use the helper in `tests/integration/fixture.rs` for executable-connected tests
-or `../crp_impl/tests/boundaries/git_fixture.rs` for implementation boundaries.
+or `crp_workspace`'s `private-test-util` repository fixture for implementation boundaries.
 Do not add real-time delays.
 
 The executable-connected integration suite is one test binary, `tests/integration/`, split into a
@@ -36,15 +36,17 @@ Keep real Git/Cargo tests for boundary behavior; see
 Library unit tests must not acquire real Git, Cargo or filesystem state, including
 through fixture helpers or production acquisition methods. Small temporary Git
 repositories and filesystem probes belong in `tests/integration/`, not `src/`.
-Implementation-boundary assertions belong in `crp_impl/tests/boundaries/`; its
-ordinary internal operations may be public within the implementation partition.
+Implementation-boundary assertions belong beside their owning component; its
+ordinary internal operations may be public within the private application family.
 Inject acquired observations into decision tests; do not recreate subprocesses
-behind a fake protocol or widen the supported `cargo-release-plan` facade.
+behind a fake protocol or widen the executable's internal re-export boundary.
 
 ## Modules own subjects, not categories
 
-Put implementation in `crp_impl`, in the module that owns its subject. Re-export
-only supported application API from the shell's `lib.rs`. Do not add a shared module for
+Follow the package ownership map in `docs/implementation.md`. Keep CLI parsing,
+command values, dispatch and external compatibility execution in this application.
+Components must not depend on it, including through dev-dependencies.
+Do not add a shared module for
 "types", "constants", or "utilities"; there is deliberately none to add to.
 
 A subject-owned module keeps an item next to the code that gives it meaning, so
@@ -75,6 +77,20 @@ groups", and `docs/implementation.md`, "Workspace snapshots".
 
 ## Release-process ownership
 
-`docs/release-versioning.md`, `docs/git-workflow.md`, `RELEASING.md`, Standard
-validation, and `just gh-release` own the surrounding release process. Do not
-change them from this package.
+The application owns reusable release behavior; implement it in the owning component and
+document it in the owning design, implementation guide and user book.
+Repository instructions and workflow callers select Folo policy rather than
+reimplementing that behavior. Keep the shared action revision immutable and
+validated. Preserve the registered `release.yml` caller and its publication
+authorization boundary; source-mode checks do not authorize a live release.
+Use the unified application's publication operations and manifest-linked batches.
+Do not introduce repository-local publication policy or alternate command adapters.
+
+Write the user book for the person adopting and operating the toolkit. The skill
+owns version planning and generated release tables; workflows own happy-path
+delivery checks. Explain user decisions, failure signals and safe recovery actions
+rather than turning routine automation steps into manual user instructions.
+
+Keep every application-family library target marked `private-api = true` with library documentation
+disabled. Assess the CLI and artifact contracts defined in `docs/design.md`,
+not internal Rust construction or exhaustive matching, when choosing release levels.

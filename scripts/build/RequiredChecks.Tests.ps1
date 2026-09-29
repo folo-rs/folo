@@ -145,11 +145,13 @@ Describe 'Planned tooling results' {
     BeforeEach {
         $script:plan = @{
             workflows = $false; script_analysis = $false; bicep = $false; script_domains = @()
+            release_binary_smoke = $false
             benchmark_canary = $false; benchmark_canary_trusted = $true
         }
         $script:needs = @{
             prepare = @{ result = 'success'; outputs = @{
                     packages_json = '[]'; script_domains = '[]'; benchmark_canary = 'false'
+                    release_binary_smoke = 'false'
                 } }
             'test-scripts' = @{ result = 'skipped' }
             'validate-workflows' = @{ result = 'skipped' }
@@ -187,11 +189,34 @@ Describe 'Planned tooling results' {
     }
 
     It 'requires integration tests for an affected native helper' {
-        $needs.prepare.outputs.packages_json = '["release-target-check"]'
+        $needs.prepare.outputs.packages_json = '["crp_publication","cargo-release-plan"]'
         { Assert-PlannedResult } | Should -Throw
         $needs.prepare.outputs.script_domains = '["release"]'
         { Assert-PlannedResult } | Should -Throw
         $needs['test-scripts'].result = 'success'
+        $needs.prepare.outputs.release_binary_smoke = 'true'
+        $needs['clippy-dev-docs'] = @{ result = 'success' }
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'requires the platform job when the release binary smoke is selected' {
+        $plan.release_binary_smoke = $true
+        { Assert-PlannedResult } | Should -Throw
+        $needs.prepare.outputs.release_binary_smoke = 'true'
+        { Assert-PlannedResult } | Should -Throw
+        $needs['clippy-dev-docs'] = @{ result = 'skipped' }
+        { Assert-PlannedResult } | Should -Throw
+        $needs['clippy-dev-docs'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'rejects a lost release binary smoke selection for <_>' -ForEach @('cargo-release-plan') {
+        $needs.prepare.outputs.packages_json = ConvertTo-Json -InputObject @($_) -Compress
+        $needs.prepare.outputs.script_domains = '["release"]'
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Throw
+        $needs.prepare.outputs.release_binary_smoke = 'true'
+        $needs['clippy-dev-docs'] = @{ result = 'success' }
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
@@ -232,7 +257,7 @@ Describe 'Planned tooling results' {
     }
 
     It 'rejects absent preparation output <_>' -ForEach @(
-        'plan', 'packages_json', 'script_domains', 'benchmark_canary'
+        'plan', 'packages_json', 'script_domains', 'release_binary_smoke', 'benchmark_canary'
     ) {
         $needs.prepare.outputs.plan = ConvertTo-Json -InputObject $plan -Compress
         $needs.prepare.outputs.Remove($_)

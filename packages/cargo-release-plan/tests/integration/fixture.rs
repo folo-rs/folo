@@ -49,7 +49,7 @@ impl Fixture {
     ///
     /// Copy the objects and index, not hard links or alternates: changing or dropping
     /// one fixture must not affect another. Only ordinary files and directories
-    /// belong in templates; tests create symlinks and special index states afterward.
+    /// belong in templates; individual tests create special index states afterward.
     pub(crate) fn from_template(template: &Self) -> Self {
         let dir = TempDir::new().unwrap();
         copy_directory(template.path(), dir.path());

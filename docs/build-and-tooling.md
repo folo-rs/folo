@@ -42,8 +42,8 @@ asking - including as a smoke test of a new Callgrind benchmark.
 We generally prefer using Just commands over raw Cargo commands if there is a
 suitable Just command defined in one of the `*.just` files.
 
-Do **not** execute `just gh-release` — it performs real crates.io publishes and is
-a CI-only entry point (driven by the release workflow); never run it manually.
+Do **not** invoke mutating `cargo release-plan publish` commands without explicit
+publication authorization. Ordinary development and validation do not grant it.
 
 Do **not** use VS Code tasks, relying instead on `just` and, if necessary, `cargo`
 commands.
@@ -315,6 +315,14 @@ Standard validation selects this check for changed Bicep inputs, compiler config
 or invocation code and runs it inside the existing script-validation job. Main and deep
 validation retain full scope. See
 [workflow implementation](../.github/workflows/implementation.md#bicep-validation).
+
+## Release archives
+
+The release application creates ZIP/checksum pairs in process. `just install-tools`
+does not install an archiver, and publication requires no `zip`, `unzip` or `7za`
+executable. The native smoke tests use PowerShell's .NET ZIP reader to inspect and
+extract the output independently of the Rust writer, including stored Unix modes.
+This test reader is not a publication runtime dependency.
 
 ## Multiplatform codebase
 

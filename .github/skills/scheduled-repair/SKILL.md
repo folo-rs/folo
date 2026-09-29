@@ -153,42 +153,27 @@ unavailable local platform.
 Obtain an independent critique as required by repository conventions and address
 concrete findings. Invoke `increment-versions` to apply the full current version
 plan without a separate approval gate; human PR review is that gate. Refresh the
-plan after relevant source, baseline or decision changes.
+plan after relevant source, release-history, target or decision changes.
 Assess one combined version plan for the shared PR, not a separate version
 increment per issue. Cover every member's required verification; combined commands
 may supply evidence for several members when the tested scope includes each one.
 
 ## Version planning for a stacked layer
 
-Keep `increment-versions` evidence anchored to fresh main, as that skill requires;
-do not treat the unreleased parent as a release anchor. Separately assess this
-layer's released-content and dependency effects relative to the recorded parent
-head. Each package requiring release for this layer that exists in the parent
-must advance above the parent's declared version, sufficiently for this layer's
-own semantic change level as well as the combined main-based assessment. Include
-all group alignment and dependent releases required by the expanded plan, even
-when they move packages otherwise inherited unchanged. Inheritance alone does not
-justify a second semantic increment, but it never exempts a package from required
-mechanical movements. New packages retain the normal first-publication handoff.
+Use `increment-versions` with actual `main` release history and the recorded parent
+as the separate merge target. Follow that skill's command reference to preserve
+both inputs through preparation, compatibility, preview and application.
+The parent's final pending versions and content form its anticipated squash
+release; this layer's additional changes require their own increments.
 
-The normal planner retains sufficient pending increments, so running it alone
-can leave this layer at the parent's version. Compare the resulting versions with
-the parent explicitly. If an additional increment is still required, use a
-separate authored proposal in the documented
-[proposed-plan schema](../../../packages/cargo-release-plan/README.md#apply),
-with explicit version targets satisfying those parent-relative requirements.
-Follow `increment-versions`' preparation, preview, prospective semantic assessment,
-publication checks, application and verification procedure for that proposal.
-Prepare from the current tree against fresh main; preserve the normal plan's
-requirements, expand groups/dependents and respect every SemVer floor. Do not
-edit generated plans or captured evidence, apply a manifest-only proposal, or
-change the release baseline to manufacture the extra step.
-Recheck newly reached packages for overlap before applying the additional plan.
+Assess every newly reached group/dependent effect and check package overlap before
+application. Inherited content alone needs no second semantic decision, but group
+alignment and dependency rewrites can require movement. Retain a sufficient child
+increment on later runs rather than adding a step mechanically.
 
-Verify the expanded result against the same parent again. Repeated follow-up
-retains an already sufficient child increment rather than adding a step per run.
-A changed parent head, plan or release baseline requires fresh assessment, not
-blind arithmetic or reserving distant versions.
+Refresh the plan when the parent, actual release history or decisions change.
+Do not calculate a second parent-relative plan by hand or edit generated evidence.
+New packages retain the skill's first-publication handoff.
 
 ## Publish this repair's PR
 

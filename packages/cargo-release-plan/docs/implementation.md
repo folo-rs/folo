@@ -5,12 +5,34 @@ describes the internal boundaries that keep that behavior consistent.
 
 ## Architecture
 
-The binary and library facade are intentionally thin. `main` parses Cargo's injected
-subcommand argument, then delegates to the library `run()` entry used by integration
-tests. The facade explicitly re-exports its supported API from
-[`crp_impl`](../../crp_impl/docs/implementation.md), which owns the implementation,
-unit tests, implementation-boundary integrations and benchmarks. Both packages
-share an exact dependency and release version.
+The application owns argument parsing, command values, dispatch, external
+compatibility execution and the process entry point. Its library target connects
+the binary and maintainer tests; it is not a supported Rust library API.
+Purpose-specific private packages own the capabilities it coordinates:
+
+* [`crp_workspace`](../../crp_workspace/docs/implementation.md) owns Git/Cargo
+  observations, manifest and dependency graphs, tracked contents and source/path identity.
+* [`crp_versioning`](../../crp_versioning/docs/implementation.md) owns classification,
+  reports, version groups and the complete preparation, planning and application pipeline.
+* [`crp_publication`](../../crp_publication/docs/implementation.md) owns publication
+  policy, immutable intent, registry/OIDC and GitHub delivery, receipts and operator recovery.
+* [`crp_native`](../../crp_native/docs/implementation.md) owns native build execution,
+  source worktrees, process supervision, archives and their cleanup.
+* [`crp_diag`](../../crp_diag/docs/implementation.md) owns diagnostic reporting and
+  deterministic presentation, independently of a process stream.
+
+Dependencies follow responsibility: versioning depends on workspace; publication
+depends on versioning, native and workspace; native depends on workspace.
+Diagnostics is a dependency-light leaf. The application also uses workspace's
+artifact-file mechanics for its compatibility evidence. Components never depend
+on application command values or the executable package, including through
+development dependencies.
+
+Every library target is marked `private-api = true` and disables library
+documentation. Exact normal dependencies declare the application's version group;
+user-facing contracts are the CLI and documented configuration and artifact formats.
+The [implementation package release prerequisites](package-bootstrap.md) describe
+publication ordering and the verification obligations for this family.
 The selected command drives command-specific paths through shared components:
 
 ```text
@@ -29,13 +51,77 @@ Cli -> RunInput -> run()
                     |                              -> expanded plan + captured files
                     |                              -> retained compatibility workspace
                     |
-                    \-> apply -> validate original or fully applied snapshot -> install files
+                    +-> apply -> validate original or fully applied snapshot -> install files
+                    |
+                    +-> check-compatibility -> bound source + external checker -> evidence
+                    |
+                    +-> release-context / publishing identity probe
+                    |
+                    +-> prepare-publish -> verified source + policy -> immutable manifest
+                    |
+                    \-> publish -> registry -> GitHub reconciliation -> platform batches
+                              \-> native builds and delivery -> per-attempt outcomes
+                              \-> report selected outcomes + job results -> operator summary
 ```
 
 Modules own subjects rather than syntactic categories. `metadata` and `manifest`
 build the work-tree model, `git` owns repository facts, `anchor` resolves release
 history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
+
+## Executable identity
+
+Executable identity is handled by CLI parsing before workspace acquisition.
+The application supplies its compiled version to publication producer and HTTP
+adapter wiring, independently of component bootstrap versions. Installation
+checks do not need to inspect a consumer repository to identify the executable.
+
+## Standalone planning
+
+Standalone use follows the existing explicit-history preparation, preview,
+application and check paths. These operations have no publication-configuration
+acquisition dependency. The skill selects whether to acquire configured context
+and publication prerequisites or use the user's local history/target refs.
+No additional tool mode, configuration schema or publication adapter is needed.
+Executable integration coverage runs the complete versioning sequence without a
+configuration, remote, publishing metadata or workflow and verifies the final
+squashed version/content state.
+
+## Publication preparation
+
+The publication subject validates committed policy independently of remote state.
+Its configuration owns supported native targets but no runner assignments.
+Package discovery shares the unresolved Cargo-metadata acquisition boundary with
+classification, projecting the binary names, registry
+eligibility and archive metadata needed by publication. The optional configured
+`check` composes this validation with ordinary version readiness; unconfigured
+assessment performs no publication discovery. Discovery does not implement a
+feature resolver or buildability preflight; the explicit native Cargo build owns
+those checks. See [validation responsibilities](design.md#validation-stays-proportional-to-its-purpose).
+
+Publication preparation composes that policy with the candidate verifier under
+`publication::candidate`. The verifier owns clean-head/index checks, tracked
+input containment, first-parent membership and candidate-relative version
+validation. Its typed request comes from publication preparation, not another
+executable or argument parser. Real candidate-boundary tests and the in-process
+verification sequence belong to `crp_publication`; source facts are acquired by `crp_workspace`.
+
+Candidate verification calls versioning's typed check operation, not application
+dispatch. Workspace observations contain exact dependency edges; versioning derives
+groups and their verdicts from those facts without an upward workspace dependency.
+
+The preparation boundary fetches the configured GitHub branch through a
+per-invocation Git credential helper and captures its resolved commit. It does not
+depend on a local remote nickname or modify global authentication configuration.
+Preparation preserves the recorded lockfile without a full Cargo resolution.
+The actual publication and native build commands use `--locked`. The publication
+manifest then contains repository-relative paths and all exact package requests.
+Canonical serde serialization supplies its SHA-256 content identity; schema,
+paths, configuration and identities are revalidated on read and before writes.
+Atomic no-clobber promotion prevents a different intent from replacing an existing
+handoff. Outcomes are not part of that identity and belong to separate artifacts.
+
+## Planning report validation
 
 Artifact-only planning shares the report producer's serde model. Report loading
 validates the schema and cross-package identities before consumers build dependency
@@ -53,6 +139,184 @@ checks the order, while one membership set rejects repeated members within or ac
 groups. Together these enforce strictly increasing members without a redundant strict
 comparison. Shape tests keep package references reciprocal while independently varying
 group size, canonical naming, ordering and uniqueness.
+
+## External compatibility evidence
+
+Compatibility is a separate explicit operation, not part of offline classification.
+Prepared inputs and resolved previews already carry source identity, so the checker
+consumes those artifacts rather than extending report schema solely to make an
+unbound report executable. Fresh checks capture inputs around their own read-only
+report and verify them again after external comparison. Preview checks use the
+retained prospective manifest and share versioning's typed resolved-state
+verification without producing publication-target JSON.
+
+The checker receives all features and one explicit published baseline version per
+consumer contract. A small identical-source library canary validates its ability
+to run. A short workspace-identity-keyed target directory avoids generated Windows path
+length problems while retaining compatible compiler artifacts across assessment
+passes, without affecting other Cargo commands. Checker findings and
+execution errors remain distinct; a completed comparison supplies a semantic
+floor, not the author's compatibility judgment. Empty target sets do not invoke
+external tooling or query registry versions.
+
+Each baseline comes from one registry-history observation. Source verification
+runs after comparison even when the checker fails, and incomplete evidence is
+persisted before errors propagate. Simultaneous checker and source-verification
+failures retain both diagnostics.
+
+The identical-source canary requires a recognized unchanged summary from the
+same checker protocol used for real comparisons. Updating the configured checker
+pin requires reviewing its exit-status and summary output against the parser;
+unknown output remains an operational failure rather than a compatible result.
+
+For an anticipated parent release, the report identifies packages whose comparison
+anchor is the parent's final commit. Their API comparison uses that source rather
+than an older registry version. The checker owns a detached parent worktree for the
+comparison and preserves source-verification and cleanup failures in its outcome.
+Historical anchors retain the registry comparison path.
+
+Registry preflight reuses exact registry observations and resolved-plan inspection.
+The plan-scoped form fails closed for unavailable or never-published targets;
+workspace discovery remains an explicit advisory. Neither form performs package
+administration.
+
+## Registry publication boundaries
+
+Registry observations distinguish an absent exact version from an unavailable
+query. Cargo owns workspace packaging, verification and dependency-ordered
+uploads; the application selects only missing requests and rechecks availability
+after the attempt. Outcomes preserve partial completion and distinguish a dry-run
+plan from confirmed delivery. Each attempt writes a new outcome file rather than
+overwriting intent or earlier receipts.
+
+The Cargo credential provider acquires a fresh GitHub assertion and crates.io
+token per upload, after Cargo package verification. It validates the requested
+operation, registry, package and version and rechecks source identity before
+releasing a credential. Cargo hashes the same archive handle it uploads; the
+provider does not reopen Cargo's generated archives. Package normalization and
+locked verification belong to Cargo, not a second archive-closure inspector.
+
+Cargo starts short-lived provider processes. Invocation-owned temporary files
+therefore retain identity context and issued token leases for the parent to revoke
+after Cargo exits. They live outside source and publication artifact directories,
+are never transported between jobs, and are removed when the attempt completes.
+This avoids a separate credential broker service or token-renewal scheduler.
+Registry and GitHub credential variables are removed from Cargo's environment;
+the provider receives only its private context location. This is credential
+handling within the trusted publication job, not process isolation from reviewed
+build code running under the same account.
+Registry, native and compatibility compilation share the fixed credential-name
+list while their adapters remove named registry tokens and apply operation-specific grants.
+
+OIDC HTTP errors report the operation and status without echoing response bodies,
+and credential values have no diagnostic representation. Revocation and temporary
+directory failures remain failed outcomes even when uploads succeeded. The
+registry build directory is independently owned, so packaging cannot dirty a
+source checkout merely because that repository has no target-directory ignore.
+
+## Native binary execution
+
+Archive encoding runs inside `crp_native` using a maintained ZIP library.
+It streams the staged executable, preserves the archive entry metadata, finalizes
+the ZIP and computes its SHA-256 sidecar without archiver subprocesses.
+Native's item deadline and cancellation remain in force during compression and
+hashing. The component guide owns the codec and buffering details.
+
+`crp_publication` owns platform-batch coordination behind `publish binaries`.
+That command consumes frozen manifest-linked batches; runner assignments
+and workflow timeouts belong to the shared action. It supplies validated, non-wire
+build requests to `crp_native`. Batch/delivery decisions stay in publication;
+`crp_native` owns source and artifact execution validation. Pure decisions are
+unit tested in the component; real filesystem and process behavior belongs in its
+boundary tests, and executable-connected contracts belong in the application's
+native integration suite.
+
+The controller repository supplies Git objects and the shared target directory,
+while each release tag selects a disposable immutable source worktree.
+Missing objects are fetched by exact commit from the configured GitHub repository;
+the caller need not have a local remote named `origin`. Fetch authentication is
+scoped to that repository-read command, not inherited by compilation.
+The controller workspace's repository-relative location is retained for nested
+Cargo projects. Build commands execute there and rustup selects a tracked
+toolchain within that source repository; the engine needs no repository-local
+PowerShell toolchain adapter. Source preparation verifies the compiler's actual
+native host before building.
+
+Owned process groups implement cancellation and deadlines. Build environments
+exclude upload credentials and controller toolchain overrides. Independent
+packages retain separate Cargo invocations, while compatible target artifacts
+are shared. The batch retains source cleanup diagnostics alongside publication
+outcomes, including both Git-worktree and directory cleanup failures.
+The GitHub asset adapter owns its executable and token separately. Integration
+tests supply a native protocol fixture without altering process-global
+environment or introducing a second release-command implementation.
+
+## GitHub reconciliation and reporting
+
+GitHub reconciliation checks the complete registry prerequisite before writing
+tags. The source-candidate classification is shared across missing-tag requests
+and compares the fetched first-parent descendant against the original publication
+source's version anchors. Per-package eligibility requires unchanged released
+content and the exact requested version. Bounded creation retries refresh that
+candidate; a version superseded before tagging produces the explicit operator
+handoff rather than another version or broader credentials.
+
+Existing tags retain their commit identity and bypass candidate selection.
+Historical package identity is checked without imposing today's configuration or
+group policy on an old tag. Reconciliation carries that verified commit into
+release requests and batches without replacing it with another tag observation.
+Binary releases name the established tag explicitly,
+and creation requests retain its observed commit instead of an implicit branch
+target. A competing ref created at a different commit is preserved but does not
+authorize this attempt's release or binary work.
+Paginated asset inventories determine which archive/checksum pairs remain incomplete.
+Tag failures retain per-package diagnostics and do not discard valid batches for
+other releases. Batch identity hashes the complete native request set, including
+tag source commits, independently of a workflow attempt.
+
+The REST client owns structured tag/release/issue operations; publication's asset
+adapter retains GitHub CLI upload through native process supervision and the
+archive-file interface. Both use the invocation's repository token. Git supplies
+source objects independently of either forge API boundary.
+
+Outcome artifacts add optional GitHub run/attempt attribution; publication intent
+does not. A receipt is the reporter's internal projection of a phase outcome, not
+another operator-managed artifact. The final reporter selects the latest applicable phase receipt for the
+current publication/run, then matches binary receipts to the batches named by that
+GitHub outcome. A binary receipt cannot precede the reconciliation attempt that
+observed the missing assets, even if the batch identity happens to match.
+Platform job failures and cancellation remain authoritative over old receipts.
+Missing manifests or receipts produce an incomplete report and operator issue,
+never reconstructed intent from the current branch. Invalid or ambiguous receipt
+evidence does not discard the independently acquired platform job failures.
+
+`release-context` gives both local planning and shared workflows the same
+configured baseline and concurrency identity. It is read-only apart from fetching
+Git history and does not require clean source. The separate publishing identity probe
+exchanges and immediately revokes OIDC credentials without publishing, allowing
+caller/workflow registration to be verified before a live release.
+
+## Reusable action boundary
+
+[`folo-rs/cargo-release-plan-action`](https://github.com/folo-rs/cargo-release-plan-action)
+owns its root composite, reusable workflows and installation bootstrap.
+The boundary follows the repository's benchmark-action distribution pattern:
+Rust implements release operations, PowerShell prepares tools, and YAML supplies
+jobs, permissions and artifact transport. Action-local implementation details
+belong to that repository; the public book owns the consumer contract.
+
+The action manifest selects its tools and supported native runners. Released
+executable cache identities include the tool version, operating system and
+architecture. Path installation builds the selected checkout instead of
+restoring a released executable. The installation compiler is selected separately
+from the consumer's or a tagged source's toolchain.
+
+Folo's source-installed controller comes from the invocation checkout, while
+immutable worktrees provide package sources. This permits the application to
+publish itself without requiring its proposed version to be installed first.
+The action's release pipeline separately verifies exact published packages and
+promised archives without accepting source fallback or cached executables as
+archive evidence. Source-mode acceptance does not satisfy that release gate.
 
 ## Subprocess boundaries
 
@@ -88,22 +352,45 @@ manifest on a sensitive filesystem. Git lookups continue to use recorded spellin
 
 ### Test boundaries
 
+`cargo-release-plan/tests/integration/native_binaries/` owns the unified executable's
+source, build, archive and cancellation contracts. Publication's native boundary
+tests own GitHub asset delivery and recovery; `crp_native/tests/boundaries/` owns
+filesystem and supervised-process adapters. `just release-binary-smoke` and ordinary
+test/coverage selection reach these owners.
+
+Candidate-boundary tests in `crp_publication/tests/boundaries/candidate/` cover actual
+Git history, tracked-input semantics and real Cargo verification.
+Workspace snapshot acquisition has its own boundary tests. Native scheduling and
+last-chance watchdog policy are maintained by the fixtures and nextest configuration.
+
+Registry-publication boundary tests exercise real Cargo and its credential-provider
+protocol against an isolated sparse registry. They cover verification ordering,
+archive and lockfile identity checks, per-upload credentials and partial
+publication without production registry access. Protocol and fixture mechanics
+are documented beside the helpers that depend on them.
+
+The registry runtime boundary supplies credential sessions, Cargo process results
+and retry delays, bound to native operations by the CLI. Its integration tests
+exercise source and registry recovery through owned local services, not production
+publication. This is a testing boundary, not a selectable publication backend.
+
 The [workspace in-process boundary](../../../docs/testing.md#unit-tests-stay-inside-the-process)
 applies to every fixture and acquisition call. Avoiding Cargo metadata or keeping
 a real Git history small does not make an acquisition test a unit test. Tests of
 real Git, Cargo and filesystem adapters belong in Cargo integration targets;
 decision tests supply acquired values without calling those adapters.
 
-`crp_impl/tests/boundaries/` preserves direct assertions on acquisition, files,
-repository state and private error conditions. Its Git fixture cannot be imported
-by library unit tests. The unit-only Git helpers construct inert handles and
+Component `tests/boundaries/` targets preserve direct assertions on acquisition,
+files, repository state and foreign error causes. Exact private conditions are
+asserted by the owning unit tests, not exposed as a test taxonomy.
+The real Git fixture is for integration tests only. Pure Git helpers construct inert handles and
 tree entries without observing the host.
 
 The executable-connected `cargo-release-plan/tests/integration/` suite stays in
 the binary's package: Cargo supplies `CARGO_BIN_EXE_cargo-release-plan` only to that
 package's integration targets. This is the executable-ownership exception to the
 usual implementation-crate test layout, not a second implementation or nested
-build harness. The shell also checks its explicit re-export surface.
+build harness. The shell also checks its internal command wiring.
 
 Captured-input decisions use acquired metadata and a read-only per-directory case
 probe. Unit tests supply regular-file, missing-file and error observations, mixed
@@ -112,6 +399,12 @@ persisted fingerprint framing, Unix execute-bit interpretation, alias collapse
 without new input admission, and retained verification ordering independently of
 the host filesystem. Windows path-prefix conversion and Unix mode interpretation
 are compiled for all test hosts because those transformations are pure.
+
+Released dependency discovery resolves Cargo's dependency paths against the same
+canonical member index as exact-version grouping. Equivalent member and dependency
+spellings, including Windows verbatim paths, retain the same graph in ordinary,
+prepared and fresh compatibility reports. Filesystem resolution stays in metadata
+acquisition; membership decisions use acquired observations in unit tests.
 
 Offline resolver invocation and changed-artifact selection have in-process cores
 that preserve arguments, working directories, bytes and errors. Preparation and
@@ -135,8 +428,8 @@ tests inject acquisition at its existing boundary so they exercise production
 ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
 
-Proposal and expansion inject artifact operations into their command cores.
-Their unit tests retain input-collision checks, acquisition and publication order,
+Proposal generation injects artifact operations into its command core.
+Its unit tests retain input-collision checks, acquisition and publication order,
 plan generation, rendered output, and error propagation without touching files.
 Proposal publication also checks stale-output invalidation and failed-write cleanup.
 Real artifact path interpretation and file access stay in integration coverage.
@@ -182,21 +475,17 @@ operations is excluded from mutation discovery. Integration coverage verifies
 that inspection uses read-only application validation and rejects stale live or
 retained workspaces without resolving Cargo again.
 
-Manifest application injects captured-plan application, workspace acquisition,
-manifest reads and writes into its shared orchestration. Unit tests exercise
-dispatch, full edit computation before writes, unique root/member acquisition,
-package and dependency rewrites, dry-run output, and unchanged-write suppression.
-Prospective resolution uses the same edit computation. Only the adapters that
-connect these operations to real files and repository state are excluded from
-mutation discovery; integration tests retain the actual application boundary.
+Preview's manifest-edit computation has in-process tests for complete root/member
+edits, dependency rewrites and read/parse failures. Application accepts only the
+captured preview; admission tests reject incomplete input before filesystem
+acquisition, and boundary tests verify exact writes and dry-run preservation.
 
 Integration tests establish the real Git, Cargo, filesystem, and executable
 connections: history and index semantics, manifest discovery, offline resolution,
 captured-workspace identity, and a complete CLI release-plan round trip. A test
 classifies each unchanged workspace state only once where the resulting report
 can establish all its assertions. Output-format combinations belong to renderer
-tests, not additional repository classifications. Structural expansion tests stop
-at the expanded artifact; only preview tests acquire resolved evidence.
+tests, not additional repository classifications.
 
 Fixtures remain independently mutable. Immutable Git initialization and empty
 global configuration can be shared within a test process, while commits still
@@ -222,14 +511,11 @@ Released-file discovery acquisition belongs in integration tests using small Git
 without constructing or resolving Cargo workspaces. They exercise selection,
 presence, modes and cleaned blob bytes at the acquisition boundary. Optional
 reads and hash-input validation inject metadata and byte-read observations so
-disappearance between operations, permission failures and symlink rejection remain
-deterministic without races, delays or host symlink privileges. Real-filesystem
-link tests also exercise the metadata adapter on platforms that permit them.
+disappearance between operations, permission failures and unsupported input
+rejection remain deterministic without races or delays.
 
-Filesystem path tests create symlinked temporary roots explicitly rather than
-depending on the host's temporary-directory layout. Expected destinations use a
-canonical existing ancestor followed by the missing suffix, preserving assertions
-about symlink resolution and parent traversal without assuming a root spelling.
+Filesystem identity tests cover native path spelling and missing-path handling
+without assuming case sensitivity from the operating system.
 Artifact path resolution accepts injected canonicalization and directory queries
 for deterministic operational-error tests. A transient failure must propagate even
 if a subsequent query would succeed; tests do not depend on filesystem races or
@@ -519,14 +805,6 @@ captured-state checks, so metadata cannot direct a caller to an unchecked worksp
 Proposal and preview output guards resolve existing path ancestors before
 normalizing missing components. Creating an output directory therefore cannot
 turn an accepted destination into an alias of the input evidence.
-The PowerShell preview wrapper leaves initial directory creation and marker
-invalidation to Rust. It may invalidate a successfully produced preview if later
-compatibility evidence fails, but a rejected native invocation grants no ownership
-over the requested output path.
-The expansion wrapper requests Rust's input-preserving mode and supplies the final
-destination directly. Rust checks aliases and promotes an exclusively created
-temporary file only after a complete write. General expansion retains its separate
-in-place behavior when that mode is not selected.
 
 `plan` owns both planning stages and the resolution shared between them. It first
 resolves package and group entries into one target version per tracked version
@@ -543,13 +821,11 @@ was written, and a surviving increment level would be re-resolved against the
 manifests of the day. Both are rejected. The stage is matched on rather than
 tested as a condition, so a new code path has to state which rule it wants.
 
-Structural expansion and prospective preview share version-target resolution.
-Both read the same Git-tracked version-target set. Preview also computes manifest
-edits and resolves the resulting lockfile before writing the complete artifact.
+Preview resolves the Git-tracked package set, computes manifest edits and resolves
+the resulting lockfile before writing the complete artifact.
 
-`apply` accepts plan targets and validates groups against the Git-tracked
-version-target set. It parses and rewrites every affected
-manifest in memory before writing any of them. All Cargo-visible members remain
+Preview validates groups and computes all affected manifest edits before applying
+them to the prospective workspace. Final application installs only the captured result. All Cargo-visible members remain
 rewrite candidates, including non-publishable, untracked, and ignored members,
 because they may carry exact pins to a package being incremented. A dependency
 requirement is changed only when:
@@ -584,7 +860,8 @@ must start from the live state that preparation captured.
 Preview uses a disposable prospective workspace so version and requirement
 rewrites never become original planning inputs. Each iteration derives its
 candidate from the prepared input rather than incrementing the preceding
-candidate again. Classification uses the same pinned release baseline throughout.
+candidate again. Classification uses the same release-history and merge-target
+commits throughout.
 New binary closure effects and their dependent/group consequences expand the
 candidate until it is stable. Existing sufficient versions are retained.
 
@@ -660,8 +937,10 @@ scale with workspace size:
 Criterion tracks wall-clock behavior without subprocess or filesystem noise.
 Callgrind is not used because both measured paths allocate variable-sized output
 or parse state, and its fixed allocator model would omit a material part of their
-cost. The benchmark-only surface is available in `crp_impl` unit-test builds and through
-its `private-test-util` feature, but does not participate in normal builds. Small unit tests
+cost. Benchmark-only drivers belong to `crp_versioning` and `crp_workspace`, enabled
+in unit-test builds or through their `private-test-util` features, not normal builds.
+Criterion workload identifiers stay application-scoped across package ownership.
+Small unit tests
 exercise the adapters' byte and line statistics, root selection and repeated-walk
 totals without running a benchmark harness. Both adapters and their underlying
 algorithms participate in library-only mutation testing; benchmark smoke runs

@@ -35,14 +35,25 @@ fn main() -> ExitCode {
 
     match run(&cli.into_input()) {
         Ok(outcome) => match outcome {
+            RunOutcome::Publication { passed, message } => {
+                if passed {
+                    println!("{message}");
+                    ExitCode::SUCCESS
+                } else {
+                    eprintln!("{message}");
+                    ExitCode::FAILURE
+                }
+            }
             RunOutcome::ArtifactQuery { message }
+            | RunOutcome::IdentityCheck { message }
             | RunOutcome::Propose { message }
             | RunOutcome::Prepare { message }
             | RunOutcome::Preview { message }
             | RunOutcome::VerifyPreview { message }
             | RunOutcome::Report { message }
-            | RunOutcome::Expand { message }
             | RunOutcome::Apply { message } => {
+                // The credential provider has already written its protocol stream and returns
+                // an empty summary; no extra newline or generic success text may follow it.
                 if !message.is_empty() {
                     println!("{message}");
                 }

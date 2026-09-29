@@ -1,0 +1,147 @@
+# Add GitHub checks
+
+The standard reusable check workflow is
+`folo-rs/cargo-release-plan-action/.github/workflows/check.yml`.
+Select a tested published release from the
+[action repository](https://github.com/folo-rs/cargo-release-plan-action) and
+replace `ACTION_REVISION` below with its verified immutable commit. Use that same
+commit for every action/workflow example in this book; `ACTION_REVISION` is a
+placeholder, not an existing release or a GitHub Actions variable.
+
+Add a caller such as `.github/workflows/release-checks.yml`:
+
+```yaml
+name: Release checks
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  release-check:
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@ACTION_REVISION
+    with:
+      working-directory: .
+      config: .cargo/release_plan.toml
+      install-method: binstall
+      source-path: .
+```
+
+These inputs show their defaults. `working-directory` selects the consumer
+workspace; `config` is relative to it. `source-path` selects tool source only
+with `install-method: path`, not the consumer workspace for released
+installation. The reusable workflow and its internal composite use the same
+immutable action revision.
+
+For a custom graph, the root composite provides individual operations. Its
+installation and configuration inputs are described under
+[custom jobs](../advanced/custom-jobs.md). A version-readiness operation is
+deliberately narrower than the complete PR gate.
+
+## Required check coverage
+
+A complete release gate combines:
+
+- Workspace-wide version readiness, including packages not directly edited.
+- Publication-input validation using committed configuration.
+- External compatibility evidence for the selected public library contracts.
+- Consumer-owned external-type exposure checks and ordinary build/test checks.
+
+Do not scope offline version readiness to a changed-package list. It must find
+unversioned released content anywhere in the workspace, including inherited
+inputs and effects carried from an earlier contribution.
+
+The core offline invocation uses the pair returned by `release-context`:
+
+```powershell
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+$AssessmentArguments = @("--release-history", $Context.release_history)
+if ($Context.merge_target) {
+    $AssessmentArguments += @("--merge-target", $Context.merge_target)
+}
+cargo release-plan check @AssessmentArguments `
+    --config (Join-Path ".cargo" "release_plan.toml") --format github
+```
+
+This command alone is not a replacement for external compatibility checking.
+`--format github` adds annotations; it does not change the release rules.
+
+The equivalent compatibility gate uses fresh bound evidence and rejects
+insufficient increments:
+
+```powershell
+cargo release-plan check-compatibility @AssessmentArguments `
+    --output (Join-Path ".release-plan-work" "ci-compatibility") --deny-findings
+```
+
+Use a new output directory. `check-compatibility` acquires a read-only report
+from the selected source and checks its identity around the comparison; it does
+not accept a detached report as permission to check another checkout.
+
+The compatibility stage must distinguish a valid empty selection from a broken
+checker or unavailable comparison. Run the checker on the assessed source with
+the supported feature selection, and retain diagnostics. All-features checking
+does not remove the author's feature-subset and behavioral review obligations.
+
+## Fetch and select the correct history
+
+Use a full-history checkout. Resolve actual release history separately from any
+anticipated target:
+
+| Event | History and target |
+| --- | --- |
+| PR | Fetch actual configured release history; pass `pull_request.base.sha` as the proposed merge target. |
+| Merge queue | Keep actual release history separate; the supplied integration base is a proposed target, not independently established history. |
+| Pinned release-source check | Explicitly select that known release-branch commit as history; no anticipated target. |
+| Other push, scheduled or manual check | Let context acquire configured release history rather than assuming the tested HEAD is already released. |
+
+Fetch the required base-repository history for fork PRs too. A similarly named
+branch in the fork is not a substitute.
+
+For a custom graph, `release-context --config <path>` fetches the configured
+release branch and returns `release_history` plus nullable `merge_target`.
+Supply `--merge-target <target-commit>` for a PR or integration target. Context
+normalizes a target already in release history to null. Pass the returned pair
+unchanged to check and compatibility. Use `--release-history <commit>` only when
+the caller already knows the actual release-history boundary.
+
+A repository can keep a deliberately narrow queue gate using the lower
+version-readiness operation and the candidate's history/target pair. That does not remove
+the full compatibility and publication-input checks from ordinary PR validation.
+
+## Protect the branch
+
+Configure squash merging and branch protection for the chosen release branch.
+Each PR's target-aware checks establish its own version decisions; merge queue
+grouping does not replace those checks. Require a stable status that represents all merge-blocking work.
+
+A final aggregation job is useful for dynamic matrices: it succeeds only when
+required prerequisites succeeded or were deliberately not applicable. Failure,
+cancellation, missing results and an unexpectedly skipped unconditional gate do
+not count as success.
+
+Require the status on both PR and queue events. A queue check whose workflow
+never runs cannot establish readiness. Choose your own stable check name; no
+particular Folo job name is required.
+
+## Keep checks read-only
+
+PR checking needs source/history access, not publication credentials, write
+permission or OIDC authority. Follow the repository's normal approval policy for
+fork workflow runs. An unapproved or policy-disallowed check is not an executed
+pass.
+
+Do not use privileged `pull_request_target` execution of contributor source as
+an adoption shortcut. Mutation privileges belong only in the separately gated
+[publication workflow](publication.md).
+
+Before making the check required, exercise a passing change, an intentionally
+missing increment, a group/dependency violation and the queue event. Confirm the
+external-type gate covers your supported public API surfaces and that
+API compatibility checker execution failures remain failures in the final status.

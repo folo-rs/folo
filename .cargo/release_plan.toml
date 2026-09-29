@@ -1,0 +1,17 @@
+# Folo selects the repository, release branch and native targets.
+# cargo-release-plan supplies the shared release model and operations.
+schema-version = 1
+repository = "folo-rs/folo"
+# Match the branch whose merges initiate publication in .github/workflows/release.yml.
+# Ref: docs/release-versioning.md, The invariant.
+release-branch = "main"
+# Select the supported native targets with provisioned runners.
+# The shared action owns runner assignments.
+# Ref: docs/release-automation.md, Target selection.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]

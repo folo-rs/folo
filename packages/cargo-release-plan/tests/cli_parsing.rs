@@ -1,0 +1,356 @@
+//! Tests for the `cargo-release-plan` clap argument parser.
+//!
+//! These exercise the library-housed [`Cli`] directly (no subprocess), covering
+//! subcommand requiredness, option defaults, and help/error early-exit.
+
+use std::iter;
+use std::path::PathBuf;
+
+use cargo_release_plan::{CheckFormat, Cli, EarlyExit, RunInput};
+
+::testing::set_allocator!();
+
+fn parse(args: &[&str]) -> Result<Cli, EarlyExit> {
+    Cli::from_args_os(iter::once("cargo-release-plan").chain(args.iter().copied()))
+}
+
+#[test]
+fn retired_operations_and_argument_forms_are_rejected() {
+    for arguments in [
+        &["expand", "--plan", "plan.json", "--out", "expanded.json"][..],
+        &["check", "--base", "main"][..],
+        &["prepare", "--out-dir", "prepared"][..],
+    ] {
+        parse(arguments).unwrap_err().status.unwrap_err();
+    }
+}
+
+#[test]
+fn inspection_requires_a_plan_and_preserves_workspace_selection() {
+    parse(&["inspect-plan"]).unwrap_err().status.unwrap_err();
+    let input = parse(&[
+        "inspect-plan",
+        "--plan",
+        "plan.json",
+        "--require-resolved",
+        "--manifest-path",
+        "workspace.toml",
+        "--verbose",
+    ])
+    .unwrap()
+    .into_input();
+    match input {
+        RunInput::InspectPlan {
+            plan,
+            require_resolved,
+            manifest_path,
+            verbose,
+        } => {
+            assert_eq!(plan, PathBuf::from("plan.json"));
+            assert_eq!(manifest_path, PathBuf::from("workspace.toml"));
+            assert!(require_resolved);
+            assert!(verbose);
+        }
+        other => panic!("unexpected input {other:?}"),
+    }
+}
+
+#[test]
+fn artifact_commands_require_inputs_and_do_not_accept_workspace_options() {
+    for command in ["analysis-order", "semver-targets"] {
+        parse(&[command]).unwrap_err().status.unwrap_err();
+        for option in ["--release-history", "--manifest-path"] {
+            parse(&[command, "--report", "report.json", option, "other"])
+                .unwrap_err()
+                .status
+                .unwrap_err();
+        }
+        let input = parse(&[command, "--report", "report.json", "--verbose"])
+            .unwrap()
+            .into_input();
+        match input {
+            RunInput::AnalysisOrder { report, verbose }
+            | RunInput::SemverTargets { report, verbose } => {
+                assert_eq!(report, PathBuf::from("report.json"));
+                assert!(verbose);
+            }
+            other => panic!("unexpected input {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn proposal_requires_report_decisions_and_output() {
+    for args in [
+        vec![
+            "propose",
+            "--report",
+            "evidence",
+            "--decisions",
+            "decisions.json",
+        ],
+        vec!["propose", "--report", "evidence", "--out", "plan.json"],
+        vec![
+            "propose",
+            "--decisions",
+            "decisions.json",
+            "--out",
+            "plan.json",
+        ],
+    ] {
+        parse(&args).unwrap_err().status.unwrap_err();
+    }
+    let input = parse(&[
+        "propose",
+        "--report",
+        "evidence",
+        "--decisions",
+        "decisions.json",
+        "--out",
+        "plan.json",
+        "--verbose",
+    ])
+    .unwrap()
+    .into_input();
+    match input {
+        RunInput::Propose {
+            report,
+            decisions,
+            out,
+            verbose,
+        } => {
+            assert_eq!(report, PathBuf::from("evidence"));
+            assert_eq!(decisions, PathBuf::from("decisions.json"));
+            assert_eq!(out, PathBuf::from("plan.json"));
+            assert!(verbose);
+        }
+        other => panic!("unexpected input {other:?}"),
+    }
+}
+
+#[test]
+fn missing_subcommand_prints_help() {
+    let early = parse(&[]).unwrap_err();
+    early.status.unwrap();
+    assert!(early.output.contains("Usage"));
+}
+
+#[test]
+fn help_request_is_a_success_early_exit() {
+    let early = parse(&["--help"]).unwrap_err();
+    early.status.unwrap();
+    assert!(early.output.contains("Usage"));
+}
+
+#[test]
+fn unknown_flag_is_a_failure_early_exit() {
+    let early = parse(&["--definitely-not-a-flag"]).unwrap_err();
+    early.status.unwrap_err();
+}
+
+#[test]
+fn report_requires_out_dir() {
+    let early = parse(&["report"]).unwrap_err();
+    early.status.unwrap_err();
+}
+
+#[test]
+fn report_defers_base_and_defaults_the_manifest_path() {
+    let input = parse(&["report", "--out-dir", "out"]).unwrap().into_input();
+    match input {
+        RunInput::Report {
+            merge_target: None,
+            out_dir,
+            release_history,
+            manifest_path,
+            verbose,
+        } => {
+            assert_eq!(out_dir, PathBuf::from("out"));
+            assert_eq!(release_history, None);
+            assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
+            assert!(!verbose);
+        }
+        other => panic!("expected report, got {other:?}"),
+    }
+}
+
+#[test]
+fn check_parses_github_format_and_verify_packaging() {
+    let input = parse(&[
+        "check",
+        "--release-history",
+        "HEAD",
+        "--format",
+        "github",
+        "--config",
+        ".cargo/release_plan.toml",
+        "--verify-packaging",
+        "--verbose",
+    ])
+    .unwrap()
+    .into_input();
+    match input {
+        RunInput::Check {
+            merge_target: None,
+            release_history,
+            format,
+            verify_packaging,
+            config,
+            verbose,
+            ..
+        } => {
+            assert_eq!(release_history.as_deref(), Some("HEAD"));
+            assert_eq!(format, CheckFormat::Github);
+            assert!(verify_packaging);
+            assert_eq!(config, Some(PathBuf::from(".cargo/release_plan.toml")));
+            assert!(verbose);
+        }
+        other => panic!("expected check, got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_requires_plan() {
+    let early = parse(&["apply"]).unwrap_err();
+    early.status.unwrap_err();
+}
+
+#[test]
+fn apply_parses_dry_run() {
+    let input = parse(&["apply", "--plan", "plan.json", "--dry-run"])
+        .unwrap()
+        .into_input();
+    match input {
+        RunInput::Apply {
+            plan,
+            dry_run,
+            manifest_path,
+            verbose,
+        } => {
+            assert_eq!(plan, PathBuf::from("plan.json"));
+            assert!(dry_run);
+            assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
+            assert!(!verbose);
+        }
+
+        other => panic!("expected apply, got {other:?}"),
+    }
+}
+
+#[test]
+fn preparation_requires_output_and_preserves_baseline_selection() {
+    parse(&["prepare"]).unwrap_err().status.unwrap_err();
+    let input = parse(&[
+        "prepare",
+        "--output",
+        "evidence",
+        "--release-history",
+        "main",
+        "--verbose",
+    ])
+    .unwrap()
+    .into_input();
+    match input {
+        RunInput::Prepare {
+            merge_target: None,
+            output,
+            release_history,
+            manifest_path,
+            verbose,
+        } => {
+            assert_eq!(output, PathBuf::from("evidence"));
+            assert_eq!(release_history.as_deref(), Some("main"));
+            assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
+            assert!(verbose);
+        }
+        other => panic!("expected prepare, got {other:?}"),
+    }
+}
+
+#[test]
+fn preview_requires_the_prepared_state_proposal_and_output() {
+    for args in [
+        vec![
+            "preview",
+            "--plan",
+            "proposal.json",
+            "--output",
+            "candidate",
+        ],
+        vec![
+            "preview",
+            "--prepared",
+            "prepared.json",
+            "--output",
+            "candidate",
+        ],
+        vec![
+            "preview",
+            "--prepared",
+            "prepared.json",
+            "--plan",
+            "proposal.json",
+        ],
+    ] {
+        parse(&args).unwrap_err().status.unwrap_err();
+    }
+
+    let input = parse(&[
+        "preview",
+        "--prepared",
+        "prepared.json",
+        "--plan",
+        "proposal.json",
+        "--output",
+        "candidate",
+        "--manifest-path",
+        "workspace/Cargo.toml",
+    ])
+    .unwrap()
+    .into_input();
+    match input {
+        RunInput::Preview {
+            plan,
+            prepared,
+            output,
+            manifest_path,
+            verbose,
+        } => {
+            assert_eq!(plan, PathBuf::from("proposal.json"));
+            assert_eq!(prepared, PathBuf::from("prepared.json"));
+            assert_eq!(output, PathBuf::from("candidate"));
+            assert_eq!(manifest_path, PathBuf::from("workspace/Cargo.toml"));
+            assert!(!verbose);
+        }
+        other => panic!("expected preview, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_preview_requires_an_explicit_candidate_manifest() {
+    parse(&["verify-preview", "--plan", "plan.json"])
+        .unwrap_err()
+        .status
+        .unwrap_err();
+    let input = parse(&[
+        "verify-preview",
+        "--plan",
+        "plan.json",
+        "--manifest-path",
+        "candidate/Cargo.toml",
+    ])
+    .unwrap()
+    .into_input();
+    match input {
+        RunInput::VerifyPreview {
+            plan,
+            manifest_path,
+            verbose,
+        } => {
+            assert_eq!(plan, PathBuf::from("plan.json"));
+            assert_eq!(manifest_path, PathBuf::from("candidate/Cargo.toml"));
+            assert!(!verbose);
+        }
+        other => panic!("expected verify-preview, got {other:?}"),
+    }
+}

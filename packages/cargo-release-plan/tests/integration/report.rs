@@ -162,10 +162,12 @@ fn github_format_emits_workflow_annotations() {
     let base = fixture.sha("HEAD");
 
     let outcome = run(&RunInput::Check {
-        base: Some(base),
+        merge_target: None,
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Github,
         verify_packaging: false,
+        config: None,
         verbose: false,
     })
     .unwrap();
@@ -198,7 +200,7 @@ fn report_records_group_verdicts() {
     let report = report_json(&fixture, &base);
 
     let report: Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(report.get("schema_version"), Some(&json!(4)));
+    assert_eq!(report.get("schema_version"), Some(&json!(6)));
     assert_eq!(
         report.pointer("/groups/alpha"),
         Some(&json!({
@@ -344,8 +346,9 @@ fn a_failed_rerun_does_not_leave_the_previous_report_marker() {
     fixture.write("out/diffs", "blocks directory creation");
 
     let result = run(&RunInput::Report {
+        merge_target: None,
         out_dir: out_dir.clone(),
-        base: Some(base),
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         verbose: false,
     });
@@ -368,8 +371,9 @@ fn staging_failure_does_not_publish_a_completion_marker() {
     fs::create_dir_all(out_dir.join("report.json.tmp")).unwrap();
 
     let result = run(&RunInput::Report {
+        merge_target: None,
         out_dir: out_dir.clone(),
-        base: Some(base),
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         verbose: false,
     });

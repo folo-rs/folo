@@ -160,7 +160,7 @@ missing scope or unexpected skips cannot pass the required fan-in.
 
 Release validation (`validate-versions`) remains unconditional: release-plan generation compares every
 publishable package's released content to that package's version anchor, not just to the PR
-base. Live binstall metadata validation accompanies it because Cargo target discovery can
+base. Publication metadata validation accompanies it because Cargo target discovery can
 change release obligations without a manifest edit. API compatibility uses the report's
 consumer-contract selection and a working compatibility tool; a failed version-readiness
 verdict does not suppress comparisons when the report supplied targets.
@@ -300,11 +300,12 @@ tooling maps it to a Cargo increment level or an exact target version. This appl
 workspace as a whole rather than only packages selected by delta analysis: an earlier change can
 remain pending even when the current pull request does not touch that package.
 
-Release state is read from the branch that publishes, not from the branch a pull request
-targets, so a stacked pull request is assessed against the same baseline as any other and a
-parent branch's pending increment is never mistaken for a release. A merge-queue entry is the
-exception: it is assessed against the commit the queue rebased it onto, so its scope matches
-what will actually land.
+Actual release history comes from the publishing branch. A stacked PR also supplies
+its unmerged parent's final snapshot as an anticipated squash release. Extra child
+content needs its own increment; the parent's intermediate version-edit commits do
+not define releases. Existing release-history anchors retain catch-up work from
+unversioned changes. The same distinction applies in a merge queue: grouping PRs
+does not replace their independently assessed version decisions.
 
 Version increments follow Cargo's compatibility rule rather than plain semantic versioning:
 the leftmost non-zero component acts as the major component, so a compatible change to a 0.y
@@ -780,52 +781,64 @@ lives in [`docs/release-automation.md`](../../docs/release-automation.md).
 
 ### Release-equivalent snapshots
 
-A package's version anchor identifies the main commit that introduced its version. It
-remains the comparison baseline for version validation, not a mandatory release-tag target.
-A release tag identifies an immutable main snapshot containing the package's released
-content at that version. A later main commit is equally valid when the package version
-and its release-relevant content remain unchanged.
+Folo uses the application's
+[release-source identity model](https://folo-rs.github.io/folo/cargo-release-plan/concepts/publication.html).
+Verified equivalent sources do not require workflow-write authority or serialize
+merges. They do not promise byte-identical rebuilt binaries.
 
-This follows from the merge gate: released-content changes require a version increment.
-Equivalence uses the same package-content model as that gate, including inherited manifest
-values and an installable binary's locked dependency closure. It does not require identical
-unrelated workspace files, workflow files or build environments, and does not promise
-byte-identical rebuilt binaries. A crate already on crates.io is never republished;
-its recorded source commit can differ from the equivalent snapshot chosen for its
-GitHub release and prebuilt binaries.
+### Publishing identity probe
 
-GitHub can require workflow-write authority when creating a tag at a historical commit
-whose workflow files differ from main. Actions' ambient token cannot receive that
-permission. Requiring every tag to point at its version anchor would therefore make
-unattended recovery depend on a permission the workflow does not possess. Selecting a
-verified current-main snapshot preserves package identity without adding credentials or
-blocking unrelated merges.
+A manual `verify-publishing-identity` dispatch on `release.yml` verifies the
+registered caller through the reusable release action. The controller is built
+without granting installation code OIDC credential-request authority. The probe
+exchanges and immediately revokes a temporary crates.io credential without
+package upload, tag/release writes or binary publication. The
+[implementation guide](implementation.md#release-publication) owns job isolation
+and executable transport.
+
+The probe and normal publication paths are mutually exclusive. Every mutating
+publication job explicitly excludes probe dispatches, including on `main`.
+The crates.io Trusted Publisher registration names `.github/workflows/release.yml`
+as the caller.
+Success validates that identity path, not every package-specific publisher grant.
 
 ### Publication and recovery
 
-Registry publication and GitHub publication have separate owners. Release-plz publishes
-crates through Trusted Publishing but creates neither tags nor GitHub releases. A shared
-reconciler handles both ordinary GitHub publication and recovery after a partial or manual
-registry publish. Libraries receive tags; publishable binary packages also receive GitHub
-releases and prebuilt assets. Discovery remains package-driven rather than a hardcoded list.
+Folo's registered `release.yml` selects the shared release workflow at an immutable
+tested revision. It builds the controller from the invocation checkout and supplies
+`.cargo/release_plan.toml`; the shared graph owns registry, GitHub, native batches
+and operator reporting. No repository-local publisher or reconciliation policy exists.
 
-The reconciler freezes the package/version requests from the successful registry
-publication's source snapshot. Before creating missing tags, it fetches main, pins its
-commit, and verifies a clean disposable checkout with the release validator. Every requested
-package must still be publishable at exactly the requested version. A version string alone
-does not authorize content that fails the release invariant.
+Release-triggered runs use non-cancelling queued concurrency to retain pending
+commits as well as the running publication. Hosted queue capacity and external
+cancellation remain operational limits; queuing does not serialize merges.
 
-Writes use the verified commit ID, never an unchecked moving `main` reference. If tag
-creation fails and main has advanced, a bounded retry selects and verifies a fresh snapshot.
-An unchanged main, failed verification or exhausted retry budget surfaces an error.
-Advancement to a different package version is not permission to relabel that version:
-automatic recovery of a superseded version is not guaranteed.
+The shared graph freezes publication intent and keeps native build source separate
+from controller source. Failed reconciliation does not suppress independent valid
+native batches, but the overall run fails and posts an operator issue.
 
-Existing tags are authoritative and are never moved or overwritten. A missing binary release
-is attached to its existing tag, without asking GitHub to choose another target.
-Binary build jobs receive the tag's resolved commit ID separately from the release name,
-so source checkout remains pinned while assets are uploaded to the correct versioned release.
-Partial successes survive a retry; reconciliation creates only what remains missing.
+If concurrent merges leave a missing tag for a superseded version, an operator
+creates that exact tag at the original recorded source and retries the original run.
+Existing tags are never moved. Recovery does not broaden workflow credentials or
+block merges. Expired artifacts require an explicit original-source dispatch rather
+than silently selecting current `main`.
+
+### Platform-grouped binary builds
+
+Each selected native target triple has one batch job containing its incomplete binary releases. It shares
+environment preparation and compatible Cargo artifacts while preserving separate
+package builds and separate release assets. Each binary retains its own version,
+tag and immutable source commit; batching never combines package feature selection
+or changes which source a release represents.
+
+Recovery refreshes each binary release's archive/checksum completeness before doing
+build work. Structural and frozen tag-identity validation admit the batch before
+execution begins. After that preflight succeeds, independent execution failures
+do not suppress remaining work, and any failed
+binary release fails the job. Standard validation runs the selected binary smoke
+path without release queries or writes, retaining source, build and archive
+verification. See [release binary batches](implementation.md#release-binary-batches)
+for the command boundary.
 
 ## Cache warmup
 

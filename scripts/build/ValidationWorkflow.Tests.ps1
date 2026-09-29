@@ -9,10 +9,14 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
+    # Only this conjunction proves event HEAD is already on Folo's release branch.
+    $script:mainHistoryBinding = '${{ github.event_name != ''pull_request'' && github.ref == ''refs/heads/main'' && github.sha || '''' }}'
+
     $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $script:standard = Get-Content -LiteralPath (Join-Path $root '.github/workflows/standard-validation.yml') -Raw
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
+    $script:release = Get-Content -LiteralPath (Join-Path $root '.github/workflows/release.yml') -Raw
     $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
     $script:benchmarkWorkflows = @(
         foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
@@ -63,6 +67,24 @@ BeforeAll {
         return [regex]::Match($FanIn, '(?m)^\s+MUST_SUCCEED_JOBS: ([^\r\n]+)').Groups[1].Value -split '\s+'
     }
 
+    function Get-ReleaseSmokeStep([string] $Workflow) {
+        $job = Get-WorkflowJob $Workflow 'clippy-dev-docs'
+        return @([regex]::Matches($job, '(?ms)^      - .*?(?=^      - |\z)') |
+            ForEach-Object { $_.Value } |
+            Where-Object { $_ -match '(?m)^\s+just release-binary-smoke\s*$' })
+    }
+
+    function Assert-ReleaseSmokeRelationship([string] $Workflow) {
+        $steps = @(Get-ReleaseSmokeStep $Workflow)
+        $steps.Count | Should -Be 1
+        $condition = [regex]::Match($steps[0], '(?m)^\s+if:\s*(?<condition>[^\r\n]+)').Groups['condition'].Value
+        $condition | Should -Match '!\s*cancelled\(\)'
+        $condition | Should -Match 'steps\.setup\.outcome\s*==\s*''success'''
+        $condition | Should -Match 'needs\.prepare\.outputs\.release_binary_smoke\s*==\s*''true'''
+        @(Get-WorkflowJobDependency (Get-WorkflowJob $Workflow 'clippy-dev-docs')) | Should -Contain 'prepare'
+        @(Get-WorkflowJobDependency (Get-WorkflowJob $Workflow 'required-checks')) | Should -Contain 'clippy-dev-docs'
+    }
+
     function Assert-WorkflowIdentityHandoff([string] $Workflow) {
         foreach ($name in @(Get-WorkflowJobName $Workflow)) {
             $job = Get-WorkflowJob $Workflow $name
@@ -92,15 +114,89 @@ Describe 'Workflow dependency extraction' {
         $block | Should -Be $inline
     }
 
+    Describe 'Release smoke execution relationship' {
+        It 'connects the selected smoke command to its hosting job and required fan-in' {
+            Assert-ReleaseSmokeRelationship $standard
+        }
+
+        It 'rejects a removed or disabled smoke step' {
+            $step = @(Get-ReleaseSmokeStep $standard)[0]
+            { Assert-ReleaseSmokeRelationship ($standard.Replace($step, '')) } | Should -Throw
+            $disabled = [regex]::Replace($step, '(?m)^(\s+)if:[^\r\n]+', '$1if: false')
+            { Assert-ReleaseSmokeRelationship ($standard.Replace($step, $disabled)) } | Should -Throw
+        }
+    }
+
     It 'accepts a scalar dependency or no dependency' {
         @(Get-WorkflowJobDependency "    needs: plan`n") | Should -Be @('plan')
         @(Get-WorkflowJobDependency "    runs-on: ubuntu-latest`n") | Should -BeNullOrEmpty
     }
 }
 
+Describe 'Release assessment history and target handoff' {
+    BeforeAll {
+        function Assert-KnownMainHistory([string] $Workflow) {
+            $job = Get-WorkflowJob $Workflow 'validate-versions'
+            $history = @([regex]::Matches($job,
+                '(?m)^      release-history:\s*(?<value>[^\r\n]+)'))
+            $history.Count | Should -Be 1
+            $history[0].Groups['value'].Value | Should -BeExactly $script:mainHistoryBinding
+            $job | Should -Not -Match '(?m)^      (base|merge-target):'
+        }
+
+        function Assert-QueueTargetHandoff([string] $Workflow) {
+            $job = Get-WorkflowJob $Workflow 'validate-versions'
+            $steps = @([regex]::Matches($job, '(?ms)^      - .*?(?=^      - |\z)') |
+                ForEach-Object { $_.Value })
+            $install = @($steps | Where-Object { $_ -match 'uses: folo-rs/cargo-release-plan-action@' })
+            $check = @($steps | Where-Object { $_ -match 'Invoke-ReleaseValidation' })
+            $install.Count | Should -Be 1
+            $check.Count | Should -Be 1
+            $id = [regex]::Match($install[0], '(?m)^\s+id:\s*(?<id>[^\s]+)').Groups['id'].Value
+            $id | Should -Not -BeNullOrEmpty
+            $install[0] | Should -Match '(?m)^\s+command: version\r?$'
+            $check[0] | Should -Match ([regex]::Escape("CRP_EXE: `${{ steps.$id.outputs.executable }}"))
+            $check[0] | Should -Match 'QUEUE_TARGET: \$\{\{ github\.event\.merge_group\.base_sha \}\}'
+            $check[0] | Should -Match 'Invoke-ReleaseValidation -MergeTarget \$env:QUEUE_TARGET -VersionReadinessOnly -Tool'
+            $check[0] | Should -Match '& \$env:CRP_EXE @Argument'
+            $job | Should -Not -Match 'RELEASE_PLAN_HISTORY:|RELEASE_PLAN_BASE:|--release-history|cargo run|verify-semver-checks| semver-checks|validate-binstall'
+            $job | Should -Match '(?m)^\s+fetch-depth:\s*0\s*$'
+        }
+    }
+
+    It 'separates guarded Standard history from the queue target' {
+        Assert-KnownMainHistory $standard
+        Assert-QueueTargetHandoff $queue
+    }
+
+    It 'rejects a lost queue target or a target relabeled as history' {
+        foreach ($name in @('RELEASE_PLAN_HISTORY', 'RELEASE_PLAN_BASE', 'UNRELATED_INPUT')) {
+            $changed = $queue.Replace('QUEUE_TARGET:', "$name`:")
+            { Assert-QueueTargetHandoff $changed } | Should -Throw
+        }
+    }
+
+    It 'rejects event HEAD as history without both non-PR and main-ref guards' {
+        foreach ($binding in @(
+            '${{ github.sha }}',
+            '${{ github.event_name != ''pull_request'' && github.sha || '''' }}',
+            '${{ github.ref == ''refs/heads/main'' && github.sha || '''' }}'
+        )) {
+            $changed = $standard.Replace($script:mainHistoryBinding, $binding)
+            { Assert-KnownMainHistory $changed } | Should -Throw
+        }
+    }
+
+    It 'rejects lost installed-tool linkage or accidentally widened queue validation' {
+        { Assert-QueueTargetHandoff ($queue.Replace('steps.tool.outputs.executable', 'steps.unrelated.outputs.executable')) } |
+            Should -Throw
+        { Assert-QueueTargetHandoff ($queue.Replace('-VersionReadinessOnly', '')) } | Should -Throw
+    }
+}
+
 Describe 'Validation job references' {
     It 'resolves every declared prerequisite within its workflow' {
-        foreach ($workflow in (@($standard, $deep, $queue) + $benchmarkWorkflows)) {
+        foreach ($workflow in (@($standard, $deep, $queue, $release) + $benchmarkWorkflows)) {
             $jobNames = @(Get-WorkflowJobName $workflow)
             foreach ($name in $jobNames) {
                 $job = Get-WorkflowJob $workflow $name
@@ -110,6 +206,67 @@ Describe 'Validation job references' {
                 }
             }
         }
+    }
+}
+
+Describe 'Shared release integration' {
+    It 'pins every shared release entry point to the same immutable action revision' {
+        $references = @([regex]::Matches(($standard, $queue, $release -join "`n"),
+                'uses: folo-rs/cargo-release-plan-action(?:/\.github/workflows/[^@\r\n]+)?@(?<revision>[^\s]+)') |
+            ForEach-Object { $_.Groups['revision'].Value })
+        $references.Count | Should -BeGreaterThan 0
+        foreach ($revision in $references) { $revision | Should -Match '^[0-9a-f]{40}$' }
+        @($references | Sort-Object -Unique).Count | Should -Be 1
+    }
+
+    It 'keeps the complete shared check unconditional and read-only within the existing fan-in' {
+        $check = Get-WorkflowJob $standard 'validate-versions'
+        $check | Should -Match '(?m)^    uses: folo-rs/cargo-release-plan-action/\.github/workflows/check\.yml@'
+        $check | Should -Not -Match '(?m)^    (if|needs):'
+        $check | Should -Not -Match '(?m)^\s+(id-token|contents|issues): write'
+        @(Get-WorkflowJobDependency (Get-WorkflowJob $standard 'required-checks')) |
+            Should -Contain 'validate-versions'
+        @(Get-MustSucceedJob (Get-WorkflowJob $standard 'required-checks')) |
+            Should -Contain 'validate-versions'
+    }
+
+    It 'keeps the queue separate from the complete shared check graph' {
+        $check = Get-WorkflowJob $queue 'validate-versions'
+        $check | Should -Match '-VersionReadinessOnly'
+        $check | Should -Not -Match '(?m)^\s+(config|deny-findings):'
+        $check | Should -Not -Match '/\.github/workflows/check\.yml@'
+    }
+
+    It 'keeps controller installation and explicit recovery-source routing distinct' {
+        $publisher = Get-WorkflowJob $release 'publish'
+        $publisher | Should -Match 'uses: folo-rs/cargo-release-plan-action/\.github/workflows/release\.yml@'
+        $publisher | Should -Match '(?m)^      install-method: path\r?$'
+        $publisher | Should -Match '(?m)^      source-path: \.\r?$'
+        $publisher | Should -Match 'source: \$\{\{ inputs\.source \|\| '''' \}\}'
+        $release | Should -Match '(?m)^      source:\r?$'
+        $publisher | Should -Not -Match '(?m)^    (steps|runs-on):'
+    }
+
+    It 'makes the exchange/revoke probe and publisher mutually exclusive on the registered caller' {
+        $probe = Get-WorkflowJob $release 'verify-publishing-identity'
+        $publisher = Get-WorkflowJob $release 'publish'
+        $probe | Should -Match '/\.github/workflows/identity-probe\.yml@'
+        $probe | Should -Match '&& inputs\.verify-publishing-identity &&'
+        $publisher | Should -Match '&& !inputs\.verify-publishing-identity'
+        foreach ($job in @($probe, $publisher)) {
+            $job | Should -Match 'github\.repository == ''folo-rs/folo'''
+            $job | Should -Match 'github\.ref == ''refs/heads/main'''
+        }
+        $probe | Should -Not -Match '(?m)^\s+(contents|issues): write'
+    }
+
+    It 'retains the migration lock without cancelling or replacing queued publisher runs' {
+        $lock = [regex]::Match($release, '(?ms)^concurrency:\r?\n(?<body>.*?)(?=^\S|\z)').Groups['body'].Value
+        $lock | Should -Match 'group: release-\$\{\{ github\.ref \}\}'
+        $lock | Should -Match '(?m)^  cancel-in-progress: false\r?$'
+        $lock | Should -Match '(?m)^  queue: max\r?$'
+        # release-context uses its workspace-scoped prefix for the nested graph's lock.
+        $lock | Should -Not -Match 'group: cargo-release-plan-'
     }
 }
 

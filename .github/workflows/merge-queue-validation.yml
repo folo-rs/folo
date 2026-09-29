@@ -50,7 +50,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just clippy dev
 
-  # Reassess version readiness for the combined candidate against its immutable release base.
+  # Reassess the queue candidate with its target separate from actual configured release history.
   # SemVer analysis and binstall checks remain in Standard validation.
   # Ref: .github/workflows/implementation.md#merge-queue-validation.
   validate-versions:
@@ -60,18 +60,31 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup-environment
+      # Install once; the root version operation needs no workspace or assessment context.
+      # The following thin adapter invokes context plus the narrow readiness command.
+      # Ref: .github/workflows/implementation.md#merge-queue-validation.
+      - name: Install release tool
+        id: tool
+        uses: folo-rs/cargo-release-plan-action@de4c1f29bdfadbf9814b717b47d53e40a5c62ae6
         with:
-          save-build-cache: "true"
+          command: version
+          install-method: path
+          source-path: .
       - name: Check package versions
         shell: pwsh
         env:
-          RELEASE_PLAN_BASE: ${{ github.event.merge_group.base_sha }}
+          CRP_EXE: ${{ steps.tool.outputs.executable }}
+          QUEUE_TARGET: ${{ github.event.merge_group.base_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          just validate-versions
+          Import-Module ./scripts/release/ReleasePlan.psm1 -Force
+          Invoke-ReleaseValidation -MergeTarget $env:QUEUE_TARGET -VersionReadinessOnly -Tool {
+              param([string[]] $Argument)
+              & $env:CRP_EXE @Argument
+          }
 
   required-checks:
     # The ruleset uses the same check name on PR and queue SHAs; neither queue job may skip.

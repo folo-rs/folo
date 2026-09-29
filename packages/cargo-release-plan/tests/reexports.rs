@@ -1,4 +1,4 @@
-//! The supported library surface remains reachable through the application facade.
+//! Internal executable and maintainer-test wiring remains reachable through the shell.
 
 use cargo_release_plan::{CheckFormat, Cli, EarlyExit, RunInput, RunOutcome, run};
 use ohno::AppError;
@@ -6,18 +6,19 @@ use ohno::AppError;
 ::testing::set_allocator!();
 
 #[test]
-fn supported_items_are_reexported() {
+fn executable_wiring_is_reexported() {
     let cli: Cli = Cli::from_args_os(["cargo-release-plan", "check"]).unwrap();
     let input: RunInput = cli.into_input();
     assert!(matches!(
         input,
         RunInput::Check {
+            merge_target: None,
             format: CheckFormat::Text,
             ..
         }
     ));
     let exit: EarlyExit = Cli::from_args_os(["cargo-release-plan", "--help"]).unwrap_err();
-    assert!(exit.status.is_ok());
+    exit.status.unwrap();
     let outcome = RunOutcome::Propose {
         message: String::new(),
     };

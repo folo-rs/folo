@@ -51,7 +51,7 @@ pub(crate) fn pairing_needed(
     mut note: impl FnMut(&str),
 ) -> Result<bool, AppError> {
     // These are the formats consumed from cargo-release-plan and the action repository.
-    const REPORT_SCHEMA: u32 = 4;
+    const REPORT_SCHEMA: u32 = 6;
     const MANIFEST_SCHEMA: u32 = 1;
 
     let report: ReleaseReport = serde_json::from_str(report)
@@ -141,7 +141,7 @@ mod tests {
 
     fn report(packages: &[(&str, &str)]) -> String {
         json!({
-            "schema_version": 4,
+            "schema_version": 6,
             "packages": packages.iter().map(|(name, status)| {
                 json!({"name": name, "status": status})
             }).collect::<Vec<_>>()
@@ -196,7 +196,7 @@ mod tests {
     fn malformed_reports_and_unfinished_plans_fail_before_lookup() {
         for invalid in [
             "{}".to_owned(),
-            r#"{"schema_version":3,"packages":[]}"#.to_owned(),
+            r#"{"schema_version":5,"packages":[]}"#.to_owned(),
             report(&[("tool", "needs-increment")]),
             report(&[("tool", "unknown")]),
             report(&[("", "pending-release")]),

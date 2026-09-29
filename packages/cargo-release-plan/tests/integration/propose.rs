@@ -15,7 +15,7 @@ fn missing_output_parents_cannot_make_an_input_writable_as_a_proposal() {
     let report_path = directory.path().join("report.json");
     let decisions_path = directory.path().join("decisions.json");
     fs::write(&report_path, report().to_string()).unwrap();
-    fs::write(&decisions_path, r#"{"schema_version":1,"changes":[]}"#).unwrap();
+    fs::write(&decisions_path, r#"{"schema_version":2,"changes":[]}"#).unwrap();
     for input in [&report_path, &decisions_path] {
         let before = fs::read(input).unwrap();
         let output = directory
@@ -38,7 +38,7 @@ fn unusable_output_path_is_rejected_without_damaging_inputs() {
     // An interior NUL rejects the path before publication without permission assumptions.
     let output = directory.path().join("invalid\0.json");
     fs::write(&report_path, report().to_string()).unwrap();
-    fs::write(&decisions_path, r#"{"schema_version":1,"changes":[]}"#).unwrap();
+    fs::write(&decisions_path, r#"{"schema_version":2,"changes":[]}"#).unwrap();
     let valid_output = directory.path().join("proposal.json");
     propose(&report_path, &decisions_path, &valid_output).unwrap();
     assert!(valid_output.is_file());
@@ -60,14 +60,14 @@ fn failed_reruns_remove_stale_proposals_and_preserve_inputs() {
     fs::write(&report_path, report().to_string()).unwrap();
     fs::write(
         &decisions_path,
-        r#"{"schema_version":1,"changes":[{"name":"library","level":"patch"}]}"#,
+        r#"{"schema_version":2,"changes":[{"name":"library","impact":"patch"}]}"#,
     )
     .unwrap();
     propose(directory.path(), &decisions_path, &output).unwrap();
     let written: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
     assert_eq!(
         written.get("increments").unwrap(),
-        &json!([{"name": "library", "level": "patch"}])
+        &json!([{"name": "library", "bump": "patch"}])
     );
     fs::write(&decisions_path, "null").unwrap();
     propose(&report_path, &decisions_path, &output).unwrap_err();
@@ -89,7 +89,7 @@ fn malformed_versions_anywhere_in_the_report_invalidate_stale_output() {
     let report_path = directory.path().join("report.json");
     let decisions_path = directory.path().join("decisions.json");
     let output = directory.path().join("plan.json");
-    fs::write(&decisions_path, r#"{"schema_version":1,"changes":[]}"#).unwrap();
+    fs::write(&decisions_path, r#"{"schema_version":2,"changes":[]}"#).unwrap();
     let mut report = report();
     *report.get_mut("non_publishable_packages").unwrap() = json!([
         {"name": "helper", "declared_version": "1.0.0", "group": "helper"},
@@ -127,8 +127,9 @@ fn propose(report: &Path, decisions: &Path, output: &Path) -> Result<RunOutcome,
 
 fn report() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 6,
         "head": "captured",
+        "release_history": "released",
         "packages": [{
             "name": "library",
             "declared_version": "1.0.0",

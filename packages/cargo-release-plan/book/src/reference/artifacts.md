@@ -1,0 +1,395 @@
+# Artifact reference
+
+Local planning and post-merge publication serve different purposes and have
+separate schema lifecycles. Use tool-produced evidence where specified; do not
+fabricate captured inputs, identities or publication outcomes.
+
+## Local decisions and plans
+
+A decisions document is caller-authored literal JSON:
+
+```json
+{
+  "schema_version": 2,
+  "changes": [
+    { "name": "widget", "impact": "nonbreaking" },
+    { "name": "widget_impl", "impact": "patch" }
+  ]
+}
+```
+
+`changes[].impact` is semantic: `breaking`, `nonbreaking` or `patch`.
+Non-publishable packages have no semantic impacts.
+
+The proposed-plan format uses report/plan schema revision `6`. This is a literal
+example of that format:
+
+```json
+{
+  "schema_version": 6,
+  "increments": [
+    { "name": "widget", "bump": "minor" },
+    { "name": "widget-cli", "version": "2.0.1" }
+  ]
+}
+```
+
+`increments[].bump` is numeric: `major`, `minor` or `patch`. Supply exactly one
+of `bump` and `version` per entry. Names select tracked workspace members;
+group members expand together. Explicit targets cannot lower declared versions,
+and group targets use plain `major.minor.patch` versions.
+
+Preview produces an expanded plan with explicit package versions and the
+`resolved` source/files needed for application, including
+resolved file contents, original inputs and `evidence_manifest_path`.
+
+Treat `prepared.json` and the `resolved` object as opaque. Preserve them intact;
+regenerate unsupported or stale evidence with `prepare` and `preview`.
+
+## Reports
+
+The revision-6 report's top level contains:
+
+| Field | Content |
+| --- | --- |
+| `schema_version` | Report/plan format revision. |
+| `head` | Source commit associated with the assessment. |
+| `release_history` | Selected actual release-history commit. |
+| `merge_target` | Optional final parent commit supplying anticipated releases. |
+| `packages` | Publishable package assessments. |
+| `non_publishable_packages` | Tracked alignment targets without release assessments. |
+| `groups` | Complete group membership across both package arrays. |
+
+Each publishable entry includes `name`, `declared_version`, `status`, `changed`,
+`stat`, `dependencies`, `dependents` and `consumer_contract`. Optional evidence
+includes its group, anchor, patch path and advisory untracked files. An anchor can
+identify a release-history version change or the final snapshot of an anticipated
+parent version; the report's history/target fields identify that context.
+
+Changed entries distinguish:
+
+| `source` | Evidence |
+| --- | --- |
+| `package` | Packaged file path and change kind. |
+| `inherited` | Changed inherited workspace field. |
+| `lockfile` | Changed binary installation dependency identity. |
+
+Dependencies record `name`, `req`, `exact_pin` and `public`. Consumer-contract
+flags select public library comparisons; they do not claim that binaries or
+private implementation changes lack behavioral consequences.
+
+Non-publishable packages carry `name`, `declared_version` and an optional group,
+not a status or semantic impact. Group records include complete sorted
+members and their highest declared version.
+
+Patch paths are relative to the report directory. Patches are zero-context
+unified file diffs, not the complete report. An inherited-only or lockfile-only
+change can have no patch.
+
+A report's HEAD alone does not prove that an arbitrary dirty checkout matches
+the evidence. `check-compatibility` regenerates a bound read-only report from
+prepared inputs, a resolved preview or a fresh source assessment. It does not
+accept a detached report.
+
+## Release context
+
+`release-context` prints JSON with these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Release-context format revision, currently `2`. |
+| `repository` | Configured GitHub `owner/repository`. |
+| `release_branch` | Configured release branch. |
+| `release_history` | Commit delimiting actual release-branch history. |
+| `merge_target` | Anticipated unmerged parent commit, or null when no additional target is needed. |
+| `head` | Assessed source HEAD. |
+| `workspace_manifest` | Repository-relative workspace manifest location. |
+| `config_path` | Repository-relative configuration location. |
+| `concurrency_group` | Stable workspace-scoped release concurrency identity. |
+
+This is acquired context, not publication intent. Save it for the local planning
+run and reuse its history/target pair. Refresh both before application; do not
+replace either beneath prepared evidence.
+
+## Compatibility evidence
+
+Each `check-compatibility` invocation uses a new output directory and writes
+`compatibility.json`, `semver-checks.log` and a regenerated read-only report.
+The evidence retains checker identity and exact comparison versions. Its linked
+report identifies any anticipated-parent anchor supplying the comparison source.
+
+Compatibility evidence uses schema `2`:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Compatibility-evidence format revision. |
+| `checker` | Identified checker version, or an explanation when no identity was established. |
+| `report` | Location of the source-bound report generated for this comparison. |
+| `completed` | Whether the required comparisons and source verification completed. |
+| `findings` | Whether completed comparisons found an insufficient increment. |
+| `packages` | Comparison records containing the fields below. |
+
+Each comparison record contains `name`, `compared`, nullable `baseline_version`,
+and nullable `required_impact`. A compared package uses a published version or its
+anticipated parent's version and final source. An unavailable comparison has
+`compared: false` and no comparison version or required impact.
+An operational failure can leave only earlier completed records; inspect the
+overall completion flag and retained diagnostics rather than treating absent
+records as passes.
+
+Require `completed: true` before using the result. A package's `compared: false`
+means no comparison was available, not proof of compatibility.
+`required_impact` is a semantic `breaking` or `nonbreaking` floor; `null`
+establishes no minimum. The author still judges behavioral, CLI, format and
+feature-subset effects.
+
+Do not confuse a completed comparison with a passing merge gate:
+`--deny-findings` additionally rejects insufficient increments. Captured source
+is verified around comparison; operational errors never become semantic passes.
+
+## Artifact-only command output
+
+`analysis-order` emits a dependency-first array:
+
+```json
+[
+  { "order": 1, "packages": ["widget_impl"], "cyclic": false },
+  { "order": 2, "packages": ["widget"], "cyclic": false },
+  { "order": 3, "packages": ["widget-cli"], "cyclic": false }
+]
+```
+
+This example assumes those are the publishable packages. Every publishable
+member appears once, including unchanged ones; non-publishable packages do not.
+Cycle batches represent actual dependencies, not group alignment.
+
+`semver-targets` emits sorted package names, or `[]` when no public contract is
+selected. `inspect-plan` emits:
+
+```json
+{
+  "publication_targets": ["widget", "widget-cli", "widget_impl"],
+  "evidence_manifest_path": null
+}
+```
+
+This example represents structural inspection without retained preview evidence.
+For a resolved artifact, the manifest path identifies the verified prospective
+workspace. Request `--require-resolved` before relying on that workspace for the
+complete local release flow.
+
+## Publication manifest
+
+`prepare-publish` creates this envelope:
+
+```text
+{
+  id,
+  publication: {
+    schema_version: 1,
+    tool_version,
+    source,
+    workspace_manifest,
+    config_path,
+    configuration,
+    packages: [
+      { name, version, manifest, binary: null | { name, targets } }
+    ]
+  }
+}
+```
+
+This is a **field-shape sketch, not JSON input**. `source` is the full publication
+commit. Workspace, package and configuration paths are repository-relative.
+`configuration` captures the effective committed configuration. A binary's
+`name` is the executable name, not necessarily its package name.
+
+The package array includes every publishable exact version at that source,
+including unchanged packages, and excludes non-publishable packages.
+The artifact records producer identity and schema independently of local-plan
+schemas.
+
+`id` links subsequent work to the captured payload. It is an integrity and
+linkage check, not a signature or independent authorization. A fetched branch
+tip is not part of the captured intent digest. Do not change the payload,
+recompute its identity by hand or add mutable publication flags.
+
+## Registry outcome
+
+Registry outcomes use schema `1` and record:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Outcome format revision. |
+| `publication_id` | Original publication manifest identity. |
+| `phase` | `registry`. |
+| `dry_run` | Whether the attempt only observed intended work. |
+| `complete` | Whether this live registry attempt established completion. |
+| `packages` | Entries with exact `name`, `version` and `state`. |
+| `errors`, `notes` | Failure diagnostics and explanatory observations. |
+| `github` | Optional `{run_id, run_attempt}` linkage captured in GitHub Actions. |
+
+The exact state spellings are:
+
+| State | Interpretation |
+| --- | --- |
+| `already_present` | The exact version was observed without needing this attempt to publish it. |
+| `published` | Publication completed and the exact version was observed. |
+| `would_publish` | Dry-run work for a missing version. |
+| `missing` | The requested version remains absent. |
+| `unknown` | Availability could not be established. |
+
+A dry run never sets `complete` to true. Use the outcome and command diagnostics
+together; unknown queries and partial failure are not reduced to successful
+skips. Each attempt writes a new outcome path.
+
+## GitHub outcome
+
+GitHub reconciliation outcomes use schema `1`:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Outcome format revision. |
+| `publication_id` | Original publication manifest identity. |
+| `phase` | `github`. |
+| `dry_run` | Whether the attempt only observed intended work. |
+| `complete` | Whether live GitHub reconciliation completed; binary delivery can still remain. |
+| `packages` | Package/version/tag identities with the state and source evidence described below. |
+| `batches` | Routing entries containing `target`, `path` and `batch_id` for separate platform-batch files. |
+| `planned_targets` | Native targets selected for potential binary work, not batch payloads or delivery evidence. |
+| `errors` | Reconciliation diagnostics. |
+| `github` | Optional `{run_id, run_attempt}` linkage captured in GitHub Actions. |
+
+Each package record contains `name`, `version`, `tag` and `state`, with these
+state spellings:
+
+| State | Interpretation |
+| --- | --- |
+| `pending` | This record does not establish completed reconciliation. |
+| `complete` | The required tag and, for a binary package, GitHub release were reconciled. |
+| `would_create_tag` | A dry run identified a missing tag. |
+| `would_create_release` | A dry run identified a missing GitHub release. |
+| `failed` | Reconciliation for the package failed. |
+
+The nullable `source` field retains an observed commit identity. A failure can
+retain an unverified observation; this field alone does not authorize a build.
+The nullable `recovery_source` is the original publication source retained for
+missing-tag recovery, while `observed_version` is the candidate version when
+available. Failures need not have missing-tag recovery evidence.
+
+A dry run never sets the outcome's `complete` field to true. A live complete
+GitHub outcome does not imply that its binary archives are uploaded.
+Each batch `path` is relative to the separately emitted batch directory; retain
+those files and the parent publication manifest alongside the outcome.
+
+## Platform batch
+
+`publish github` produces a separate schema `1` platform-batch file for each
+selected native target. Its shape is:
+
+```text
+{
+  schema_version: 1, publication_id, repository, target, batch_id,
+  binaries: [{name, bin, version, tag, source_sha}]
+}
+```
+
+This is a field-shape sketch, not caller-authored JSON. `name` identifies the Cargo
+package and `bin` its executable. `source_sha` is the frozen peeled package-tag
+commit. `publication_id` identifies the parent manifest; `batch_id` identifies the
+batch's exact work, including those source commits. `repository` and `target`
+retain their configured identities.
+
+## Binary outcome
+
+`publish binaries` produces a schema `1` outcome:
+
+```text
+{
+  schema_version: 1, publication_id, phase: "binaries",
+  target, no_upload, complete, batch_id,
+  github?: {run_id, run_attempt},
+  items: [
+    {
+      binary: {name, bin, version, tag, source_sha},
+      status, stage, diagnostic, cleanup_error
+    }
+  ]
+}
+```
+
+`github` is omitted outside GitHub Actions. Item `diagnostic` and `cleanup_error`
+values are nullable strings. The supported status/stage combinations are:
+
+| Status | Stage | Execution mode |
+| --- | --- | --- |
+| `published` | `upload` | Upload |
+| `skipped-complete` | `refresh` | Upload |
+| `staged-only` | `package` | No upload |
+| `failed` | `refresh` or `upload` | Upload |
+| `failed` | `source`, `build`, `package` or `cancelled` | Either |
+| `unattempted` | `cancelled` | Either |
+
+A failed item includes a diagnostic. Cleanup failure is recorded separately
+without replacing the item's operation status. `complete` requires successful
+upload-mode results for every requested binary and no cleanup failures.
+`no_upload` staging never establishes delivery completion.
+
+Retain the original manifest and platform batch with these outcomes. Consume the
+tool-produced artifacts rather than synthesizing them; their identities and
+attempt ordering are required evidence for reporting.
+
+## Derived batches and later outcomes
+
+GitHub reconciliation emits new platform batches linked to the original
+manifest. A batch fixes the native target, package versions, executable names,
+tags and actual peeled tag commits. Its stable `batch_id` binds that content;
+each outcome routing entry supplies `target`, relative `path` and `batch_id`.
+Those observations do not get written back into the original manifest.
+
+Native execution refreshes remote completeness before building. Later
+reconciliation can emit another batch for remaining work without mutating an
+older batch. Binary outcomes link both the publication and batch identities.
+Phase outcomes include optional `github: {run_id, run_attempt}` metadata, which
+the workflow preserves across artifact transport.
+
+An older successful binary outcome cannot satisfy newer GitHub evidence of
+missing assets. This remains true when the new batch contains exactly the same
+requests and therefore has the same `batch_id`. Its outcome must be at least
+as new as the selected GitHub reconciliation.
+
+Consume these artifacts through the matching tool/action interface rather than
+writing them manually. Missing or incompatible artifacts require explicit
+recovery; they are not a valid empty work set.
+
+## Reporter job results
+
+`publish report --jobs` reads a JSON object with fixed keys. Each value is one of
+`success`, `failure`, `cancelled` or `skipped`, taken from GitHub's workflow job-result
+context rather than the broader check-run conclusion vocabulary:
+
+```json
+{
+  "prepare": "success",
+  "registry": "success",
+  "github": "success",
+  "binaries": "success"
+}
+```
+
+This demonstrates the format, not a default successful state. Supply observed
+results from the current workflow; `binaries` is the binary matrix job result.
+Skipped required phases are incomplete. A skipped binary matrix is acceptable
+only when the selected GitHub outcome requires no platform batches.
+Do not omit failed/skipped jobs, rename keys after your caller's display names,
+or synthesize success from existing assets.
+
+The reporter recursively reads `outcome.json` files beneath `--outcomes`,
+retaining their artifact subdirectories and run/attempt linkage. It compares
+the latest applicable outcomes with current job results and the original
+manifest. Old successes cannot hide failed jobs or newer missing-asset evidence.
+
+`--output` names the new Markdown report. The command can report and file a
+failure issue without the publication manifest, but always marks that case
+incomplete. `--no-issue` suppresses issue writes, not GitHub-context validation
+or incomplete-delivery failure.

@@ -43,7 +43,7 @@ bootstrap and publisher-first policy as local development. Bootstrap constants a
 through `scripts/utility/Constants.psm1`, also used by the pre-setup benchmark canary.
 See [development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
 
-The Cargo tool cache owns the installed executables and their `.crates.toml`,
+The shared development-tool cache owns Cargo-installed executables and their `.crates.toml`,
 `.crates2.json` and `binstall` metadata, which record installed versions and Git revisions
 so restored tools can be reused or reconciled. It excludes rustup proxies. Its key includes
 the platform, runner image and checked-out commit. The commit covers every tracked
@@ -58,6 +58,16 @@ and upload cost, rather than by treating a cache hit as proof that installation 
 This cache is separate from `rust-cache`, whose binary caching is disabled, so changing
 a tool pin does not discard workspace compilation artifacts. Standalone lint tools and
 Bicep retain their independent caches.
+
+Derive the cached executable inventory from `scripts/setup/install-just.ps1` and
+`just install-tools`, not from everything found in a runner's Cargo bin directory.
+Cargo subcommands match `cargo-*`; package executables without that prefix need their
+own entries. Cargo's installation records identify package-owned binaries.
+`cargo-clippy`, `cargo-fmt` and `cargo-miri` instead dispatch through rustup to components
+of the selected toolchain, so the wildcard excludes them. When an installer adds a
+package or a rustup component, apply that ownership rule and check whether its executable
+name matches the wildcard. Keep Cargo/binstall registration data with their binaries so
+restoration cannot separate an executable from the version/revision used to reconcile it.
 
 Book jobs install into a separate Cargo install root and cache that entire root, including
 the binaries and registration metadata, after shared setup. Only book jobs populate this
@@ -376,6 +386,11 @@ They use the same Linux, macOS and Windows matrix as Clippy and minimum-dependen
 including on pull requests. `check-frozen` runs last because it
 rewrites the manifests and lockfile, so later checks cannot accidentally use frozen inputs.
 Each platform proceeds independently rather than waiting for other platforms' Clippy results.
+The matrix also runs `just release-binary-smoke` before minimum-dependency freezing.
+Its independent `release_binary_smoke` selection combines path inputs with Cargo
+impact on the helper. Script-only selection starts the matrix without expanding
+empty Cargo scope into a workspace-wide check. The required-checks fan-in rejects
+a skipped or absent selected platform job.
 The `test-x64` matrix shares its Linux/Windows environment across coverage-instrumented tests,
 benchmark smoke tests and external-type checks. Test or upload failures do not suppress
 benchmark or external-type checks. Coverage reporting consumes successful measurement;
@@ -466,11 +481,11 @@ The workflow invokes `actionlint -color` directly, matching `just validate-workf
 installing Just solely to dispatch that command. Local full setup continues to install these
 same binaries. Keep the command and cache keys aligned when editing these entry points.
 
-The push-to-main and PR benchmark collection queues use GitHub's
+The release and benchmark collection queues use GitHub's
 [`queue: max` concurrency setting](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency#example-queueing-multiple-pending-runs)
 so waiting commits and PRs are retained instead of replacing one another. The pinned actionlint does not
 recognize this key ([upstream issue](https://github.com/rhysd/actionlint/issues/657)).
-`.github/actionlint.yaml` excludes only that exact diagnostic for `bench-history.yml` and `pr-bench-history.yml`;
+`.github/actionlint.yaml` excludes only that exact diagnostic for their named workflow files;
 other concurrency diagnostics and other workflows remain checked.
 
 ## Merge queue validation
@@ -479,9 +494,13 @@ The queue workflow is independent of Standard validation and has no preparation/
 Its Clippy matrix runs `just clippy dev` with no package selector on the same platforms as
 standard dev Clippy. The Ubuntu leg first runs `just format-check`, sharing setup.
 Clippy still runs after a formatting failure when setup succeeded.
-A separate full-history job runs only `just validate-versions` with
-`RELEASE_PLAN_BASE` set to the event's immutable `merge_group.base_sha`. This prevents a
-moving `origin/main` from changing the candidate's release baseline.
+A separate full-history job installs the source-built tool once through the shared
+root action's workspace-independent `version` operation. The thin release adapter
+invokes that executable for `release-context` with the event's `merge_group.base_sha`
+as the proposed target, then forwards the normalized history/target pair to the
+unconfigured `check`. This is the same narrow version-readiness operation exposed by
+the root action without a second tool installation. A synthetic queue predecessor
+is not actual release history.
 
 The queue does not inherit minimum-dependency, binstall or SemVer steps from the similarly
 named standard jobs. Its fan-in names every dependency as must-succeed and retains the
@@ -491,100 +510,79 @@ validation and its PR-close companion.
 ## Release validation
 
 `cargo-release-plan` compares released content with version anchors and owns the report schema
-and version-readiness verdict. Its release baseline is the tip of the branch releases are made
-from, which is not the branch a pull request targets, so the workflow passes the release branch
-on a pull request, the merge-group base commit on a queue run, and the tested main commit
-on main pushes and scheduled/manual runs.
+and version-readiness verdict. Actual release history supplies catch-up anchors;
+an unmerged target supplies its final pending versions/content as an anticipated
+squash release. PR and queue event target commits are passed separately from release
+history, which the configured context acquires. Known non-PR `main` runs pin that history
+to their tested source commit, so a later main push cannot invalidate an older scheduled
+check. Other event names do not by themselves establish already released source.
 
-`scripts/release/ReleasePlan.psm1` is the PowerShell boundary between that report and hosted
-validation. Rust artifact commands validate the report and distinguish publishable release
-assessments from all tracked version targets. The report's `packages`
-array supplies released-content evidence and consumer-contract selection for publishable members;
-`non_publishable_packages` supplies only names, declared versions, and derived group membership.
-SemVer analysis and change-level decisions use the former, while grouping and alignment use their
-union. The pre-apply publication gate resolves every planned target against current workspace
-metadata and queries crates.io only for targets Cargo says are publishable. Package-name patterns
-do not determine whether a crate has a consumer contract or is publishable.
+The unconditional `validate-versions` job calls the shared action's read-only `check.yml`.
+It selects source installation from the invocation checkout and Folo's committed
+`.cargo/release_plan.toml`. The shared graph owns version readiness, publication
+metadata validation, report-selected compatibility and evidence artifacts. It does
+not rewrite manifests or refresh dependencies. Private-API packages do not become
+Rust API comparison targets merely because they contain a library target.
+The caller supplies guarded known-main `release-history`; the shared workflow reads
+the PR target from its event rather than treating that target as released history.
 
-`cargo-release-plan analysis-order`, `semver-targets`, and `propose` own dependency-order
-presentation, consumer-contract selection, change-level validation, version-group realignment,
-and release propagation. These operations consume captured artifacts without discovering the
-workspace or contacting a registry. The module retains process orchestration and the crates.io
-publication probe; the just recipes remain thin command-line entry points. Pester tests protect
-argument forwarding, subprocess failures, publication checks, and the evidence lifecycle.
+The Rust application owns preparation, compatibility evidence, artifact validation,
+version planning, preview/application and registry preflight. The copied skill guides
+those operations; repository PowerShell does not maintain another planning or
+publication-preflight implementation. CI's report/check path stays read-only, with
+no hidden preparation or dependency refresh.
 
-The guided release workflow collects its decision evidence after explicit offline preparation.
-It then sends semantic choices to Rust's prospective resolution preview, which completes the
-version-target set and captures the resolved files before application. The PowerShell boundary does
-not duplicate Cargo resolution or infer binary closure membership. Compatibility evidence is
-built with the prospective manifest path and working directory, so Cargo reads its captured
-configuration and resolution rather than the live tree's. A read-only comparison rejects any
-input mutation by that build. The module presents the stable
-expanded artifact and applies it unchanged; the Rust boundary rejects stale original inputs
-and installs only the captured state. CI's report/check path and post-apply reporting remain
-read-only, with no hidden preparation or dependency refresh.
+The parent's final snapshot is an anticipated squash release, not a replacement for
+actual history. Additional child content needs its own increment independently of
+queue batching. Both callers retain the literal `required-checks` fan-in.
+
+Local `just validate-versions` delegates configuration-aware checks through the thin
+`scripts/release/ReleasePlan.psm1` process adapter. It shares context validation and
+forwarding with the queue's installed-tool invocation. Local calls without explicit
+history or target use Folo's cached `origin/main`; a missing local ref is an error,
+not permission to fetch silently. Portable version planning and
+compatibility execution belong to the application and its
+[local-planning guide](https://folo-rs.github.io/folo/cargo-release-plan/integration/local-planning.html).
 
 There is no separate version-approval prompt. The complete pull request and its
 Version/release plan section carry the human review of release impact.
 
-The unconditional `validate-versions` job shares one full-history checkout and environment
-across live binstall metadata validation, version readiness and semantic-version analysis.
-Release-target and archive-shape obligations follow Cargo's discovered binary targets,
-including source additions that do not edit a manifest. Steps run in order: binstall validation,
-version readiness, the SemVer canary and the scoped comparison. The comparison consumes the
-version step's consumer-contract targets directly, which are emitted before its readiness
-verdict. Binstall validation, readiness and the canary run independently after successful
-setup. The comparison requires a successful canary and nonempty report-selected targets;
-a missing version increment does not suppress it. Every failed check fails the combined job.
-
-Rust plan-generation tests assert properties of the generated plan over a matrix of report
-states, not only by testing individual guards. The properties are that every entry is well formed
-and names a known target, that no target receives two decision kinds, that no version moves
-backwards, that every version group ends on one version, and that no package keeps an
-already-published version while a requirement inside it is rewritten. These are checked as
-outcomes rather than isolated implementation guards. A scenario
-passes either by refusing to generate a plan or by generating one that holds every property.
-
-On Windows, the module scopes `CARGO_TARGET_DIR` for direct `cargo-semver-checks`
-invocations to a stable, workspace-specific directory beneath the user
-temporary directory. This keeps the SemVer tool's nested placeholder builds independent of
-checkout depth without changing target-directory behavior for unrelated Cargo commands or
-non-Windows validation. The override can be reassessed when
-[cargo-semver-checks issue #1725](https://github.com/obi1kenobi/cargo-semver-checks/issues/1725)
-shortens the generated paths upstream.
-
 ## Release publication
 
-`release-plz` owns registry publication only. Its committed configuration disables Git
-tag and release creation, so a main-advance race in GitHub publication cannot turn a
-successful crates.io publish into a publisher retry. The publish job's ambient GitHub
-token is read-only; Trusted Publishing retains its independent OIDC permission.
+`workflow_dispatch` accepts `verify-publishing-identity` for the separate
+exchange/revoke-only path. It calls the pinned reusable identity workflow from
+`release.yml`, preserving crates.io's registered caller filename. The normal
+publication and publication-failure paths all exclude that input.
+The reusable workflow builds the controller in a job without `id-token: write`,
+so installation subprocesses cannot request OIDC credentials. It transfers the
+verified executable by artifact identity to the credential-only probe job.
 
-`scripts/release/ReleasePublication.psm1` owns Git/GitHub process orchestration after
-publication. It derives package/version requests from the checked-out publication source,
-reads existing remote tags, and builds `release-target-check` from that same controller
-checkout only when a new tag needs a source candidate. The temporary candidate worktree
-is data for the verifier, not the source of the verifier executable or automation scripts.
+The normal job calls the pinned shared `release.yml` with source installation.
+The canonical repository and `main` gates remain in Folo's registered caller;
+registry, GitHub, native batches and reporting live in the shared graph. Its
+commands use `.cargo/release_plan.toml` rather than repository-local publisher logic.
 
-The nonpublished `release-target-check` utility owns candidate identity and version
-constraints, and delegates released-content validation to `cargo-release-plan`. It requires
-a clean checkout at the supplied immutable commit on the supplied main history, exact
-requested package versions, and the release invariant against that snapshot's own anchors.
-Using the candidate as the validator's baseline does not relax the invariant: the clean
-worktree must still match each package's version anchor within that main history.
+The controller is built from the invocation checkout. An optional full `source`
+dispatch input selects original publication data for recovery after artifacts expire;
+it does not change automation source. The shared publisher freezes the manifest and
+passes it through registry publication, reconciliation, native batches and the report.
+Independent valid batches remain eligible after partial reconciliation failure.
 
-The PowerShell boundary uses the verified SHA in GitHub reference creation, confirms
-the resulting remote reference, and retries only after observing that main moved.
-It does not duplicate the Rust package-content or binary-dependency comparison.
-Its temporary worktree is removed on both success and failure; cleanup failures retain
-the original diagnostic rather than replacing it.
+The outer `release-${{ github.ref }}` group is retained while earlier publishers
+drain. It queues with `queue: max` and does not cancel running publication. The shared
+graph uses a distinct inner workspace group, preventing caller/callee deadlock
+while serializing the entire nested run.
 
-Missing binary releases use `gh release create --verify-tag` against the established
-reference. Asset planning resolves each tag to a commit and carries `source_sha` in
-the build matrix. Checkout consumes that immutable SHA; upload consumes the versioned
-tag name. Existing references are not rewritten to match a newer preferred snapshot.
-See [Release-equivalent snapshots](design.md#release-equivalent-snapshots) for the
-identity contract and credential rationale.
+### Release binary batches
+
+The shared workflow owns runner selection and invokes `cargo-release-plan publish binaries`
+with manifest-linked frozen batches. `crp_publication` owns batch and delivery policy;
+`crp_native` owns source worktrees, supervised native builds, archives and cleanup.
+Folo supplies policy, not a second matrix planner or upload engine.
+The [application implementation guide](../../packages/cargo-release-plan/docs/implementation.md#native-binary-execution)
+owns the execution and resource boundaries.
+[Standard validation](#standard-validation-structure) covers the nonpublishing
+source and archive path before release.
 
 ## Merge-blocking result
 
@@ -623,8 +621,9 @@ the workflow includes its complete check graph and platform matrices instead of 
 a nightly copy. GitHub preserves the caller's `schedule` or `workflow_dispatch` event in
 the reusable workflow. Both scope planners select full-workspace/full-tooling outputs for
 these events. The standard platform matrices are shared with PR and main-push validation.
-All jobs check out the same event commit; main release validation uses that immutable commit
-as its baseline.
+All jobs check out the same event commit. The main-only plan gate establishes that
+this is released source, so standard release validation pins history to that commit
+instead of fetching a newer tip during the scheduled run.
 
 The caller forwards the Codecov secret and grants the permissions declared by the called
 jobs, including the test identity's OIDC permission. Main-branch federation works for these

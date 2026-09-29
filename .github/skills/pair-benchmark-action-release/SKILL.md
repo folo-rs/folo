@@ -25,7 +25,7 @@ Stage 1 needs only the verified report. If it returns `true`, read the resolved
 verification report and compatibility evidence, together with the current
 **Version/release plan** section, prepared locally if the PR does not exist yet.
 An empty applied plan does not mean there are no pending releases. If evidence is missing or
-no longer describes the current source, release baseline, groups or decisions, return to
+no longer describes the current source, release history, merge target, groups or decisions, return to
 `increment-versions` before choosing action pins. Publication follow-up uses the verified
 paired release and current action manifest; it does not reserve another crate increment.
 
@@ -132,7 +132,7 @@ when the monorepo PR is created.
 
 # Stage 4: Follow publication and the required installation gate
 
-Keep the pair current after any reassessment, including release-baseline recovery. The
+Keep the pair current after any reassessment, including release-history or target recovery. The
 monorepo merges first under its normal authorization and checks. Creating the paired PR is
 a monorepo readiness obligation; passing the action's required `install-tools` check gates
 the action merge, not the monorepo merge that starts asynchronous dependency publication.

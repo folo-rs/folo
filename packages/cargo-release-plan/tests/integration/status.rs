@@ -46,8 +46,9 @@ fn content_already_on_base_needs_an_increment() {
 
     let out_dir = fixture.path().join("out");
     let outcome = run(&RunInput::Report {
+        merge_target: None,
         out_dir: out_dir.clone(),
-        base: Some(base),
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
@@ -120,8 +121,9 @@ fn binary_executable_bit_alone_renders_only_modes() {
 
     let out_dir = fixture.path().join("out");
     run(&RunInput::Report {
+        merge_target: None,
         out_dir: out_dir.clone(),
-        base: Some(base),
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
@@ -365,16 +367,15 @@ fn declared_version_below_the_anchor_is_an_error() {
     fixture.commit("downgrade");
 
     let result = run(&RunInput::Check {
-        base: Some(base),
+        merge_target: None,
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
-    assert!(
-        result.is_err(),
-        "a version below the anchor must not classify, got {result:?}"
-    );
+    result.unwrap_err();
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

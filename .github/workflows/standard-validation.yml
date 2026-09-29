@@ -53,6 +53,7 @@ jobs:
       packages_json: ${{ steps.compute.outputs.packages_json }}
       skip_all: ${{ steps.compute.outputs.skip_all }}
       script_domains: ${{ steps.scripts.outputs.domains }}
+      release_binary_smoke: ${{ steps.scripts.outputs.release_binary_smoke }}
       benchmark_canary: ${{ steps.scripts.outputs.benchmark_canary }}
     steps:
       - uses: actions/checkout@v7
@@ -116,6 +117,9 @@ jobs:
           Import-Module ./scripts/build/ValidationPlan.psm1 -Force
           $domains = @(Get-ValidationScriptDomain -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES -Verbose)
           "domains=$(ConvertTo-Json -InputObject $domains -Compress)" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          $smoke = Test-ReleaseBinarySmokeSelected -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES
+          "release_binary_smoke=$($smoke.ToString().ToLowerInvariant())" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           $canary = Get-ValidationCanarySelection -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES -Verbose
           "check_fixture=$(ConvertTo-Json -InputObject $canary.check_fixture -Compress)" |
@@ -240,85 +244,27 @@ jobs:
 
   # Workspace-wide release-plan generation: every publishable package's released content
   # versus its version anchor. Delta cannot narrow that set, so this job is not gated on
-  # skip_all. Independent release checks share setup without suppressing later findings.
+  # skip_all. The shared read-only graph owns version, publication-input and API checks.
   # Ref: .github/workflows/implementation.md#release-validation.
   validate-versions:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          # cargo-release-plan resolves the release baseline and each package's version anchor
-          # from the release branch's first-parent history, so a truncated clone can hide the
-          # commit that last changed a version and report that package as unchanged.
-          fetch-depth: 0
-
-      - name: Setup environment
-        id: setup
-        uses: ./.github/actions/setup-environment
-        with:
-          save-build-cache: "true"
-
-      # Live Cargo metadata belongs with unconditional release validation: target autodiscovery
-      # can change the binary set without a manifest edit.
-      # Ref: .github/workflows/implementation.md#release-validation.
-      - name: Validate binstall metadata
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just validate-binstall
-
-      - name: Check package versions
-        id: check
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        env:
-          # The release baseline is the tip of the branch releases are made from, which is
-          # not the branch a pull request targets: a stacked pull request targets an
-          # unreleased parent, and anchoring on it would treat that parent's pending
-          # increment as a release. Main runs use the tested commit, not a moving remote tip.
-          RELEASE_PLAN_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.event.repository.default_branch) || github.sha }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just validate-versions
-
-      # Never interpret a broken compatibility tool as evidence of no breaking changes.
-      # Ref: .github/workflows/implementation.md#release-validation.
-      - name: Verify cargo-semver-checks can run
-        id: semver-canary
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just verify-semver-checks
-
-      # The report owns consumer-contract selection, including version-group closure.
-      # Targets are emitted before the readiness verdict, so a missing version increment does not
-      # suppress compatibility findings. No comparison is possible without targets or a working tool.
-      - name: Run cargo-semver-checks on releasing packages
-        if: ${{ !cancelled() && steps.semver-canary.outcome == 'success' && steps.check.outputs.semver_targets != '' }}
-        shell: pwsh
-        env:
-          SEMVER_TARGETS: ${{ steps.check.outputs.semver_targets }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just package="$env:SEMVER_TARGETS" semver-checks
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@de4c1f29bdfadbf9814b717b47d53e40a5c62ae6
+    with:
+      install-method: path
+      source-path: .
+      # Only non-PR main runs establish the tested commit as actual release history.
+      # The shared workflow obtains the PR target separately from its event.
+      release-history: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.sha || '' }}
+    permissions:
+      contents: read
+      actions: read
 
   # Formatting, dev Clippy, documentation and minimum-dependency compilation share setup.
   # Documentation builds and doctests use the same platform coverage as compilation, including PRs.
+  # Independently selected release-binary smoke coverage can run with Cargo checks skipped.
   # Ref: .github/workflows/implementation.md#standard-validation-structure.
   clippy-dev-docs:
     needs: [prepare]
-    if: needs.prepare.outputs.skip_all != 'true'
+    if: needs.prepare.outputs.skip_all != 'true' || needs.prepare.outputs.release_binary_smoke == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -338,7 +284,7 @@ jobs:
 
       # Formatting is platform-independent; the Ubuntu leg performs the workspace-wide check.
       - name: Run format-check
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.platform == 'ubuntu-latest' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' && matrix.platform == 'ubuntu-latest' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -347,7 +293,7 @@ jobs:
           just format-check
 
       - name: Run clippy dev on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -356,7 +302,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" clippy dev
 
       - name: Run docs on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -365,7 +311,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" docs
 
       - name: Run docs-default-features on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -374,7 +320,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" docs-default-features
 
       - name: Run test-docs on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -382,10 +328,22 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just package="${{ needs.prepare.outputs.packages }}" test-docs
 
+      # Covers native ZIP layout/permissions on every matrix platform without
+      # publishing. Script-only selection must not expand the Cargo package checks above.
+      # Ref: .github/workflows/implementation.md#release-binary-batches.
+      - name: Smoke release binary packaging
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.release_binary_smoke == 'true' }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just release-binary-smoke
+
       # Freezing rewrites manifests and the lockfile, so nothing using the original inputs follows.
       # Ref: .github/workflows/implementation.md#standard-validation-structure.
       - name: Run check-frozen on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest

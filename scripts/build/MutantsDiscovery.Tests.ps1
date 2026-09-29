@@ -92,13 +92,15 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         @($after | Where-Object { $_.file -match $binaryPattern }).Count | Should -Be 0
         @($after.name | Sort-Object) | Should -Be @($libraryMutants.name | Sort-Object)
 
-        $packages = @('cargo-bench-history-stress', 'cargo-release-plan', 'release-target-check')
+        $packages = @('cargo-bench-history-stress', 'cargo-release-plan')
         if ($IsWindows) { $packages += 'dure' }
         foreach ($packageName in $packages) {
-            # The release-plan binary and its implementation library have separate owners.
-            $libraryPackage = if ($packageName -ceq 'cargo-release-plan') { 'crp_impl' } else { $packageName }
+            # Every executable keeps its own non-binary adapter behavior mutation-selected.
             @($binaryMutants | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
-            @($after | Where-Object { $_.package -eq $libraryPackage }).Count | Should -BeGreaterThan 0
+            @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
+        }
+        foreach ($packageName in @('crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication')) {
+            @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
         }
     }
 

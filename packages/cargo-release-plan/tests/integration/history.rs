@@ -67,16 +67,15 @@ fn shallow_history_without_a_version_change_is_an_error() {
     );
 
     let result = run(&RunInput::Check {
-        base: Some("HEAD".to_string()),
+        merge_target: None,
+        release_history: Some("HEAD".to_string()),
         manifest_path: clone.path().join("Cargo.toml"),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
-    assert!(
-        result.is_err(),
-        "shallow clone must not pass classification, got {result:?}"
-    );
+    result.unwrap_err();
 }
 
 /// A package the baseline does not publish is treated as entirely new.

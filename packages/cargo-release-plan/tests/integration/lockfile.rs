@@ -68,12 +68,12 @@ fn locked_workspace() -> Fixture {
 #[test]
 fn a_moved_dependency_changes_the_binary_but_not_its_library_dependency() {
     let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("update the locked widget");
 
-    let (passed, message) = check_verbose(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &release_history);
     assert!(!passed, "{message}");
     assert!(message.contains("tool: needs-increment"), "{message}");
     assert!(message.contains("widget"), "{message}");
@@ -87,10 +87,10 @@ fn an_untracked_default_binary_does_not_require_a_lockfile() {
     let fixture = Fixture::new("");
     write_package(&fixture, "tool", "0.1.0", "");
     fixture.commit("seed library");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
 
     assert!(passed, "{message}");
 }
@@ -103,10 +103,10 @@ fn an_ignored_example_does_not_require_a_lockfile() {
     write_package(&fixture, "tool", "0.1.0", "");
     fixture.write(".gitignore", "packages/tool/examples/\n");
     fixture.commit("seed library");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     fixture.write("packages/tool/examples/demo.rs", "fn main() {}\n");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
 
     assert!(passed, "{message}");
 }
@@ -117,7 +117,7 @@ fn an_incremented_binary_package_settles() {
     // The package's own entry is not part of its closure, so incrementing it
     // must not register as a further change to its dependencies.
     let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     write_binary_package(&fixture, "tool", "0.2.0", INSTALLATION_DEPENDENCIES);
     fixture.write(
@@ -129,7 +129,7 @@ fn an_incremented_binary_package_settles() {
     );
     fixture.commit("increment tool");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(passed, "{message}");
 }
 
@@ -137,12 +137,12 @@ fn an_incremented_binary_package_settles() {
 #[test]
 fn an_untouched_lockfile_leaves_a_binary_package_unchanged() {
     let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("packages/helper/src/lib.rs", "pub fn f() { let _ = 3; }\n");
     fixture.commit("edit helper only");
 
-    let (_, message) = check(&fixture, &base);
+    let (_, message) = check(&fixture, &release_history);
     assert!(!message.contains("tool: needs-increment"), "{message}");
 }
 
@@ -166,9 +166,9 @@ version = "0.1.0"
 "#,
     );
     fixture.commit("seed");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
 
     assert!(passed, "{message}");
 }
@@ -179,11 +179,11 @@ fn a_new_binary_package_needs_no_historical_lockfile() {
     let fixture = Fixture::new("");
     write_package(&fixture, "existing", "0.1.0", "");
     fixture.commit("seed");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     write_binary_package(&fixture, "tool", "0.1.0", "");
     fixture.commit("add binary package");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
 
     assert!(passed, "{message}");
 }
@@ -199,16 +199,16 @@ fn a_library_that_adds_its_first_binary_needs_no_anchor_lockfile() {
     write_package(&fixture, "tool", "0.1.0", INSTALLATION_DEPENDENCIES);
     write_package(&fixture, "helper", "0.1.0", "");
     fixture.commit("seed library");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
     write_lockfile(&fixture, "1.0.0");
     fixture.commit("add binary");
 
-    let (passed, message) = check_verbose(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &release_history);
     assert!(!passed, "{message}");
     assert!(message.contains("tool: needs-increment"), "{message}");
-    assert_lockfile_change(&fixture, &base, "added");
+    assert_lockfile_change(&fixture, &release_history, "added");
 }
 
 /// A workspace lockfile does not invent a library-only anchor closure.
@@ -231,12 +231,12 @@ fn an_unrelated_anchor_lockfile_does_not_create_a_library_closure() {
         ),
     );
     fixture.commit("seed library beside a binary");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
     fixture.commit("add binary");
 
-    assert_lockfile_change(&fixture, &base, "added");
+    assert_lockfile_change(&fixture, &release_history, "added");
 }
 
 /// Removing the last binary ends the released lockfile closure.
@@ -247,14 +247,14 @@ fn an_unrelated_anchor_lockfile_does_not_create_a_library_closure() {
 #[test]
 fn removing_the_last_binary_needs_no_work_tree_lockfile() {
     let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fs::remove_file(fixture.path().join("packages/tool/src/main.rs")).unwrap();
     fixture.write("packages/tool/src/lib.rs", "pub fn f() {}\n");
     fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
     fixture.commit("replace binary with library");
 
-    assert_lockfile_change(&fixture, &base, "deleted");
+    assert_lockfile_change(&fixture, &release_history, "deleted");
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -279,9 +279,9 @@ fn library_auxiliary_targets_never_require_or_compare_a_lockfile() {
     }
     fixture.write("packages/tool/examples/implicit/main.rs", "fn main() {}\n");
     fixture.commit("seed libraries and auxiliary targets without a lockfile");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(passed, "{message}");
     assert!(!fixture.path().join("Cargo.lock").exists());
 
@@ -289,11 +289,11 @@ fn library_auxiliary_targets_never_require_or_compare_a_lockfile() {
     fixture.commit("record a lockfile");
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("change only resolution");
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&fixture, &release_history);
 
     // Even unreadable resolution is irrelevant when no installed binary exists.
     fixture.write("Cargo.lock", "not = = toml");
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(passed, "{message}");
 }
 
@@ -332,7 +332,7 @@ fn library_source_and_requirements_still_need_increments_without_a_lockfile() {
     fixture.write("packages/source/examples/demo.rs", "fn main() {}\n");
     fixture.write("packages/requirement/examples/demo.rs", "fn main() {}\n");
     fixture.commit("seed libraries with examples");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("packages/source/src/lib.rs", "pub fn updated() {}\n");
     write_package(
@@ -343,14 +343,14 @@ fn library_source_and_requirements_still_need_increments_without_a_lockfile() {
     );
     fixture.commit("change published source and dependency requirements");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(!passed, "{message}");
     assert!(message.contains("source: needs-increment"), "{message}");
     assert!(
         message.contains("requirement: needs-increment"),
         "{message}"
     );
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&fixture, &release_history);
     assert!(!fixture.path().join("Cargo.lock").exists());
 }
 
@@ -371,12 +371,12 @@ fn explicit_custom_binary_with_disabled_autobins_keeps_its_installation_closure(
     write_package(&fixture, "helper", "0.1.0", "");
     write_lockfile(&fixture, "1.0.0");
     fixture.commit("seed mixed package with a custom binary");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("change the binary installation");
 
-    assert_lockfile_change(&fixture, &base, "modified");
+    assert_lockfile_change(&fixture, &release_history, "modified");
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -388,9 +388,9 @@ fn disabled_autobins_ignores_conventional_binary_files() {
         fixture.write(&format!("packages/tool/{target}"), "fn main() {}\n");
     }
     fixture.commit("seed library with disabled conventional binaries");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(passed, "{message}");
     assert!(!fixture.path().join("Cargo.lock").exists());
 }
@@ -458,7 +458,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
     fixture.write("Cargo.lock", original);
     fixture.commit("seed an executable and an unpublished exact dependency");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     let development = ["root-dev", "transitive-dev", "dev-leaf"].into_iter().fold(
         original.to_owned(),
         |lockfile, name| {
@@ -471,7 +471,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     fixture.write("Cargo.lock", &development);
     fixture.commit("change development-only resolution");
 
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&fixture, &release_history);
     assert_eq!(fixture.read("Cargo.lock"), development);
 
     let installed = ["installed-leaf", "root-builder", "transitive-builder"];
@@ -481,7 +481,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             move_locked_package(&lockfile, name)
         });
     fixture.write("Cargo.lock", &updated);
-    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
+    let report: Value = serde_json::from_str(&report_json(&fixture, &release_history)).unwrap();
     let tool = report
         .get("packages")
         .and_then(Value::as_array)
@@ -506,7 +506,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             "[target.'cfg(unix)'.dev-dependencies]",
         ),
     );
-    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
+    let report: Value = serde_json::from_str(&report_json(&fixture, &release_history)).unwrap();
     let tool = report
         .get("packages")
         .and_then(Value::as_array)
@@ -530,12 +530,12 @@ fn a_moved_dependency_needs_an_increment_for_an_auto_discovered_binary() {
     write_package(&fixture, "helper", "0.1.0", "");
     write_lockfile(&fixture, "1.0.0");
     fixture.commit("seed auto-discovered binary");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("update the locked widget");
 
-    assert_lockfile_change(&fixture, &base, "modified");
+    assert_lockfile_change(&fixture, &release_history, "modified");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -544,12 +544,12 @@ fn a_binary_anchor_without_a_lockfile_is_an_error() {
     let fixture = Fixture::new("");
     write_binary_package(&fixture, "tool", "0.1.0", "");
     fixture.commit("seed");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
     fixture.commit("edit the binary");
 
-    let error = check_error(&fixture, &base);
+    let error = check_error(&fixture, &release_history);
     assert!(error.contains("anchor commit"), "{error}");
     assert!(error.contains("Cargo.lock"), "{error}");
 }
@@ -558,10 +558,10 @@ fn a_binary_anchor_without_a_lockfile_is_an_error() {
 #[test]
 fn a_missing_work_tree_lockfile_is_an_error() {
     let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
 
-    let error = check_error(&fixture, &base);
+    let error = check_error(&fixture, &release_history);
     assert!(error.contains("work tree"), "{error}");
     assert!(error.contains("Cargo.lock"), "{error}");
 }
@@ -570,10 +570,10 @@ fn a_missing_work_tree_lockfile_is_an_error() {
 #[test]
 fn a_malformed_work_tree_lockfile_is_an_error() {
     let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     fixture.write("Cargo.lock", "not = = toml");
 
-    let error = check_error(&fixture, &base);
+    let error = check_error(&fixture, &release_history);
 
     assert!(error.contains("Cargo.lock"), "{error}");
 }
@@ -594,7 +594,7 @@ dependencies = ["absent"]
 "#,
     );
     fixture.commit("seed an incomplete lockfile");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write(
         "Cargo.lock",
@@ -608,7 +608,7 @@ version = "0.1.0"
     fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
     fixture.commit("restore the lockfile and edit the binary");
 
-    let error = check_error(&fixture, &base);
+    let error = check_error(&fixture, &release_history);
     assert!(error.contains("Cargo.lock"), "{error}");
     assert!(error.contains("resolved dependencies"), "{error}");
 }
@@ -629,12 +629,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#,
     );
     fixture.commit("seed");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
     fixture.commit("edit the binary");
 
-    let error = check_error(&fixture, &base);
+    let error = check_error(&fixture, &release_history);
     assert!(error.contains("anchor Cargo.lock"), "{error}");
     assert!(error.contains("declared version"), "{error}");
 }
@@ -643,7 +643,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 #[test]
 fn a_work_tree_lockfile_that_does_not_resolve_the_binary_is_an_error() {
     let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     fixture.write(
         "Cargo.lock",
         r#"version = 4
@@ -655,13 +655,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#,
     );
 
-    let error = check_error(&fixture, &base);
+    let error = check_error(&fixture, &release_history);
     assert!(error.contains("work-tree Cargo.lock"), "{error}");
     assert!(error.contains("declared version"), "{error}");
 }
 
-fn check_error(fixture: &Fixture, base: &str) -> String {
-    crate::harness::check_result(fixture, base)
+fn check_error(fixture: &Fixture, release_history: &str) -> String {
+    crate::harness::check_result(fixture, release_history)
         .expect_err("classification must stop when a released closure is unavailable")
 }
 
@@ -727,13 +727,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
         fixture.write("Cargo.lock", lockfile);
         fixture.commit("seed colliding installation and development sources");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
 
         fixture.write("Cargo.lock", &move_locked_package(lockfile, dev_leaf));
-        assert_no_lockfile_changes(&fixture, &base);
+        assert_no_lockfile_changes(&fixture, &release_history);
 
         fixture.write("Cargo.lock", &move_locked_package(lockfile, installed_leaf));
-        assert_dependency_change(&fixture, &base, installed_leaf, "modified");
+        assert_dependency_change(&fixture, &release_history, installed_leaf, "modified");
     }
 }
 
@@ -826,13 +826,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
         fixture.write("Cargo.lock", lockfile);
         fixture.commit("seed distinct path packages satisfying the same requirement");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
 
         fixture.write("Cargo.lock", &move_locked_package(lockfile, dev_leaf));
-        assert_no_lockfile_changes(&fixture, &base);
+        assert_no_lockfile_changes(&fixture, &release_history);
 
         fixture.write("Cargo.lock", &move_locked_package(lockfile, installed_leaf));
-        assert_dependency_change(&fixture, &base, installed_leaf, "modified");
+        assert_dependency_change(&fixture, &release_history, installed_leaf, "modified");
 
         let manifest = format!("{directory}/Cargo.toml");
         fixture.write(
@@ -851,7 +851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
                     &format!("name = \"foo\"\nversion = \"{next}\""),
                 ),
         );
-        assert_dependency_change(&fixture, &base, "foo", "modified");
+        assert_dependency_change(&fixture, &release_history, "foo", "modified");
     }
 }
 
@@ -880,13 +880,13 @@ fn an_unavailable_direct_path_identity_fails_at_either_endpoint() {
             fixture.write(".gitignore", "external/foo/Cargo.toml\n");
         }
         fixture.commit("seed a direct path declaration");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
         if missing_at_anchor {
             fixture.git(&["add", "-f", "external/foo/Cargo.toml"]);
         } else {
             fixture.git(&["rm", "--cached", "external/foo/Cargo.toml"]);
         }
-        _ = crate::harness::check_result(&fixture, &base).unwrap_err();
+        _ = crate::harness::check_result(&fixture, &release_history).unwrap_err();
     }
 }
 
@@ -912,9 +912,9 @@ fn unavailable_library_paths_do_not_block_an_unrelated_binary_closure() {
         "version = 4\n[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\n",
     );
     fixture.commit("seed an unrelated binary beside a library with untracked path inputs");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(passed, "{message}");
 }
 
@@ -950,19 +950,19 @@ fn historical_path_read_errors_only_block_binaries_that_reach_them() {
         fixture.write("external/foo/Cargo.toml", "not = = toml");
         fixture.write("external/foo/src/lib.rs", "pub fn f() {}\n");
         fixture.commit("seed an unavailable historical installation identity");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
         fixture.write(
             "external/foo/Cargo.toml",
             "[package]\nname = \"foo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
         );
 
         if consumes_library {
-            _ = crate::harness::check_result(&fixture, &base).unwrap_err();
+            _ = crate::harness::check_result(&fixture, &release_history).unwrap_err();
         } else {
-            let (passed, message) = check(&fixture, &base);
+            let (passed, message) = check(&fixture, &release_history);
             assert!(passed, "{message}");
             fixture.write("packages/library/src/lib.rs", "pub fn changed() {}\n");
-            let (passed, message) = check(&fixture, &base);
+            let (passed, message) = check(&fixture, &release_history);
             assert!(!passed, "{message}");
             assert!(message.contains("library: needs-increment"), "{message}");
         }
@@ -1000,7 +1000,7 @@ fn historical_installation_declaration_errors_do_not_replace_library_assessment(
             ));
         }
         fixture.commit("seed historical installation declarations");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
         write_package(
             &fixture,
             "library",
@@ -1009,12 +1009,12 @@ fn historical_installation_declaration_errors_do_not_replace_library_assessment(
         );
 
         if consumes_library {
-            _ = crate::harness::check_result(&fixture, &base).unwrap_err();
+            _ = crate::harness::check_result(&fixture, &release_history).unwrap_err();
         } else {
-            let (passed, message) = check(&fixture, &base);
+            let (passed, message) = check(&fixture, &release_history);
             assert!(!passed, "{message}");
             assert!(message.contains("library: needs-increment"), "{message}");
-            assert_no_lockfile_changes(&fixture, &base);
+            assert_no_lockfile_changes(&fixture, &release_history);
         }
     }
 }
@@ -1057,15 +1057,15 @@ fn excluded_path_targets_share_their_explicit_owning_workspace_at_each_endpoint(
         source = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
     fixture.write("Cargo.lock", lockfile);
     fixture.commit("seed explicitly owned excluded path packages");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(passed, "{message}");
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "leaf"));
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check(&fixture, &release_history);
     assert!(!passed, "{message}");
     assert!(!message.contains("unrelated: needs-increment"), "{message}");
-    assert_dependency_change(&fixture, &base, "leaf", "modified");
+    assert_dependency_change(&fixture, &release_history, "leaf", "modified");
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1088,10 +1088,10 @@ fn path_targets_outside_the_repository_cannot_supply_a_released_identity() {
         [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n";
     fixture.write("Cargo.lock", lockfile);
     fixture.commit("seed a path outside the versioned repository");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
     let manifest = fixture.read("packages/tool/Cargo.toml");
 
-    _ = crate::harness::check_result(&fixture, &base).unwrap_err();
+    _ = crate::harness::check_result(&fixture, &release_history).unwrap_err();
     assert_eq!(fixture.read("Cargo.lock"), lockfile);
     assert_eq!(fixture.read("packages/tool/Cargo.toml"), manifest);
 }
@@ -1128,7 +1128,7 @@ fn historical_registry_parse_errors_only_block_closures_requiring_registry_names
         );
         fixture.write("Cargo.lock", &lockfile);
         fixture.commit("seed invalid historical registry configuration");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
         fixture.write(
             ".cargo/config.toml",
             "[registries.private]\nindex = \"https://example.invalid/index\"\n",
@@ -1138,18 +1138,19 @@ fn historical_registry_parse_errors_only_block_closures_requiring_registry_names
             // A failed classification must not overwrite an existing report.
             fixture.write("report/report.json", "existing report");
             _ = run(&RunInput::Report {
+                merge_target: None,
                 out_dir: fixture.path().join("report"),
-                base: Some(base),
+                release_history: Some(release_history),
                 manifest_path: fixture.manifest(),
                 verbose: false,
             })
             .unwrap_err();
             assert_eq!(fixture.read("report/report.json"), "existing report");
         } else {
-            let (passed, message) = check(&fixture, &base);
+            let (passed, message) = check(&fixture, &release_history);
             assert!(passed, "{message}");
             fixture.write("packages/unrelated/src/lib.rs", "pub fn changed() {}\n");
-            let (passed, message) = check(&fixture, &base);
+            let (passed, message) = check(&fixture, &release_history);
             assert!(!passed, "{message}");
             assert!(message.contains("unrelated: needs-increment"), "{message}");
             assert!(!message.contains("tool: needs-increment"), "{message}");
@@ -1200,13 +1201,13 @@ source = "git+https://example.invalid/foo.git?branch=development#bbbb"
 "#;
         fixture.write("Cargo.lock", lockfile);
         fixture.commit("seed colliding Git references");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
 
         fixture.write("Cargo.lock", &lockfile.replace("#bbbb", "#cccc"));
-        assert_no_lockfile_changes(&fixture, &base);
+        assert_no_lockfile_changes(&fixture, &release_history);
 
         fixture.write("Cargo.lock", &lockfile.replace("#aaaa", "#dddd"));
-        assert_dependency_change(&fixture, &base, "foo", "modified");
+        assert_dependency_change(&fixture, &release_history, "foo", "modified");
     }
 }
 
@@ -1253,10 +1254,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
     fixture.write("Cargo.lock", lockfile);
     fixture.commit("seed distinct registry sources");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&fixture, &release_history);
 
     fixture.write(
         ".cargo/config",
@@ -1266,7 +1267,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         "Cargo.lock",
         &lockfile.replace("original-index", "current-index"),
     );
-    assert_dependency_change(&fixture, &base, "foo", "modified");
+    assert_dependency_change(&fixture, &release_history, "foo", "modified");
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1314,16 +1315,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
     fixture.write("Cargo.lock", lockfile);
     fixture.commit("seed registry kinds sharing an index URL");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&fixture, &release_history);
 
     fixture.write(
         "Cargo.lock",
         &move_locked_package(lockfile, "installed-leaf"),
     );
-    assert_dependency_change(&fixture, &base, "installed-leaf", "modified");
+    assert_dependency_change(&fixture, &release_history, "installed-leaf", "modified");
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1375,16 +1376,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
     fixture.write("Cargo.lock", lockfile);
     fixture.commit("seed a path patch beside a distinct development path package");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&fixture, &release_history);
 
     fixture.write(
         "Cargo.lock",
         &move_locked_package(lockfile, "installed-leaf"),
     );
-    assert_dependency_change(&fixture, &base, "installed-leaf", "modified");
+    assert_dependency_change(&fixture, &release_history, "installed-leaf", "modified");
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1421,9 +1422,9 @@ fn unavailable_git_normalization_fails_closed_for_direct_and_patched_edges() {
         );
         fixture.write("Cargo.lock", &lockfile);
         fixture.commit("seed a source requiring unsupported URL normalization");
-        let base = fixture.sha("HEAD");
+        let release_history = fixture.sha("HEAD");
 
-        _ = crate::harness::check_result(&fixture, &base).unwrap_err();
+        _ = crate::harness::check_result(&fixture, &release_history).unwrap_err();
         assert_eq!(fixture.read("Cargo.lock"), lockfile);
     }
 }
@@ -1446,7 +1447,7 @@ fn an_unavailable_historical_registry_mapping_fails_closed() {
         source = \"registry+https://example.invalid/historical-index\"\n";
     fixture.write("Cargo.lock", lockfile);
     fixture.commit("seed an anchor requiring unavailable ambient configuration");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     write_binary_package(&fixture, "tool", "0.1.0", "[dependencies]\nfoo = \"1\"\n");
     fixture.write(
@@ -1456,7 +1457,7 @@ fn an_unavailable_historical_registry_mapping_fails_closed() {
             "https://github.com/rust-lang/crates.io-index",
         ),
     );
-    _ = crate::harness::check_result(&fixture, &base).unwrap_err();
+    _ = crate::harness::check_result(&fixture, &release_history).unwrap_err();
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1492,7 +1493,7 @@ fn legacy_build_tables_are_installed_and_legacy_development_tables_are_not() {
     }
     fixture.write("Cargo.lock", &lockfile);
     fixture.commit("seed legacy dependency spellings");
-    let base = fixture.sha("HEAD");
+    let release_history = fixture.sha("HEAD");
 
     let development = ["root-dev", "target-dev", "ignored-builder"]
         .into_iter()
@@ -1500,11 +1501,11 @@ fn legacy_build_tables_are_installed_and_legacy_development_tables_are_not() {
             move_locked_package(&lockfile, name)
         });
     fixture.write("Cargo.lock", &development);
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&fixture, &release_history);
 
     for builder in ["root-builder", "target-builder"] {
         fixture.write("Cargo.lock", &move_locked_package(&lockfile, builder));
-        assert_dependency_change(&fixture, &base, builder, "modified");
+        assert_dependency_change(&fixture, &release_history, builder, "modified");
     }
 }
 
@@ -1515,12 +1516,17 @@ fn move_locked_package(lockfile: &str, name: &str) -> String {
     )
 }
 
-fn assert_lockfile_change(fixture: &Fixture, base: &str, change: &str) {
-    assert_dependency_change(fixture, base, "widget", change);
+fn assert_lockfile_change(fixture: &Fixture, release_history: &str, change: &str) {
+    assert_dependency_change(fixture, release_history, "widget", change);
 }
 
-fn assert_dependency_change(fixture: &Fixture, base: &str, dependency: &str, change: &str) {
-    let report: Value = serde_json::from_str(&report_json(fixture, base)).unwrap();
+fn assert_dependency_change(
+    fixture: &Fixture,
+    release_history: &str,
+    dependency: &str,
+    change: &str,
+) {
+    let report: Value = serde_json::from_str(&report_json(fixture, release_history)).unwrap();
     let package = report
         .get("packages")
         .and_then(Value::as_array)
@@ -1541,8 +1547,8 @@ fn assert_dependency_change(fixture: &Fixture, base: &str, dependency: &str, cha
     );
 }
 
-fn assert_no_lockfile_changes(fixture: &Fixture, base: &str) {
-    let report: Value = serde_json::from_str(&report_json(fixture, base)).unwrap();
+fn assert_no_lockfile_changes(fixture: &Fixture, release_history: &str) {
+    let report: Value = serde_json::from_str(&report_json(fixture, release_history)).unwrap();
     for package in report.get("packages").and_then(Value::as_array).unwrap() {
         if package
             .get("changed")
