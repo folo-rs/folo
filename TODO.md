@@ -4,15 +4,6 @@ Tracking notes for follow-up work that is intentionally deferred. Each entry
 should describe the task, the trigger condition that makes it actionable, and
 links to the relevant code.
 
-## Audit test-only nightly coverage feature gates
-
-During the next coverage-warning cleanup, audit crates that enable `coverage_attribute`
-in ordinary library builds despite using `coverage(off)` only in test code.
-[`cpulist`](packages/cpulist/src/lib.rs) reproduces the unused-feature error with
-`cargo +nightly-2026-06-19 rustc -p cpulist --lib --locked -- --cfg coverage_nightly -C instrument-coverage -D warnings`.
-Keep exclusions outside test-only code enabled where required; follow
-[the coverage guidance](docs/testing.md#test-coverage).
-
 ## Reorder bench-history object-key segments to `triple/machine/engine`
 
 `cargo-bench-history` keys stored objects as

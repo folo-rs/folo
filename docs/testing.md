@@ -404,6 +404,11 @@ To exclude code from coverage measurement, mark it with
 If every coverage annotation is in `#[cfg(test)]` code, use
 `#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]` instead,
 so ordinary library builds do not enable an unused unstable feature.
+When excluded helpers are also available through `private-test-util`, replace
+`test` with `any(test, feature = "private-test-util")` in that gate. For
+platform-gated crates, include the same platform condition in the feature gate.
+Crates without coverage annotations, including re-export-only shells, do not
+enable `coverage_attribute`.
 
 Note that `coverage(off)` applies to entire functions, not to individual branches.
 Defensive branches inside a function (e.g. `debug_assert!(false)` for structurally
