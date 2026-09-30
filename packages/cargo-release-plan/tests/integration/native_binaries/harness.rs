@@ -14,6 +14,8 @@ use crp_publication::publication::packages::PublicationWorkspace;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use crate::fixture::GLOBAL_CONFIG;
+
 /// A live controller checkout and a separately recorded tagged-source commit.
 ///
 /// The constructor records source before advancing controller configuration. Batch items retain
@@ -126,7 +128,7 @@ fn main() {
             );
         }
         run(path, "cargo", &["generate-lockfile", "--offline"]);
-        run(path, "git", &["init", "--quiet"]);
+        run(path, "git", &["init", "--quiet", "--template="]);
         run(
             path,
             "git",
@@ -327,14 +329,13 @@ pub(crate) fn command(root: &Path, program: impl AsRef<OsStr>) -> Command {
     command.current_dir(root).env_remove("RUSTUP_TOOLCHAIN");
     // Fixture repositories must not inherit workstation hooks, signing or global Git settings.
     command
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
+        .env("GIT_CONFIG_GLOBAL", GLOBAL_CONFIG.path().join("config"))
+        .env_remove("GIT_CONFIG")
+        .env_remove("GIT_CONFIG_PARAMETERS")
         .env("GIT_CONFIG_NOSYSTEM", "1");
     // Applies to nested Git commands as well as fixture setup.
     command
-        .env("GIT_CONFIG_COUNT", "4")
+        .env("GIT_CONFIG_COUNT", "6")
         .env("GIT_CONFIG_KEY_0", "user.name")
         .env("GIT_CONFIG_VALUE_0", "Release fixture")
         .env("GIT_CONFIG_KEY_1", "user.email")
@@ -342,7 +343,11 @@ pub(crate) fn command(root: &Path, program: impl AsRef<OsStr>) -> Command {
         .env("GIT_CONFIG_KEY_2", "commit.gpgsign")
         .env("GIT_CONFIG_VALUE_2", "false")
         .env("GIT_CONFIG_KEY_3", "gc.auto")
-        .env("GIT_CONFIG_VALUE_3", "0");
+        .env("GIT_CONFIG_VALUE_3", "0")
+        .env("GIT_CONFIG_KEY_4", "maintenance.auto")
+        .env("GIT_CONFIG_VALUE_4", "false")
+        .env("GIT_CONFIG_KEY_5", "core.fsync")
+        .env("GIT_CONFIG_VALUE_5", "none");
     command
 }
 
@@ -378,4 +383,32 @@ pub(crate) fn assert_success(result: &Output) {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
+}
+
+#[test]
+fn native_commands_use_owned_empty_configuration_and_disable_ambient_git_behavior() {
+    let root = TempDir::new().unwrap();
+    let command = command(root.path(), "git");
+    let path = command
+        .get_envs()
+        .find(|(name, _)| *name == "GIT_CONFIG_GLOBAL")
+        .unwrap()
+        .1
+        .unwrap();
+    assert_eq!(Path::new(path), GLOBAL_CONFIG.path().join("config"));
+    assert!(fs::read(path).unwrap().is_empty());
+    run(root.path(), "git", &["init", "--quiet", "--template="]);
+    for (key, value) in [
+        ("user.name", "Release fixture"),
+        ("user.email", "fixture@example.invalid"),
+        ("commit.gpgsign", "false"),
+        ("gc.auto", "0"),
+        ("maintenance.auto", "false"),
+        ("core.fsync", "none"),
+    ] {
+        assert_eq!(
+            run(root.path(), "git", &["config", "--get", key]).trim(),
+            value
+        );
+    }
 }

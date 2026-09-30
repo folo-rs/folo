@@ -39,6 +39,37 @@ fn builds_a_nested_workspace_without_controller_scripts() {
 }
 
 #[test]
+fn source_toolchain_preserves_explicit_caller_build_flags() {
+    testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
+        let mut fixture = Fixture::new();
+        write(
+            fixture.root.path(),
+            "alpha/src/main.rs",
+            "fn main() { assert!(cfg!(native_caller_flag)); }\n",
+        );
+        fixture.commit_source();
+        let result = fixture
+            .batch_command(&json!([fixture.binary("alpha")]), "out")
+            .arg("--no-upload")
+            .env(
+                "RUSTFLAGS",
+                "--cfg native_caller_flag --check-cfg=cfg(native_caller_flag)",
+            )
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .output()
+            .unwrap();
+        assert_success(&result);
+        let staged = fixture
+            .root
+            .path()
+            .join("out/artifacts")
+            .join(fixture.archive_base("alpha"));
+        run(&staged, staged.join(format!("alpha-bin{EXE_SUFFIX}")), &[]);
+        assert_eq!(fixture.outcomes("out")[0]["status"], "staged-only");
+    });
+}
+
+#[test]
 fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
     testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
         let fixture = Fixture::new();

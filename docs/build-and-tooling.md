@@ -167,6 +167,21 @@ For asynchronous GitHub results, follow the
 Low-signal optional checks do not delay readiness or authorized queue submission;
 this does not reduce required validation or relevant local checks.
 
+### Careful test execution
+
+`just careful` compiles the selected tests and application dependencies with
+careful's nightly instrumentation. Its Cargo test runner restores the compiler
+flags captured before careful starts when launching each compiled test executable.
+The instrumented executable and sysroot libraries remain instrumented; nested
+fixture Cargo builds receive the caller's original flags instead of careful's
+nightly-only flags and sysroot. This keeps source-selected stable toolchains usable
+without changing production command environment policy.
+
+The PowerShell runner is part of the existing recipe runtime, avoiding a separately
+compiled native helper merely to launch tests with a scoped environment. It forwards
+literal test arguments and exit status and retains unrelated environment, including
+the runtime library search path.
+
 ### Mutation target selection
 
 `just mutants` selects Cargo library unit-test targets with `--lib`.

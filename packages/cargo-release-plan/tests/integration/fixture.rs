@@ -224,7 +224,7 @@ const HERMETIC_CONFIG: &[&str] = &[
 /// Git for Windows on ARM64 rejects the `NUL` device as a configuration path, so
 /// commands cannot use a null device. The static owner keeps this immutable file
 /// alive without allocating a directory and writing a file for every Git command.
-static GLOBAL_CONFIG: LazyLock<TempDir> = LazyLock::new(|| {
+pub(crate) static GLOBAL_CONFIG: LazyLock<TempDir> = LazyLock::new(|| {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("config"), "").unwrap();
     dir

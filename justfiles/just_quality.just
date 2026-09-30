@@ -234,7 +234,22 @@ careful FILTER="":
         $env:DURE_TEST_HELPER = just _dure-test-helper-path | Select-Object -Last 1
     }
 
-    cargo +$env:RUST_NIGHTLY careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
+    # Compilation remains instrumented; only the executed test process restores caller flags.
+    # Native fixture builds then use their own source toolchain. See docs/build-and-tooling.md,
+    # "Careful test execution". The runner preserves native argv and the test exit status.
+    $env:FOLO_CAREFUL_BUILD_FLAGS = @{
+        RUSTFLAGS = [Environment]::GetEnvironmentVariable('RUSTFLAGS')
+        CARGO_ENCODED_RUSTFLAGS = [Environment]::GetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS')
+        RUSTDOCFLAGS = [Environment]::GetEnvironmentVariable('RUSTDOCFLAGS')
+        CARGO_ENCODED_RUSTDOCFLAGS = [Environment]::GetEnvironmentVariable('CARGO_ENCODED_RUSTDOCFLAGS')
+    } | ConvertTo-Json -Compress
+    $runner = @('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File',
+        '{{ justfile_directory() }}/scripts/build/Invoke-CarefulTest.ps1') | ConvertTo-Json -Compress
+    # A host-specific runner takes precedence over any ambient cfg-based runner.
+    $hostLine = @(rustc +$env:RUST_NIGHTLY -vV) | Where-Object { $_.StartsWith('host: ') }
+    if (-not $hostLine) { throw 'Could not identify the careful toolchain host.' }
+    $hostTriple = $hostLine.Substring('host: '.Length)
+    cargo +$env:RUST_NIGHTLY careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked --config "target.$hostTriple.runner=$runner"
 
 # Separate file because it is a giant script.
 import 'just_quality_mutants.just'

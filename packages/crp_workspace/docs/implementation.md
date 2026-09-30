@@ -40,3 +40,6 @@ and configuration precedence consume captured values or narrow read callbacks. M
 projection shares those operations rather than duplicating publication and dependency
 decisions in a test model. Only native forwarding is excluded from unit mutation testing;
 boundary integrations exercise the actual commands and filesystem effects.
+The shared repository fixture's Git and filesystem methods have individual
+native-support mutation exclusions. I/O scheduling stays unit-tested, including
+callback execution and rejection after a predecessor poisons its slot.

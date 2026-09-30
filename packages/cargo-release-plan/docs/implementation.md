@@ -362,6 +362,11 @@ source, build, archive and cancellation contracts. Publication's native boundary
 tests own GitHub asset delivery and recovery; `crp_native/tests/boundaries/` owns
 filesystem and supervised-process adapters. `just release-binary-smoke` and ordinary
 test/coverage selection reach these owners.
+Fixture Git invocations reuse an owned empty global configuration rather than
+platform null devices, including commands inherited by native execution.
+The [careful runner](../../../docs/build-and-tooling.md#careful-test-execution)
+isolates compiler instrumentation at test launch; production build commands keep
+the caller's configuration and the source's toolchain selection.
 
 Candidate-boundary tests in `crp_publication/tests/boundaries/candidate/` cover actual
 Git history, tracked-input semantics and real Cargo verification.

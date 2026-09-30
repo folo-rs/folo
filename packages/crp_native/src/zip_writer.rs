@@ -124,8 +124,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_zip64_entries_are_readable() {
-        for declared_size in [0, u64::from(u32::MAX)] {
+    fn declared_size_reserves_zip64_at_the_format_boundary() {
+        for (declared_size, zip64) in [
+            (0, false),
+            (u64::from(u32::MAX) - 1, false),
+            (u64::from(u32::MAX), true),
+            (u64::from(u32::MAX) + 1, true),
+        ] {
             let mut output = Cursor::new(Vec::new());
             write_archive(
                 io::empty(),
@@ -136,6 +141,12 @@ mod tests {
                 || Ok(()),
             )
             .unwrap();
+            // ZIP APPNOTE local headers use this sentinel when the uncompressed size is
+            // stored in the ZIP64 extra field. An empty stream tests the reservation without
+            // allocating or compressing a large executable.
+            let stored_size =
+                u32::from_le_bytes(output.get_ref().get(22..26).unwrap().try_into().unwrap());
+            assert_eq!(stored_size, if zip64 { u32::MAX } else { 0 });
             let mut archive = ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
             let entry = archive.by_index(0).unwrap();
             assert_eq!(entry.size(), 0);

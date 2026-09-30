@@ -67,6 +67,14 @@ real worktrees, toolchains, process trees and archive files belong in integratio
 tests. Native I/O scheduling precedes last-chance watchdog timing; mutation testing
 retains the watchdog disablement. The package does not depend on publication or CLI types.
 
+Credential-name decisions retain interpreter coverage independently of Command's
+native environment-key comparison. Windows Command environment assertions run
+natively because the interpreter does not implement that comparison.
+Library mutation testing excludes only the signal-state forwarders and native
+file-support adapters whose callers require integration execution. Literal arguments,
+identifier admission, interruption decisions and ZIP64 header reservation remain
+in-process behavior coverage; large declared sizes require no large input allocation.
+
 The low/high in-memory archive benchmark measures ZIP/Deflate work independently
 of source acquisition and filesystem noise. Maintainer drivers and file-boundary
 interruption injection use `private-test-util`; production execution is unchanged.
