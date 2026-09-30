@@ -44,7 +44,7 @@ fn registry_configuration_uses_ancestor_and_filename_precedence() {
         case: PathCase::Sensitive,
     };
     assert_eq!(
-        work_tree_registry_indices(&tracked).unwrap(),
+        work_tree_registry_indices_with(&tracked, |path| fs::read_to_string(path)).unwrap(),
         BTreeMap::from([
             (
                 "shared".to_owned(),
@@ -73,10 +73,14 @@ fn registry_configuration_distinguishes_absence_from_read_and_parse_errors() {
         paths: Vec::new(),
         case: PathCase::Sensitive,
     };
-    assert!(work_tree_registry_indices(&tracked).unwrap().is_empty());
+    assert!(
+        work_tree_registry_indices_with(&tracked, |path| fs::read_to_string(path))
+            .unwrap()
+            .is_empty()
+    );
     fixture.write(".cargo/config.toml", b"not valid TOML");
     assert!(
-        work_tree_registry_indices(&tracked)
+        work_tree_registry_indices_with(&tracked, |path| fs::read_to_string(path))
             .unwrap_err()
             .find_source::<toml_edit::TomlError>()
             .is_some()
@@ -88,7 +92,7 @@ fn registry_configuration_distinguishes_absence_from_read_and_parse_errors() {
     );
     fs::create_dir_all(fixture.path().join(".cargo/config")).unwrap();
     assert!(
-        work_tree_registry_indices(&tracked)
+        work_tree_registry_indices_with(&tracked, |path| fs::read_to_string(path))
             .unwrap_err()
             .find_source::<std::io::Error>()
             .is_some()
@@ -119,7 +123,9 @@ fn path_acquisition_preserves_identity_and_missing_or_unreadable_targets() {
     )
     .unwrap();
     let mut missing = path_installation();
-    resolve_installation_paths(&mut missing, &manifests, &tracked);
+    resolve_installation_paths_with(&mut missing, &manifests, &tracked, |path| {
+        fs::read_to_string(path)
+    });
     assert!(
         lockfile
             .closure("tool", "1.0.0", &missing)
@@ -132,7 +138,9 @@ fn path_acquisition_preserves_identity_and_missing_or_unreadable_targets() {
         b"[package]\nname = 'foo'\nversion = '1.2.0'\n",
     );
     let mut present = path_installation();
-    resolve_installation_paths(&mut present, &manifests, &tracked);
+    resolve_installation_paths_with(&mut present, &manifests, &tracked, |path| {
+        fs::read_to_string(path)
+    });
     assert_eq!(
         lockfile
             .closure("tool", "1.0.0", &present)
@@ -158,7 +166,9 @@ fn path_acquisition_preserves_identity_and_missing_or_unreadable_targets() {
     // Invalid UTF-8 is an operational read failure, not a missing path identity.
     fixture.write(manifest_path, &[0xff]);
     let mut unreadable = path_installation();
-    resolve_installation_paths(&mut unreadable, &manifests, &tracked);
+    resolve_installation_paths_with(&mut unreadable, &manifests, &tracked, |path| {
+        fs::read_to_string(path)
+    });
     assert!(
         lockfile
             .closure("tool", "1.0.0", &unreadable)
@@ -168,7 +178,9 @@ fn path_acquisition_preserves_identity_and_missing_or_unreadable_targets() {
     );
     fixture.write(manifest_path, b"not valid TOML");
     let mut malformed = path_installation();
-    resolve_installation_paths(&mut malformed, &manifests, &tracked);
+    resolve_installation_paths_with(&mut malformed, &manifests, &tracked, |path| {
+        fs::read_to_string(path)
+    });
     assert!(
         lockfile
             .closure("tool", "1.0.0", &malformed)
@@ -198,7 +210,9 @@ fn path_acquisition_does_not_read_untracked_manifests() {
         packages: BTreeMap::new(),
     };
     let mut installation = path_installation();
-    resolve_installation_paths(&mut installation, &manifests, &tracked);
+    resolve_installation_paths_with(&mut installation, &manifests, &tracked, |path| {
+        fs::read_to_string(path)
+    });
     assert!(matches!(
         installation
             .patches

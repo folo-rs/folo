@@ -2,7 +2,7 @@
 name = "crp_versioning"
 description = "Versioning implementation for cargo-release-plan - do not reference directly"
 publish = true
-version = "0.5.2"
+version = "0.5.3"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -44,7 +44,6 @@ ohno = { workspace = true, features = ["app-err"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["parse", "display"] }
 

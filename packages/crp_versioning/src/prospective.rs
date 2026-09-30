@@ -93,24 +93,51 @@ impl Prospective {
         Ok(prospective)
     }
 
+    // Native ownership observation and promotion; retain_workspace tests admission and ordering.
+    #[cfg_attr(test, mutants::skip)]
     pub fn retain(mut self, output: &Path, owner: &Path) -> Result<PathBuf, AppError> {
         let manifest = relative(&self.root, &self.manifest)?;
         let destination = output.join("workspace");
         let owner = owner.to_string_lossy();
-        if destination.exists() {
-            let marker = destination.join(EVIDENCE_MARKER);
-            if fs::read_to_string(&marker).ok().as_deref() != Some(owner.as_ref()) {
+        let existing = destination
+            .exists()
+            .then(|| fs::read_to_string(destination.join(EVIDENCE_MARKER)));
+        let manifest = Self::retain_workspace(
+            &manifest,
+            &destination,
+            &owner,
+            existing,
+            || {
+                fs::remove_dir_all(&destination)
+                    .map_err(|error| WriteFileError::caused_by(&destination, error).into())
+            },
+            || {
+                let marker = self.root.join(EVIDENCE_MARKER);
+                fs::write(&marker, owner.as_bytes())
+                    .map_err(|error| WriteFileError::caused_by(&marker, error))?;
+                fs::rename(&self.root, &destination)
+                    .map_err(|error| WriteFileError::caused_by(&destination, error).into())
+            },
+        )?;
+        self.retained = true;
+        Ok(manifest)
+    }
+
+    fn retain_workspace(
+        manifest: &Path,
+        destination: &Path,
+        owner: &str,
+        existing: Option<io::Result<String>>,
+        remove: impl FnOnce() -> Result<(), AppError>,
+        promote: impl FnOnce() -> Result<(), AppError>,
+    ) -> Result<PathBuf, AppError> {
+        if let Some(existing) = existing {
+            if existing.ok().as_deref() != Some(owner) {
                 return Err(EvidenceWorkspaceOccupied::new().into());
             }
-            fs::remove_dir_all(&destination)
-                .map_err(|error| WriteFileError::caused_by(&destination, error))?;
+            remove()?;
         }
-        let marker = self.root.join(EVIDENCE_MARKER);
-        fs::write(&marker, owner.as_bytes())
-            .map_err(|error| WriteFileError::caused_by(&marker, error))?;
-        fs::rename(&self.root, &destination)
-            .map_err(|error| WriteFileError::caused_by(&destination, error))?;
-        self.retained = true;
+        promote()?;
         Ok(destination.join(manifest))
     }
 
@@ -193,11 +220,17 @@ fn capture_artifacts(
 }
 
 impl Drop for Prospective {
+    // Native cleanup only; cleanup_unretained tests the retention decision without touching disk.
+    #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        // A resolver error remains the useful diagnostic even if cleanup also fails.
-        if !self.retained {
-            _ = fs::remove_dir_all(&self.root);
-        }
+        cleanup_unretained(self.retained, || fs::remove_dir_all(&self.root));
+    }
+}
+
+fn cleanup_unretained(retained: bool, remove: impl FnOnce() -> io::Result<()>) {
+    // A resolver error remains the useful diagnostic even if cleanup also fails.
+    if !retained {
+        _ = remove();
     }
 }
 
@@ -211,10 +244,91 @@ pub(crate) struct EvidenceWorkspaceOccupied;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::Cell;
     use std::io::ErrorKind;
 
     use super::*;
     use crate::resolved::UnsupportedInput;
+
+    #[test]
+    fn retention_rejects_foreign_or_unreadable_owners_before_mutating_evidence() {
+        let destination = Path::new("output/workspace");
+        for existing in [
+            Ok("foreign".into()),
+            Err(ErrorKind::PermissionDenied.into()),
+        ] {
+            assert!(
+                Prospective::retain_workspace(
+                    Path::new("Cargo.toml"),
+                    destination,
+                    "owner",
+                    Some(existing),
+                    || panic!("foreign removal"),
+                    || panic!("foreign promotion")
+                )
+                .unwrap_err()
+                .find_source::<EvidenceWorkspaceOccupied>()
+                .is_some()
+            );
+        }
+        for occupied in [false, true] {
+            let calls = Cell::new(0);
+            let result = Prospective::retain_workspace(
+                Path::new("nested/Cargo.toml"),
+                destination,
+                "owner",
+                occupied.then(|| Ok("owner".into())),
+                || {
+                    assert_eq!(calls.replace(1), 0);
+                    Ok(())
+                },
+                || {
+                    assert_eq!(calls.replace(2), usize::from(occupied));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(calls.get(), 2);
+            assert_eq!(result, destination.join("nested/Cargo.toml"));
+        }
+        for fail_remove in [false, true] {
+            let result = Prospective::retain_workspace(
+                Path::new("Cargo.toml"),
+                destination,
+                "owner",
+                Some(Ok("owner".into())),
+                || {
+                    if fail_remove {
+                        Err(ResolutionFailure::new().into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    assert!(!fail_remove);
+                    Err(ResolutionFailure::new().into())
+                },
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .find_source::<ResolutionFailure>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn cleanup_only_removes_unretained_workspaces_and_preserves_primary_errors() {
+        for retained in [false, true] {
+            let mut called = false;
+            cleanup_unretained(retained, || {
+                called = true;
+                Err(ErrorKind::PermissionDenied.into())
+            });
+            assert_eq!(called, !retained);
+        }
+    }
 
     #[test]
     fn offline_resolution_preserves_manifest_arguments_working_directory_and_errors() {

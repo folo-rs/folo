@@ -90,7 +90,7 @@ fn exact_dependencies(member: DocumentMut, workspace: DocumentMut) -> Vec<ExactD
         &BTreeMap::new(),
         &snapshot,
         snapshot.root(root),
-        root,
+        |_| panic!("fixture paths match the lexical member index"),
     )
     .unwrap()
 }

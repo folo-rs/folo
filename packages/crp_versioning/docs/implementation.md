@@ -76,3 +76,14 @@ filesystem behavior without depending on the application binary. Patch-rendering
 benchmarks use an opt-in private driver. Versioning-only tests compile only this
 component and its intended lower-level dependencies. Criterion's development
 dependencies remain part of benchmark-enabled builds.
+
+Released-content comparison consumes acquired archive paths, object identities and modes.
+It requests bytes lazily only for content changes, independently of mode-only changes.
+Historical member discovery reads recorded paths through the same cache and membership
+logic whether observations come from Git or an in-process fixture.
+
+Captured-source traversal, artifact admission and prospective evidence ownership use
+injected observations and effects. This keeps transitive membership, original/final
+fingerprints, retained isolation, foreign-owner rejection and marker invalidation within
+unit mutation coverage. Native adapters retain integration coverage for subprocess
+arguments, real aliases, atomic file promotion and workspace lifetime.
