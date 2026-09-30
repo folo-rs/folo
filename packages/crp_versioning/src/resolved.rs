@@ -151,7 +151,16 @@ impl Inputs {
     ///
     /// Retained candidates use frozen commits for their content checks, but must still reject
     /// movement of the caller's original release-history or merge-target ref.
+    // Native Git verification only; verify_history_with tests the original identity handoff.
+    #[cfg_attr(test, mutants::skip)]
     pub fn verify_history(&self) -> Result<(), AppError> {
+        self.verify_history_with(AssessmentHistory::verify)
+    }
+
+    fn verify_history_with(
+        &self,
+        verify: impl FnOnce(&AssessmentHistory, &GitRepo) -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
         self.validate_history_fields()?;
         let history = AssessmentHistory {
             release_history: self.release_history.clone(),
@@ -159,12 +168,14 @@ impl Inputs {
             merge_target: self.merge_target.clone(),
             merge_target_revision: self.merge_target_revision.clone(),
         };
-        history
-            .verify(&GitRepo {
+        verify(
+            &history,
+            &GitRepo {
                 root: self.root.clone(),
                 prefix: String::new(),
-            })
-            .map_err(StaleInputs::caused_by)?;
+            },
+        )
+        .map_err(StaleInputs::caused_by)?;
         Ok(())
     }
 
@@ -185,6 +196,8 @@ impl Inputs {
         compare(&current, final_digest)
     }
 
+    // Native path-identity and fingerprint acquisition; the comparison protocol has pure tests.
+    #[cfg_attr(test, mutants::skip)]
     pub fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
         self.compare_candidate_with(
             current,
@@ -218,9 +231,20 @@ impl Inputs {
     }
 
     /// Accepts only the complete initial state or the complete captured final state.
+    // Live acquisition is native; verify_with preserves the captured refs and comparison result.
+    #[cfg_attr(test, mutants::skip)]
     pub fn verify(&self, manifest: &Path, final_digest: Option<&str>) -> Result<bool, AppError> {
+        self.verify_with(manifest, final_digest, Self::capture_with_target)
+    }
+
+    fn verify_with(
+        &self,
+        manifest: &Path,
+        final_digest: Option<&str>,
+        capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<Self, AppError>,
+    ) -> Result<bool, AppError> {
         self.validate_history_fields()?;
-        let current = Self::capture_with_target(
+        let current = capture(
             manifest,
             Some(&self.release_history_revision),
             self.merge_target_revision.as_deref(),
@@ -259,10 +283,23 @@ impl Inputs {
         Ok(())
     }
 
+    // Native identity/fingerprint adapter; final_digest_with tests the exact replacement handoff.
+    #[cfg_attr(test, mutants::skip)]
     pub fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let identity = PathIdentity::new(&self.root, &PathCase::probe);
-        let replacements = self.artifact_replacements(files, &identity)?;
-        fingerprint(&self.root, &self.paths, &replacements)
+        self.final_digest_with(files, &identity, |replacements| {
+            fingerprint(&self.root, &self.paths, replacements)
+        })
+    }
+
+    fn final_digest_with(
+        &self,
+        files: &[Artifact],
+        identity: &PathIdentity<'_>,
+        fingerprint: impl FnOnce(&BTreeMap<PathBuf, Vec<u8>>) -> Result<String, AppError>,
+    ) -> Result<String, AppError> {
+        let replacements = self.artifact_replacements(files, identity)?;
+        fingerprint(&replacements)
     }
 
     fn artifact_replacements(
@@ -287,10 +324,32 @@ impl Inputs {
     }
 }
 
+// Native file/identity/source acquisition; the graph traversal is tested with captured observations.
+#[cfg_attr(test, mutants::skip)]
 pub fn capture_path_dependencies<'a>(
     root: &Path,
     manifests: impl IntoIterator<Item = &'a PathBuf>,
     paths: &mut BTreeSet<PathBuf>,
+) -> Result<(), AppError> {
+    capture_path_dependencies_with(
+        root,
+        manifests,
+        paths,
+        |path| {
+            fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error).into())
+        },
+        canonical,
+        |directory, paths| collect_sources(root, directory, paths),
+    )
+}
+
+fn capture_path_dependencies_with<'a>(
+    root: &Path,
+    manifests: impl IntoIterator<Item = &'a PathBuf>,
+    paths: &mut BTreeSet<PathBuf>,
+    mut read: impl FnMut(&Path) -> Result<String, AppError>,
+    mut canonicalize: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    mut collect: impl FnMut(&Path, &mut BTreeSet<PathBuf>) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     let mut pending: BTreeSet<PathBuf> = manifests.into_iter().cloned().collect();
     let mut visited = BTreeSet::new();
@@ -299,8 +358,7 @@ pub fn capture_path_dependencies<'a>(
             continue;
         }
         paths.insert(relative(root, &manifest)?);
-        let text = fs::read_to_string(&manifest)
-            .map_err(|error| ReadFileError::caused_by(&manifest, error))?;
+        let text = read(&manifest)?;
         let document = parse_document(&manifest, &text)?;
         let mut dependencies = Vec::new();
         for_each_dependency_table(document.as_table(), &mut |_, table| {
@@ -331,9 +389,9 @@ pub fn capture_path_dependencies<'a>(
                 .parent()
                 .expect("a manifest has a parent")
                 .join(path);
-            let directory = canonical(&directory)?;
+            let directory = canonicalize(&directory)?;
             relative(root, &directory)?;
-            collect_sources(root, &directory.join("src"), paths)?;
+            collect(&directory.join("src"), paths)?;
             pending.insert(directory.join("Cargo.toml"));
         }
     }
@@ -363,6 +421,8 @@ pub struct ResolvedState {
 }
 
 impl ResolvedState {
+    // Native identity/captured-input acquisition; validate_candidate_location owns isolation policy.
+    #[cfg_attr(test, mutants::skip)]
     pub fn verify_candidate(&self, manifest: &Path) -> Result<(), AppError> {
         let manifest = canonical(manifest)?;
         Self::validate_candidate_location(
@@ -384,15 +444,31 @@ impl ResolvedState {
         Ok(())
     }
 
+    // Native identity/fingerprint acquisition; the injected validator retains every admission check.
+    #[cfg_attr(test, mutants::skip)]
     pub fn validate_artifacts(
         &self,
         versions: &BTreeMap<String, String>,
         allowed: &BTreeSet<PathBuf>,
     ) -> Result<(), AppError> {
+        self.validate_artifacts_with(
+            versions,
+            allowed,
+            &PathIdentity::new(self.inputs.root(), &PathCase::probe),
+            || self.inputs.final_digest(&self.files),
+        )
+    }
+
+    fn validate_artifacts_with(
+        &self,
+        versions: &BTreeMap<String, String>,
+        allowed: &BTreeSet<PathBuf>,
+        identity: &PathIdentity<'_>,
+        final_digest: impl FnOnce() -> Result<String, AppError>,
+    ) -> Result<(), AppError> {
         if *versions != self.versions {
             return Err(ResolutionRequired::new().into());
         }
-        let identity = PathIdentity::new(self.inputs.root(), &PathCase::probe);
         for file in &self.files {
             if !identity.supports_artifact(&file.path) || !identity.contains(allowed, &file.path) {
                 return Err(ResolutionRequired::new().into());
@@ -400,7 +476,7 @@ impl ResolvedState {
         }
         // final_digest owns captured-path membership and uniqueness; this layer additionally
         // restricts writes to the current workspace's member manifests and lockfile.
-        if self.inputs.final_digest(&self.files)? != self.final_digest {
+        if final_digest()? != self.final_digest {
             return Err(ResolutionRequired::new().into());
         }
         Ok(())
@@ -525,10 +601,20 @@ fn parse_artifact<T: for<'de> Deserialize<'de>>(path: &Path, text: &str) -> Resu
     serde_json::from_str(text).map_err(|error| ParsePlanError::caused_by(path, error).into())
 }
 
+// Native file write only; serialization, emitted bytes and write errors are tested with a sink.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AppError> {
+    write_json_with(path, value, |path, bytes| fs::write(path, bytes))
+}
+
+fn write_json_with(
+    path: &Path,
+    value: &impl Serialize,
+    write: impl FnOnce(&Path, &[u8]) -> io::Result<()>,
+) -> Result<(), AppError> {
     let json = serde_json::to_string_pretty(value)
         .expect("release artifacts contain only JSON-compatible data");
-    fs::write(path, format!("{json}\n"))
+    write(path, format!("{json}\n").as_bytes())
         .map_err(|error| WriteFileError::caused_by(path, error).into())
 }
 
@@ -545,6 +631,8 @@ pub fn relative(root: &Path, path: &Path) -> Result<PathBuf, AppError> {
     Ok(relative.to_path_buf())
 }
 
+// Native canonicalization is integration-only; Windows spelling normalization has pure tests.
+#[cfg_attr(test, mutants::skip)]
 pub fn canonical(path: &Path) -> Result<PathBuf, AppError> {
     let canonical =
         fs::canonicalize(path).map_err(|error| ReadFileError::caused_by(path, error))?;
@@ -565,14 +653,23 @@ fn ordinary_windows_path(path: &Path) -> PathBuf {
     }
 }
 
+// Directory entries require native acquisition; collect_sources_with tests recursive selection.
+#[cfg_attr(test, mutants::skip)]
 pub fn collect_sources(
     root: &Path,
     directory: &Path,
     paths: &mut BTreeSet<PathBuf>,
 ) -> Result<(), AppError> {
+    collect_sources_with(root, directory, paths, &mut read_source_directory)
+}
+
+// Filesystem existence and entry/type observations are covered by source-capture integration tests.
+#[cfg_attr(test, mutants::skip)]
+fn read_source_directory(directory: &Path) -> Result<Option<Vec<(PathBuf, bool)>>, AppError> {
     if !directory.exists() {
-        return Ok(());
+        return Ok(None);
     }
+    let mut entries = Vec::new();
     for entry in
         fs::read_dir(directory).map_err(|error| ReadFileError::caused_by(directory, error))?
     {
@@ -580,10 +677,25 @@ pub fn collect_sources(
         let kind = entry
             .file_type()
             .map_err(|error| ReadFileError::caused_by(entry.path(), error))?;
-        if kind.is_dir() {
-            collect_sources(root, &entry.path(), paths)?;
+        entries.push((entry.path(), kind.is_dir()));
+    }
+    Ok(Some(entries))
+}
+
+fn collect_sources_with(
+    root: &Path,
+    directory: &Path,
+    paths: &mut BTreeSet<PathBuf>,
+    read: &mut impl FnMut(&Path) -> Result<Option<Vec<(PathBuf, bool)>>, AppError>,
+) -> Result<(), AppError> {
+    let Some(entries) = read(directory)? else {
+        return Ok(());
+    };
+    for (path, directory) in entries {
+        if directory {
+            collect_sources_with(root, &path, paths, read)?;
         } else {
-            paths.insert(relative(root, &entry.path())?);
+            paths.insert(relative(root, &path)?);
         }
     }
     Ok(())

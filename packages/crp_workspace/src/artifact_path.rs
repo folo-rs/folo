@@ -2,7 +2,7 @@
 // Resolve existing ancestors before comparing their eventual filesystem locations.
 
 use std::ffi::OsString;
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File};
 use std::io::{Error as IoError, ErrorKind};
 use std::path::{Component, Path, PathBuf, absolute};
 
@@ -35,16 +35,28 @@ pub fn write_new(
     Ok(())
 }
 
+// Alias identity requires filesystem resolution; resolve_path_with tests the resolution policy.
+#[cfg_attr(test, mutants::skip)]
 pub fn same_path(left: &Path, right: &Path) -> Result<bool, AppError> {
-    Ok(resolve_path(left)? == resolve_path(right)?)
+    same_path_with(left, right, resolve_path)
 }
 
+fn same_path_with(
+    left: &Path,
+    right: &Path,
+    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+) -> Result<bool, AppError> {
+    Ok(resolve(left)? == resolve(right)?)
+}
+
+// Acquires the absolute path and native observations for the in-process resolver.
+#[cfg_attr(test, mutants::skip)]
 pub fn resolve_path(path: &Path) -> Result<PathBuf, AppError> {
     resolve_path_with(
         path,
         absolute(path).map_err(|error| WriteFileError::caused_by(path, error))?,
         |path| fs::canonicalize(path),
-        |path| fs::metadata(path),
+        |path| fs::metadata(path).map(|metadata| metadata.is_dir()),
     )
 }
 
@@ -55,7 +67,7 @@ fn resolve_path_with(
     path: &Path,
     mut ancestor: PathBuf,
     mut canonicalize: impl FnMut(&Path) -> Result<PathBuf, IoError>,
-    mut metadata: impl FnMut(&Path) -> Result<Metadata, IoError>,
+    mut is_directory: impl FnMut(&Path) -> Result<bool, IoError>,
 ) -> Result<PathBuf, AppError> {
     let mut suffix = Vec::<OsString>::new();
     loop {
@@ -65,8 +77,8 @@ fn resolve_path_with(
                 // Reacquire identity for existing components to preserve filesystem casing
                 // and short-name aliases rather than relying on lexical spelling.
                 for component in suffix.into_iter().rev() {
-                    match metadata(&resolved) {
-                        Ok(metadata) if !metadata.is_dir() => {
+                    match is_directory(&resolved) {
+                        Ok(false) => {
                             return Err(WriteFileError::caused_by(
                                 path,
                                 IoError::from(ErrorKind::NotADirectory),
@@ -115,6 +127,84 @@ mod tests {
     use std::mem;
 
     use super::*;
+
+    #[test]
+    fn aliases_compare_resolved_identity_and_propagate_resolution_errors() {
+        for same in [false, true] {
+            assert_eq!(
+                same_path_with(Path::new("first"), Path::new("second"), |path| {
+                    Ok(if same {
+                        PathBuf::from("actual")
+                    } else {
+                        path.into()
+                    })
+                })
+                .unwrap(),
+                same
+            );
+        }
+        same_path_with(Path::new("first"), Path::new("second"), |_| {
+            Err(IoError::other("identity").into())
+        })
+        .unwrap_err();
+    }
+
+    #[test]
+    fn missing_suffixes_require_directory_ancestors() {
+        let output = Path::new("root").join("missing").join("plan.json");
+        for directory in [true, false] {
+            let result = resolve_path_with(
+                &output,
+                output.clone(),
+                |path| {
+                    if path == Path::new("root") {
+                        Ok(PathBuf::from("canonical"))
+                    } else {
+                        Err(ErrorKind::NotFound.into())
+                    }
+                },
+                |path| {
+                    if path == Path::new("canonical") {
+                        Ok(directory)
+                    } else {
+                        Err(ErrorKind::NotFound.into())
+                    }
+                },
+            );
+            if directory {
+                assert_eq!(
+                    result.unwrap(),
+                    Path::new("canonical").join("missing").join("plan.json")
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().find_source::<IoError>().unwrap().kind(),
+                    ErrorKind::NotADirectory
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parent_suffix_reacquires_existing_aliases() {
+        let output = Path::new("root").join("missing").join("..").join("ALIAS");
+        let result = resolve_path_with(
+            &output,
+            output.clone(),
+            |path| {
+                if path == Path::new("root") || path == Path::new("canonical") {
+                    Ok(PathBuf::from("canonical"))
+                } else if path == Path::new("canonical").join("ALIAS") {
+                    Ok(Path::new("canonical").join("recorded"))
+                } else {
+                    Err(ErrorKind::NotFound.into())
+                }
+            },
+            |_| Ok(true),
+        )
+        .unwrap();
+        assert_eq!(result, Path::new("canonical").join("recorded"));
+    }
 
     #[test]
     fn an_initial_operational_error_is_not_retried_as_a_missing_suffix() {

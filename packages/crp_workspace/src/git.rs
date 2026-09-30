@@ -173,15 +173,18 @@ impl GitRepo {
         &self.prefix
     }
 
+    // Native query only; resolved_revision tests output normalization and failure contextualization.
+    #[cfg_attr(test, mutants::skip)]
     pub fn rev_parse(&self, rev: &str) -> Result<String, AppError> {
-        match run_capture(
-            "git",
-            &["rev-parse", "--verify", "--end-of-options", rev],
-            &self.root,
-        ) {
-            Ok(stdout) => Ok(stdout.trim().to_string()),
-            Err(error) => Err(UnresolvedRevisionError::caused_by(rev, error).into()),
-        }
+        resolved_revision(
+            rev,
+            run_capture(
+                "git",
+                &["rev-parse", "--verify", "--end-of-options", rev],
+                &self.root,
+            )
+            .map_err(Into::into),
+        )
     }
 
     /// Whether one resolved commit is an ancestor of another, including equality.
@@ -226,14 +229,11 @@ impl GitRepo {
     }
 
     /// First-parent commits reachable from `rev`, newest first, as full hashes.
+    // Git owns traversal; revision_lines interprets the acquired output in unit tests.
+    #[cfg_attr(test, mutants::skip)]
     pub fn first_parent_commits(&self, rev: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture("git", &["rev-list", "--first-parent", rev], &self.root)?;
-        Ok(stdout
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(ToOwned::to_owned)
-            .collect())
+        Ok(revision_lines(&stdout))
     }
 
     /// Whether `commit` has a parent that the walk must not treat as a true root.
@@ -241,17 +241,21 @@ impl GitRepo {
     /// A true root commit has no `parent` header. A shallow-boundary commit has
     /// one even though Git cannot resolve `commit^`, and reports `true` here so
     /// the caller reports truncated history instead of a root.
+    // Acquires native history observations; parent_boundary retains the lazy decision protocol.
+    #[cfg_attr(test, mutants::skip)]
     pub fn has_parent_or_is_shallow_boundary(&self, commit: &str) -> Result<bool, AppError> {
-        if !self.commit_has_parent_header(commit)? {
-            return Ok(false);
-        }
-        let spec = format!("{commit}^");
-        if run_capture_ok("git", &["rev-parse", "--verify", &spec], &self.root)?.is_some() {
-            return Ok(true);
-        }
-        self.is_shallow()
+        parent_boundary(
+            self.commit_has_parent_header(commit)?,
+            || {
+                let spec = format!("{commit}^");
+                Ok(run_capture_ok("git", &["rev-parse", "--verify", &spec], &self.root)?.is_some())
+            },
+            || self.is_shallow(),
+        )
     }
 
+    // The commit bytes come from Git; commit_parent_header tests header/message separation.
+    #[cfg_attr(test, mutants::skip)]
     pub fn commit_has_parent_header(&self, commit: &str) -> Result<bool, AppError> {
         // `cat-file -p` prints the `parent` header even when the parent object
         // was not fetched (shallow boundary). `rev-list --parents` omits that
@@ -260,10 +264,7 @@ impl GitRepo {
         // A blank line terminates the header block and the message follows, so
         // only the headers are inspected: a message body line that happens to
         // start with `parent ` must not make a root commit look parented.
-        Ok(stdout
-            .lines()
-            .take_while(|line| !line.is_empty())
-            .any(|line| line.starts_with("parent ")))
+        Ok(commit_parent_header(&stdout))
     }
 
     /// First-parent commits reachable from `rev` that touch a `Cargo.toml`.
@@ -271,6 +272,8 @@ impl GitRepo {
     /// Version and membership can change only on those commits, so classification
     /// reconstructs historical workspaces from this subset rather than every
     /// first-parent commit.
+    // Git selects the first-parent paths; retain_manifest_commits tests endpoint retention.
+    #[cfg_attr(test, mutants::skip)]
     pub fn first_parent_manifest_commits(
         &self,
         rev: &str,
@@ -286,29 +289,14 @@ impl GitRepo {
             &["rev-list", "--first-parent", rev, "--", paths[0], paths[1]],
             &self.root,
         )?;
-        let touching: HashSet<&str> = stdout
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
-        // Keep the selected revision and the oldest first-parent commit even when they
-        // do not touch a manifest, so the timeline still observes HEAD and can
-        // distinguish a true root from truncated history.
-        let newest = all.first().cloned();
-        let oldest = all.last().cloned();
-        Ok(all
-            .into_iter()
-            .filter(|commit| {
-                touching.contains(commit.as_str())
-                    || newest.as_deref() == Some(commit.as_str())
-                    || oldest.as_deref() == Some(commit.as_str())
-            })
-            .collect())
+        Ok(retain_manifest_commits(all, &stdout))
     }
 
+    // Native repository query; shallow_observation tests the answer independently of Git.
+    #[cfg_attr(test, mutants::skip)]
     pub fn is_shallow(&self) -> Result<bool, AppError> {
         let stdout = run_capture("git", &["rev-parse", "--is-shallow-repository"], &self.root)?;
-        Ok(stdout.trim() == "true")
+        Ok(shallow_observation(&stdout))
     }
 
     /// Text at `commit:rel_path`, or `None` if the path is absent.
@@ -317,35 +305,22 @@ impl GitRepo {
     /// content Cargo could never have parsed into a different, parseable
     /// document and classify a package against text Git does not store, so a
     /// blob that is not valid UTF-8 is reported instead.
+    // Acquires a blob before the pure, strict text decoder; boundary tests cover addressing.
+    #[cfg_attr(test, mutants::skip)]
     pub fn show_file(&self, commit: &str, rel_path: &str) -> Result<Option<String>, AppError> {
-        match self.show_file_bytes(commit, rel_path)? {
-            Some(bytes) => String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|error| NonUtf8BlobError::caused_by(commit, rel_path, error).into()),
-            None => Ok(None),
-        }
+        decode_file(self.show_file_bytes(commit, rel_path)?, commit, rel_path)
     }
 
     /// Raw bytes at `commit:rel_path`, or `None` if the path is absent.
+    // Git lookup is native; optional_git_file distinguishes absence from command failure.
+    #[cfg_attr(test, mutants::skip)]
     pub fn show_file_bytes(
         &self,
         commit: &str,
         rel_path: &str,
     ) -> Result<Option<Vec<u8>>, AppError> {
         let spec = format!("{commit}:{rel_path}");
-        match run_capture_bytes("git", &["show", &spec], &self.root) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(error) => {
-                if error
-                    .find_source::<CommandFailedError>()
-                    .is_some_and(|failed| is_absent_git_path(failed.stderr()))
-                {
-                    Ok(None)
-                } else {
-                    Err(error)
-                }
-            }
-        }
+        optional_git_file(run_capture_bytes("git", &["show", &spec], &self.root))
     }
 
     /// Paths under `pathspec` that Git records in the index.
@@ -354,6 +329,8 @@ impl GitRepo {
     /// tracked until it is staged. Callers that need work-tree presence check
     /// for it separately, so that a deleted released file is still recognised
     /// as one.
+    // Native index query; pathspec construction and lossless split_z parsing have unit coverage.
+    #[cfg_attr(test, mutants::skip)]
     pub fn ls_files(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture_bytes(
             "git",
@@ -371,14 +348,12 @@ impl GitRepo {
     /// opens manifest-declared resources through that checkout. An empty input
     /// answers without invoking Git, because `git ls-files` with no pathspec
     /// lists the whole repository.
+    // Native query only; tracked_paths_with tests empty selection and case-aware pathspecs.
+    #[cfg_attr(test, mutants::skip)]
     pub fn tracked_paths(&self, paths: &[&str], case: PathCase) -> Result<Vec<String>, AppError> {
-        if paths.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
-        args.extend(paths.iter().map(|path| cased_pathspec(path, case)));
-        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        split_z(&stdout)
+        Self::tracked_paths_with(paths, case, |args| {
+            run_capture_os_bytes("git", args, &self.root)
+        })
     }
 
     /// Modes under `pathspecs` that affect packaged work-tree content.
@@ -392,10 +367,36 @@ impl GitRepo {
     ///
     /// An empty input answers without invoking Git, because `git ls-files` with
     /// no pathspec lists the whole repository.
+    // Native queries only; work_tree_modes_with tests admission and both acquired record streams.
+    #[cfg_attr(test, mutants::skip)]
     pub fn work_tree_modes(
         &self,
         pathspecs: &[&str],
         case: PathCase,
+    ) -> Result<WorkTreeModes, AppError> {
+        Self::work_tree_modes_with(pathspecs, case, |args| {
+            run_capture_os_bytes("git", args, &self.root)
+        })
+    }
+
+    fn tracked_paths_with(
+        paths: &[&str],
+        case: PathCase,
+        run: impl FnOnce(&[String]) -> Result<Vec<u8>, AppError>,
+    ) -> Result<Vec<String>, AppError> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
+        args.extend(paths.iter().map(|path| cased_pathspec(path, case)));
+        let stdout = run(&args)?;
+        split_z(&stdout)
+    }
+
+    fn work_tree_modes_with(
+        pathspecs: &[&str],
+        case: PathCase,
+        mut run: impl FnMut(&[String]) -> Result<Vec<u8>, AppError>,
     ) -> Result<WorkTreeModes, AppError> {
         if pathspecs.is_empty() {
             return Ok(WorkTreeModes::default());
@@ -411,13 +412,7 @@ impl GitRepo {
                 .iter()
                 .map(|pathspec| cased_pathspec(pathspec, case)),
         );
-        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        let mut modes = WorkTreeModes::default();
-        for record in split_z(&stdout)? {
-            if let Some((mode, path)) = staged_path_mode(&record) {
-                modes.set(path, mode);
-            }
-        }
+        let index = run(&args)?;
 
         let mut args = vec![
             "diff-files".to_string(),
@@ -431,9 +426,7 @@ impl GitRepo {
                 .iter()
                 .map(|pathspec| cased_pathspec(pathspec, case)),
         );
-        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        overlay_work_tree_modes(&stdout, &mut modes)?;
-        Ok(modes)
+        work_tree_modes_from_outputs(&index, || run(&args))
     }
 
     /// Untracked, non-ignored paths under `pathspec`.
@@ -463,6 +456,8 @@ impl GitRepo {
     /// the only place that distinction survives; and the object id is the
     /// content identity Git itself compares by, which is what a work-tree file
     /// has to be compared against once a filter stands between the two.
+    // Native tree query; split_z and TreeEntry::parse retain in-process interpretation coverage.
+    #[cfg_attr(test, mutants::skip)]
     pub fn ls_tree(&self, commit: &str, pathspecs: &[&str]) -> Result<Vec<TreeEntry>, AppError> {
         let mut args = vec![
             "ls-tree".to_string(),
@@ -491,6 +486,8 @@ impl GitRepo {
     /// stateful clean filter twice. This changes no ref, index entry, or work-tree
     /// path; unreachable blobs remain subject to ordinary Git garbage collection.
     /// Ids come back in the order the paths were given.
+    // Git owns clean-filter execution and object writes; batching and revision_lines are pure.
+    #[cfg_attr(test, mutants::skip)]
     pub fn hash_objects(&self, rel_paths: &[&str]) -> Result<Vec<String>, AppError> {
         let mut ids = Vec::with_capacity(rel_paths.len());
         for chunk in command_line_batches(rel_paths, PATH_ARG_BUDGET)? {
@@ -498,23 +495,21 @@ impl GitRepo {
             // and copying them would duplicate every path in the request.
             let args = ["hash-object", "-w", "--"].into_iter().chain(chunk);
             let stdout = run_capture_os_bytes("git", args, &self.root)?;
-            ids.extend(
-                String::from_utf8_lossy(&stdout)
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(ToOwned::to_owned),
-            );
+            ids.extend(revision_lines(&String::from_utf8_lossy(&stdout)));
         }
         Ok(ids)
     }
 
     /// Bytes of a blob already present in Git's object database.
+    // Trivial native command forwarder; binary blob boundary tests verify lossless output.
+    #[cfg_attr(test, mutants::skip)]
     pub fn show_blob_bytes(&self, id: &str) -> Result<Vec<u8>, AppError> {
         run_capture_bytes("git", &["cat-file", "blob", id], &self.root)
     }
 
     /// Every path at `commit`, used to reconstruct historical package metadata.
+    // Native tree query with the separately unit-tested lossless path decoder.
+    #[cfg_attr(test, mutants::skip)]
     pub fn ls_tree_paths(&self, commit: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture_bytes(
             "git",
@@ -523,6 +518,104 @@ impl GitRepo {
         )?;
         split_z(&stdout)
     }
+}
+
+fn resolved_revision(revision: &str, result: Result<String, AppError>) -> Result<String, AppError> {
+    result
+        .map(|stdout| stdout.trim().to_owned())
+        .map_err(|error| UnresolvedRevisionError::caused_by(revision, error).into())
+}
+
+fn revision_lines(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn commit_parent_header(stdout: &str) -> bool {
+    stdout
+        .lines()
+        .take_while(|line| !line.is_empty())
+        .any(|line| line.starts_with("parent "))
+}
+
+fn parent_boundary(
+    has_header: bool,
+    resolve_parent: impl FnOnce() -> Result<bool, AppError>,
+    is_shallow: impl FnOnce() -> Result<bool, AppError>,
+) -> Result<bool, AppError> {
+    if !has_header {
+        return Ok(false);
+    }
+    if resolve_parent()? {
+        return Ok(true);
+    }
+    is_shallow()
+}
+
+fn shallow_observation(stdout: &str) -> bool {
+    stdout.trim() == "true"
+}
+
+fn retain_manifest_commits(all: Vec<String>, stdout: &str) -> Vec<String> {
+    let touching: HashSet<String> = revision_lines(stdout).into_iter().collect();
+    // Both endpoints are needed even when no manifest changed, to distinguish creation
+    // from truncated history. Ref: packages/cargo-release-plan/docs/implementation.md.
+    let newest = all.first().cloned();
+    let oldest = all.last().cloned();
+    all.into_iter()
+        .filter(|commit| {
+            touching.contains(commit)
+                || newest.as_ref() == Some(commit)
+                || oldest.as_ref() == Some(commit)
+        })
+        .collect()
+}
+
+fn decode_file(
+    bytes: Option<Vec<u8>>,
+    commit: &str,
+    path: &str,
+) -> Result<Option<String>, AppError> {
+    bytes
+        .map(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|error| NonUtf8BlobError::caused_by(commit, path, error).into())
+        })
+        .transpose()
+}
+
+fn optional_git_file(result: Result<Vec<u8>, AppError>) -> Result<Option<Vec<u8>>, AppError> {
+    match result {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) => {
+            if error
+                .find_source::<CommandFailedError>()
+                .is_some_and(|failed| is_absent_git_path(failed.stderr()))
+            {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+fn work_tree_modes_from_outputs(
+    index: &[u8],
+    diff: impl FnOnce() -> Result<Vec<u8>, AppError>,
+) -> Result<WorkTreeModes, AppError> {
+    let mut modes = WorkTreeModes::default();
+    for record in split_z(index)? {
+        if let Some((mode, path)) = staged_path_mode(&record) {
+            modes.set(path, mode);
+        }
+    }
+    overlay_work_tree_modes(&diff()?, &mut modes)?;
+    Ok(modes)
 }
 
 /// Strips the single record terminator `git` writes after a value.
@@ -795,8 +888,221 @@ fn split_z(stdout: &[u8]) -> Result<Vec<String>, AppError> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::io;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt as _;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
 
     use super::*;
+
+    #[test]
+    fn acquired_git_queries_do_not_turn_empty_selection_into_all_repository_paths() {
+        assert!(
+            GitRepo::tracked_paths_with(&[], PathCase::Sensitive, |_| panic!("empty query"))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            GitRepo::work_tree_modes_with(&[], PathCase::Sensitive, |_| panic!("empty query"))
+                .unwrap(),
+            WorkTreeModes::default()
+        );
+        assert_eq!(
+            GitRepo::tracked_paths_with(&["resource"], PathCase::Insensitive, |args| {
+                assert_eq!(args, ["ls-files", "-z", "--", ":(icase,literal)resource"]);
+                Ok(b"recorded resource\0".to_vec())
+            })
+            .unwrap(),
+            ["recorded resource"]
+        );
+        let mut calls = 0;
+        let modes = GitRepo::work_tree_modes_with(&["pkg"], PathCase::Sensitive, |args| {
+            calls += 1;
+            Ok(match calls {
+                1 => {
+                    assert_eq!(args, ["ls-files", "-s", "-z", "--", ":(literal)pkg"]);
+                    b"100755 abc 0\tscript\0".to_vec()
+                }
+                2 => {
+                    assert_eq!(
+                        args,
+                        [
+                            "diff-files",
+                            "--raw",
+                            "-z",
+                            "--no-renames",
+                            "--",
+                            ":(literal)pkg"
+                        ]
+                    );
+                    b":100755 100644 old new M\0script\0:100644 120000 old new M\0link\0".to_vec()
+                }
+                _ => panic!("only index and work-tree observations"),
+            })
+        })
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert!(!modes.is_executable("script"));
+        assert!(modes.is_symlink("link"));
+        assert!(
+            GitRepo::tracked_paths_with(&["pkg"], PathCase::Sensitive, |_| Err(io::Error::other(
+                "index"
+            )
+            .into()))
+            .unwrap_err()
+            .find_source::<io::Error>()
+            .is_some()
+        );
+        for fail_at in [1, 2] {
+            let mut calls = 0;
+            assert!(
+                GitRepo::work_tree_modes_with(&["pkg"], PathCase::Sensitive, |_| {
+                    calls += 1;
+                    if calls == fail_at {
+                        Err(io::Error::other("modes").into())
+                    } else {
+                        Ok(vec![])
+                    }
+                })
+                .unwrap_err()
+                .find_source::<io::Error>()
+                .is_some()
+            );
+            assert_eq!(calls, fail_at);
+        }
+    }
+
+    #[test]
+    fn acquired_revision_output_is_normalized_and_failures_keep_their_cause() {
+        assert_eq!(
+            resolved_revision("main", Ok("  full-hash\n".into())).unwrap(),
+            "full-hash"
+        );
+        let error =
+            resolved_revision("missing", Err(io::Error::other("git failure").into())).unwrap_err();
+        assert!(error.find_source::<UnresolvedRevisionError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+    }
+
+    #[test]
+    fn repository_prefix_is_not_a_filesystem_observation() {
+        let git = GitRepo {
+            root: PathBuf::from("unused"),
+            prefix: "nested/workspace".to_owned(),
+        };
+        assert_eq!(git.prefix(), "nested/workspace");
+    }
+
+    #[test]
+    fn acquired_history_retains_endpoints_and_manifest_changes_in_order() {
+        assert_eq!(
+            revision_lines(" newest\n\n middle \noldest\n"),
+            ["newest", "middle", "oldest"]
+        );
+        assert_eq!(
+            retain_manifest_commits(
+                ["newest", "unrelated", "changed", "oldest"]
+                    .map(str::to_owned)
+                    .into(),
+                "changed\nside-branch\n\n",
+            ),
+            ["newest", "changed", "oldest"]
+        );
+        assert_eq!(retain_manifest_commits(vec!["only".into()], ""), ["only"]);
+        assert!(retain_manifest_commits(vec![], "outside").is_empty());
+        assert!(!commit_parent_header(
+            "tree object\n\nparent only-in-message\n"
+        ));
+        assert!(commit_parent_header(
+            "tree object\nparent actual\n\nmessage\n"
+        ));
+        assert!(shallow_observation(" true\n"));
+        assert!(!shallow_observation("false\n"));
+    }
+
+    #[test]
+    fn parent_observations_distinguish_roots_resolved_parents_and_shallow_boundaries() {
+        assert!(
+            !parent_boundary(false, || panic!("root has no parent"), || panic!("root")).unwrap()
+        );
+        assert!(parent_boundary(true, || Ok(true), || panic!("resolved parent")).unwrap());
+        for shallow in [false, true] {
+            assert_eq!(
+                parent_boundary(true, || Ok(false), || Ok(shallow)).unwrap(),
+                shallow
+            );
+        }
+        let error = parent_boundary(
+            true,
+            || Err(io::Error::other("parent query").into()),
+            || panic!("failed query"),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<io::Error>().is_some());
+        let error = parent_boundary(
+            true,
+            || Ok(false),
+            || Err(io::Error::other("shallow query").into()),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<io::Error>().is_some());
+    }
+
+    #[test]
+    fn captured_files_preserve_binary_bytes_and_only_missing_paths_are_optional() {
+        assert_eq!(
+            optional_git_file(Ok(vec![0xff, 0])).unwrap(),
+            Some(vec![0xff, 0])
+        );
+        assert_eq!(decode_file(None, "commit", "path").unwrap(), None);
+        assert_eq!(
+            decode_file(Some(b"text\n".to_vec()), "commit", "path").unwrap(),
+            Some("text\n".into())
+        );
+        assert!(
+            decode_file(Some(vec![0xff]), "commit", "path")
+                .unwrap_err()
+                .find_source::<NonUtf8BlobError>()
+                .is_some()
+        );
+        #[cfg(unix)]
+        let status = ExitStatus::from_raw(1 << 8);
+        #[cfg(windows)]
+        let status = ExitStatus::from_raw(1);
+        for diagnostic in [
+            "fatal: path 'file' does not exist in 'commit'",
+            "fatal: path 'file' exists on disk, but not in 'commit'",
+        ] {
+            assert_eq!(
+                optional_git_file(Err(
+                    CommandFailedError::new("git", status, diagnostic).into()
+                ))
+                .unwrap(),
+                None
+            );
+        }
+        optional_git_file(Err(
+            CommandFailedError::new("git", status, "bad object").into()
+        ))
+        .unwrap_err();
+        optional_git_file(Err(io::Error::other("pipe").into())).unwrap_err();
+    }
+
+    #[test]
+    fn acquired_modes_preserve_index_entries_and_apply_work_tree_overrides() {
+        let modes = work_tree_modes_from_outputs(b"100755 abc 0\tplain\0invalid\0", || {
+            Ok(b":100644 100755 old new M\0script\0:100755 100644 old new M\0plain\0".to_vec())
+        })
+        .unwrap();
+        assert!(modes.is_executable("script"));
+        assert!(!modes.is_executable("plain"));
+        assert!(!modes.is_executable("missing"));
+        work_tree_modes_from_outputs(b"\xff\0", || panic!("invalid index stops acquisition"))
+            .unwrap_err();
+        work_tree_modes_from_outputs(b"", || Ok(b"\xff\0".to_vec())).unwrap_err();
+    }
 
     #[test]
     fn a_recorded_remote_head_is_the_default_release_history() {
