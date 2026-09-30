@@ -16,7 +16,7 @@
 //! are an implementation detail carrying no stability contract, which is why they are hidden from
 //! the generated documentation.
 
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(all(coverage_nightly, windows), feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // The exported surface below is an implementation detail, so it is hidden from the rendered
 // documentation. Hiding it only under `docsrs` is deliberate: the external-types check reads

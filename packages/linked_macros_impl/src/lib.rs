@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Copyright (c) Folo authors.
 
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(
     missing_docs,
