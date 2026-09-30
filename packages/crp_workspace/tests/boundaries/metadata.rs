@@ -1,7 +1,7 @@
 //! External acquisition for metadata.
 
-use std::fs;
 use std::path::Path;
+use std::{fs, slice};
 
 use crp_workspace::metadata::*;
 use serde_json::{Value, from_slice};
@@ -15,7 +15,7 @@ fn captured_metadata_uses_the_selected_manifest_without_resolving_dependencies()
     with_io_test(|| {
         let directory = tempdir().unwrap();
         let member = directory.path().join("selected");
-        fs::create_dir(&member).unwrap();
+        fs::create_dir_all(&member).unwrap();
         let manifest = member.join("Cargo.toml");
         fs::write(
             &manifest,
@@ -30,7 +30,7 @@ fn captured_metadata_uses_the_selected_manifest_without_resolving_dependencies()
         let package = metadata.packages.first().unwrap();
         assert_eq!(package.name, "selected");
         assert_eq!(package.version, "2.3.4");
-        assert_eq!(metadata.workspace_members, [package.id.clone()]);
+        assert_eq!(metadata.workspace_members, slice::from_ref(&package.id));
         assert_eq!(
             Path::new(&package.manifest_path).canonicalize().unwrap(),
             manifest.canonicalize().unwrap()
@@ -39,9 +39,9 @@ fn captured_metadata_uses_the_selected_manifest_without_resolving_dependencies()
         assert_eq!(raw.get("resolve"), Some(&Value::Null));
         assert!(!member.join("Cargo.lock").try_exists().unwrap());
 
-        assert!(capture_metadata(&member.join("missing.toml")).is_err());
+        capture_metadata(&member.join("missing.toml")).unwrap_err();
         fs::write(&manifest, "[invalid TOML").unwrap();
-        assert!(capture_metadata(&manifest).is_err());
+        capture_metadata(&manifest).unwrap_err();
     });
 }
 
