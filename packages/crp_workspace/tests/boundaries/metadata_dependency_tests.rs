@@ -226,24 +226,33 @@ fn member_identity_failures_do_not_become_negative_membership() {
     let member = directory.path().join("member");
     let mut members =
         BTreeMap::from([(directory.path().join("via/../member"), "member".to_string())]);
-    let canonical = canonical_members_by_dir(&members).unwrap();
+    let canonical = canonical_members_by_dir_with(&members, |path| fs::canonicalize(path)).unwrap();
     assert_eq!(
         canonical,
         BTreeMap::from([(fs::canonicalize(&member).unwrap(), "member".to_string())])
     );
     assert_eq!(
-        resolved_member(directory.path(), "member", &members, &canonical).unwrap(),
+        resolved_member_with(directory.path(), "member", &members, &canonical, |path| {
+            fs::canonicalize(path)
+        })
+        .unwrap(),
         Some("member")
     );
     assert_eq!(
-        resolved_member(directory.path(), "outside", &members, &canonical).unwrap(),
+        resolved_member_with(directory.path(), "outside", &members, &canonical, |path| {
+            fs::canonicalize(path)
+        })
+        .unwrap(),
         None
     );
-    let error = resolved_member(directory.path(), "absent", &members, &canonical).unwrap_err();
+    let error = resolved_member_with(directory.path(), "absent", &members, &canonical, |path| {
+        fs::canonicalize(path)
+    })
+    .unwrap_err();
     assert!(error.to_string().contains("absent"));
     assert!(error.find_source::<std::io::Error>().is_some());
     members.insert(directory.path().join("missing"), "missing".to_owned());
-    let error = canonical_members_by_dir(&members).unwrap_err();
+    let error = canonical_members_by_dir_with(&members, |path| fs::canonicalize(path)).unwrap_err();
     assert!(error.to_string().contains("missing"));
     assert!(error.find_source::<std::io::Error>().is_some());
 }

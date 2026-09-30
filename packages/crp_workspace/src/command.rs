@@ -68,6 +68,8 @@ pub const BUILD_CREDENTIAL_VARIABLES: &[&str] = &[
 ];
 
 /// Hashes captured input bytes without writing an object into the repository.
+// Git owns object hashing; its invocation and output are checked by command boundary tests.
+#[cfg_attr(test, mutants::skip)]
 pub fn hash_bytes(bytes: &[u8], cwd: &Path) -> Result<String, AppError> {
     run_capture_input("git", &["hash-object", "--stdin"], bytes, cwd)
         .map(|output| output.trim().to_owned())
@@ -75,6 +77,8 @@ pub fn hash_bytes(bytes: &[u8], cwd: &Path) -> Result<String, AppError> {
 }
 
 /// Sends captured bytes to a subprocess without involving a shell or staging file.
+// Pipe ownership and child execution require a real subprocess; captured_output tests the verdict.
+#[cfg_attr(test, mutants::skip)]
 pub fn run_capture_input(
     program: &str,
     args: &[&str],
@@ -100,15 +104,7 @@ pub fn run_capture_input(
     let output = child
         .wait_with_output()
         .map_err(|error| CommandIoError::caused_by(program, error))?;
-    if !output.status.success() {
-        return Err(CommandFailedError::new(
-            program,
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        )
-        .into());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    captured_output(program, output).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Runs `program` with `args` in `cwd` and returns UTF-8 stdout on success.
@@ -116,6 +112,8 @@ pub fn run_capture_input(
 /// # Errors
 ///
 /// Returns an error when invocation fails or the command exits unsuccessfully.
+// Argument-forwarding adapter; native command boundary tests cover the actual invocation.
+#[cfg_attr(test, mutants::skip)]
 pub fn run_capture(program: &str, args: &[&str], cwd: &Path) -> Result<String, CommandError> {
     run_capture_os(program, args, cwd)
 }
@@ -125,27 +123,22 @@ pub fn run_capture(program: &str, args: &[&str], cwd: &Path) -> Result<String, C
 /// Stdout is decoded lossily, so this is for output that is not a file name:
 /// path listings go through [`run_capture_os_bytes`] and are decoded strictly,
 /// because replacing a byte in a name would silently name a different file.
+// Native acquisition delegates the success/error decision to captured_output.
+#[cfg_attr(test, mutants::skip)]
 pub fn run_capture_os(
     program: &str,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
 ) -> Result<String, CommandError> {
-    let output = spawn(program, args, cwd)?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        Err(CommandFailedError::new(
-            program,
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        )
-        .into())
-    }
+    captured_output(program, spawn(program, args, cwd)?)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Like [`run_capture`], mapping a non-zero exit to `Ok(None)`.
 ///
 /// Spawn failures still error.
+// Native optional-output forwarding; optional_capture owns absence versus operational failure.
+#[cfg_attr(test, mutants::skip)]
 pub fn run_capture_ok(
     program: &str,
     args: &[&str],
@@ -158,17 +151,24 @@ pub fn run_capture_ok(
 }
 
 /// Runs `program` and returns raw stdout on success.
+// This adapter only converts argument types before native execution.
+#[cfg_attr(test, mutants::skip)]
 pub fn run_capture_bytes(program: &str, args: &[&str], cwd: &Path) -> Result<Vec<u8>, AppError> {
     run_capture_os_bytes(program, args.iter().map(OsStr::new), cwd)
 }
 
 /// Runs `program` with OS-str arguments and returns raw stdout on success.
+// Native acquisition delegates lossless bytes and status interpretation to captured_output.
+#[cfg_attr(test, mutants::skip)]
 pub fn run_capture_os_bytes(
     program: &str,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
 ) -> Result<Vec<u8>, AppError> {
-    let output = spawn(program, args, cwd)?;
+    captured_output(program, spawn(program, args, cwd)?).map_err(Into::into)
+}
+
+fn captured_output(program: &str, output: Output) -> Result<Vec<u8>, CommandError> {
     if output.status.success() {
         Ok(output.stdout)
     } else {
@@ -184,12 +184,18 @@ pub fn run_capture_os_bytes(
 /// Like [`run_capture_ok`], keeping stdout as raw bytes.
 ///
 /// Binary files can then be compared without UTF-8 replacement.
+// The subprocess is integration-only; optional_capture remains mutation-tested in process.
+#[cfg_attr(test, mutants::skip)]
 pub fn run_capture_ok_bytes(
     program: &str,
     args: &[&str],
     cwd: &Path,
 ) -> Result<Option<Vec<u8>>, AppError> {
-    match run_capture_bytes(program, args, cwd) {
+    optional_capture(run_capture_bytes(program, args, cwd))
+}
+
+fn optional_capture(result: Result<Vec<u8>, AppError>) -> Result<Option<Vec<u8>>, AppError> {
+    match result {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) => {
             if error
@@ -274,6 +280,53 @@ mod tests {
         assert_eq!(subprocess_cwd(Path::new("packages")), Path::new("packages"));
     }
 
+    fn status(code: u32) -> ExitStatus {
+        #[cfg(unix)]
+        return ExitStatus::from_raw(i32::try_from(code).unwrap() << 8);
+        #[cfg(windows)]
+        return ExitStatus::from_raw(code);
+    }
+
+    #[test]
+    fn captured_output_preserves_bytes_and_failed_command_diagnostics() {
+        let bytes = vec![0xff, 0, b'\n', b'x'];
+        let output = Output {
+            status: status(0),
+            stdout: bytes.clone(),
+            stderr: b"unused diagnostic".to_vec(),
+        };
+        assert_eq!(captured_output("git", output).unwrap(), bytes);
+        let error = captured_output(
+            "git",
+            Output {
+                status: status(23),
+                stdout: b"partial".to_vec(),
+                stderr: b"  rejected input\n".to_vec(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.is_nonzero_exit());
+        assert_eq!(
+            error.find_source::<CommandFailedError>().unwrap().stderr(),
+            "rejected input"
+        );
+    }
+
+    #[test]
+    fn optional_capture_distinguishes_empty_output_absence_and_io_failure() {
+        assert_eq!(optional_capture(Ok(vec![])).unwrap(), Some(vec![]));
+        assert_eq!(optional_capture(Ok(vec![0xff])).unwrap(), Some(vec![0xff]));
+        let failure = CommandFailedError::new("git", status(1), "absent");
+        assert_eq!(optional_capture(Err(failure.into())).unwrap(), None);
+        let error = optional_capture(Err(CommandIoError::caused_by(
+            "git",
+            io::Error::other("pipe"),
+        )
+        .into()))
+        .unwrap_err();
+        assert!(error.find_source::<io::Error>().is_some());
+    }
+
     #[test]
     fn command_failure_reports_only_normal_nonzero_exits() {
         // Distinct ordinary failures must not collapse to a generic diagnostic.
@@ -297,6 +350,9 @@ mod tests {
     fn signal_termination_is_an_operational_failure() {
         // POSIX wait status for a process terminated by SIGTERM.
         let status = ExitStatus::from_raw(15);
+        let failure = CommandFailedError::new("git", status, "terminated");
+        let error = optional_capture(Err(failure.into())).unwrap_err();
+        assert!(error.find_source::<CommandFailedError>().is_some());
         let failure = CommandFailedError::new("git", status, "terminated");
         let error = CommandError::from(failure);
         assert!(!error.is_nonzero_exit());

@@ -50,7 +50,14 @@ fn historical_registry_configuration_overlays_ambient_using_recorded_files() {
         ),
     ]);
     assert_eq!(
-        historical_registries(&git, "HEAD", &ambient, &paths, PathCase::Sensitive).unwrap(),
+        historical_registries_with(
+            git.prefix(),
+            &ambient,
+            &paths,
+            PathCase::Sensitive,
+            |path| git.show_file("HEAD", path)
+        )
+        .unwrap(),
         BTreeMap::from([
             (
                 "ambient".to_owned(),
@@ -67,7 +74,9 @@ fn historical_registry_configuration_overlays_ambient_using_recorded_files() {
         ])
     );
     assert_eq!(
-        historical_registries(&git, "HEAD", &ambient, &[], PathCase::Sensitive).unwrap(),
+        historical_registries_with(git.prefix(), &ambient, &[], PathCase::Sensitive, |path| git
+            .show_file("HEAD", path))
+        .unwrap(),
         ambient
     );
 }
@@ -91,10 +100,16 @@ fn historical_registry_configuration_preserves_parse_errors() {
     let git = fixture.repo();
     let paths = git.ls_tree_paths("HEAD").unwrap();
     assert!(
-        historical_registries(&git, "HEAD", &BTreeMap::new(), &paths, PathCase::Sensitive)
-            .unwrap_err()
-            .find_source::<toml_edit::TomlError>()
-            .is_some()
+        historical_registries_with(
+            git.prefix(),
+            &BTreeMap::new(),
+            &paths,
+            PathCase::Sensitive,
+            |path| git.show_file("HEAD", path)
+        )
+        .unwrap_err()
+        .find_source::<toml_edit::TomlError>()
+        .is_some()
     );
 }
 
@@ -127,13 +142,13 @@ fn historical_paths_read_target_versions_from_their_own_workspace() {
         patches: installation_patches(&root),
         ..InstallationGraph::default()
     };
-    resolve_historical_installation_paths(
+    resolve_historical_installation_paths_with(
         &mut installation,
         BTreeMap::new(),
         &git,
-        "HEAD",
         &paths,
         PathCase::Sensitive,
+        |path| git.show_file("HEAD", path),
     );
     assert_eq!(
         installation
