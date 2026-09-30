@@ -203,6 +203,17 @@ mod tests {
     }
 
     #[test]
+    fn tracked_membership_normalizes_current_directory_components() {
+        let paths = [
+            PathBuf::from(".").join("Cargo.toml"),
+            PathBuf::from(".").join("package").join("Cargo.toml"),
+        ];
+        require_tracked_paths(b"Cargo.toml\0package/Cargo.toml\0", &paths).unwrap();
+        assert_eq!(tracked_path_key(&paths[0]).unwrap(), b"Cargo.toml");
+        assert_eq!(tracked_path_key(&paths[1]).unwrap(), b"package/Cargo.toml");
+    }
+
+    #[test]
     fn tracked_membership_rejects_invalid_paths_and_truncated_output() {
         for path in ["", ".", "../Cargo.toml", "package/../Cargo.toml"] {
             let error = require_tracked_paths(b"Cargo.toml\0", &[PathBuf::from(path)]).unwrap_err();

@@ -293,6 +293,10 @@ fn metadata_projection_requires_tracked_members_and_agreement_on_publication() {
             assert_eq!(work.version_targets.len(), 1);
             assert_eq!(work.version_targets.first().unwrap().name, "pkg");
             assert_eq!(
+                work.target_versions(),
+                BTreeMap::from([("pkg".into(), Version::new(1, 0, 0))])
+            );
+            assert_eq!(
                 work.version_targets.first().unwrap().publishable,
                 cargo_publish && raw_publish
             );

@@ -4,7 +4,46 @@ use std::fs;
 use std::path::Path;
 
 use crp_workspace::metadata::*;
+use serde_json::{Value, from_slice};
 use tempfile::tempdir;
+
+use crate::with_io_test;
+
+#[test]
+#[cfg_attr(miri, ignore = "Runs Cargo metadata against real manifests.")]
+fn captured_metadata_uses_the_selected_manifest_without_resolving_dependencies() {
+    with_io_test(|| {
+        let directory = tempdir().unwrap();
+        let member = directory.path().join("selected");
+        fs::create_dir(&member).unwrap();
+        let manifest = member.join("Cargo.toml");
+        fs::write(
+            &manifest,
+            "[package]\nname='selected'\nversion='2.3.4'\n[workspace]\n[lib]\npath='library.rs'\n",
+        )
+        .unwrap();
+        fs::write(member.join("library.rs"), "").unwrap();
+
+        let bytes = capture_metadata(&manifest).unwrap();
+        let metadata: MetadataJson = from_slice(&bytes).unwrap();
+        assert_eq!(metadata.packages.len(), 1);
+        let package = metadata.packages.first().unwrap();
+        assert_eq!(package.name, "selected");
+        assert_eq!(package.version, "2.3.4");
+        assert_eq!(metadata.workspace_members, [package.id.clone()]);
+        assert_eq!(
+            Path::new(&package.manifest_path).canonicalize().unwrap(),
+            manifest.canonicalize().unwrap()
+        );
+        let raw: Value = from_slice(&bytes).unwrap();
+        assert_eq!(raw.get("resolve"), Some(&Value::Null));
+        assert!(!member.join("Cargo.lock").try_exists().unwrap());
+
+        assert!(capture_metadata(&member.join("missing.toml")).is_err());
+        fs::write(&manifest, "[invalid TOML").unwrap();
+        assert!(capture_metadata(&manifest).is_err());
+    });
+}
 
 #[cfg_attr(
     miri,
