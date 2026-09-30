@@ -1,11 +1,13 @@
 use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsStr;
+#[cfg(feature = "private-test-util")]
+use std::mem;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{fs, io, mem};
+use std::{fs, io};
 
 use crp_diag::DiagnosticSink;
 #[cfg(feature = "private-test-util")]

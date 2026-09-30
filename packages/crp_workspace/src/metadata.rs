@@ -460,6 +460,8 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
 }
 
 /// Captures unresolved Cargo metadata for classification and publication views.
+// Native path probing and Cargo execution are covered by the metadata boundary tests.
+#[cfg_attr(test, mutants::skip)]
 pub fn capture_metadata(manifest_path: &Path) -> Result<Vec<u8>, AppError> {
     // Named registries come from the selected workspace's Cargo configuration,
     // not an unrelated directory from which this tool happens to be invoked.

@@ -345,6 +345,15 @@ mod tests {
         assert!(error.find_source::<io::Error>().is_some());
     }
 
+    #[test]
+    fn exit_classification_does_not_infer_failure_from_the_diagnostic_type() {
+        // Production constructs this diagnostic only for failed commands, but its crate-visible
+        // constructor accepts any status. Exercise the query's defensive successful-exit case.
+        let failure = CommandFailedError::new("git", status(0), "captured diagnostic");
+        assert!(!failure.is_nonzero_exit());
+        assert!(!CommandError::from(failure).is_nonzero_exit());
+    }
+
     #[cfg(unix)]
     #[test]
     fn signal_termination_is_an_operational_failure() {
