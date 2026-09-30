@@ -401,6 +401,9 @@ covered by tests. For example:
 To exclude code from coverage measurement, mark it with
 `#[cfg_attr(coverage_nightly, coverage(off))]`. This also requires
 `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` on the crate level.
+If every coverage annotation is in `#[cfg(test)]` code, use
+`#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]` instead,
+so ordinary library builds do not enable an unused unstable feature.
 
 Note that `coverage(off)` applies to entire functions, not to individual branches.
 Defensive branches inside a function (e.g. `debug_assert!(false)` for structurally

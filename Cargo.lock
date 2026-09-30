@@ -492,7 +492,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-figures"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "cbh_analyze",
  "cbh_detect",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-github"
-version = "0.2.15"
+version = "0.2.16"
 dependencies = [
  "cargo-detect-package",
  "cbh_config",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-stress"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "all_the_time",
  "cargo-bench-history",
@@ -665,7 +665,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbh_analyze"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "anyspawn",
  "cbh_command",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_cli"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "cbh_command",
  "cbh_model",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_codec"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "alloc_tracker",
  "cbh_model",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_command"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "cbh_model",
  "mutants",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_config"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "cbh_command",
  "mutants",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_detect"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "anyspawn",
  "cbh_model",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_diag"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "mutants",
  "testing",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_engines"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_git"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "cbh_model",
  "futures",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_model"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "criterion",
  "jiff",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_probe"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "cbh_git",
  "cbh_model",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_render"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "cbh_detect",
  "cbh_model",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_stats"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "criterion",
  "mutants",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_storage"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "cpulist"
-version = "1.1.10"
+version = "1.1.11"
 dependencies = [
  "itertools 0.15.0",
  "new_zealand",
@@ -2218,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.30"
+version = "0.8.31"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2480,7 +2480,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "many_cpus"
-version = "2.4.22"
+version = "2.4.23"
 dependencies = [
  "many_cpus_impl",
  "new_zealand",
@@ -2490,7 +2490,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2507,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_impl"
-version = "2.4.22"
+version = "2.4.23"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2622,7 +2622,7 @@ checksum = "add0ac067452ff1aca8c5002111bd6b1c895baee6e45fcbc44e0193aea17be56"
 
 [[package]]
 name = "new_zealand"
-version = "1.0.10"
+version = "1.0.11"
 dependencies = [
  "testing",
 ]
@@ -2894,7 +2894,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.63"
+version = "0.2.64"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -3354,7 +3354,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.39"
+version = "1.0.40"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3376,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.39"
+version = "1.0.40"
 dependencies = [
  "arc-swap",
  "axum",
@@ -4498,7 +4498,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vicinal"
-version = "0.1.42"
+version = "0.1.43"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
