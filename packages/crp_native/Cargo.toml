@@ -16,6 +16,10 @@ all-features = true
 [package.metadata.release-plan]
 private-api = true
 
+[package.metadata.cargo-udeps.ignore]
+# The default-feature dependency check omits the private-test-util-gated archive benchmark.
+development = ["criterion"]
+
 [package.metadata.cargo_check_external_types]
 allowed_external_types = ["crp_diag::*", "ohno::app::error::AppError"]
 
