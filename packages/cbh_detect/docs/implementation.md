@@ -114,3 +114,22 @@ shapes and retains every mode, scale and report-size combination. Its independen
 companions carry only enough observations to be judged, with a sparse jump to the context commit;
 their size does not grow with the curated history. Recorded series remain verbatim, and dedicated
 branch tests retain long histories needed to exercise segmentation and the supported window cap.
+
+## Branch benchmarks
+
+Quiet branch benchmarks measure the production detection entry point with an inline executor
+and explicit single-worker capacity. Fixture construction and preflight assertions of the expected
+judged coverage, withheld reasons and no findings happen outside measurement. Exactly flat evidence
+exercises persistence rejection; independently seeded bounded timing noise exercises
+boundary screening with a context observation drawn from the same unchanged level.
+History length and series count vary independently, sharing the low workload rather
+than combining both high dimensions.
+The short noisy histories include an apparent unresolved tail in one series; their census pins
+that withholding instead of selecting cleaner seeds. Flat fixtures and the longer noisy history
+have complete judged coverage.
+
+These report-level scenarios intentionally use Criterion without Callgrind counterparts. They
+measure allocation-bearing preparation and historical family scoring together, not an isolated
+statistical kernel whose instruction count would explain its cost. Whole-history simulation
+would duplicate that composite workload rather than supply focused kernel evidence. The
+regression-producing whole-report and noisy-base scenarios remain distinct from the quiet cases.
