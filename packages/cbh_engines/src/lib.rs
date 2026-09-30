@@ -27,6 +27,7 @@
 
 mod bench;
 mod bench_output;
+mod output_files;
 
 pub use bench::{
     AllTheTimeParseError, AllocTrackerParseError, CallgrindParseError, CriterionParseError,

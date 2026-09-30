@@ -24,7 +24,16 @@ module. These exercise the real adapters without repeatedly processing unrelated
 metadata. The committed external-output fixtures and live producer round trips retain
 schema-compatibility coverage at the adapter boundary.
 
-Filesystem harvesting and live producer round trips run as Cargo integration tests because they
-acquire real files or processor-clock readings. Harvesting fixtures assign their modification times
-explicitly rather than depending on the wall clock. In-memory parsing, freshness arithmetic and
-diagnostic formatting remain in the unit harness.
+Harvesting separates filesystem observations from engine traversal and selection. A private port
+supplies directory cursors, entry type flags, modification times and contents. Acquisition remains
+lazy and uses native entry metadata, preserving error order and link handling without reading
+irrelevant files. The same collectors run against Tokio and in-process fixtures; engine dispatch,
+recursion, pairing, filtering, freshness and missing-versus-operational-error decisions remain
+mutation targets. Only individual native acquisition forwarders and their composition entry point
+have integration-only mutation exclusions.
+
+Real filesystem harvesting and live producer round trips run as Cargo integration tests because
+they acquire real files or processor-clock readings. Harvesting fixtures assign their modification
+times explicitly rather than depending on the wall clock. In-process harvesting fixtures likewise
+supply fixed timestamps and controlled read failures, alongside pure parsing, freshness arithmetic
+and diagnostic formatting tests.

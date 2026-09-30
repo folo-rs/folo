@@ -4,6 +4,11 @@
 //! The real adapter walks the cargo target tree with `tokio::fs`; an in-memory
 //! fake (in `#[cfg(test)]`) returns canned summaries so orchestration is testable.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; its child module organizes unit tests."
+)]
+
 use std::ffi::OsStr;
 use std::future::Future;
 use std::io;
@@ -18,6 +23,7 @@ use crate::bench::{
     ALL_THE_TIME_DIR, ALLOC_TRACKER_DIR, CRITERION_BENCHMARK_FILE, CRITERION_DIR,
     CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR, GUNGRAUN_DIR, SUMMARY_FILE,
 };
+use crate::output_files::{EntryType, OutputDirectory, OutputEntry, OutputFiles, TokioOutputFiles};
 
 /// Tolerance subtracted from the run-start boundary before comparing file
 /// modification times, absorbing coarse filesystem mtime granularity so a summary
@@ -113,6 +119,7 @@ impl FsBenchOutputSource {
     /// Walks `{target_root}/gungraun` for fresh `summary.json` files.
     async fn collect_callgrind(
         &self,
+        files: &impl OutputFiles,
         since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> io::Result<Vec<RawSummary>> {
@@ -132,7 +139,7 @@ impl FsBenchOutputSource {
         let mut stack = vec![root.clone()];
 
         while let Some(dir) = stack.pop() {
-            let mut entries = match tokio::fs::read_dir(&dir).await {
+            let mut entries = match files.read_dir(&dir).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     note_missing_dir(reporter, "callgrind", &dir, &root);
@@ -144,13 +151,13 @@ impl FsBenchOutputSource {
             while let Some(entry) = entries.next_entry().await? {
                 let file_type = entry.file_type().await?;
                 let path = entry.path();
-                if file_type.is_dir() {
+                if file_type == EntryType::Directory {
                     stack.push(path);
                 } else if path.file_name() == Some(summary_name) {
-                    let modified = entry.metadata().await?.modified()?;
+                    let modified = entry.modified().await?;
                     if threshold.is_none_or(|threshold| modified >= threshold) {
                         reporter.note_with(|| format!("callgrind: including {}", path.display()));
-                        let content = tokio::fs::read_to_string(&path).await?;
+                        let content = files.read_to_string(&path).await?;
                         summaries.push(RawSummary { path, content });
                     } else {
                         reporter.note_with(|| format!(
@@ -182,6 +189,7 @@ impl FsBenchOutputSource {
     /// older than the run-start boundary. Incomplete pairs are skipped.
     async fn collect_criterion(
         &self,
+        files: &impl OutputFiles,
         since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> io::Result<Vec<RawCriterionCase>> {
@@ -202,7 +210,7 @@ impl FsBenchOutputSource {
         let mut stack = vec![root.clone()];
 
         while let Some(dir) = stack.pop() {
-            let mut entries = match tokio::fs::read_dir(&dir).await {
+            let mut entries = match files.read_dir(&dir).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     note_missing_dir(reporter, "criterion", &dir, &root);
@@ -216,12 +224,12 @@ impl FsBenchOutputSource {
             while let Some(entry) = entries.next_entry().await? {
                 let file_type = entry.file_type().await?;
                 let path = entry.path();
-                if file_type.is_dir() {
+                if file_type == EntryType::Directory {
                     stack.push(path);
                 } else if path.file_name() == Some(benchmark_name) {
                     has_benchmark = true;
                 } else if path.file_name() == Some(estimates_name) {
-                    estimates_mtime = Some(entry.metadata().await?.modified()?);
+                    estimates_mtime = Some(entry.modified().await?);
                 }
             }
 
@@ -243,10 +251,12 @@ impl FsBenchOutputSource {
             };
             if threshold.is_none_or(|threshold| modified >= threshold) {
                 reporter.note_with(|| format!("criterion: including {}", dir.display()));
-                let benchmark =
-                    tokio::fs::read_to_string(dir.join(CRITERION_BENCHMARK_FILE)).await?;
-                let estimates =
-                    tokio::fs::read_to_string(dir.join(CRITERION_ESTIMATES_FILE)).await?;
+                let benchmark = files
+                    .read_to_string(&dir.join(CRITERION_BENCHMARK_FILE))
+                    .await?;
+                let estimates = files
+                    .read_to_string(&dir.join(CRITERION_ESTIMATES_FILE))
+                    .await?;
                 cases.push(RawCriterionCase {
                     dir,
                     benchmark,
@@ -281,6 +291,7 @@ impl FsBenchOutputSource {
     /// harvested. `label` names the engine in diagnostic notes.
     async fn collect_flat(
         &self,
+        output: &impl OutputFiles,
         engine_dir: &str,
         label: &str,
         since: Option<SystemTime>,
@@ -299,7 +310,7 @@ impl FsBenchOutputSource {
         });
 
         let mut files = Vec::new();
-        let mut entries = match tokio::fs::read_dir(&root).await {
+        let mut entries = match output.read_dir(&root).await {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 note_missing_dir(reporter, label, &root, &root);
@@ -311,13 +322,13 @@ impl FsBenchOutputSource {
         while let Some(entry) = entries.next_entry().await? {
             let file_type = entry.file_type().await?;
             let path = entry.path();
-            if !file_type.is_file() || path.extension() != Some(json_extension) {
+            if file_type != EntryType::File || path.extension() != Some(json_extension) {
                 continue;
             }
-            let modified = entry.metadata().await?.modified()?;
+            let modified = entry.modified().await?;
             if threshold.is_none_or(|threshold| modified >= threshold) {
                 reporter.note_with(|| format!("{label}: including {}", path.display()));
-                let content = tokio::fs::read_to_string(&path).await?;
+                let content = output.read_to_string(&path).await?;
                 files.push(RawOperationFile { path, content });
             } else {
                 reporter.note_with(|| {
@@ -339,31 +350,44 @@ impl FsBenchOutputSource {
         });
         Ok(files)
     }
-}
-
-impl BenchOutputSource for FsBenchOutputSource {
-    async fn collect(
+    async fn collect_with(
         &self,
+        files: &impl OutputFiles,
         engine: Engine,
         since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> io::Result<Harvest> {
         match engine {
             Engine::Callgrind => Ok(Harvest::Callgrind(
-                self.collect_callgrind(since, reporter).await?,
+                self.collect_callgrind(files, since, reporter).await?,
             )),
             Engine::Criterion => Ok(Harvest::Criterion(
-                self.collect_criterion(since, reporter).await?,
+                self.collect_criterion(files, since, reporter).await?,
             )),
             Engine::AllocTracker => Ok(Harvest::AllocTracker(
-                self.collect_flat(ALLOC_TRACKER_DIR, "alloc_tracker", since, reporter)
+                self.collect_flat(files, ALLOC_TRACKER_DIR, "alloc_tracker", since, reporter)
                     .await?,
             )),
             Engine::AllTheTime => Ok(Harvest::AllTheTime(
-                self.collect_flat(ALL_THE_TIME_DIR, "all_the_time", since, reporter)
+                self.collect_flat(files, ALL_THE_TIME_DIR, "all_the_time", since, reporter)
                     .await?,
             )),
         }
+    }
+}
+
+impl BenchOutputSource for FsBenchOutputSource {
+    // Only selects the native port. tests/bench_output.rs covers this wiring;
+    // collect_with and every engine collector remain under mutation testing.
+    #[cfg_attr(test, mutants::skip)]
+    async fn collect(
+        &self,
+        engine: Engine,
+        since: Option<SystemTime>,
+        reporter: &dyn Reporter,
+    ) -> io::Result<Harvest> {
+        self.collect_with(&TokioOutputFiles, engine, since, reporter)
+            .await
     }
 }
 
@@ -421,6 +445,10 @@ fn note_missing_dir(reporter: &dyn Reporter, engine: &str, dir: &Path, root: &Pa
         });
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod harvest_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

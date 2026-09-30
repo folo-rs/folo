@@ -14,6 +14,9 @@ of reading process-global state.
 Configuration acquisition passes its read result to synchronous parsing and read-policy logic.
 Unit tests cover that policy, including private error context, with in-memory read results;
 Cargo integration tests cover loading real files.
+The native read forwarder has a narrow mutation exclusion: detecting its replacement requires
+real filesystem acquisition. Parsing, optional-file policy and error propagation remain mutation
+targets in the synchronous interpreter.
 
 Public configuration operations return one aggregate. Read, parse, and selection conditions
 remain private, each retaining the context and lower-level cause owned by its responsibility. The

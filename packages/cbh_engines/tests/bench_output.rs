@@ -109,6 +109,18 @@ async fn collects_fresh_summaries_recursively() {
     let summaries = callgrind_summaries(harvest);
     let contents: Vec<&str> = summaries.iter().map(|s| s.content.as_str()).collect();
     assert_eq!(contents, vec!["a", "b"]);
+    assert_eq!(
+        summaries
+            .iter()
+            .map(|summary| summary.path.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            dir.path().join(GUNGRAUN_DIR).join("group_a/summary.json"),
+            dir.path()
+                .join(GUNGRAUN_DIR)
+                .join("group_b/nested/summary.json"),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -220,6 +232,16 @@ async fn criterion_collects_fresh_new_dirs_only() {
         vec![("bm-fast", "est-fast"), ("bm-std", "est-std")],
         "only fresh new/ directories should be harvested, sorted by path"
     );
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.dir.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            dir.path().join(CRITERION_DIR).join("grp/fast/now/new"),
+            dir.path().join(CRITERION_DIR).join("grp/std/now/new"),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -291,6 +313,39 @@ async fn flat_engine_collects_fresh_top_level_json_only() {
         vec!["a", "b"],
         "only fresh top-level *.json files should be harvested, sorted by path"
     );
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            dir.path().join(ALLOC_TRACKER_DIR).join("allocate_vec.json"),
+            dir.path().join(ALLOC_TRACKER_DIR).join("grow_map.json"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn selected_files_with_invalid_utf8_report_read_errors() {
+    for (engine, engine_dir, relative) in [
+        (Engine::Callgrind, GUNGRAUN_DIR, "group/summary.json"),
+        (Engine::Criterion, CRITERION_DIR, "group/new/estimates.json"),
+        (Engine::AllocTracker, ALLOC_TRACKER_DIR, "operation.json"),
+        (Engine::AllTheTime, ALL_THE_TIME_DIR, "operation.json"),
+    ] {
+        let dir = tempdir().unwrap();
+        let path = write_operation_file(dir.path(), engine_dir, relative, "");
+        fs::write(&path, [0xff]).unwrap();
+        if engine == Engine::Criterion {
+            write_criterion_file(dir.path(), "group/new/benchmark.json", "identity");
+        }
+        let source = FsBenchOutputSource::new(dir.path());
+        let error = source
+            .collect(engine, None, &RecordingReporter::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
 }
 
 #[tokio::test]
