@@ -120,9 +120,10 @@ branch tests retain long histories needed to exercise segmentation and the suppo
 Quiet branch benchmarks measure the production detection entry point with an inline executor
 and explicit single-worker capacity. Fixture construction and preflight assertions of the expected
 judged coverage, withheld reasons and no findings happen outside measurement. Exactly flat evidence
-exercises persistence rejection; independently seeded bounded timing noise exercises boundary screening
-with a context observation drawn from the same unchanged level. History length and series count
-vary independently, sharing the low workload rather than combining both high dimensions.
+exercises persistence rejection; independently seeded bounded timing noise exercises
+boundary screening with a context observation drawn from the same unchanged level.
+History length and series count vary independently, sharing the low workload rather
+than combining both high dimensions.
 The short noisy histories include an apparent unresolved tail in one series; their census pins
 that withholding instead of selecting cleaner seeds. Flat fixtures and the longer noisy history
 have complete judged coverage.
