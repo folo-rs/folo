@@ -54,34 +54,62 @@ impl PublicationManifest {
     }
 
     /// Creates a manifest or confirms that a prior invocation wrote identical intent.
+    // Filesystem acquisition and no-clobber promotion are exercised by publication integration
+    // tests. write_with retains the validation, idempotency and conflict decisions in process.
+    #[cfg_attr(test, mutants::skip)]
     pub fn write(&self, path: &Path) -> Result<(), AppError> {
+        self.write_with(
+            path,
+            || {
+                path.try_exists()
+                    .map_err(|error| ReadFileError::caused_by(path, error))?
+                    .then(|| Self::read(path))
+                    .transpose()
+            },
+            persist_manifest,
+        )
+    }
+
+    fn write_with(
+        &self,
+        path: &Path,
+        read: impl FnOnce() -> Result<Option<Self>, AppError>,
+        persist: impl FnOnce(&Path, &Self) -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
         self.validate()?;
-        if path
-            .try_exists()
-            .map_err(|error| ReadFileError::caused_by(path, error))?
-        {
-            if Self::read(path)?.id == self.id {
+        if let Some(existing) = read()? {
+            if existing.id == self.id {
                 return Ok(());
             }
             return Err(DestinationOccupied::new(path).into());
         }
-        let parent = path
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).map_err(|error| WriteFileError::caused_by(path, error))?;
-        let mut staging = NamedTempFile::new_in(parent)
-            .map_err(|error| WriteFileError::caused_by(path, error))?;
-        serde_json::to_writer_pretty(&mut staging, self)
-            .map_err(|error| WriteFileError::caused_by(path, error))?;
-        staging
-            .write_all(b"\n")
-            .map_err(|error| WriteFileError::caused_by(path, error))?;
-        staging
-            .persist_noclobber(path)
-            .map_err(|error| WriteFileError::caused_by(path, error))?;
-        Ok(())
+        persist(path, self)
     }
+}
+
+fn destination_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+// Atomic file creation is tested with real destinations; no in-memory simulation proves
+// NamedTempFile's no-clobber behavior. Destination selection is tested separately.
+#[cfg_attr(test, mutants::skip)]
+fn persist_manifest(path: &Path, manifest: &PublicationManifest) -> Result<(), AppError> {
+    let parent = destination_parent(path);
+    fs::create_dir_all(parent).map_err(|error| WriteFileError::caused_by(path, error))?;
+    let mut staging =
+        NamedTempFile::new_in(parent).map_err(|error| WriteFileError::caused_by(path, error))?;
+    serde_json::to_writer_pretty(&mut staging, manifest)
+        .map_err(|error| WriteFileError::caused_by(path, error))?;
+    staging
+        .write_all(b"\n")
+        .map_err(|error| WriteFileError::caused_by(path, error))?;
+    staging
+        .persist_noclobber(path)
+        .map_err(|error| WriteFileError::caused_by(path, error))?;
+    Ok(())
 }
 
 /// Frozen source and configured destinations, without any observed remote completion state.
@@ -224,6 +252,8 @@ pub(crate) struct InvalidManifest {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::Cell;
+
     use serde_json::json;
 
     use super::*;
@@ -247,6 +277,82 @@ mod tests {
                 binary: None,
             }],
         }
+    }
+
+    #[test]
+    fn manifest_writes_validate_before_acquisition_and_preserve_identical_intent() {
+        let manifest = PublicationManifest::new(publication()).unwrap();
+        let path = Path::new("intent.json");
+        let persisted = Cell::new(false);
+        manifest
+            .write_with(
+                path,
+                || Ok(None),
+                |destination, value| {
+                    assert_eq!(destination, path);
+                    assert_eq!(value.id, manifest.id);
+                    persisted.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(persisted.get());
+        manifest
+            .write_with(
+                path,
+                || Ok(Some(manifest.clone())),
+                |_, _| {
+                    panic!("identical intent must not be rewritten");
+                },
+            )
+            .unwrap();
+        let mut other = publication();
+        other.source = "b".repeat(40);
+        let error = manifest
+            .write_with(
+                path,
+                || Ok(Some(PublicationManifest::new(other).unwrap())),
+                |_, _| panic!("conflicting intent must not be overwritten"),
+            )
+            .unwrap_err();
+        assert!(error.find_source::<DestinationOccupied>().is_some());
+        let mut invalid = manifest;
+        invalid.id.clear();
+        let error = invalid
+            .write_with(
+                path,
+                || panic!("invalid intent must fail before acquisition"),
+                |_, _| panic!("invalid intent must not be written"),
+            )
+            .unwrap_err();
+        assert!(error.find_source::<InvalidManifest>().is_some());
+    }
+
+    #[test]
+    fn manifest_persistence_propagates_acquisition_and_promotion_failures() {
+        let manifest = PublicationManifest::new(publication()).unwrap();
+        let path = Path::new("intent.json");
+        let error = manifest
+            .write_with(
+                path,
+                || Err(ReadFileError::new(path).into()),
+                |_, _| panic!("failed acquisition must not write"),
+            )
+            .unwrap_err();
+        assert!(error.find_source::<ReadFileError>().is_some());
+        let error = manifest
+            .write_with(
+                path,
+                || Ok(None),
+                |_, _| Err(WriteFileError::new(path).into()),
+            )
+            .unwrap_err();
+        assert!(error.find_source::<WriteFileError>().is_some());
+        assert_eq!(destination_parent(path), Path::new("."));
+        assert_eq!(
+            destination_parent(Path::new("nested/intent.json")),
+            Path::new("nested")
+        );
     }
 
     #[test]

@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::PublicationOutput;
 
 /// Verifies caller identity setup without constructing or uploading a package.
+// Ambient identity and production HTTP selection are exercised by executable failure tests;
+// verify_identity covers exchange/revocation sequencing without acquiring live credentials.
+#[cfg_attr(test, mutants::skip)]
 pub fn check_publishing_identity(output: &PublicationOutput) -> Result<String, AppError> {
     output.notes().note(|| {
         "Checking the caller workflow's GitHub OIDC identity against crates.io; \
@@ -22,8 +25,18 @@ pub fn check_publishing_identity(output: &PublicationOutput) -> Result<String, A
     });
     let identity = ActionsIdentity::from_environment()?;
     let publisher = TrustedPublisher::new(output.clone())?;
-    let token = publisher.exchange(&identity)?;
-    publisher.revoke(&token)?;
+    verify_identity(
+        || publisher.exchange(&identity),
+        |token| publisher.revoke(token),
+    )
+}
+
+fn verify_identity(
+    exchange: impl FnOnce() -> Result<String, AppError>,
+    revoke: impl FnOnce(&str) -> Result<(), AppError>,
+) -> Result<String, AppError> {
+    let token = exchange()?;
+    revoke(&token)?;
     Ok("GitHub OIDC exchange for a crates.io credential and revocation of that credential succeeded. Package-specific publication grants are checked when uploading.".to_owned())
 }
 
@@ -37,12 +50,20 @@ pub struct ActionsIdentity {
 impl ActionsIdentity {
     pub fn from_environment() -> Result<Self, AppError> {
         Ok(Self {
-            request_url: required_environment("ACTIONS_ID_TOKEN_REQUEST_URL")?,
-            request_token: required_environment("ACTIONS_ID_TOKEN_REQUEST_TOKEN")?,
+            request_url: required_environment(
+                "ACTIONS_ID_TOKEN_REQUEST_URL",
+                env::var("ACTIONS_ID_TOKEN_REQUEST_URL"),
+            )?,
+            request_token: required_environment(
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
+            )?,
         })
     }
 
     /// Acquires a fresh JWT for each exchange; crates.io rejects reusing a JWT identity.
+    // The HTTP exchange and credential-body decoding are covered by publication_identity.
+    #[cfg_attr(test, mutants::skip)]
     fn token(&self, client: &Client) -> Result<String, AppError> {
         let url = audience_url(&self.request_url)?;
         let response = client
@@ -52,7 +73,7 @@ impl ActionsIdentity {
             .map_err(|error| {
                 IdentityTransport::caused_by("GitHub OIDC request", error.without_url())
             })?;
-        let response = successful(response, "GitHub OIDC request")?;
+        successful(response.status(), "GitHub OIDC request")?;
         // Deserializer diagnostics can echo malformed values from a credential-bearing body.
         let token: OidcResponse = response
             .json()
@@ -76,6 +97,8 @@ pub struct TrustedPublisher {
 }
 
 impl TrustedPublisher {
+    // This field forwarder is observed through the persisted session's loopback exchanges.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn endpoint(&self) -> &str {
         &self.endpoint
     }
@@ -99,6 +122,8 @@ impl TrustedPublisher {
         })
     }
 
+    // Real HTTP and response decoding belong to publication_identity's local-service tests.
+    #[cfg_attr(test, mutants::skip)]
     pub fn exchange(&self, identity: &ActionsIdentity) -> Result<String, AppError> {
         let jwt = identity.token(&self.client)?;
         let response = self
@@ -109,13 +134,15 @@ impl TrustedPublisher {
             .map_err(|error| {
                 IdentityTransport::caused_by("Trusted Publishing exchange", error.without_url())
             })?;
-        let response = successful(response, "Trusted Publishing exchange")?;
+        successful(response.status(), "Trusted Publishing exchange")?;
         let token: ExchangeResponse = response.json().map_err(|_sensitive_body| {
             MalformedIdentityResponse::new("Trusted Publishing response")
         })?;
         require_credential(token.token, "Trusted Publishing response")
     }
 
+    // publication_identity and publication_credentials observe DELETE and failed revocations.
+    #[cfg_attr(test, mutants::skip)]
     pub fn revoke(&self, token: &str) -> Result<(), AppError> {
         let response = self
             .client
@@ -125,7 +152,7 @@ impl TrustedPublisher {
             .map_err(|error| {
                 IdentityTransport::caused_by("Trusted Publishing revocation", error.without_url())
             })?;
-        successful(response, "Trusted Publishing revocation")?;
+        successful(response.status(), "Trusted Publishing revocation")?;
         Ok(())
     }
 }
@@ -154,8 +181,11 @@ const TOKEN_ENDPOINT: &str = "https://crates.io/api/v1/trusted_publishing/tokens
 // These control operations carry no package upload; failure should leave room for cleanup.
 const IDENTITY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn required_environment(name: &'static str) -> Result<String, AppError> {
-    let value = env::var(name).map_err(|error| MissingIdentity::caused_by(name, error))?;
+fn required_environment(
+    name: &'static str,
+    value: Result<String, env::VarError>,
+) -> Result<String, AppError> {
+    let value = value.map_err(|error| MissingIdentity::caused_by(name, error))?;
     if value.is_empty() {
         return Err(MissingIdentity::new(name).into());
     }
@@ -184,16 +214,13 @@ fn audience_url(url: &str) -> Result<Url, AppError> {
     Ok(url)
 }
 
-fn successful(
-    response: reqwest::blocking::Response,
-    operation: &'static str,
-) -> Result<reqwest::blocking::Response, AppError> {
-    if !response.status().is_success() {
+fn successful(status: StatusCode, operation: &'static str) -> Result<(), AppError> {
+    if !status.is_success() {
         // An identity endpoint can echo request material in its body. Only status and
         // operation enter diagnostics; bearer credentials and JWT bodies never do.
-        return Err(IdentityRejected::new(operation, response.status()).into());
+        return Err(IdentityRejected::new(operation, status).into());
     }
-    Ok(response)
+    Ok(())
 }
 
 #[ohno::error]
@@ -232,7 +259,84 @@ struct MalformedIdentityResponse {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::Cell;
+    use std::ffi::OsString;
+
     use super::*;
+
+    #[test]
+    fn identity_check_revokes_the_exact_issued_credential_before_reporting_success() {
+        let exchanged = Cell::new(false);
+        let revoked = Cell::new(false);
+        let result = verify_identity(
+            || {
+                exchanged.set(true);
+                Ok("lease-canary".to_owned())
+            },
+            |token| {
+                assert!(exchanged.get());
+                assert_eq!(token, "lease-canary");
+                revoked.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(revoked.get());
+        assert!(result.contains("revocation"));
+        assert!(!result.contains("lease-canary"));
+        let error = verify_identity(
+            || Err(EmptyCredential::new("exchange").into()),
+            |_| panic!("no credential was issued"),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<EmptyCredential>().is_some());
+        let error = verify_identity(
+            || Ok("lease-canary".to_owned()),
+            |_| Err(IdentityRejected::new("revocation", StatusCode::FORBIDDEN).into()),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<IdentityRejected>().is_some());
+    }
+
+    #[test]
+    fn required_identity_values_distinguish_absence_empty_and_invalid_unicode() {
+        assert_eq!(
+            required_environment("identity", Ok("credential-canary".to_owned())).unwrap(),
+            "credential-canary"
+        );
+        for value in [
+            Ok(String::new()),
+            Err(env::VarError::NotPresent),
+            Err(env::VarError::NotUnicode(OsString::from(
+                "sensitive-canary",
+            ))),
+        ] {
+            let error = required_environment("identity", value).unwrap_err();
+            assert_eq!(
+                error.find_source::<MissingIdentity>().unwrap().name,
+                "identity"
+            );
+        }
+    }
+
+    #[test]
+    fn identity_status_accepts_only_success_without_consuming_a_response_body() {
+        for status in [StatusCode::OK, StatusCode::CREATED, StatusCode::NO_CONTENT] {
+            successful(status, "identity").unwrap();
+        }
+        for status in [
+            StatusCode::CONTINUE,
+            StatusCode::FOUND,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::NOT_FOUND,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            let error = successful(status, "identity").unwrap_err();
+            let rejected = error.find_source::<IdentityRejected>().unwrap();
+            assert_eq!(rejected.status, status);
+            assert_eq!(rejected.operation, "identity");
+        }
+    }
 
     #[test]
     fn empty_protocol_credentials_are_rejected_without_echoing_their_value() {

@@ -31,6 +31,8 @@ pub fn diagnostic(sink: &dyn DiagnosticSink, text: &str) {
 pub struct Stderr;
 
 impl DiagnosticSink for Stderr {
+    // Process-stream delivery is covered by the executable's stderr integration assertions.
+    #[cfg_attr(test, mutants::skip)]
     fn write(&self, text: &str) -> io::Result<()> {
         io::stderr().lock().write_all(text.as_bytes())
     }

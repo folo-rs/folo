@@ -76,3 +76,13 @@ excluded from library mutation testing and exercised by executable cancellation
 and missing-source integrations. Identifier and credential-name decisions retain
 in-process coverage, including under Miri; Windows Command environment comparison
 is verified natively.
+
+Publication lifecycle decisions consume acquired observations or narrow action callbacks:
+workflow environment values, tracked input paths, manifest destinations, credential issuance
+and revocation, and registry observations. Unit tests cover request admission, lease retention,
+independent cleanup failures, retry requests and receipt completion without acquiring process
+environment, files, services or clocks. Native adapters are individually excluded from library
+mutation testing and exercised by the publication boundary and executable integration suites.
+Timing-only delay adapters are excluded without wall-clock assertions; retry decisions assert
+the requested delays in process. Receipt selection rejects duplicate attempts and obtains the
+newest eligible attempt from that same ordered inventory, without a separate tie-breaking state.

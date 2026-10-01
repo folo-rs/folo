@@ -370,8 +370,7 @@ fn select_receipt<'a>(
     batch: Option<&str>,
     failures: &mut Vec<String>,
 ) -> Option<&'a Receipt> {
-    let mut selected: Option<&Receipt> = None;
-    let mut attempts = BTreeMap::new();
+    let mut attempts: BTreeMap<_, &Receipt> = BTreeMap::new();
     let mut ambiguous = false;
     for receipt in receipts.iter().filter(|receipt| {
         receipt.publication_id == publication_id
@@ -381,19 +380,20 @@ fn select_receipt<'a>(
             && receipt.target.as_deref() == target
             && receipt.batch_id.as_deref() == batch
     }) {
-        if let Some(previous) = attempts.insert(receipt.github.run_attempt, &receipt.path) {
+        if let Some(previous) = attempts.insert(receipt.github.run_attempt, receipt) {
             ambiguous = true;
             failures.push(format!(
                 "Duplicate {phase} outcomes for publication {publication_id}, run {}, attempt {}, target {target:?}, batch {batch:?}: {} and {}.",
-                context.run_id, receipt.github.run_attempt, previous.display(), receipt.path.display(),
+                context.run_id, receipt.github.run_attempt, previous.path.display(), receipt.path.display(),
             ));
         }
-        if selected.is_none_or(|previous| previous.github.run_attempt < receipt.github.run_attempt)
-        {
-            selected = Some(receipt);
-        }
     }
-    if ambiguous { None } else { selected }
+    // Duplicate attempts invalidate the unit, so ties never select a usable receipt.
+    if ambiguous {
+        None
+    } else {
+        attempts.last_key_value().map(|(_, receipt)| *receipt)
+    }
 }
 
 /// Retains the particular jobs/receipt file when decoding or validation fails.
@@ -728,5 +728,56 @@ mod tests {
         assert!(report.contains("example/tools/actions/runs/123"));
         assert!(report.contains("package failure"));
         assert!(report.contains("independent success"));
+        assert!(report.contains("Retry the original failed workflow"));
+        let complete = render_report(
+            "example/tools",
+            context(2),
+            &Assessment {
+                complete: true,
+                details: vec!["confirmed delivery".to_owned()],
+            },
+        )
+        .unwrap();
+        assert!(complete.contains("Release complete"));
+        assert!(complete.contains("confirmed delivery"));
+        assert!(!complete.contains("Retry the original failed workflow"));
+    }
+
+    #[test]
+    fn receipt_selection_is_order_independent_and_rejects_equal_attempts() {
+        let publication = publication();
+        for attempts in [[1, 3, 2], [3, 2, 1], [2, 1, 3]] {
+            let mut receipts: Vec<_> = attempts
+                .map(|attempt| receipt(&publication, "registry", attempt, true))
+                .into_iter()
+                .collect();
+            let mut failures = Vec::new();
+            let selected = select_receipt(
+                &receipts,
+                &publication.id,
+                context(2),
+                "registry",
+                None,
+                None,
+                &mut failures,
+            )
+            .unwrap();
+            assert_eq!(selected.github, context(2));
+            assert!(failures.is_empty());
+            receipts.push(receipt(&publication, "registry", 2, false));
+            assert!(
+                select_receipt(
+                    &receipts,
+                    &publication.id,
+                    context(2),
+                    "registry",
+                    None,
+                    None,
+                    &mut failures,
+                )
+                .is_none()
+            );
+            assert_eq!(failures.len(), 1);
+        }
     }
 }

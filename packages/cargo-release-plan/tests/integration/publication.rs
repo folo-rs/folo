@@ -115,19 +115,25 @@ pkg-fmt = "zip"
     );
     assert!(fixture.path().join("Cargo.lock").is_file());
     fixture.commit("configured binary source");
+    let input = RunInput::Check {
+        merge_target: None,
+        release_history: Some(fixture.sha("HEAD")),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        config: Some(PathBuf::from(".cargo/release_plan.toml")),
+        verbose: true,
+    };
     assert!(matches!(
-        run(&RunInput::Check {
-            merge_target: None,
-            release_history: Some(fixture.sha("HEAD")),
-            manifest_path: fixture.manifest(),
-            format: CheckFormat::Text,
-            verify_packaging: false,
-            config: Some(PathBuf::from(".cargo/release_plan.toml")),
-            verbose: true,
-        })
-        .unwrap(),
+        run(&input).unwrap(),
         RunOutcome::Check { passed: true, .. }
     ));
+    let manifest = fixture.read("packages/tool/Cargo.toml");
+    fixture.write(
+        "packages/tool/Cargo.toml",
+        &manifest.replace("pkg-fmt = \"zip\"", "pkg-fmt = \"tar.gz\""),
+    );
+    run(&input).unwrap_err();
 }
 
 #[test]
