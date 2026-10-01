@@ -12,7 +12,7 @@ use ohno::AppError;
 use tempfile::TempDir;
 
 use crate::archive::Staging;
-use crate::command::{cancelled, capture, capture_cleanup};
+use crate::command::{cancelled, capture, capture_cleanup, strings};
 use crate::request::InvalidPlan;
 use crate::source::{Metadata, executable};
 use crate::{Artifacts, BuildRequest, ExecutionContext, SourceProvider};
@@ -153,6 +153,8 @@ impl Native {
     }
 
     #[must_use]
+    // Forwards invocation-global signal state; executable cancellation tests cover the adapter.
+    #[cfg_attr(test, mutants::skip)]
     pub fn cancelled(&self) -> bool {
         cancelled()
     }
@@ -432,10 +434,6 @@ fn finish_cleanup(
         (Ok(_), Err(error)) => Err(error.into()),
         (Ok(_), Ok(())) => Ok(()),
     }
-}
-
-fn strings(values: &[&str]) -> Vec<OsString> {
-    values.iter().map(OsString::from).collect()
 }
 
 // Real deadlines exist only in the native adapter, never in unit-test decisions.

@@ -261,6 +261,8 @@ fn executable_mode(mode: u32) -> bool {
 
 /// Drives native executable copying with an injected interruption source.
 #[cfg(any(test, feature = "private-test-util"))]
+// File-copy/promotion forwarding is exercised by native interruption integration tests.
+#[cfg_attr(test, mutants::skip)]
 pub fn stage_executable_for_test(
     executable: &Path,
     staged: &Path,
@@ -271,6 +273,8 @@ pub fn stage_executable_for_test(
 
 /// Drives the real file-promotion boundary with an in-process interruption source.
 #[cfg(any(test, feature = "private-test-util"))]
+// Archive file-promotion forwarding is exercised by native interruption integration tests.
+#[cfg_attr(test, mutants::skip)]
 pub fn write_archive_for_test(
     executable: &Path,
     archive: &Path,

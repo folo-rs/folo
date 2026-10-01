@@ -98,6 +98,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn package_and_binary_identifiers_require_an_alphanumeric_start_and_safe_remainder() {
+        for (value, valid) in [
+            ("tool", true),
+            ("7tool_name-bin", true),
+            ("", false),
+            ("-tool", false),
+            ("_tool", false),
+            ("tool/path", false),
+            ("tool.name", false),
+            ("tool name", false),
+        ] {
+            for name_field in [false, true] {
+                let mut binary = binary("tool");
+                if name_field {
+                    binary.name = value.to_owned();
+                    binary.tag = format!("{value}-v{}", binary.version);
+                } else {
+                    binary.bin = value.to_owned();
+                }
+                assert_eq!(binary.validate().is_ok(), valid);
+            }
+        }
+    }
+
+    #[test]
     fn preserves_names_versions_and_source_identity() {
         let binary = binary("tool");
         binary.validate().unwrap();

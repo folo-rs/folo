@@ -73,6 +73,9 @@ fn registry_token_variable(name: &OsStr) -> bool {
     })
 }
 
+// The invocation-global flag is set by OS signals or failed native cleanup. The executable
+// cancellation integration test exercises both states without changing global state in unit tests.
+#[cfg_attr(test, mutants::skip)]
 pub fn cancelled() -> bool {
     CANCELLED.load(Ordering::Relaxed)
 }
@@ -400,6 +403,41 @@ mod tests {
     }
 
     #[test]
+    fn literal_arguments_preserve_order_empty_values_and_punctuation() {
+        assert_eq!(
+            strings(&["build", "", "a path", "--package=tool", "*.rs"]),
+            ["build", "", "a path", "--package=tool", "*.rs"].map(OsString::from)
+        );
+        assert!(strings(&[]).is_empty());
+    }
+
+    #[test]
+    fn registry_credential_names_are_distinct_from_build_configuration() {
+        for name in [
+            "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+            "CARGO_REGISTRIES_PRIVATE_TOKEN",
+            "cargo_registries_private_token",
+        ] {
+            assert!(registry_token_variable(OsStr::new(name)));
+        }
+        for name in [
+            "",
+            "CARGO_REGISTRIES_PRIVATE_INDEX",
+            "PREFIX_CARGO_REGISTRIES_PRIVATE_TOKEN",
+            "CARGO_REGISTRIES_PRIVATE_TOKEN_SUFFIX",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "RUSTFLAGS",
+        ] {
+            assert!(!registry_token_variable(OsStr::new(name)));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        all(miri, windows),
+        ignore = "Command environment keys call Windows CompareStringOrdinal, unsupported by Miri"
+    )]
     fn credential_aliases_do_not_remove_build_configuration() {
         let mut command = Command::new("cargo");
         let names = [
@@ -409,6 +447,8 @@ mod tests {
             ("CARGO_REGISTRIES_PRIVATE_INDEX", false),
             ("CARGO_HOME", false),
             ("RUSTUP_HOME", false),
+            ("RUSTFLAGS", false),
+            ("CARGO_ENCODED_RUSTFLAGS", false),
         ];
         strip_build_credentials(
             &mut command,

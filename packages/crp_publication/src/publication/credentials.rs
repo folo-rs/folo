@@ -395,18 +395,6 @@ mod tests {
     use crate::publication::manifest::{InvalidManifest, Publication};
 
     #[test]
-    fn registry_token_spelling_follows_the_platform_environment() {
-        assert!(registry_token(OsStr::new("CARGO_REGISTRIES_PRIVATE_TOKEN")));
-        assert_eq!(
-            registry_token(OsStr::new("Cargo_Registries_Private_Token")),
-            cfg!(windows)
-        );
-        assert!(!registry_token(OsStr::new(
-            "CARGO_REGISTRIES_PRIVATE_INDEX"
-        )));
-    }
-
-    #[test]
     fn cleanup_accumulation_retains_independent_failure_causes() {
         let output = PublicationOutput::new("1.0.0", false, std::sync::Arc::new(crp_diag::Discard));
         let mut failure = None;
@@ -429,6 +417,30 @@ mod tests {
     }
 
     #[test]
+    fn registry_token_spelling_follows_the_platform_environment() {
+        assert!(registry_token(OsStr::new("CARGO_REGISTRIES_PRIVATE_TOKEN")));
+        assert_eq!(
+            registry_token(OsStr::new("Cargo_Registries_Private_Token")),
+            cfg!(windows)
+        );
+        for name in [
+            "",
+            "CARGO_REGISTRIES_PRIVATE_INDEX",
+            "PREFIX_CARGO_REGISTRIES_PRIVATE_TOKEN",
+            "CARGO_REGISTRIES_PRIVATE_TOKEN_SUFFIX",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "RUSTFLAGS",
+        ] {
+            assert!(!registry_token(OsStr::new(name)));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        all(miri, windows),
+        ignore = "Command environment keys call Windows CompareStringOrdinal, unsupported by Miri"
+    )]
     fn cargo_receives_no_publication_credentials() {
         let mut command = Command::new("cargo");
         strip_credentials(
@@ -437,6 +449,10 @@ mod tests {
                 "CARGO_REGISTRIES_PRIVATE_TOKEN",
                 "CARGO_REGISTRIES_PRIVATE_INDEX",
                 "UNRELATED",
+                "RUSTFLAGS",
+                "CARGO_ENCODED_RUSTFLAGS",
+                "CARGO_HOME",
+                "RUSTUP_HOME",
             ]
             .into_iter()
             .map(OsString::from),
@@ -458,7 +474,14 @@ mod tests {
         ] {
             assert!(removed.contains(&OsString::from(name)));
         }
-        for name in ["UNRELATED", "CARGO_REGISTRIES_PRIVATE_INDEX"] {
+        for name in [
+            "UNRELATED",
+            "CARGO_REGISTRIES_PRIVATE_INDEX",
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+        ] {
             assert!(!removed.contains(&OsString::from(name)));
         }
     }

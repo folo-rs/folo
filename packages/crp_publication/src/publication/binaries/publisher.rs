@@ -50,6 +50,8 @@ impl BinaryPublisher {
 }
 
 impl Executor for BinaryPublisher {
+    // Forwards native's signal state; executable cancellation tests cover the composed pipeline.
+    #[cfg_attr(test, mutants::skip)]
     fn cancelled(&self) -> bool {
         self.native.cancelled()
     }

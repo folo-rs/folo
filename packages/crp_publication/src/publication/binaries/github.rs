@@ -150,6 +150,8 @@ impl Github {
 }
 
 impl SourceProvider for Github {
+    // Real Git acquisition is covered by the exact-missing-source executable integration test.
+    #[cfg_attr(test, mutants::skip)]
     fn fetch(&self, controller: &Path, commit: &str, deadline: Instant) -> Result<(), AppError> {
         // Fetch only the requested immutable commit from the configured repository, not
         // unrelated tag refs. Reset persistent credential helpers before installing the

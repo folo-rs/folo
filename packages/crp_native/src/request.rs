@@ -108,6 +108,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn package_and_binary_identifiers_require_an_alphanumeric_start_and_safe_remainder() {
+        for (value, valid) in [
+            ("tool", true),
+            ("7tool_name-bin", true),
+            ("", false),
+            ("-tool", false),
+            ("_tool", false),
+            ("tool/path", false),
+            ("tool.name", false),
+            ("tool name", false),
+        ] {
+            for name_field in [false, true] {
+                let request = binary("tool");
+                let (name, bin) = if name_field {
+                    (value.to_owned(), request.bin)
+                } else {
+                    (request.name, value.to_owned())
+                };
+                assert_eq!(
+                    BuildRequest::new(
+                        name,
+                        bin,
+                        request.version,
+                        request.label,
+                        request.source_sha,
+                        request.archive_base,
+                    )
+                    .is_ok(),
+                    valid
+                );
+            }
+        }
+    }
+
+    #[test]
     fn execution_inputs_require_safe_names_and_complete_source_identity() {
         let request = binary("tool");
         for (name, bin, version, source, archive) in [

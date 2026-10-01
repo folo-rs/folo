@@ -71,3 +71,8 @@ Candidate policy consumes workspace facts and the typed versioning check result,
 not application command dispatch. Production entry points select concrete adapters;
 unit tests inject narrow observation and action interfaces. Real HTTP/Git/Cargo and delivery-adapter
 behavior belongs to boundary tests, never production registry or GitHub writes.
+Native cancellation forwarding and exact-source Git acquisition are individually
+excluded from library mutation testing and exercised by executable cancellation
+and missing-source integrations. Identifier and credential-name decisions retain
+in-process coverage, including under Miri; Windows Command environment comparison
+is verified natively.

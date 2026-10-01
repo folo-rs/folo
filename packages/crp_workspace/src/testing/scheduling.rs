@@ -30,12 +30,21 @@ fn with_slot(slot: &Mutex<()>, run: impl FnOnce()) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::{Cell, RefCell};
 
     use testing::{assert_panics, with_watchdog};
 
     use super::*;
+
+    #[test]
+    fn io_entry_point_executes_each_supplied_operation() {
+        let calls = Cell::new(0);
+        with_io_slot(|| calls.set(calls.get() + 1));
+        with_io_slot(|| calls.set(calls.get() + 1));
+        assert_eq!(calls.get(), 2);
+    }
 
     #[test]
     fn successful_execution_releases_the_slot() {

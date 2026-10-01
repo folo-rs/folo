@@ -63,6 +63,8 @@ impl Repository {
         }
     }
 
+    // Native fixture setup is exercised by boundary tests, not in-process library tests.
+    #[cfg_attr(test, mutants::skip)]
     pub fn write(&self, relative: &str, bytes: &[u8]) {
         let path = self.path().join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -73,6 +75,8 @@ impl Repository {
         clippy::must_use_candidate,
         reason = "Fixture commands stage and commit as well as query; their output is optional."
     )]
+    // Native Git fixture execution is exercised by repository and source boundary tests.
+    #[cfg_attr(test, mutants::skip)]
     pub fn command(&self, args: &[&str]) -> String {
         let output = Command::new("git")
             .current_dir(self.path())
