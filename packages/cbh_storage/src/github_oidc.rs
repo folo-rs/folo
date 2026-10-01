@@ -23,13 +23,18 @@
 //! sidesteps that entirely, and needs neither an `azure/login` step nor a stored
 //! secret.
 
+use std::any::type_name;
 use std::fmt;
 use std::sync::Arc;
 
 use azure_core::Error;
 use azure_core::credentials::TokenCredential;
 use azure_core::error::ErrorKind;
-use azure_core::http::{ClientMethodOptions, HttpClient, Method, Request, Url, headers};
+use azure_core::http::{
+    ClientMethodOptions, HttpClient, Method, Request, StatusCode, Url, headers,
+};
+use azure_core::sleep::sleep;
+use azure_core::time::Duration;
 use azure_identity::{ClientAssertion, ClientAssertionCredential};
 use serde::Deserialize;
 
@@ -56,6 +61,24 @@ const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
 /// The environment variable the workflow sets to the Entra tenant (directory) ID to
 /// authenticate against.
 const ENV_TENANT_ID: &str = "AZURE_TENANT_ID";
+
+/// Short exponential waits absorb brief issuer disruptions without prolonged authentication stalls.
+/// Ref: ../docs/implementation.md, "GitHub OIDC acquisition".
+const RETRY_DELAYS: [Duration; 3] = [
+    Duration::seconds(1),
+    Duration::seconds(2),
+    Duration::seconds(4),
+];
+
+/// Retry the Azure SDK's established transient status set, not arbitrary server errors.
+const RETRY_STATUSES: &[StatusCode] = &[
+    StatusCode::RequestTimeout,
+    StatusCode::TooManyRequests,
+    StatusCode::InternalServerError,
+    StatusCode::BadGateway,
+    StatusCode::ServiceUnavailable,
+    StatusCode::GatewayTimeout,
+];
 
 /// The values that together opt a job into GitHub OIDC federation.
 struct GithubOidcParams {
@@ -133,11 +156,8 @@ struct GithubOidcAssertion {
 
 impl fmt::Debug for GithubOidcAssertion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redact the request token: it authorizes minting OIDC tokens for this job
-        // and must never reach logs.
-        f.debug_struct("GithubOidcAssertion")
-            .field("request_url", &self.request_url)
-            .finish_non_exhaustive()
+        // Both the bearer token and the per-job URL can carry sensitive request data.
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
@@ -153,14 +173,18 @@ impl ClientAssertion for GithubOidcAssertion {
         &self,
         _options: Option<ClientMethodOptions<'_>>,
     ) -> azure_core::Result<String> {
-        let mut url = Url::parse(&self.request_url).map_err(|error| {
-            Error::with_message(
-                ErrorKind::Credential,
-                format!(
-                    "invalid GitHub OIDC request URL {:?}: {error}",
-                    self.request_url
-                ),
-            )
+        self.secret_with_sleep(sleep).await
+    }
+}
+
+impl GithubOidcAssertion {
+    /// Acquires an assertion with the same retry policy under real and simulated delays.
+    async fn secret_with_sleep<F: Future<Output = ()> + Send>(
+        &self,
+        sleep: impl Fn(Duration) -> F + Send,
+    ) -> azure_core::Result<String> {
+        let mut url = Url::parse(&self.request_url).map_err(|_error| {
+            Error::with_message(ErrorKind::Credential, "invalid GitHub OIDC request URL")
         })?;
         // Append rather than replace: the request URL already carries an
         // `api-version` query that must be preserved.
@@ -174,20 +198,61 @@ impl ClientAssertion for GithubOidcAssertion {
         );
         request.insert_header(headers::ACCEPT, "application/json");
 
-        let response = self.http_client.execute_request(&request).await?;
+        let mut delays = RETRY_DELAYS.into_iter();
+        loop {
+            let error = match self.request_token(&request).await {
+                Ok(token) => return Ok(token),
+                Err(error) => error,
+            };
+            let retryable = match error.kind() {
+                ErrorKind::Io | ErrorKind::Connection => true,
+                ErrorKind::HttpResponse { status, .. } => RETRY_STATUSES.contains(status),
+                _ => false,
+            };
+            if !retryable {
+                return Err(Error::new(ErrorKind::Credential, error));
+            }
+            let Some(delay) = delays.next() else {
+                // The issuer owns its retry budget; do not invite an outer transport retry.
+                return Err(Error::with_error(
+                    ErrorKind::Credential,
+                    error,
+                    "GitHub OIDC token request exhausted its retries",
+                ));
+            };
+            sleep(delay).await;
+        }
+    }
+
+    async fn request_token(&self, request: &Request) -> azure_core::Result<String> {
+        let response = self
+            .http_client
+            .execute_request(request)
+            .await
+            .map_err(|error| redact_transport_error(&error))?;
         let status = response.status();
-        let body = response.into_body().collect().await?;
         if !status.is_success() {
+            // An error body is unnecessary for classification and may contain token data.
             return Err(Error::with_message(
-                ErrorKind::Credential,
+                ErrorKind::HttpResponse {
+                    status,
+                    error_code: None,
+                    raw_response: None,
+                },
                 format!("GitHub OIDC token request failed with HTTP status {status}"),
             ));
         }
 
-        let parsed: OidcTokenResponse = serde_json::from_slice(&body).map_err(|error| {
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|error| redact_transport_error(&error))?;
+        let parsed: OidcTokenResponse = serde_json::from_slice(&body).map_err(|_error| {
+            // Deserializer errors can quote values from the token-bearing response.
             Error::with_message(
                 ErrorKind::Credential,
-                format!("could not parse GitHub OIDC token response: {error}"),
+                "could not parse GitHub OIDC token response",
             )
         })?;
         if parsed.value.is_empty() {
@@ -200,14 +265,28 @@ impl ClientAssertion for GithubOidcAssertion {
     }
 }
 
+/// Keeps transport classification without retaining an error that may quote credentials.
+fn redact_transport_error(error: &Error) -> Error {
+    let kind = match error.kind() {
+        ErrorKind::Io => ErrorKind::Io,
+        ErrorKind::Connection => ErrorKind::Connection,
+        _ => ErrorKind::Credential,
+    };
+    let message = format!("GitHub OIDC token request transport failed ({kind:?})");
+    Error::with_message(kind, message)
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::collections::VecDeque;
+    use std::iter;
     use std::sync::Mutex;
 
+    use azure_core::http::AsyncRawResponse;
     use azure_core::http::headers::Headers;
-    use azure_core::http::{AsyncRawResponse, StatusCode};
     use futures::executor::block_on;
+    use futures::{future, stream};
     use ohno::ErrorExt as _;
 
     use super::*;
@@ -215,52 +294,41 @@ mod tests {
 
     /// Records the request a [`StubHttpClient`] saw, so a test can assert on the URL
     /// and bearer header the assertion built.
-    #[derive(Clone, Debug, Default)]
+    #[derive(Clone, Debug, PartialEq)]
     struct SeenRequest {
         url: String,
+        method: Method,
         authorization: Option<String>,
+        accept: Option<String>,
     }
 
-    /// A minimal [`HttpClient`] that records the request and replies with a fixed
-    /// status and body, exercising the assertion's `GET`/parse logic with no real
-    /// network (so the tests stay Miri-safe).
+    /// Drives complete request sequences in process, rejecting any unexpected extra attempt.
     #[derive(Debug)]
     struct StubHttpClient {
-        status: StatusCode,
-        body: Vec<u8>,
-        /// When set, `execute_request` returns this as an `Io`-kind transport error
-        /// instead of a response, exercising `secret`'s request-failure branch.
-        fail: Option<String>,
-        seen: Mutex<Option<SeenRequest>>,
+        responses: Mutex<VecDeque<azure_core::Result<AsyncRawResponse>>>,
+        seen: Mutex<Vec<SeenRequest>>,
     }
 
     impl StubHttpClient {
         fn new(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
-            Self {
+            Self::scripted([Ok(AsyncRawResponse::from_bytes(
                 status,
-                body: body.into(),
-                fail: None,
-                seen: Mutex::new(None),
-            }
+                Headers::default(),
+                body.into(),
+            ))])
         }
 
-        /// A client whose `execute_request` fails with a transport error carrying
-        /// `message`, so a test can assert that `secret` surfaces it unchanged.
-        fn failing(message: impl Into<String>) -> Self {
+        fn scripted(
+            responses: impl IntoIterator<Item = azure_core::Result<AsyncRawResponse>>,
+        ) -> Self {
             Self {
-                status: StatusCode::Ok,
-                body: Vec::new(),
-                fail: Some(message.into()),
-                seen: Mutex::new(None),
+                responses: Mutex::new(responses.into_iter().collect()),
+                seen: Mutex::new(Vec::new()),
             }
         }
 
         fn seen(&self) -> SeenRequest {
-            self.seen
-                .lock()
-                .unwrap()
-                .clone()
-                .expect("a request should have been sent")
+            self.seen.lock().unwrap().last().unwrap().clone()
         }
     }
 
@@ -271,24 +339,23 @@ mod tests {
                 .headers()
                 .get_optional_str(&headers::AUTHORIZATION)
                 .map(ToOwned::to_owned);
-            *self.seen.lock().unwrap() = Some(SeenRequest {
+            self.seen.lock().unwrap().push(SeenRequest {
                 url: request.url().to_string(),
+                method: request.method(),
                 authorization,
+                accept: request
+                    .headers()
+                    .get_optional_str(&headers::ACCEPT)
+                    .map(ToOwned::to_owned),
             });
-            if let Some(message) = &self.fail {
-                return Err(Error::with_message(ErrorKind::Io, message.clone()));
-            }
-            Ok(AsyncRawResponse::from_bytes(
-                self.status,
-                Headers::default(),
-                self.body.clone(),
-            ))
+            let response = self.responses.lock().unwrap().pop_front();
+            response.unwrap()
         }
     }
 
     /// Builds an assertion over `client` with a request URL that already carries a
     /// query, so the audience-append behaviour is observable.
-    fn assertion(client: Arc<dyn HttpClient>) -> GithubOidcAssertion {
+    fn assertion(client: Arc<impl HttpClient + 'static>) -> GithubOidcAssertion {
         GithubOidcAssertion {
             request_url: "https://example.test/token?api-version=2.0".to_owned(),
             request_token: "request-secret".to_owned(),
@@ -328,13 +395,235 @@ mod tests {
     }
 
     #[test]
-    fn secret_propagates_a_transport_error_unchanged() {
-        let client = Arc::new(StubHttpClient::failing("connection reset by peer"));
-        let error = block_on(assertion(client).secret(None)).expect_err("error");
-        // A failure to even send the request is surfaced as-is (an `Io` transport
-        // error), not remapped to a credential error like the HTTP-status, JSON, and
-        // empty-value branches are.
-        assert!(matches!(error.kind(), ErrorKind::Io), "{error:?}");
+    fn secret_retries_transient_statuses_then_returns_a_fresh_token() {
+        for status in [
+            StatusCode::RequestTimeout,
+            StatusCode::TooManyRequests,
+            StatusCode::InternalServerError,
+            StatusCode::BadGateway,
+            StatusCode::ServiceUnavailable,
+            StatusCode::GatewayTimeout,
+        ] {
+            let client = Arc::new(StubHttpClient::scripted([
+                Ok(AsyncRawResponse::from_bytes(
+                    status,
+                    Headers::default(),
+                    "not a token response",
+                )),
+                Ok(AsyncRawResponse::from_bytes(
+                    StatusCode::Ok,
+                    Headers::default(),
+                    br#"{"value":"fresh-token"}"#.to_vec(),
+                )),
+            ]));
+            let assertion = assertion(Arc::clone(&client));
+            let token = block_on(assertion.secret_with_sleep(|delay| {
+                assert_eq!(client.seen.lock().unwrap().len(), 1);
+                assert_eq!(delay, Duration::seconds(1));
+                future::ready(())
+            }))
+            .unwrap();
+
+            assert_eq!(token, "fresh-token");
+            let seen = client.seen.lock().unwrap();
+            assert_eq!(seen.len(), 2);
+            let first = seen.first().unwrap();
+            assert_eq!(first, seen.get(1).unwrap());
+            assert_eq!(first.method, Method::Get);
+            assert_eq!(first.accept.as_deref(), Some("application/json"));
+        }
+    }
+
+    #[test]
+    fn secret_bounds_mixed_transient_failures_and_redacts_exhaustion() {
+        let client = Arc::new(StubHttpClient::scripted([
+            Ok(AsyncRawResponse::from_bytes(
+                StatusCode::ServiceUnavailable,
+                Headers::default(),
+                "response-secret",
+            )),
+            Err(Error::with_message(ErrorKind::Connection, "request-secret")),
+            Ok(AsyncRawResponse::new(
+                StatusCode::Ok,
+                Headers::default(),
+                Box::pin(stream::iter([Err(Error::with_message(
+                    ErrorKind::Io,
+                    "body-secret",
+                ))])),
+            )),
+            Ok(AsyncRawResponse::from_bytes(
+                StatusCode::BadGateway,
+                Headers::default(),
+                "final-response-secret",
+            )),
+        ]));
+        let assertion = assertion(Arc::clone(&client));
+        let waits = Mutex::new(Vec::new());
+        let error = block_on(assertion.secret_with_sleep(|delay| {
+            let mut waits = waits.lock().unwrap();
+            assert_eq!(client.seen.lock().unwrap().len(), waits.len() + 1);
+            waits.push(delay);
+            future::ready(())
+        }))
+        .unwrap_err();
+
+        assert!(matches!(error.kind(), ErrorKind::Credential));
+        assert_eq!(
+            error.downcast_ref::<Error>().unwrap().http_status(),
+            Some(StatusCode::BadGateway)
+        );
+        assert_eq!(
+            *waits.lock().unwrap(),
+            [
+                Duration::seconds(1),
+                Duration::seconds(2),
+                Duration::seconds(4)
+            ]
+        );
+        assert_eq!(client.seen.lock().unwrap().len(), 4);
+        let rendered = format!("{error:?} {error}");
+        for canary in ["request-secret", "response-secret", "body-secret"] {
+            assert!(!rendered.contains(canary));
+        }
+    }
+
+    #[test]
+    fn secret_retries_transport_and_body_failures() {
+        for kind in [ErrorKind::Connection, ErrorKind::Io] {
+            for body_failure in [false, true] {
+                let error = Error::with_message(kind.clone(), "request-secret");
+                let failure = if body_failure {
+                    Ok(AsyncRawResponse::new(
+                        StatusCode::Ok,
+                        Headers::default(),
+                        Box::pin(stream::iter([Err(error)])),
+                    ))
+                } else {
+                    Err(error)
+                };
+                let client = Arc::new(StubHttpClient::scripted([
+                    failure,
+                    Ok(AsyncRawResponse::from_bytes(
+                        StatusCode::Ok,
+                        Headers::default(),
+                        br#"{"value":"fresh-token"}"#.to_vec(),
+                    )),
+                ]));
+                let assertion = assertion(Arc::clone(&client));
+                let token = block_on(assertion.secret_with_sleep(|delay| {
+                    assert_eq!(client.seen.lock().unwrap().len(), 1);
+                    assert_eq!(delay, Duration::seconds(1));
+                    future::ready(())
+                }))
+                .unwrap();
+                assert_eq!(token, "fresh-token");
+                assert_eq!(client.seen.lock().unwrap().len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn secret_does_not_retry_non_transient_statuses_or_read_their_bodies() {
+        for status in [
+            StatusCode::BadRequest,
+            StatusCode::Unauthorized,
+            StatusCode::Forbidden,
+            StatusCode::NotFound,
+            StatusCode::NotImplemented,
+        ] {
+            let client = Arc::new(StubHttpClient::scripted([Ok(AsyncRawResponse::new(
+                status,
+                Headers::default(),
+                Box::pin(stream::poll_fn(|_| panic!("error body must not be read"))),
+            ))]));
+            let error = block_on(assertion(client).secret(None)).unwrap_err();
+            assert!(matches!(error.kind(), ErrorKind::Credential));
+            assert_eq!(
+                error.downcast_ref::<Error>().unwrap().http_status(),
+                Some(status)
+            );
+        }
+    }
+
+    #[test]
+    fn secret_redacts_non_transient_transport_and_parser_errors() {
+        let clients = [
+            StubHttpClient::scripted([Err(Error::with_message(
+                ErrorKind::Credential,
+                "request-secret",
+            ))]),
+            StubHttpClient::new(StatusCode::Ok, br#""response-secret""#.to_vec()),
+        ];
+        for client in clients {
+            let error = block_on(assertion(Arc::new(client)).secret(None)).unwrap_err();
+            assert!(matches!(error.kind(), ErrorKind::Credential));
+            let rendered = format!("{error:?} {error}");
+            for canary in ["request-secret", "response-secret"] {
+                assert!(!rendered.contains(canary));
+            }
+        }
+    }
+
+    #[test]
+    fn secret_stops_retrying_after_non_transient_rejection() {
+        let client = Arc::new(StubHttpClient::scripted([
+            Ok(AsyncRawResponse::from_bytes(
+                StatusCode::ServiceUnavailable,
+                Headers::default(),
+                "",
+            )),
+            Ok(AsyncRawResponse::from_bytes(
+                StatusCode::Forbidden,
+                Headers::default(),
+                "",
+            )),
+        ]));
+        let assertion = assertion(Arc::clone(&client));
+        let error = block_on(assertion.secret_with_sleep(|delay| {
+            assert_eq!(delay, Duration::seconds(1));
+            assert_eq!(client.seen.lock().unwrap().len(), 1);
+            future::ready(())
+        }))
+        .unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Credential));
+        assert_eq!(
+            error.downcast_ref::<Error>().unwrap().http_status(),
+            Some(StatusCode::Forbidden)
+        );
+        assert_eq!(client.seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn secret_succeeds_on_the_final_attempt() {
+        let client = Arc::new(StubHttpClient::scripted(
+            RETRY_DELAYS
+                .iter()
+                .map(|_| Err(Error::with_message(ErrorKind::Io, "request-secret")))
+                .chain([Ok(AsyncRawResponse::from_bytes(
+                    StatusCode::Ok,
+                    Headers::default(),
+                    br#"{"value":"fresh-token"}"#.to_vec(),
+                ))]),
+        ));
+        let token =
+            block_on(assertion(Arc::clone(&client)).secret_with_sleep(|_| future::ready(())))
+                .unwrap();
+        assert_eq!(token, "fresh-token");
+        assert_eq!(client.seen.lock().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn secret_redacts_exhausted_transport_errors() {
+        let client = Arc::new(StubHttpClient::scripted(
+            iter::repeat_with(|| Err(Error::with_message(ErrorKind::Io, "request-secret")))
+                .take(RETRY_DELAYS.len() + 1),
+        ));
+        let error =
+            block_on(assertion(Arc::clone(&client)).secret_with_sleep(|_| future::ready(())))
+                .unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Credential));
+        assert_eq!(client.seen.lock().unwrap().len(), 4);
+        assert!(!format!("{error:?} {error}").contains("request-secret"));
     }
 
     #[test]
@@ -361,17 +650,18 @@ mod tests {
             br#"{"value":"x"}"#.to_vec(),
         ));
         let mut assertion = assertion(client);
-        assertion.request_url = "not a url".to_owned();
+        assertion.request_url = "not a url: request-secret".to_owned();
         let error = block_on(assertion.secret(None)).expect_err("error");
         assert!(matches!(error.kind(), ErrorKind::Credential), "{error:?}");
+        assert!(!format!("{error:?} {error}").contains("request-secret"));
     }
 
     #[test]
-    fn debug_redacts_the_request_token() {
+    fn debug_redacts_the_request_credentials() {
         let client = Arc::new(StubHttpClient::new(StatusCode::Ok, b"{}".to_vec()));
         let rendered = format!("{:?}", assertion(client));
         assert!(!rendered.contains("request-secret"), "{rendered}");
-        assert!(rendered.contains("example.test"), "{rendered}");
+        assert!(!rendered.contains("example.test"), "{rendered}");
     }
 
     /// The full set of GitHub OIDC variables, all present and non-empty.
