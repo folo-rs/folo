@@ -12,6 +12,7 @@
 use std::collections::HashSet;
 use std::mem;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::process::Output;
 
 use ohno::AppError;
 
@@ -188,22 +189,15 @@ impl GitRepo {
     }
 
     /// Whether one resolved commit is an ancestor of another, including equality.
+    // Native Git acquisition; ancestry_outcome interprets statuses in process.
+    #[cfg_attr(test, mutants::skip)]
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, AppError> {
         let output = spawn(
             "git",
             ["merge-base", "--is-ancestor", ancestor, descendant],
             &self.root,
         )?;
-        match output.status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            _ => Err(CommandFailedError::new(
-                "git merge-base --is-ancestor",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            )
-            .into()),
-        }
+        ancestry_outcome(&output)
     }
 
     /// The branch releases are made from, used when the caller names no release history.
@@ -719,6 +713,20 @@ impl TreeEntry {
     }
 }
 
+/// Interprets Git's ancestry predicate without confusing a query failure with non-ancestry.
+fn ancestry_outcome(output: &Output) -> Result<bool, AppError> {
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(CommandFailedError::new(
+            "git merge-base --is-ancestor",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        )
+        .into()),
+    }
+}
+
 /// Work-tree modes that affect released artifacts or their interpretation.
 ///
 /// Executable paths provide the mode Cargo copies into the archive. Symlink
@@ -896,6 +904,46 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::*;
+
+    #[test]
+    fn ancestry_status_distinguishes_both_answers_from_query_failure() {
+        for (code, expected) in [(0, Ok(true)), (1, Ok(false)), (128, Err(()))] {
+            #[cfg(unix)]
+            let status = ExitStatus::from_raw(code << 8);
+            #[cfg(windows)]
+            let status = ExitStatus::from_raw(code);
+            let result = ancestry_outcome(&Output {
+                status,
+                stdout: Vec::new(),
+                stderr: b"  native ancestry failure\n".to_vec(),
+            });
+            match expected {
+                Ok(expected) => assert_eq!(result.unwrap(), expected),
+                Err(()) => {
+                    let error = result.unwrap_err();
+                    let condition = error.find_source::<CommandFailedError>().unwrap();
+                    assert_eq!(condition.stderr(), "native ancestry failure");
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ancestry_query_terminated_by_signal_is_not_a_negative_answer() {
+        // POSIX wait status encodes signal termination without an exit code.
+        let result = ancestry_outcome(&Output {
+            status: ExitStatus::from_raw(15),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        });
+        assert!(
+            result
+                .unwrap_err()
+                .find_source::<CommandFailedError>()
+                .is_some()
+        );
+    }
 
     #[test]
     fn acquired_git_queries_do_not_turn_empty_selection_into_all_repository_paths() {

@@ -471,6 +471,75 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn bound_plans_require_both_captured_history_identities() {
+        let inputs = Inputs {
+            root: "unused".into(),
+            manifest: "Cargo.toml".into(),
+            head: "head".into(),
+            release_history: "released".into(),
+            release_history_revision: "release-branch".into(),
+            merge_target: Some("parent".into()),
+            merge_target_revision: Some("parent-branch".into()),
+            index: String::new(),
+            paths: BTreeSet::new(),
+            digest: "digest".into(),
+        };
+        for stage in [PlanStage::Proposed, PlanStage::Expanded] {
+            let mut plan = PlanFile::new(stage, Vec::new());
+            // Unbound proposals remain supported even when the prepared inputs have a target.
+            plan.validate_history(&inputs).unwrap();
+            plan.merge_target = Some("parent".into());
+            assert!(
+                plan.validate_history(&inputs)
+                    .unwrap_err()
+                    .find_source::<UnboundMergeTarget>()
+                    .is_some()
+            );
+            for (history, target, accepted) in [
+                ("released", Some("parent"), true),
+                ("other-history", Some("parent"), false),
+                ("released", Some("other-parent"), false),
+                ("other-history", Some("other-parent"), false),
+                ("released", None, false),
+            ] {
+                plan.release_history = Some(history.into());
+                plan.merge_target = target.map(str::to_owned);
+                let result = plan.validate_history(&inputs);
+                if accepted {
+                    result.unwrap();
+                } else {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .find_source::<PlanHistoryMismatch>()
+                            .is_some()
+                    );
+                }
+            }
+            let inputs = Inputs {
+                merge_target: None,
+                merge_target_revision: None,
+                ..inputs.clone()
+            };
+            plan.validate_history(&inputs).unwrap();
+            plan.merge_target = Some("parent".into());
+            assert!(
+                plan.validate_history(&inputs)
+                    .unwrap_err()
+                    .find_source::<PlanHistoryMismatch>()
+                    .is_some()
+            );
+            plan.schema_version = SCHEMA_VERSION + 1;
+            assert!(
+                plan.validate_history(&inputs)
+                    .unwrap_err()
+                    .find_source::<UnsupportedPlanSchemaError>()
+                    .is_some()
+            );
+        }
+    }
+
     fn v(text: &str) -> Version {
         text.parse().unwrap()
     }

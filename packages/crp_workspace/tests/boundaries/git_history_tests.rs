@@ -7,6 +7,30 @@ use crp_workspace::manifest::PathCase;
 use crate::git_fixture::Repository;
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "creates Git commits and invokes native ancestry queries"
+)]
+fn ancestry_queries_preserve_direction_equality_divergence_and_errors() {
+    let fixture = Repository::new();
+    fixture.command(&["commit", "--quiet", "--allow-empty", "-m", "root"]);
+    let repo = fixture.repo();
+    let root = repo.rev_parse("HEAD").unwrap();
+    fixture.command(&["commit", "--quiet", "--allow-empty", "-m", "child"]);
+    let child = repo.rev_parse("HEAD").unwrap();
+    assert!(repo.is_ancestor(&root, &child).unwrap());
+    assert!(repo.is_ancestor(&child, &child).unwrap());
+    assert!(!repo.is_ancestor(&child, &root).unwrap());
+
+    let unrelated_tree = repo.rev_parse("HEAD^{tree}").unwrap();
+    let unrelated = fixture.command(&["commit-tree", &unrelated_tree, "-m", "unrelated"]);
+    assert!(!repo.is_ancestor(unrelated.trim(), &child).unwrap());
+    assert!(!repo.is_ancestor(&child, unrelated.trim()).unwrap());
+    repo.is_ancestor("missing-revision", &child).unwrap_err();
+    repo.is_ancestor(&root, "missing-revision").unwrap_err();
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "creates Git history and spawns Git")]
 fn a_commit_with_a_reachable_parent_is_not_a_root() {
     let fixture = Repository::new();
