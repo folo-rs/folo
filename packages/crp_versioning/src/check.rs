@@ -603,6 +603,27 @@ mod tests {
     const RELEASE_HISTORY: &str = "origin/main";
 
     #[test]
+    fn failed_target_assessments_retain_target_guidance_without_changing_success_output() {
+        for format in [CheckFormat::Text, CheckFormat::Github] {
+            for status in [PackageStatus::NeedsIncrement, PackageStatus::Unchanged] {
+                let mut data = classification(vec![package("api", status, "")]);
+                data.merge_target = Some("anticipated-parent".into());
+                let (passed, message, warnings) =
+                    check_workspace(|| Ok(data), format, false, |_| panic!("no probe")).unwrap();
+                assert_eq!(passed, status == PackageStatus::Unchanged);
+                assert!(warnings.is_empty());
+                if passed {
+                    assert_eq!(message, "Every release and workspace-version check passed.");
+                } else {
+                    assert!(message.contains("--merge-target <target>"));
+                    assert!(message.contains("anticipated-parent"));
+                    assert!(message.contains("api: needs-increment"));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn command_derives_verdict_and_runs_only_selected_packaging_probe() {
         for status in [PackageStatus::NeedsIncrement, PackageStatus::PendingRelease] {
             for verify in [false, true] {

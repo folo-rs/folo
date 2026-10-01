@@ -480,8 +480,11 @@ pub fn classify_with_target(
         .version_targets
         .iter()
         .filter(|target| {
-            is_new_at_snapshot(&history_snapshot, &target.name)
-                && projected.is_none_or(|(_, snapshot)| is_new_at_snapshot(snapshot, &target.name))
+            is_new_in_assessment(
+                &history_snapshot,
+                projected.map(|(_, snapshot)| snapshot),
+                &target.name,
+            )
         })
         .map(|target| target.name.clone())
         .collect();
@@ -1388,6 +1391,16 @@ fn released_in_work_tree(
 /// Ref: packages/cargo-release-plan/docs/design.md, "Version groups".
 fn is_new_at_snapshot(snapshot: &CommitSnapshot, name: &str) -> bool {
     !snapshot.packages.contains_key(name) && !snapshot.unpublished.contains(name)
+}
+
+/// Only members absent from both predecessors are exempt from group version matching.
+fn is_new_in_assessment(
+    history: &CommitSnapshot,
+    target: Option<&CommitSnapshot>,
+    name: &str,
+) -> bool {
+    is_new_at_snapshot(history, name)
+        && target.is_none_or(|snapshot| is_new_at_snapshot(snapshot, name))
 }
 
 /// The subset of `paths` the work tree still holds on disk.
@@ -2569,6 +2582,53 @@ mod tests {
         // Withdrawn in this snapshot is still present, so the group binds it.
         assert!(!is_new_at_snapshot(&snapshot, "withdrawn"));
         assert!(is_new_at_snapshot(&snapshot, "added"));
+    }
+
+    #[test]
+    fn group_exemption_requires_absence_from_actual_history_and_the_anticipated_parent() {
+        fn snapshot(presence: &str) -> CommitSnapshot {
+            let mut snapshot = CommitSnapshot {
+                packages: BTreeMap::new(),
+                unpublished: BTreeSet::new(),
+                root_doc: DocumentMut::new(),
+                installation: InstallationGraph::default(),
+            };
+            match presence {
+                "published" => {
+                    snapshot.packages.insert(
+                        "member".into(),
+                        HistoricalPackage {
+                            directory: "member".into(),
+                            version: Version::new(1, 0, 0),
+                            packaging: PackagingRules::default(),
+                            resources: BTreeMap::new(),
+                            auto_readme: false,
+                            has_lockfile_target: false,
+                        },
+                    );
+                }
+                "unpublished" => {
+                    snapshot.unpublished.insert("member".into());
+                }
+                "absent" => {}
+                _ => panic!("unknown fixture presence"),
+            }
+            snapshot
+        }
+
+        for history in ["absent", "published", "unpublished"] {
+            let history_snapshot = snapshot(history);
+            assert_eq!(
+                is_new_in_assessment(&history_snapshot, None, "member"),
+                history == "absent"
+            );
+            for target in ["absent", "published", "unpublished"] {
+                assert_eq!(
+                    is_new_in_assessment(&history_snapshot, Some(&snapshot(target)), "member"),
+                    (history, target) == ("absent", "absent")
+                );
+            }
+        }
     }
 
     #[test]

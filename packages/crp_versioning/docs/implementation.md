@@ -34,6 +34,13 @@ The supplied ref remains captured: verification rejects movement that changes
 the effective target, while movement wholly within committed release history
 does not introduce a new predecessor.
 
+Ref resolution and ancestry acquisition enter through narrow callbacks. The same
+in-process protocol admits targets and revalidates retained refs, including acquisition
+failures, independently changed identities and transitions into or out of committed
+history. Native Git adapters retain boundary coverage. Group exemptions require
+absence from both actual history and the anticipated predecessor; publication-disabled
+members still bind the group.
+
 The target contributes one anticipated predecessor snapshot, not its intermediate
 commits. A package first published by the target, or declaring a higher version
 there, anchors to that final snapshot. A package retaining its history version

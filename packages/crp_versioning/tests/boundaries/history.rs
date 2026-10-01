@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crp_diag::{Discard, Stderr, Verbose};
 use crp_versioning::apply::run_apply;
 use crp_versioning::classify::{Classification, PackageClass, PackageStatus, classify_with_target};
+use crp_versioning::groups::GroupState;
 use crp_versioning::history::resolve_merge_target;
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::preview::{run_prepare_with_target, run_preview};
@@ -394,6 +395,97 @@ fn already_integrated_targets_are_ordinary_and_divergent_targets_require_rebase(
     assert!(message.contains("diverges from release history"));
     assert!(message.contains("refresh"));
     assert!(message.contains("rebase"));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "captures Git refs and rechecks their native movement")]
+fn direct_history_verification_retains_original_refs_and_normalizes_integrated_movement() {
+    let fixture = HistoryFixture::new();
+    let inputs = Inputs::capture_with_target(
+        &fixture.manifest(),
+        Some("release-history"),
+        Some("merge-target"),
+    )
+    .unwrap();
+    inputs.verify_history().unwrap();
+    fixture.repository.command(&[
+        "update-ref",
+        "refs/heads/merge-target",
+        &fixture.release_history,
+    ]);
+    inputs.verify_history().unwrap_err();
+    fixture.repository.command(&[
+        "update-ref",
+        "refs/heads/merge-target",
+        &fixture.parent_final,
+    ]);
+    inputs.verify_history().unwrap();
+    fixture.repository.command(&[
+        "update-ref",
+        "refs/heads/release-history",
+        &fixture.original_release,
+    ]);
+    inputs.verify_history().unwrap_err();
+    fixture.repository.command(&[
+        "update-ref",
+        "refs/heads/release-history",
+        &fixture.release_history,
+    ]);
+
+    let integrated = Inputs::capture_with_target(
+        &fixture.manifest(),
+        Some("merge-target"),
+        Some("release-history"),
+    )
+    .unwrap();
+    assert!(integrated.merge_target.is_none());
+    fixture.repository.command(&[
+        "update-ref",
+        "refs/heads/release-history",
+        &fixture.original_release,
+    ]);
+    integrated.verify_history().unwrap();
+    fixture
+        .repository
+        .command(&["update-ref", "-d", "refs/heads/release-history"]);
+    integrated.verify_history().unwrap_err();
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "classifies group members from real history and parent snapshots"
+)]
+fn a_group_member_introduced_by_the_parent_is_not_exempt_from_child_version_matching() {
+    let repository = Repository::new();
+    repository.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['api']\nresolver='3'\n",
+    );
+    package(&repository, "api", "1.0.0", "");
+    repository.command(&["add", "."]);
+    repository.command(&["commit", "-qm", "released api"]);
+    let history = repository.repo().rev_parse("HEAD").unwrap();
+    repository.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['api','consumer']\nresolver='3'\n",
+    );
+    package(&repository, "consumer", "1.0.0", &dependency("1.0.0"));
+    repository.command(&["add", "."]);
+    repository.command(&["commit", "-qm", "parent adds group member"]);
+    let target = repository.repo().rev_parse("HEAD").unwrap();
+    package(&repository, "api", "1.1.0", "");
+    package(&repository, "consumer", "1.0.0", &dependency("1.1.0"));
+    let classification = classify_with_target(
+        &repository.path().join("Cargo.toml"),
+        Some(&history),
+        Some(&target),
+        quiet(),
+    )
+    .unwrap();
+    let group = classification.groups.values().next().unwrap();
+    assert_eq!(group.members(), ["api", "consumer"]);
+    assert!(matches!(group.state, GroupState::Inconsistent { .. }));
 }
 
 fn read(path: &Path) -> Value {

@@ -15,6 +15,8 @@ versioning derives their groups.
 Git observations can resolve commits and test ancestor relationships without
 rewriting history. Whether a descendant snapshot represents an anticipated squash
 predecessor is versioning policy, not a workspace acquisition rule.
+Ancestry exit-status interpretation stays in process: Git's positive and negative
+answers are distinct from execution failures, including signal termination.
 
 Path handling probes actual filesystem alias behavior rather than assuming case
 sensitivity from the operating system. Dependency membership uses the lexical member
