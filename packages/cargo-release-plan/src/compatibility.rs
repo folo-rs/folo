@@ -48,6 +48,8 @@ impl Evidence {
             Self::Preview(resolved) => &resolved.inputs,
         }
     }
+    // Both variants acquire live Git/filesystem identity; drift cases run in integration tests.
+    #[cfg_attr(test, mutants::skip)]
     fn verify(&self, manifest: &Path) -> Result<(), AppError> {
         match self {
             Self::Source(inputs) => {
@@ -338,6 +340,8 @@ fn finish_delivery<T>(
     clippy::too_many_arguments,
     reason = "Pass the explicit command options without a second application request type"
 )]
+// Native diagnostic wiring around the acquisition pipeline; exercised through run and the CLI.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn check_with_target(
     manifest: &Path,
     prepared: Option<&Path>,
@@ -371,6 +375,9 @@ pub(crate) fn check_with_target(
     clippy::too_many_arguments,
     reason = "Keep the command options together while substituting the diagnostic destination"
 )]
+// Acquires Git/Cargo/filesystem evidence and executes the checker. Selection, output admission,
+// comparison, finalization and diagnostic-failure decisions remain separate unit-test targets.
+#[cfg_attr(test, mutants::skip)]
 fn check_with_output(
     manifest: &Path,
     prepared: Option<&Path>,
@@ -735,27 +742,47 @@ fn checker_command(checker: &Path, manifest: &Path, args: &[&str]) -> Command {
     command
 }
 
+// PATH, metadata and canonical paths are native observations; selection itself is unit-tested.
+#[cfg_attr(test, mutants::skip)]
 fn resolve_checker() -> Result<PathBuf, AppError> {
     let paths = env::var_os("PATH").ok_or_else(CheckerUnavailable::new)?;
+    select_checker(
+        &paths,
+        |path| {
+            fs::metadata(path).map(|metadata| {
+                #[cfg(unix)]
+                let mode = Some(metadata.permissions().mode());
+                #[cfg(not(unix))]
+                let mode = None;
+                checker_file_is_executable(metadata.is_file(), mode)
+            })
+        },
+        Path::canonicalize,
+    )
+}
+
+fn checker_file_is_executable(is_file: bool, unix_mode: Option<u32>) -> bool {
+    // Only Unix supplies permission bits; other platforms defer executable validation to launch.
+    is_file && unix_mode.is_none_or(|mode| mode & 0o111 != 0)
+}
+
+fn select_checker(
+    paths: &OsStr,
+    mut inspect: impl FnMut(&Path) -> io::Result<bool>,
+    canonicalize: impl FnOnce(&Path) -> io::Result<PathBuf>,
+) -> Result<PathBuf, AppError> {
     let filename = format!("cargo-semver-checks{EXE_SUFFIX}");
-    for directory in env::split_paths(&paths) {
+    for directory in env::split_paths(paths) {
         let candidate = directory.join(&filename);
-        let metadata = match fs::metadata(&candidate) {
-            Ok(metadata) => metadata,
+        let executable = match inspect(&candidate) {
+            Ok(executable) => executable,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => return Err(CheckerLocationFailed::caused_by(&candidate, error).into()),
         };
-        if !metadata.is_file() {
+        if !executable {
             continue;
         }
-        #[cfg(unix)]
-        {
-            if metadata.permissions().mode() & 0o111 == 0 {
-                continue;
-            }
-        }
-        return candidate
-            .canonicalize()
+        return canonicalize(&candidate)
             .map_err(|error| CheckerLocationFailed::caused_by(&candidate, error).into());
     }
     Err(CheckerUnavailable::new().into())
@@ -763,13 +790,16 @@ fn resolve_checker() -> Result<PathBuf, AppError> {
 
 // Compatibility compilation needs source-download access, not inherited upload or OIDC tokens.
 // This controls the child environment, not same-user filesystem access or build-code isolation.
-fn strip_checker_credentials(command: &mut Command, names: impl Iterator<Item = OsString>) {
+fn strip_checker_credentials(
+    mut remove: impl FnMut(&OsStr),
+    names: impl Iterator<Item = OsString>,
+) {
     for name in BUILD_CREDENTIAL_VARIABLES {
-        command.env_remove(name);
+        remove(OsStr::new(name));
     }
     for name in names {
         if is_registry_token(&name) {
-            command.env_remove(name);
+            remove(&name);
         }
     }
 }
@@ -788,12 +818,19 @@ fn execute_checker(mut command: Command, cache: &Path) -> Result<Output, AppErro
     command
         .env("CARGO_TARGET_DIR", cache)
         .env("CARGO_TERM_COLOR", "never");
-    strip_checker_credentials(&mut command, env::vars_os().map(|(name, _)| name));
+    strip_checker_credentials(
+        |name| {
+            command.env_remove(name);
+        },
+        env::vars_os().map(|(name, _)| name),
+    );
     command
         .output()
         .map_err(|error| CheckerStartFailed::caused_by(error).into())
 }
 
+// The native fixture and checker invocation are integration-tested; validate_canary owns admission.
+#[cfg_attr(test, mutants::skip)]
 fn canary(
     checker: &Path,
     cache: &Path,
@@ -971,6 +1008,7 @@ struct ParentCleanupAlsoFailed {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::Cell;
+    use std::collections::BTreeMap;
     use std::ffi::OsStr;
     use std::io::Error;
     #[cfg(unix)]
@@ -1674,6 +1712,138 @@ mod tests {
             "RUSTUP_TOOLCHAIN",
         ] {
             assert!(!is_registry_token(OsStr::new(name)));
+        }
+    }
+
+    #[test]
+    fn credentials_are_removed_without_changing_source_download_configuration() {
+        let mut environment = BTreeMap::from([
+            (OsString::from("GH_TOKEN"), OsString::from("github secret")),
+            (
+                OsString::from("CARGO_REGISTRY_TOKEN"),
+                OsString::from("upload secret"),
+            ),
+            (
+                OsString::from("cargo_registries_private_token"),
+                OsString::from("private secret"),
+            ),
+            (OsString::from("CARGO_HOME"), OsString::from("cargo-home")),
+            (
+                OsString::from("CARGO_REGISTRIES_PRIVATE_INDEX"),
+                OsString::from("registry-index"),
+            ),
+            (OsString::from("RUSTUP_TOOLCHAIN"), OsString::from("stable")),
+        ]);
+        let inherited = environment.clone();
+        let mut removed = Vec::new();
+        strip_checker_credentials(
+            |name| {
+                removed.push(name.to_owned());
+                environment.remove(name);
+            },
+            inherited.into_keys(),
+        );
+        for name in BUILD_CREDENTIAL_VARIABLES {
+            assert!(removed.contains(&OsString::from(name)));
+        }
+        assert_eq!(
+            environment,
+            BTreeMap::from([
+                (OsString::from("CARGO_HOME"), OsString::from("cargo-home")),
+                (
+                    OsString::from("CARGO_REGISTRIES_PRIVATE_INDEX"),
+                    OsString::from("registry-index")
+                ),
+                (OsString::from("RUSTUP_TOOLCHAIN"), OsString::from("stable")),
+            ])
+        );
+    }
+
+    #[test]
+    fn checker_selection_skips_missing_files_and_directories_and_stops_at_first_executable() {
+        let paths = env::join_paths(["missing", "directory", "first", "later"]).unwrap();
+        let mut inspected = Vec::new();
+        let selected = select_checker(
+            &paths,
+            |path| {
+                let directory = path.parent().unwrap();
+                inspected.push(directory.to_path_buf());
+                match directory.to_str().unwrap() {
+                    "missing" => Err(ErrorKind::NotFound.into()),
+                    "directory" => Ok(false),
+                    "first" => Ok(true),
+                    _ => panic!("selection must stop at the first executable"),
+                }
+            },
+            |path| {
+                assert_eq!(
+                    path,
+                    Path::new("first").join(format!("cargo-semver-checks{EXE_SUFFIX}"))
+                );
+                Ok(PathBuf::from("canonical-checker"))
+            },
+        )
+        .unwrap();
+        assert_eq!(selected, Path::new("canonical-checker"));
+        assert_eq!(
+            inspected,
+            [
+                Path::new("missing"),
+                Path::new("directory"),
+                Path::new("first")
+            ]
+        );
+    }
+
+    #[test]
+    fn checker_selection_distinguishes_absence_from_observation_and_resolution_failure() {
+        let paths = env::join_paths(["first", "later"]).unwrap();
+        let absent = select_checker(
+            &paths,
+            |_| Err(ErrorKind::NotFound.into()),
+            |_| panic!("an absent checker cannot be canonicalized"),
+        )
+        .unwrap_err();
+        assert!(absent.find_source::<CheckerUnavailable>().is_some());
+        for fail_inspection in [false, true] {
+            let error = select_checker(
+                &paths,
+                |path| {
+                    assert_eq!(path.parent().unwrap(), Path::new("first"));
+                    if fail_inspection {
+                        Err(ErrorKind::PermissionDenied.into())
+                    } else {
+                        Ok(true)
+                    }
+                },
+                |_| {
+                    assert!(!fail_inspection);
+                    Err(ErrorKind::PermissionDenied.into())
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.find_source::<CheckerLocationFailed>().unwrap().path,
+                Path::new("first").join(format!("cargo-semver-checks{EXE_SUFFIX}"))
+            );
+            assert_eq!(
+                error.find_source::<Error>().unwrap().kind(),
+                ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    #[test]
+    fn checker_file_eligibility_requires_a_regular_file_and_platform_execute_permission() {
+        assert!(!checker_file_is_executable(false, None));
+        assert!(checker_file_is_executable(true, None));
+        // Each Unix execute class suffices for selection; the actual launch decides accessibility.
+        for mode in [0o100, 0o010, 0o001, 0o111, 0o755] {
+            assert!(checker_file_is_executable(true, Some(mode)));
+            assert!(!checker_file_is_executable(false, Some(mode)));
+        }
+        for mode in [0, 0o644] {
+            assert!(!checker_file_is_executable(true, Some(mode)));
         }
     }
 

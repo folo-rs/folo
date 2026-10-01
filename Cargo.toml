@@ -28,7 +28,7 @@ azure_identity = { version = "1.0.0", default-features = false }
 azure_storage_blob = { version = "1.0.0", default-features = false }
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 cargo-freeze-deps = { version = "0.1.17", path = "packages/cargo-freeze-deps", default-features = false }
-cargo-release-plan = { version = "0.5.6", path = "packages/cargo-release-plan", default-features = false }
+cargo-release-plan = { version = "0.5.7", path = "packages/cargo-release-plan", default-features = false }
 cbh_analyze = { version = "=0.2.22", path = "packages/cbh_analyze", default-features = false }
 cbh_cli = { version = "=0.2.22", path = "packages/cbh_cli", default-features = false }
 cbh_codec = { version = "=0.2.22", path = "packages/cbh_codec", default-features = false }
@@ -51,11 +51,11 @@ cpulist = { version = "1.1.11", path = "packages/cpulist", default-features = fa
 criterion = { version = "0.8.2", default-features = false }
 # Exact requirements declare the application's version group; update component versions/pins together.
 # Ref: docs/impl-crate-split.md, cargo-release-plan and its private components.
-crp_diag = { version = "=0.5.6", path = "packages/crp_diag", default-features = false }
-crp_native = { version = "=0.5.6", path = "packages/crp_native", default-features = false }
-crp_publication = { version = "=0.5.6", path = "packages/crp_publication", default-features = false }
-crp_versioning = { version = "=0.5.6", path = "packages/crp_versioning", default-features = false }
-crp_workspace = { version = "=0.5.6", path = "packages/crp_workspace", default-features = false }
+crp_diag = { version = "=0.5.7", path = "packages/crp_diag", default-features = false }
+crp_native = { version = "=0.5.7", path = "packages/crp_native", default-features = false }
+crp_publication = { version = "=0.5.7", path = "packages/crp_publication", default-features = false }
+crp_versioning = { version = "=0.5.7", path = "packages/crp_versioning", default-features = false }
+crp_workspace = { version = "=0.5.7", path = "packages/crp_workspace", default-features = false }
 ctrlc = { version = "3.5.0", default-features = false }
 deranged = { version = "0.5.2", default-features = false }
 derive_more = { version = "2.0.0", default-features = false }

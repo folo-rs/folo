@@ -6,6 +6,8 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::env::consts::EXE_SUFFIX;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -396,6 +398,26 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
             "pub fn pending_change() {}\n",
         );
         let output = TempDir::new().unwrap();
+        let filename = format!("cargo-semver-checks{EXE_SUFFIX}");
+        let directory = output.path().join("directory");
+        fs::create_dir_all(directory.join(&filename)).unwrap();
+        let mut search = vec![output.path().join("absent"), directory];
+        #[cfg(unix)]
+        {
+            let nonexecutable = output.path().join("nonexecutable");
+            fs::create_dir(&nonexecutable).unwrap();
+            let path = nonexecutable.join(&filename);
+            fs::write(&path, "not selected").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
+            search.push(nonexecutable);
+        }
+        search.push(CHECKER.path().to_path_buf());
+        let path = env::join_paths(
+            search
+                .into_iter()
+                .chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
         for scenario in ["identity-failure", "canary-failure", "source-drift"] {
             let evidence = output.path().join(scenario);
             let invocations = output.path().join(format!("{scenario}.calls"));
@@ -407,6 +429,15 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
                 .args(["--release-history", &fixture.sha("HEAD"), "--output"])
                 .arg(&evidence)
                 .arg("--deny-findings")
+                .env("PATH", &path)
+                .env(
+                    "CARGO_REGISTRIES_PRIVATE_INDEX",
+                    "https://registry.example.invalid/index",
+                )
+                .env(
+                    "CRP_FIXTURE_EXPECT_INDEX",
+                    "https://registry.example.invalid/index",
+                )
                 .env("CRP_FIXTURE_SCENARIO", scenario)
                 .env("CRP_FIXTURE_CALLS", &invocations)
                 .env(
@@ -491,10 +522,15 @@ fn checker_start_failure_retains_selected_but_unidentified_state() {
         let tools = output.path().join("tools");
         fs::create_dir_all(&tools).unwrap();
         let checker = tools.join(format!("cargo-semver-checks{EXE_SUFFIX}"));
+        #[cfg(windows)]
         fs::write(&checker, b"not an executable image").unwrap();
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
+            // A missing interpreter deterministically fails launch. Unrecognized executable
+            // contents can instead trigger a shell fallback on some Unix process launchers.
+            let interpreter = output.path().join("missing-interpreter");
+            assert!(!interpreter.exists());
+            fs::write(&checker, format!("#!{}\n", interpreter.display())).unwrap();
             fs::set_permissions(&checker, fs::Permissions::from_mode(0o755)).unwrap();
         }
         let path = env::join_paths(
@@ -510,17 +546,27 @@ fn checker_start_failure_retains_selected_but_unidentified_state() {
             .env("PATH", path)
             .output()
             .unwrap();
-        assert!(!result.status.success());
+        let diagnostic = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "{diagnostic}");
+        assert!(result.stdout.is_empty());
         assert!(
-            String::from_utf8_lossy(&result.stderr).contains("failed to start cargo-semver-checks")
+            diagnostic.contains("failed to start cargo-semver-checks"),
+            "{diagnostic}"
         );
         let outcome = read_outcome(&evidence);
         assert_eq!(outcome.get("completed").unwrap(), false);
+        assert_eq!(outcome.get("findings").unwrap(), false);
         assert_eq!(
             outcome.get("checker").unwrap(),
             "selected: checker identity unavailable"
         );
         assert_eq!(outcome.get("packages").unwrap(), &json!([]));
+        assert!(evidence.join("report.json").is_file());
+        assert!(
+            fs::read(evidence.join("semver-checks.log"))
+                .unwrap()
+                .is_empty()
+        );
     });
 }
 
@@ -1140,6 +1186,9 @@ fn main() {
     assert_eq!(env::var("CARGO_TERM_COLOR").unwrap(), "never");
     assert!(Path::new(&env::var_os("CARGO_TARGET_DIR").unwrap()).is_dir());
     let scenario = env::var("CRP_FIXTURE_SCENARIO").unwrap();
+    if let Some(expected) = env::var_os("CRP_FIXTURE_EXPECT_INDEX") {
+        assert_eq!(env::var_os("CARGO_REGISTRIES_PRIVATE_INDEX"), Some(expected));
+    }
     let mut calls = OpenOptions::new().create(true).append(true)
         .open(env::var_os("CRP_FIXTURE_CALLS").unwrap()).unwrap();
     if args.iter().any(|arg| arg == "--version") {

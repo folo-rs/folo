@@ -159,6 +159,16 @@ execution errors remain distinct; a completed comparison supplies a semantic
 floor, not the author's compatibility judgment. Empty target sets do not invoke
 external tooling or query registry versions.
 
+Checker lookup separates PATH order, file eligibility and observation-error decisions
+from native metadata and canonicalization. Credential-removal decisions consume observed
+environment names and an injected removal operation; the native command owns applying
+those removals. These decisions remain library mutation targets without acquiring external
+state. Real source verification, compatibility orchestration and canary execution are
+integration boundaries, covered through retained evidence, stale-input rejection and
+checker invocation assertions rather than library mutation runs.
+New decisions belong outside the excluded acquisition adapters so they retain
+in-process mutation coverage.
+
 Each baseline comes from one registry-history observation. Source verification
 runs after comparison even when the checker fails, and incomplete evidence is
 persisted before errors propagate. Simultaneous checker and source-verification
