@@ -1,4 +1,7 @@
-#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
+#![cfg_attr(
+    all(coverage_nightly, any(test, feature = "private-test-util")),
+    feature(coverage_attribute)
+)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, doc(hidden))]
 #![expect(
@@ -47,6 +50,9 @@ mod prune;
 mod report;
 mod selection;
 mod window;
+
+#[cfg(any(test, feature = "private-test-util"))]
+pub mod benchmarks;
 
 #[cfg(test)]
 mod testing;
