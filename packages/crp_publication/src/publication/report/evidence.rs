@@ -764,37 +764,55 @@ mod tests {
     }
 
     #[test]
-    fn binary_modes_and_reordered_results_keep_the_frozen_inventory() {
+    fn uploaded_and_reordered_results_keep_the_frozen_inventory() {
+        assert_binary_mode(false);
+    }
+
+    #[test]
+    fn staged_results_require_no_upload_mode() {
+        assert_binary_mode(true);
+    }
+
+    fn assert_binary_mode(no_upload: bool) {
         let publication = publication();
-        for no_upload in [false, true] {
-            let mut value = binary_outcome(&publication);
-            value["no_upload"] = json!(no_upload);
-            value["complete"] = json!(!no_upload);
-            for (index, item) in value["items"]
-                .as_array_mut()
-                .unwrap()
-                .iter_mut()
-                .enumerate()
-            {
-                let (status, stage) = if no_upload {
-                    ("staged-only", "package")
-                } else if index == 0 {
-                    ("published", "upload")
-                } else {
-                    ("skipped-complete", "refresh")
-                };
-                item["status"] = json!(status);
-                item["stage"] = json!(stage);
-                item["diagnostic"] = Value::Null;
-                item["cleanup_error"] = Value::Null;
-            }
-            // Skips and source grouping can reorder execution without changing the batch.
-            value["items"].as_array_mut().unwrap().reverse();
-            let receipt = read(&value, &publication).unwrap();
-            assert_eq!(receipt.complete, !no_upload);
-            assert_eq!(receipt.batch_id.as_deref(), value["batch_id"].as_str());
-            assert_eq!(receipt.summaries.len(), 2);
+        let mut value = binary_outcome(&publication);
+        value["no_upload"] = json!(no_upload);
+        value["complete"] = json!(!no_upload);
+        for (index, item) in value["items"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            let (status, stage) = if no_upload {
+                ("staged-only", "package")
+            } else if index == 0 {
+                ("published", "upload")
+            } else {
+                ("skipped-complete", "refresh")
+            };
+            item["status"] = json!(status);
+            item["stage"] = json!(stage);
+            item["diagnostic"] = Value::Null;
+            item["cleanup_error"] = Value::Null;
         }
+        // Skips and source grouping can reorder execution without changing the batch.
+        value["items"].as_array_mut().unwrap().reverse();
+        let receipt = read(&value, &publication).unwrap();
+        assert_eq!(receipt.complete, !no_upload);
+        assert_eq!(receipt.batch_id.as_deref(), value["batch_id"].as_str());
+        assert_eq!(receipt.summaries.len(), 2);
+        if no_upload {
+            // Staging is not upload evidence, even if the receipt claims completeness.
+            value["no_upload"] = json!(false);
+            value["complete"] = json!(true);
+            assert_invalid(&value, &publication);
+        }
+    }
+
+    #[test]
+    fn cancelled_results_keep_the_frozen_inventory() {
+        let publication = publication();
         let mut cancelled = binary_outcome(&publication);
         for item in cancelled["items"].as_array_mut().unwrap() {
             item["status"] = json!("unattempted");
@@ -806,5 +824,27 @@ mod tests {
         assert!(!receipt.complete);
         assert_eq!(receipt.batch_id.as_deref(), cancelled["batch_id"].as_str());
         assert_eq!(receipt.summaries.len(), 2);
+    }
+
+    #[test]
+    fn registry_and_github_states_retain_distinct_operator_descriptions() {
+        for (state, expected) in [
+            (RegistryState::AlreadyPresent, "already present"),
+            (RegistryState::Published, "published and available"),
+            (RegistryState::WouldPublish, "would publish"),
+            (RegistryState::Missing, "not available"),
+            (RegistryState::Unknown, "availability unknown"),
+        ] {
+            assert_eq!(registry_state_description(&state), expected);
+        }
+        for (state, expected) in [
+            (GithubState::Pending, "not completed"),
+            (GithubState::Complete, "required reconciliation complete"),
+            (GithubState::WouldCreateTag, "would create tag"),
+            (GithubState::WouldCreateRelease, "would create release"),
+            (GithubState::Failed, "reconciliation failed"),
+        ] {
+            assert_eq!(github_state_description(state), expected);
+        }
     }
 }

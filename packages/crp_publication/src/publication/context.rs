@@ -26,10 +26,22 @@ pub struct WorkflowRun {
 }
 
 impl WorkflowRun {
+    // Executable reporting tests exercise process environment acquisition; capture_with tests
+    // the field selection and Actions interpretation without mutating global environment.
+    #[cfg_attr(test, mutants::skip)]
     pub fn capture() -> Result<Option<Self>, AppError> {
-        let id = optional_environment("GITHUB_RUN_ID")?;
-        let attempt = optional_environment("GITHUB_RUN_ATTEMPT")?;
-        let in_github_actions = optional_environment("GITHUB_ACTIONS")?.as_deref() == Some("true");
+        Self::capture_with(env::var)
+    }
+
+    fn capture_with(
+        mut environment: impl FnMut(&'static str) -> Result<String, env::VarError>,
+    ) -> Result<Option<Self>, AppError> {
+        let id = optional_environment("GITHUB_RUN_ID", environment("GITHUB_RUN_ID"))?;
+        let attempt =
+            optional_environment("GITHUB_RUN_ATTEMPT", environment("GITHUB_RUN_ATTEMPT"))?;
+        let in_github_actions =
+            optional_environment("GITHUB_ACTIONS", environment("GITHUB_ACTIONS"))?.as_deref()
+                == Some("true");
         Self::parse(id.as_deref(), attempt.as_deref(), in_github_actions)
     }
 
@@ -53,8 +65,11 @@ impl WorkflowRun {
     }
 }
 
-fn optional_environment(name: &'static str) -> Result<Option<String>, AppError> {
-    match env::var(name) {
+fn optional_environment(
+    name: &'static str,
+    value: Result<String, env::VarError>,
+) -> Result<Option<String>, AppError> {
+    match value {
         Ok(value) => Ok(Some(value)),
         Err(env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(InvalidWorkflowContext::caused_by(name, error).into()),
@@ -84,6 +99,9 @@ struct ReleaseContext {
 /// Version of the release-context handoff produced for the workflow.
 pub const CONTEXT_SCHEMA_VERSION: u32 = 2;
 
+// Git/Cargo discovery, fetch and canonicalization are covered by the release-context CLI tests.
+// Context parsing and concurrency identity remain in-process decisions.
+#[cfg_attr(test, mutants::skip)]
 pub fn release_context(
     manifest: &Path,
     configured_path: Option<&Path>,
@@ -150,7 +168,77 @@ fn concurrency_group(repository: &str, branch: &str, manifest: &str) -> Result<S
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::ffi::OsString;
+
     use super::*;
+
+    #[test]
+    fn captured_workflow_fields_preserve_the_actions_presence_requirement() {
+        let mut requested = Vec::new();
+        let context = WorkflowRun::capture_with(|name| {
+            requested.push(name);
+            Ok(match name {
+                "GITHUB_RUN_ID" => "123",
+                "GITHUB_RUN_ATTEMPT" => "2",
+                "GITHUB_ACTIONS" => "true",
+                _ => panic!("unexpected workflow variable"),
+            }
+            .to_owned())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(context.run_id.get(), 123);
+        assert_eq!(context.run_attempt.get(), 2);
+        assert_eq!(
+            requested,
+            ["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_ACTIONS"]
+        );
+        for actions in [None, Some("false"), Some("true")] {
+            let result = WorkflowRun::capture_with(|name| {
+                if name == "GITHUB_ACTIONS" {
+                    actions.map(str::to_owned).ok_or(env::VarError::NotPresent)
+                } else {
+                    Err(env::VarError::NotPresent)
+                }
+            });
+            if actions == Some("true") {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .find_source::<InvalidWorkflowContext>()
+                        .is_some()
+                );
+            } else {
+                assert!(result.unwrap().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn optional_workflow_environment_preserves_values_and_conversion_errors() {
+        assert_eq!(
+            optional_environment("field", Ok("123".to_owned())).unwrap(),
+            Some("123".to_owned())
+        );
+        assert_eq!(
+            optional_environment("field", Ok(String::new())).unwrap(),
+            Some(String::new())
+        );
+        assert!(
+            optional_environment("field", Err(env::VarError::NotPresent))
+                .unwrap()
+                .is_none()
+        );
+        let error = optional_environment(
+            "field",
+            Err(env::VarError::NotUnicode(OsString::from("invalid"))),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.find_source::<InvalidWorkflowContext>().unwrap().field,
+            "field"
+        );
+    }
 
     #[test]
     fn concurrency_groups_scope_the_workspace_not_a_source_commit_or_attempt() {

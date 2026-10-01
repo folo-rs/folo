@@ -17,3 +17,7 @@ report presentation consistent. They do not validate filesystem identities, sele
 source commits or own artifact schemas. Full source/path identity belongs to
 [`crp_workspace`](../../crp_workspace/docs/implementation.md).
 This package contains no filesystem, command, credential or release-policy operations.
+Owned string and path forwarding is tested directly alongside the quoting transformations.
+Only the concrete stderr write is excluded from library mutation testing: executable
+integration tests observe that process stream, while destination and advisory-error behavior
+remain covered with in-memory sinks.

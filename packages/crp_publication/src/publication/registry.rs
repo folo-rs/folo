@@ -107,11 +107,15 @@ impl RegistryClient {
     }
 
     /// A yanked version still occupies its identity; Cargo decides dependency usability.
+    // Real HTTP/default delay wiring is covered by publication_registry's local index tests.
+    #[cfg_attr(test, mutants::skip)]
     pub fn contains(&self, name: &str, version: &str) -> Result<bool, AppError> {
         self.contains_with_wait(name, version, thread::sleep)
     }
 
     /// Uses the same retry decisions with a caller-owned delay boundary.
+    // The adapter acquires HTTP data; contains_observation tests exact-version accumulation.
+    #[cfg_attr(test, mutants::skip)]
     pub fn contains_with_wait(
         &self,
         name: &str,
@@ -119,26 +123,36 @@ impl RegistryClient {
         wait: impl FnMut(Duration),
     ) -> Result<bool, AppError> {
         self.versions(name, wait, false, |found, entry| {
-            Ok(found || entry.version == version)
+            Ok(contains_observation(found, entry, version))
         })
     }
 
+    // HTTP existence/absence forwarding is covered by the local index integration.
+    #[cfg_attr(test, mutants::skip)]
     pub fn exists(&self, name: &str) -> Result<bool, AppError> {
         self.versions(name, thread::sleep, false, |_, _| Ok(true))
     }
 
     /// Selects a fixed API-comparison version, preferring the highest non-yanked stable release.
+    // The local index integration covers acquisition; latest_observation owns version preference.
+    #[cfg_attr(test, mutants::skip)]
     pub fn latest(&self, name: &str) -> Result<Option<Version>, AppError> {
         self.versions(name, thread::sleep, None, latest_observation)
     }
 
     /// Distinguishes a first publication from history with no usable comparison release.
+    // Local HTTP integration covers the adapter; baseline_observation/comparison_baseline
+    // independently test absence versus unusable history.
+    #[cfg_attr(test, mutants::skip)]
     pub fn comparison_baseline(&self, name: &str) -> Result<Option<Version>, AppError> {
         let observation =
             self.versions(name, thread::sleep, (false, None), baseline_observation)?;
         comparison_baseline(name, observation)
     }
 
+    // HTTP request/response I/O is covered by publication_registry. Retry, status interpretation
+    // and streamed decoding remain independently unit-testable.
+    #[cfg_attr(test, mutants::skip)]
     fn versions<T>(
         &self,
         name: &str,
@@ -159,14 +173,29 @@ impl RegistryClient {
             wait,
             &self.output,
         )?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(initial);
-        }
-        let response = response
-            .error_for_status()
-            .map_err(RegistryQueryError::caused_by)?;
-        fold_index(BufReader::new(response), name, initial, fold)
+        index_response(response.status(), initial, |initial| {
+            let response = response
+                .error_for_status()
+                .map_err(RegistryQueryError::caused_by)?;
+            fold_index(BufReader::new(response), name, initial, fold)
+        })
     }
+}
+
+fn index_response<T>(
+    status: StatusCode,
+    initial: T,
+    read: impl FnOnce(T) -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    if status == StatusCode::NOT_FOUND {
+        Ok(initial)
+    } else {
+        read(initial)
+    }
+}
+
+fn contains_observation(found: bool, entry: &RegistryVersion, version: &str) -> bool {
+    found || entry.version == version
 }
 
 /// Acquires credentials and executes Cargo without changing registry or release policy.
@@ -208,6 +237,9 @@ impl RegistryRuntime for NativeRuntime<'_> {
         command.output()
     }
 
+    // Timing-only adapter: waiting in tests cannot establish correctness without real time.
+    // Retry/propagation tests assert the requested delays using a simulated wait callback.
+    #[cfg_attr(test, mutants::skip)]
     fn pause(&self, delay: Duration) {
         thread::sleep(delay);
     }
@@ -377,6 +409,9 @@ const REGISTRY_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Version of the registry receipt consumed by final reporting.
 pub(crate) const OUTCOME_SCHEMA_VERSION: u32 = 1;
 
+// Files, process identity and production service selection are native wiring, covered by
+// executable publication tests. finish_outcome tests the persisted verdict separately.
+#[cfg_attr(test, mutants::skip)]
 pub fn publish(
     publication_path: &Path,
     manifest_path: &Path,
@@ -417,14 +452,7 @@ pub fn publish(
             output: diagnostics,
         },
     );
-    if let Err(error) = result {
-        // Outcomes contain only a concise handoff; full typed diagnostics stay on stderr.
-        diagnostics.line(format_args!("{error}"));
-        outcome.errors.push(
-            "Registry publication did not complete; inspect the command diagnostics.".to_owned(),
-        );
-    }
-    outcome.complete = !dry_run && outcome.passed();
+    finish_outcome(&mut outcome, result, diagnostics);
     write_outcome(output, &outcome)?;
     let passed = outcome.passed();
     Ok((
@@ -442,7 +470,25 @@ pub fn publish(
     ))
 }
 
+fn finish_outcome(
+    outcome: &mut RegistryOutcome,
+    result: Result<(), AppError>,
+    diagnostics: &PublicationOutput,
+) {
+    if let Err(error) = result {
+        // Outcomes contain only a concise handoff; full typed diagnostics stay on stderr.
+        diagnostics.line(format_args!("{error}"));
+        outcome.errors.push(
+            "Registry publication did not complete; inspect the command diagnostics.".to_owned(),
+        );
+    }
+    outcome.complete = !outcome.dry_run && outcome.passed();
+}
+
 /// Reconciles real source/index evidence with the invocation's credential and process boundary.
+// publication_registry covers the real Git/Cargo/credential/HTTP composition. Selection,
+// confirmation, retry budgets, reporting and cleanup decisions are exercised in process.
+#[cfg_attr(test, mutants::skip)]
 pub fn execute_with(
     publication: &PublicationManifest,
     manifest_path: &Path,
@@ -452,38 +498,12 @@ pub fn execute_with(
     runtime: &impl RegistryRuntime,
 ) -> Result<(), AppError> {
     let source = verify_source(publication, manifest_path)?;
-    let mut missing = Vec::new();
-    for package in &mut outcome.packages {
-        if client.contains_with_wait(&package.name, &package.version, |delay| {
-            runtime.pause(delay);
-        })? {
-            package.state = RegistryState::AlreadyPresent;
-            verbose.note(|| {
-                format!(
-                    "{}@{} already occupies its crates.io identity, so no upload is requested.",
-                    package.name, package.version
-                )
-            });
-        } else {
-            package.state = if outcome.dry_run {
-                RegistryState::WouldPublish
-            } else {
-                RegistryState::Missing
-            };
-            missing.push(package.name.clone());
-            verbose.note(|| format!(
-                "{}@{} is absent from crates.io; this exact manifest request needs publication.",
-                package.name, package.version
-            ));
-        }
-    }
-    verbose.note(|| {
-        "Registry presence was checked for every exact manifest request. \
-        Absent versions require upload; existing versions are retained independently of \
-        tags or version-assessment status."
-            .to_owned()
-    });
-    if missing.is_empty() || outcome.dry_run {
+    let missing = select_uploads(
+        outcome,
+        |name, version| client.contains_with_wait(name, version, |delay| runtime.pause(delay)),
+        verbose,
+    )?;
+    if missing.is_empty() {
         return Ok(());
     }
     let source_manifest = source.manifest;
@@ -549,12 +569,7 @@ pub fn execute_with(
             publication_complete,
         )?;
         source.repository.ensure_clean_head()?;
-        if !upload.status.success() {
-            outcome.notes.push(format!(
-                "Cargo exited {}, but fresh registry observations confirm every requested version is available.",
-                upload.status
-            ));
-        }
+        record_upload_status(outcome, upload.status.success(), &upload.status.to_string());
         Ok(())
     })();
     let result = retain_cleanup(result, cleanup);
@@ -563,6 +578,54 @@ pub fn execute_with(
         build_cleanup
             .map_err(|error| RegistryBuildStateCleanupFailed::caused_by(target_path, error).into()),
     )
+}
+
+fn select_uploads(
+    outcome: &mut RegistryOutcome,
+    mut contains: impl FnMut(&str, &str) -> Result<bool, AppError>,
+    verbose: Verbose<'_>,
+) -> Result<Vec<String>, AppError> {
+    let mut missing = Vec::new();
+    for package in &mut outcome.packages {
+        if contains(&package.name, &package.version)? {
+            package.state = RegistryState::AlreadyPresent;
+            verbose.note(|| {
+                format!(
+                    "{}@{} already occupies its crates.io identity, so no upload is requested.",
+                    package.name, package.version
+                )
+            });
+        } else {
+            package.state = if outcome.dry_run {
+                RegistryState::WouldPublish
+            } else {
+                RegistryState::Missing
+            };
+            missing.push(package.name.clone());
+            verbose.note(|| format!(
+                "{}@{} is absent from crates.io; this exact manifest request needs publication.",
+                package.name, package.version
+            ));
+        }
+    }
+    verbose.note(|| {
+        "Registry presence was checked for every exact manifest request. \
+        Absent versions require upload; existing versions are retained independently of \
+        tags or version-assessment status."
+            .to_owned()
+    });
+    if outcome.dry_run {
+        missing.clear();
+    }
+    Ok(missing)
+}
+
+fn record_upload_status(outcome: &mut RegistryOutcome, success: bool, status: &str) {
+    if !success {
+        outcome.notes.push(format!(
+            "Cargo exited {status}, but fresh registry observations confirm every requested version is available."
+        ));
+    }
 }
 
 fn confirm_upload(
@@ -733,6 +796,144 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exact_version_observation_retains_matches_and_checks_later_records() {
+        for (versions, expected) in [
+            (vec![], false),
+            (vec!["1.0.0"], true),
+            (vec!["2.0.0"], false),
+            (vec!["1.0.0", "2.0.0"], true),
+            (vec!["2.0.0", "1.0.0"], true),
+        ] {
+            let input = versions
+                .into_iter()
+                .map(|version| json!({"name":"tool","vers":version,"yanked":true}).to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                fold_index(input.as_bytes(), "tool", false, |found, entry| {
+                    Ok(contains_observation(found, entry, "1.0.0"))
+                })
+                .unwrap(),
+                expected
+            );
+        }
+        let input = b"{\"name\":\"tool\",\"vers\":\"1.0.0\"}\ninvalid-tail";
+        assert!(
+            fold_index(&input[..], "tool", false, |found, entry| {
+                Ok(contains_observation(found, entry, "1.0.0"))
+            })
+            .unwrap_err()
+            .find_source::<RegistryQueryError>()
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn only_not_found_bypasses_response_validation() {
+        assert_eq!(
+            index_response(StatusCode::NOT_FOUND, "absent", |_| {
+                panic!("a not-found body is not an index");
+            })
+            .unwrap(),
+            "absent"
+        );
+        assert_eq!(
+            index_response(StatusCode::OK, "initial", |initial| {
+                assert_eq!(initial, "initial");
+                Ok("observed")
+            })
+            .unwrap(),
+            "observed"
+        );
+        let error = index_response(StatusCode::FORBIDDEN, false, |_| {
+            Err(RegistryQueryError::new().into())
+        })
+        .unwrap_err();
+        assert!(error.find_source::<RegistryQueryError>().is_some());
+    }
+
+    fn pending_outcome(dry_run: bool) -> RegistryOutcome {
+        RegistryOutcome {
+            schema_version: OUTCOME_SCHEMA_VERSION,
+            publication_id: "intent".to_owned(),
+            phase: "registry".to_owned(),
+            dry_run,
+            complete: false,
+            packages: ["present", "missing"]
+                .map(|name| RegistryPackage {
+                    name: name.to_owned(),
+                    version: "1.0.0".to_owned(),
+                    state: RegistryState::Unknown,
+                })
+                .into_iter()
+                .collect(),
+            errors: vec![],
+            notes: vec![],
+            github: None,
+        }
+    }
+
+    #[test]
+    fn upload_selection_observes_every_request_but_never_uploads_dry_run_or_present_work() {
+        let output = PublicationOutput::new("1.0.0", false, std::sync::Arc::new(crp_diag::Discard));
+        for dry_run in [false, true] {
+            let mut outcome = pending_outcome(dry_run);
+            let mut queries = Vec::new();
+            let selected = select_uploads(
+                &mut outcome,
+                |name, version| {
+                    queries.push((name.to_owned(), version.to_owned()));
+                    Ok(name == "present")
+                },
+                output.notes(),
+            )
+            .unwrap();
+            assert_eq!(
+                queries,
+                [
+                    ("present".to_owned(), "1.0.0".to_owned()),
+                    ("missing".to_owned(), "1.0.0".to_owned()),
+                ]
+            );
+            assert_eq!(selected, if dry_run { vec![] } else { vec!["missing"] });
+            assert_eq!(
+                outcome.packages.first().unwrap().state,
+                RegistryState::AlreadyPresent
+            );
+            assert_eq!(
+                outcome.packages.last().unwrap().state,
+                if dry_run {
+                    RegistryState::WouldPublish
+                } else {
+                    RegistryState::Missing
+                }
+            );
+            assert!(
+                select_uploads(&mut outcome, |_, _| Ok(true), output.notes())
+                    .unwrap()
+                    .is_empty()
+            );
+            let error = select_uploads(
+                &mut outcome,
+                |_, _| Err(RegistryQueryError::new().into()),
+                output.notes(),
+            )
+            .unwrap_err();
+            assert!(error.find_source::<RegistryQueryError>().is_some());
+        }
+    }
+
+    #[test]
+    fn confirmed_upload_status_retains_only_unsuccessful_cargo_exits_as_notes() {
+        let mut outcome = pending_outcome(false);
+        record_upload_status(&mut outcome, true, "success");
+        assert!(outcome.notes.is_empty());
+        record_upload_status(&mut outcome, false, "exit-canary");
+        assert_eq!(outcome.notes.len(), 1);
+        assert!(outcome.notes.first().unwrap().contains("exit-canary"));
+    }
+
+    #[test]
     fn failed_post_upload_query_does_not_leave_later_results_unobserved() {
         let mut packages: Vec<_> = ["first", "second", "third", "fourth"]
             .into_iter()
@@ -889,6 +1090,14 @@ mod tests {
         for (versions, expected) in [
             (json!([]), None),
             (json!([{"name":"tool","vers":"2.0.0","yanked":true}]), None),
+            (
+                json!([
+                    {"name":"tool","vers":"1.0.0"},
+                    {"name":"tool","vers":"2.0.0"},
+                    {"name":"tool","vers":"3.0.0-beta.1"}
+                ]),
+                Some("2.0.0"),
+            ),
             (
                 json!([
                     {"name":"tool","vers":"3.0.0-beta.2"},
@@ -1060,6 +1269,17 @@ mod tests {
                     outcome.passed(),
                     if dry_run { dry_passes } else { execute_passes }
                 );
+                let diagnostics =
+                    PublicationOutput::new("1.0.0", false, std::sync::Arc::new(crp_diag::Discard));
+                finish_outcome(&mut outcome, Ok(()), &diagnostics);
+                assert_eq!(outcome.complete, !dry_run && execute_passes);
+                finish_outcome(
+                    &mut outcome,
+                    Err(RegistryQueryError::new().into()),
+                    &diagnostics,
+                );
+                assert!(!outcome.complete);
+                assert_eq!(outcome.errors.len(), 1);
                 outcome.errors.push("failed cleanup".to_owned());
                 assert!(!outcome.passed());
             }

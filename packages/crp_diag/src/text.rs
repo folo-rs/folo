@@ -146,6 +146,18 @@ impl fmt::Display for Plural<'_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn owned_labels_and_paths_preserve_quoting() {
+        for (label, expected) in [
+            ("ordinary path", "ordinary path"),
+            ("a/line\nbreak", r#""a/line\nbreak""#),
+            ("a/quote\"and\\slash", r#""a/quote\"and\\slash""#),
+        ] {
+            assert_eq!(label.to_owned().quoted(), expected);
+            assert_eq!(PathBuf::from(label).quoted(), expected);
+        }
+    }
+
     /// The rendering agrees with the count.
     ///
     /// Only the singular is special, so zero and any larger count must both

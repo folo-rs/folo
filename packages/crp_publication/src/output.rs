@@ -94,6 +94,30 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_diagnostics_deliver_one_formatted_line() {
+        let sink = Arc::new(Recording::default());
+        let output = PublicationOutput::new("1.0.0", false, Arc::<Recording>::clone(&sink));
+        output.best_effort_line(format_args!("cleanup {}", "canary"));
+        assert_eq!(*sink.0.lock().unwrap(), ["cleanup canary\n"]);
+    }
+
+    /// Models a sink panic without borrowing any publication state.
+    #[derive(Debug)]
+    struct Panicking;
+
+    impl DiagnosticSink for Panicking {
+        fn write(&self, _text: &str) -> std::io::Result<()> {
+            panic!("diagnostic sink canary");
+        }
+    }
+
+    #[test]
+    fn cleanup_diagnostics_preserve_progress_after_a_sink_panic() {
+        let output = PublicationOutput::new("1.0.0", false, Arc::new(Panicking));
+        output.best_effort_line(format_args!("cleanup canary"));
+    }
+
+    #[test]
     fn producer_identity_and_output_come_from_the_shell() {
         let sink = Arc::new(Recording::default());
         let output = PublicationOutput::new("9.8.7", false, Arc::<Recording>::clone(&sink));

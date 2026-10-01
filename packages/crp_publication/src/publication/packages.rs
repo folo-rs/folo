@@ -223,6 +223,9 @@ fn validate_binary_metadata(
 }
 
 /// Validates publication configuration without resolving dependencies or observing a registry.
+// Cargo/configuration acquisition and rejection are exercised by CLI publication check integrations.
+// requests and its validators cover admission decisions with in-memory metadata.
+#[cfg_attr(test, mutants::skip)]
 pub fn check_publication(
     manifest: &Path,
     config: &Path,
@@ -320,6 +323,59 @@ mod tests {
         }))
         .unwrap();
         workspace.requests(&configuration())
+    }
+
+    fn historical(packages: &[Value], members: &[&str]) -> PublicationWorkspace {
+        serde_json::from_value(json!({
+            "workspace_root": "workspace",
+            "workspace_members": members,
+            "packages": packages
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn historical_membership_requires_one_publishable_workspace_identity() {
+        let workspace = historical(&[package()], &["tool-id"]);
+        assert!(workspace.contains_release("tool", "1.0.0", None));
+        assert!(workspace.contains_release("tool", "1.0.0", Some("different-executable")));
+        assert!(!workspace.contains_release("another", "1.0.0", None));
+        assert!(!workspace.contains_release("tool", "2.0.0", None));
+        assert!(!workspace.contains_release("tool", "1.0.0", Some("tool")));
+        assert!(!historical(&[], &[]).contains_release("tool", "1.0.0", None));
+        assert!(!historical(&[package()], &[]).contains_release("tool", "1.0.0", None));
+        assert!(
+            !historical(&[package(), package()], &["tool-id"])
+                .contains_release("tool", "1.0.0", None)
+        );
+        for publish in [json!(null), json!([]), json!(["private-registry"])] {
+            let mut package = package();
+            package["publish"] = publish.clone();
+            // Historical membership does not impose the current crates.io destination policy.
+            assert_eq!(
+                historical(&[package], &["tool-id"]).contains_release("tool", "1.0.0", None),
+                publish != json!([])
+            );
+        }
+    }
+
+    #[test]
+    fn historical_binary_requests_require_matching_name_and_kind_on_the_same_target() {
+        for targets in [
+            json!([]),
+            json!([{"name":"different-executable","kind":["lib"]}]),
+            json!([{"name":"other","kind":["bin"]}]),
+            json!([
+                {"name":"different-executable","kind":["lib"]},
+                {"name":"other","kind":["bin"]}
+            ]),
+        ] {
+            let mut package = package();
+            package["targets"] = targets;
+            let workspace = historical(&[package], &["tool-id"]);
+            assert!(workspace.contains_release("tool", "1.0.0", None));
+            assert!(!workspace.contains_release("tool", "1.0.0", Some("different-executable")));
+        }
     }
 
     #[test]
