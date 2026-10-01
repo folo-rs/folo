@@ -405,7 +405,7 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
         #[cfg(unix)]
         {
             let nonexecutable = output.path().join("nonexecutable");
-            fs::create_dir(&nonexecutable).unwrap();
+            fs::create_dir_all(&nonexecutable).unwrap();
             let path = nonexecutable.join(&filename);
             fs::write(&path, "not selected").unwrap();
             fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
