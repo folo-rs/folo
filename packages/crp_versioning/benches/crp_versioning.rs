@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use crp_versioning::__private::benchmark_patch_rendering;
+use crp_versioning::benchmark_patch_rendering;
 
 ::testing::set_allocator!();
 

@@ -269,7 +269,7 @@ fn format_bucket_bound(magnitude: Magnitude) -> Arc<str> {
 mod tests {
     use std::collections::HashSet;
 
-    use nm::{EventMetrics, Histogram};
+    use nm_impl::{fake_event_metrics, fake_histogram, fake_report};
     use opentelemetry::metrics::{MeterProvider, NoopMeterProvider};
 
     use super::*;
@@ -297,9 +297,9 @@ mod tests {
         let mut instruments = InstrumentRegistry::new(meter);
 
         // First collection.
-        let first_histogram = Histogram::fake(BUCKETS, vec![5, 10], 2);
-        let first_event = EventMetrics::fake("test_event", 17, 100, Some(first_histogram));
-        let first_report = Report::fake(vec![first_event]);
+        let first_histogram = fake_histogram(BUCKETS, vec![5, 10], 2);
+        let first_event = fake_event_metrics("test_event", 17, 100, Some(first_histogram));
+        let first_report = fake_report(vec![first_event]);
 
         export_report(&first_report, &mut state, &mut instruments);
 
@@ -309,9 +309,9 @@ mod tests {
         assert_eq!(event_state.histogram_buckets, vec![5, 15, 17]);
 
         // Second collection with more data.
-        let second_histogram = Histogram::fake(BUCKETS, vec![8, 15], 4);
-        let second_event = EventMetrics::fake("test_event", 27, 200, Some(second_histogram));
-        let second_report = Report::fake(vec![second_event]);
+        let second_histogram = fake_histogram(BUCKETS, vec![8, 15], 4);
+        let second_event = fake_event_metrics("test_event", 27, 200, Some(second_histogram));
+        let second_report = fake_report(vec![second_event]);
 
         export_report(&second_report, &mut state, &mut instruments);
 
@@ -343,9 +343,9 @@ mod tests {
 
         // First pass: register every event, forcing the `HashTable` to grow.
         let events: Vec<_> = (0..NUM_EVENTS)
-            .map(|i| EventMetrics::fake(format!("growth_event_{i}"), i.saturating_add(1), 0, None))
+            .map(|i| fake_event_metrics(format!("growth_event_{i}"), i.saturating_add(1), 0, None))
             .collect();
-        let report = Report::fake(events);
+        let report = fake_report(events);
         export_report(&report, &mut state, &mut instruments);
 
         let expected_len = usize::try_from(NUM_EVENTS).unwrap();
@@ -354,7 +354,7 @@ mod tests {
         // Second pass with the same events: every lookup must hit the existing entry.
         let second_events: Vec<_> = (0..NUM_EVENTS)
             .map(|i| {
-                EventMetrics::fake(
+                fake_event_metrics(
                     format!("growth_event_{i}"),
                     i.saturating_add(1).saturating_mul(2),
                     0,
@@ -362,7 +362,7 @@ mod tests {
                 )
             })
             .collect();
-        let second_report = Report::fake(second_events);
+        let second_report = fake_report(second_events);
         export_report(&second_report, &mut state, &mut instruments);
 
         // If the rehash closure produced inconsistent hashes for any existing entry,
@@ -380,15 +380,15 @@ mod tests {
         let mut instruments = InstrumentRegistry::new(meter);
 
         // First collection establishes the baseline.
-        let baseline_histogram = Histogram::fake(BUCKETS, vec![5, 10], 2);
-        let baseline_event = EventMetrics::fake("test_event", 100, 500, Some(baseline_histogram));
-        let baseline_report = Report::fake(vec![baseline_event]);
+        let baseline_histogram = fake_histogram(BUCKETS, vec![5, 10], 2);
+        let baseline_event = fake_event_metrics("test_event", 100, 500, Some(baseline_histogram));
+        let baseline_report = fake_report(vec![baseline_event]);
         export_report(&baseline_report, &mut state, &mut instruments);
 
         // Second collection repeats the same count, so the count delta is zero.
-        let repeat_histogram = Histogram::fake(BUCKETS, vec![5, 10], 2);
-        let repeat_event = EventMetrics::fake("test_event", 100, 500, Some(repeat_histogram));
-        let repeat_report = Report::fake(vec![repeat_event]);
+        let repeat_histogram = fake_histogram(BUCKETS, vec![5, 10], 2);
+        let repeat_event = fake_event_metrics("test_event", 100, 500, Some(repeat_histogram));
+        let repeat_report = fake_report(vec![repeat_event]);
 
         export_report(&repeat_report, &mut state, &mut instruments);
 
@@ -407,15 +407,15 @@ mod tests {
         let mut instruments = InstrumentRegistry::new(meter);
 
         // First collection establishes the baseline.
-        let baseline_histogram = Histogram::fake(BUCKETS, vec![5, 10], 2);
-        let baseline_event = EventMetrics::fake("test_event", 10, 100, Some(baseline_histogram));
-        let baseline_report = Report::fake(vec![baseline_event]);
+        let baseline_histogram = fake_histogram(BUCKETS, vec![5, 10], 2);
+        let baseline_event = fake_event_metrics("test_event", 10, 100, Some(baseline_histogram));
+        let baseline_report = fake_report(vec![baseline_event]);
         export_report(&baseline_report, &mut state, &mut instruments);
 
         // Second collection repeats the same bucket counts, so every bucket delta is zero.
-        let repeat_histogram = Histogram::fake(BUCKETS, vec![5, 10], 2);
-        let repeat_event = EventMetrics::fake("test_event", 10, 100, Some(repeat_histogram));
-        let repeat_report = Report::fake(vec![repeat_event]);
+        let repeat_histogram = fake_histogram(BUCKETS, vec![5, 10], 2);
+        let repeat_event = fake_event_metrics("test_event", 10, 100, Some(repeat_histogram));
+        let repeat_report = fake_report(vec![repeat_event]);
 
         export_report(&repeat_report, &mut state, &mut instruments);
 

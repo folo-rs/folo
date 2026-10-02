@@ -1,6 +1,7 @@
-use nm::{EventMetrics, Histogram, Magnitude, Report};
+use nm::Magnitude;
+use nm_impl::{fake_event_metrics, fake_histogram, fake_report};
 use nm_otel::Publisher;
-use nm_otel_impl::{TestMetricReader, create_test_provider};
+use nm_otel_impl::{TestMetricReader, create_test_provider, run_one_iteration_with_report};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 use tick::Clock;
@@ -94,10 +95,10 @@ fn export_report_simple_event() {
     const SUM: Magnitude = 5000;
 
     let (mut publisher, reader) = create_publisher();
-    let event = EventMetrics::fake(EVENT_NAME, COUNT, SUM, None);
-    let report = Report::fake(vec![event]);
+    let event = fake_event_metrics(EVENT_NAME, COUNT, SUM, None);
+    let report = fake_report(vec![event]);
 
-    publisher.run_one_iteration_with_report(&report);
+    run_one_iteration_with_report(&mut publisher, &report);
 
     let metrics = collect_metrics(&reader);
 
@@ -122,11 +123,11 @@ fn export_report_event_with_histogram() {
     const PLUS_INFINITY_BUCKET_COUNT: u64 = 2;
 
     let (mut publisher, reader) = create_publisher();
-    let histogram = Histogram::fake(BUCKETS, vec![5, 12, 8, 3], PLUS_INFINITY_BUCKET_COUNT);
-    let event = EventMetrics::fake(EVENT_NAME, COUNT, SUM, Some(histogram));
-    let report = Report::fake(vec![event]);
+    let histogram = fake_histogram(BUCKETS, vec![5, 12, 8, 3], PLUS_INFINITY_BUCKET_COUNT);
+    let event = fake_event_metrics(EVENT_NAME, COUNT, SUM, Some(histogram));
+    let report = fake_report(vec![event]);
 
-    publisher.run_one_iteration_with_report(&report);
+    run_one_iteration_with_report(&mut publisher, &report);
 
     let metrics = collect_metrics(&reader);
 
@@ -167,11 +168,11 @@ fn export_report_multiple_events() {
     const SECOND_SUM: Magnitude = 200;
 
     let (mut publisher, reader) = create_publisher();
-    let first_event = EventMetrics::fake(FIRST_NAME, FIRST_COUNT, FIRST_SUM, None);
-    let second_event = EventMetrics::fake(SECOND_NAME, SECOND_COUNT, SECOND_SUM, None);
-    let report = Report::fake(vec![first_event, second_event]);
+    let first_event = fake_event_metrics(FIRST_NAME, FIRST_COUNT, FIRST_SUM, None);
+    let second_event = fake_event_metrics(SECOND_NAME, SECOND_COUNT, SECOND_SUM, None);
+    let report = fake_report(vec![first_event, second_event]);
 
-    publisher.run_one_iteration_with_report(&report);
+    run_one_iteration_with_report(&mut publisher, &report);
 
     let metrics = collect_metrics(&reader);
 
@@ -201,12 +202,12 @@ fn export_report_separates_event_named_like_sum_companion() {
     const COLLIDING_SUM: Magnitude = 300;
 
     let (mut publisher, reader) = create_publisher();
-    let report = Report::fake(vec![
-        EventMetrics::fake(BASE_EVENT, BASE_COUNT, BASE_SUM, None),
-        EventMetrics::fake(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
+    let report = fake_report(vec![
+        fake_event_metrics(BASE_EVENT, BASE_COUNT, BASE_SUM, None),
+        fake_event_metrics(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
     ]);
 
-    publisher.run_one_iteration_with_report(&report);
+    run_one_iteration_with_report(&mut publisher, &report);
 
     let metrics = collect_metrics(&reader);
 
@@ -242,13 +243,13 @@ fn export_report_separates_event_named_like_bucket_companion() {
     const COLLIDING_SUM: Magnitude = 400;
 
     let (mut publisher, reader) = create_publisher();
-    let histogram = Histogram::fake(BASE_BUCKETS, vec![5, 2], BASE_PLUS_INFINITY_BUCKET_COUNT);
-    let report = Report::fake(vec![
-        EventMetrics::fake(BASE_EVENT, BASE_COUNT, BASE_SUM, Some(histogram)),
-        EventMetrics::fake(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
+    let histogram = fake_histogram(BASE_BUCKETS, vec![5, 2], BASE_PLUS_INFINITY_BUCKET_COUNT);
+    let report = fake_report(vec![
+        fake_event_metrics(BASE_EVENT, BASE_COUNT, BASE_SUM, Some(histogram)),
+        fake_event_metrics(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
     ]);
 
-    publisher.run_one_iteration_with_report(&report);
+    run_one_iteration_with_report(&mut publisher, &report);
 
     let metrics = collect_metrics(&reader);
 

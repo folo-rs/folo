@@ -75,7 +75,7 @@ works as well as the technical name, this appendix uses the description.
 **Generated evidence is computed, not invented.** Every behavior-bearing table, figure,
 computed example, configured value, and serialized excerpt is produced by
 `cargo-bench-history-figures` from the production type, key builder, adapter fixture, or
-`private-test-util` inspection surface that owns the behavior. Completeness and derivation
+implementation-owned inspection surface that owns the behavior. Completeness and derivation
 tests pin those links — enum `ALL` coverage, exhaustive matches, real key-builder assertions,
 and fixture-backed adapter checks — and freshness tests fail if the checked-in includes drift
 from regenerated output. Genuinely explanatory, non-behavioral prose stays ordinary Markdown.

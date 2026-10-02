@@ -11,6 +11,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use nm::{Histogram, Magnitude};
+use nm_impl::fake_histogram;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -31,7 +32,7 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 fn make_histogram(bucket_bounds: &'static [Magnitude]) -> Histogram {
-    Histogram::fake(
+    fake_histogram(
         bucket_bounds,
         vec![OBSERVATIONS_PER_BUCKET; bucket_bounds.len()],
         OBSERVATIONS_PER_BUCKET,

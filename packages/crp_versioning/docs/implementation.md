@@ -80,7 +80,8 @@ inner operations receive acquired values and narrow ports.
 
 Unit tests stay in process. Boundary integrations exercise real Git/Cargo and
 filesystem behavior without depending on the application binary. Patch-rendering
-benchmarks use an opt-in private driver. Versioning-only tests compile only this
+benchmarks use an ordinary public driver in this private component, reusing the production
+renderer without fixture generation or additional dependencies. Versioning-only tests compile only this
 component and its intended lower-level dependencies. Criterion's development
 dependencies remain part of benchmark-enabled builds.
 

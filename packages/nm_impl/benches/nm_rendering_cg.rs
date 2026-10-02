@@ -43,6 +43,7 @@ mod linux {
 
     use gungraun::prelude::*;
     use nm::{Histogram, Magnitude};
+    use nm_impl::fake_histogram;
 
     #[library_benchmark]
     #[bench::default(make_histogram(LOW_CARDINALITY_BUCKET_BOUNDS))]
@@ -64,7 +65,7 @@ mod linux {
     );
 
     fn make_histogram(bucket_bounds: &'static [Magnitude]) -> Histogram {
-        Histogram::fake(
+        fake_histogram(
             bucket_bounds,
             vec![OBSERVATIONS_PER_BUCKET; bucket_bounds.len()],
             OBSERVATIONS_PER_BUCKET,

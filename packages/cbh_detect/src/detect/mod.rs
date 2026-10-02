@@ -30,16 +30,9 @@ pub use discriminant::{DiscriminantFilter, DiscriminantSetQuery};
 pub use findings::{
     AnalysisContext, AnalysisMode, BranchComparison, BranchComparisonTrace, BranchEvaluationTrace,
     BranchExcursion, BranchRangeRelation, BranchSeriesTrace, Detection, Direction, Finding,
-    FindingMethod, SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned,
-    short_commit, testability,
+    FindingMethod, SeriesCensus, SeriesValue, Testability, UnjudgedReason, evaluate_with_log,
+    find_changes, find_changes_spawned, short_commit, testability,
 };
-#[cfg(any(test, feature = "private-test-util"))]
-pub use findings::{evaluate_with_log, find_changes};
-// The gate types are compiled unconditionally because the detectors take a log by reference,
-// so they appear in production signatures. Only the re-export is gated: outside this crate
-// they are inspection machinery for the tests and the documentation figures, and nothing in
-// the shell crate's own path constructs one.
-#[cfg(any(test, feature = "private-test-util"))]
 pub use gate_log::{Gate, GateLog, GateOutcome, GateStage};
 // The gating policy is a fixed set of named thresholds rather than a per-run
 // configuration, so the constants are the public form of that policy: in-workspace

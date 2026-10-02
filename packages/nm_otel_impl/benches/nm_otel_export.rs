@@ -15,9 +15,10 @@ use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use many_cpus::SystemHardware;
 use new_zealand::nz;
-use nm::{EventMetrics, Histogram, Magnitude, Report};
+use nm::{Magnitude, Report};
+use nm_impl::{fake_event_metrics, fake_histogram, fake_report};
 use nm_otel::Publisher;
-use nm_otel_impl::{EventState, create_test_provider};
+use nm_otel_impl::{EventDeltaState, create_test_provider, run_one_iteration_with_report};
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
 use testing::DefaultAllocator;
 use tick::Clock;
@@ -161,7 +162,7 @@ fn benchmark_multi_event_allocations(c: &mut Criterion) {
             let mut publisher = build_publisher();
 
             // Initialize instruments and retained state outside the measured region.
-            publisher.run_one_iteration_with_report(&report);
+            run_one_iteration_with_report(&mut publisher, &report);
 
             (RefCell::new(publisher), report)
         })
@@ -170,7 +171,7 @@ fn benchmark_multi_event_allocations(c: &mut Criterion) {
         })
         .iter(|args| {
             let (publisher, report) = args.thread_state();
-            publisher.borrow_mut().run_one_iteration_with_report(report);
+            run_one_iteration_with_report(&mut publisher.borrow_mut(), report);
         })
         .execute_criterion_on(&mut one_thread, &mut group, "steady_state_8_events");
 
@@ -193,12 +194,12 @@ fn make_multi_event_report(event_count: usize) -> Report {
     let events = (0..event_count)
         .map(|event_index| {
             let name = format!("bench_event_{event_index}");
-            let histogram = Histogram::fake(
+            let histogram = fake_histogram(
                 MULTI_EVENT_BUCKET_BOUNDS,
                 MULTI_EVENT_NON_CUMULATIVE_COUNTS.to_vec(),
                 MULTI_EVENT_PLUS_INFINITY_BUCKET_COUNT,
             );
-            EventMetrics::fake(
+            fake_event_metrics(
                 name,
                 MULTI_EVENT_COUNT_TOTAL,
                 MULTI_EVENT_SUM,
@@ -206,7 +207,7 @@ fn make_multi_event_report(event_count: usize) -> Report {
             )
         })
         .collect();
-    Report::fake(events)
+    fake_report(events)
 }
 
 fn make_histogram_report(
@@ -214,7 +215,7 @@ fn make_histogram_report(
     per_bucket_count: u64,
     plus_infinity_bucket_count: u64,
 ) -> Report {
-    let histogram = Histogram::fake(
+    let histogram = fake_histogram(
         bucket_bounds,
         vec![per_bucket_count; bucket_bounds.len()],
         plus_infinity_bucket_count,
@@ -223,13 +224,13 @@ fn make_histogram_report(
     let total_buckets = u64::try_from(total_buckets).unwrap_or(u64::MAX);
     let event_count = per_bucket_count.saturating_mul(total_buckets);
     let event_sum = Magnitude::default();
-    let event = EventMetrics::fake(
+    let event = fake_event_metrics(
         HISTOGRAM_EVENT_NAME,
         event_count,
         event_sum,
         Some(histogram),
     );
-    Report::fake(vec![event])
+    fake_report(vec![event])
 }
 
 fn warm_publisher(bucket_bounds: &'static [Magnitude]) -> Publisher {
@@ -239,7 +240,7 @@ fn warm_publisher(bucket_bounds: &'static [Magnitude]) -> Publisher {
         WARM_PER_BUCKET_COUNT,
         WARM_PLUS_INFINITY_BUCKET_COUNT,
     );
-    publisher.run_one_iteration_with_report(&warm_report);
+    run_one_iteration_with_report(&mut publisher, &warm_report);
     publisher
 }
 
@@ -279,19 +280,19 @@ fn setup_high_bucket_cardinality_positive_delta() -> ExportInputs {
 
 fn run_export(inputs: &mut ExportInputs) {
     let (publisher, report) = inputs;
-    publisher.run_one_iteration_with_report(black_box(report));
+    run_one_iteration_with_report(publisher, black_box(report));
 }
 
 /// Carries warm delta state and the next collection's non-cumulative bucket counts.
 #[derive(Debug)]
 struct DeltaInputs {
-    state: EventState,
+    state: EventDeltaState,
     bucket_bounds: &'static [Magnitude],
     counts: Vec<u64>,
 }
 
 fn setup_delta(bucket_bounds: &'static [Magnitude]) -> DeltaInputs {
-    let mut state = EventState::default();
+    let mut state = EventDeltaState::default();
     let bucket_count = bucket_bounds
         .len()
         .checked_add(1)

@@ -328,11 +328,10 @@ fn native_independent_virtual_workspaces_do_not_become_foreign_scope_owners() {
     }
 }
 
-#[cfg(feature = "private-test-util")]
 mod rolling {
     use std::time::SystemTime;
 
-    use cargo_bench_history_github::__private::prepare_backfill_at;
+    use cargo_bench_history_github::prepare_backfill_at;
     use jiff::Timestamp;
     use tick::Clock;
 

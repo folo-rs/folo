@@ -2,7 +2,7 @@
 name = "crp_publication"
 description = "Publication implementation for cargo-release-plan - do not reference directly"
 publish = true
-version = "0.5.9"
+version = "0.5.10"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -46,7 +46,6 @@ toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
 
 [dev-dependencies]
 crp-publication-test-helper = { path = "../crp-publication-test-helper" }
-crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 crp_workspace = { path = "../crp_workspace", features = ["private-test-util"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
 mutants = { workspace = true }

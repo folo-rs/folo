@@ -2,7 +2,7 @@
 name = "nm_otel_impl"
 description = "Implementation crate for nm_otel; do not depend on it directly"
 publish = true
-version = "0.4.28"
+version = "0.4.29"
 
 authors.workspace = true
 edition.workspace = true
@@ -18,22 +18,19 @@ all-features = true
 # external type must be reviewed and added explicitly.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["opentelemetry::metrics::meter::MeterProvider", "tick::clock::Clock"]
+allowed_external_types = [
+    "nm_impl::magnitude::Magnitude",
+    "nm_impl::reports::Report",
+    "opentelemetry::metrics::meter::MeterProvider",
+    "tick::clock::Clock",
+]
 
 # These dev-dependencies are consumed only by test and benchmark targets that require
 # `private-test-util`. When udeps runs without `--all-features`, the targets are skipped, so the
 # development dependencies appear unused.
 # Ignore them here to silence false positives.
 [package.metadata.cargo-udeps.ignore]
-development = [
-    "alloc_tracker",
-    "criterion",
-    "gungraun",
-    "many_cpus",
-    "new_zealand",
-    "nm_otel",
-    "par_bench",
-]
+development = ["criterion", "gungraun", "many_cpus", "new_zealand", "nm_otel", "par_bench"]
 
 [package.metadata.release-plan]
 # Implementation partition of `nm_otel`; consumers reach this surface through
@@ -47,10 +44,8 @@ private-api = true
 doc = false
 
 [features]
-# Internal-only API surface for in-workspace tests and benchmarks. Never
-# forwarded by the `nm_otel` shell crate, so end-user builds never see these
-# items. See docs/impl-crate-split.md for the `test-util` vs
-# `private-test-util` distinction.
+# Excludes the SDK-backed metric reader/provider and its optional SDK dependency from
+# production builds. Lightweight report drivers and delta state need no feature.
 private-test-util = ["dep:opentelemetry_sdk"]
 
 [dependencies]
@@ -70,7 +65,7 @@ criterion = { workspace = true }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
 new_zealand = { path = "../new_zealand" }
-nm_impl = { path = "../nm_impl", features = ["private-test-util"] }
+nm_impl = { path = "../nm_impl" }
 # `nm_otel` is a development dependency so doctests, examples, and benches can write
 # `use nm_otel::Publisher;` exactly as user code would, matching the documentation
 # rendered for `nm_otel`. This forms an allowed dev-dependency-only cycle.
@@ -89,10 +84,6 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }
-
-[[test]]
-name = "nm_otel_histogram_deltas_alloc"
-required-features = ["private-test-util"]
 
 [[test]]
 name = "nm_otel_publish_forever"

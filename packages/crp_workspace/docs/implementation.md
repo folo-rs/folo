@@ -33,7 +33,10 @@ native, compatibility and registry compilation; each adapter owns environment mu
 Pure parsing and graph tests remain in process. Real Git/Cargo/filesystem tests
 belong to boundary integration targets, with hermetic Git identity/configuration.
 Shared integration fixtures are opt-in private test support, not acquisition hidden
-inside unit tests. Lockfile-closure benchmarks measure only the in-process algorithm.
+inside unit tests. `private-test-util` excludes repository creation, native filesystem
+fixtures and I/O scheduling support. Inert Git constructors and the lockfile-closure
+driver are ordinary public items in this private component: they only assemble captured
+observations or call the existing in-process algorithm.
 
 Observation adapters acquire process outputs, directory identities and file-type facts.
 Their interpretation remains independent of native execution: status and optional-result

@@ -225,6 +225,10 @@ test/bench audience or absence of production callers is not sufficient
 justification for `private-test-util`; an unused function does not necessarily
 survive into the linked production binary.
 
+Gating only a re-export excludes no implementation from compilation.
+Do not add another visibility layer or blanket `#[doc(hidden)]` annotations inside
+an already private implementation package.
+
 `private-test-util` is a **production-compilation boundary**, permitted only on
 packages whose API is private. Use it when compiling the enabled code in an
 ordinary production build would be problematic: substantial fixture generators
@@ -448,6 +452,8 @@ Concrete files to study:
 - `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false` and
   the `nm` dev-dependency for the doctest cycle.
 - `packages/nm_impl/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root.
+- `packages/nm_impl/src/reports.rs` — ordinary public free functions constructing
+  reports, event metrics and histograms without adding methods to facade types.
 - `packages/nm_impl/README.md` — "do not depend on this directly" notice.
 - `Cargo.toml` (workspace) — the exact `nm_impl` entry in
   `[workspace.dependencies]` derives the pair's version group.
@@ -462,12 +468,12 @@ Concrete files to study:
   explicit `pub use nm_otel_impl::{Publisher, PublisherBuilder};`.
 - `packages/nm_otel/tests/nm_otel_reexports.rs` — re-export smoke test.
 - `packages/nm_otel_impl/Cargo.toml` — impl manifest with `[lib] doc = false`,
-  the `private-test-util` feature excluding the telemetry SDK and synthetic
-  publisher support from production compilation, and the `nm_otel`
-  dev-dependency for the doctest cycle.
+  the `private-test-util` feature gating SDK-backed test support, the `nm_otel`
+  dev-dep for the doctest cycle, and a path-only `nm_impl` dev-dep for constructing
+  input reports. Benchmarks that use the SDK provider require the private feature.
 - `packages/nm_otel_impl/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root that re-exports
-  the public-API subset for the shell crate plus feature-gated `EventState` for
-  the alloc-tracking integration test.
+  the public-API subset for the shell crate plus ungated drivers and `EventDeltaState`
+  for maintainer callers, including allocation tests without SDK support.
 - `packages/nm_otel_impl/README.md` — "do not depend on this directly" notice.
 - `Cargo.toml` (workspace) — the exact `nm_otel_impl` entry in
   `[workspace.dependencies]` derives the pair's version group.

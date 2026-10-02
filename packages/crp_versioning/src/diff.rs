@@ -62,9 +62,7 @@ pub(crate) fn file_diff(
 }
 
 /// Runs text patch rendering for an in-workspace benchmark.
-#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[doc(hidden)]
 #[must_use]
 pub fn benchmark_patch_rendering(old: &str, new: &str) -> (usize, usize, usize) {
     let diff = file_diff(

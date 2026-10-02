@@ -1,7 +1,4 @@
-#![cfg_attr(
-    all(coverage_nightly, any(test, feature = "private-test-util")),
-    feature(coverage_attribute)
-)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, doc(hidden))]
 #![allow(
@@ -32,12 +29,6 @@ pub mod snapshot_command;
 #[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
-
-/// Internal algorithm driver for the owner-local benchmark.
-#[cfg(any(test, feature = "private-test-util"))]
-pub mod __private {
-    pub use crate::lockfile::benchmark_lockfile_closures;
-}
 
 #[cfg(test)]
 ::testing::set_allocator!();

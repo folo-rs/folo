@@ -12,14 +12,15 @@ The two crates form one library and are versioned together. `nm_otel_impl` is no
 API or documentation owner; architectural changes in that partition are described here, and
 user-visible changes are described in [the design document](design.md).
 
-Production collection remains private to the publisher. The implementation crate's
-`private-test-util` feature exposes a separately named one-iteration driver, pre-built report
-driver, and histogram delta state only to in-workspace tests and benchmarks. The shell does not
-forward this feature.
+Production collection remains private to the publisher. One-iteration and supplied-report
+drivers are ordinary free functions in the implementation crate, not inherent methods on
+the publisher re-exported by the shell. Allocation tests and benchmarks use the production
+histogram delta state directly. These lightweight entry points need no private feature.
+The `private-test-util` feature excludes SDK-backed test-reader/provider machinery and its
+optional SDK dependency from production builds; the shell does not forward it.
 
-Mutation testing targets the production exporter, delta state and streaming iterator, not
-the trivial histogram-state forwarder used by allocation tests and benchmarks. The metric
-lookup assertion helper is also excluded: it consumes populated SDK snapshots that have no
+Mutation testing targets the production exporter, delta state and streaming iterator. The metric
+lookup assertion helper is excluded: it consumes populated SDK snapshots that have no
 public in-memory constructors and are obtained through the SDK collection pipeline. Its
 consumers remain integration tests rather than running real SDK collection solely to test
 an assertion helper in the library harness.

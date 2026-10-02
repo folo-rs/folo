@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt;
 use std::io::{self, Write};
 use std::panic::RefUnwindSafe;
@@ -91,9 +92,8 @@ impl NoteSink for Verbose<'_> {
     }
 }
 
-#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl NoteSink for std::cell::RefCell<Vec<String>> {
+impl NoteSink for RefCell<Vec<String>> {
     fn note(&self, message: impl FnOnce() -> String) {
         self.borrow_mut().push(message());
     }
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn recording_and_discard_preserve_lazy_note_behavior() {
-        let recording = std::cell::RefCell::new(Vec::new());
+        let recording = RefCell::new(Vec::new());
         recording.note(|| "recorded".to_owned());
         assert_eq!(*recording.borrow(), ["recorded"]);
         let mut built = false;

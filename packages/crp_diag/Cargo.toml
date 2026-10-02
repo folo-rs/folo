@@ -2,7 +2,7 @@
 name = "crp_diag"
 description = "Diagnostic implementation for cargo-release-plan - do not reference directly"
 publish = true
-version = "0.5.9"
+version = "0.5.10"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -21,9 +21,6 @@ allowed_external_types = []
 
 [lib]
 doc = false
-
-[features]
-private-test-util = []
 
 [dev-dependencies]
 mutants = { workspace = true }

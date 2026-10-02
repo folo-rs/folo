@@ -1,6 +1,4 @@
-#[cfg(any(test, feature = "private-test-util"))]
-use std::io::Cursor;
-use std::io::{BufRead, BufReader, Read, Seek, Write};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek, Write};
 
 use flate2::Compression;
 use ohno::AppError;
@@ -57,7 +55,6 @@ pub(crate) fn copy_artifact(
 }
 
 /// Exercises the production writer without filesystem or clock noise.
-#[cfg(any(test, feature = "private-test-util"))]
 pub fn benchmark_archive(contents: &[u8]) -> Result<Vec<u8>, AppError> {
     let mut output = Cursor::new(Vec::new());
     write_archive(

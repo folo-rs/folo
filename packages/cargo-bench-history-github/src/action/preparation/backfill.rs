@@ -8,13 +8,10 @@ use tick::Clock;
 
 use crate::action::errors::{InvalidInput, InvalidOutput};
 use crate::action::execute::git;
-#[cfg(any(test, feature = "private-test-util"))]
 use crate::action::native::NativeHost;
 use crate::action::port::Host;
-#[cfg(any(test, feature = "private-test-util"))]
 use crate::action::preparation::Flow;
 use crate::action::preparation::execute::resolve;
-#[cfg(any(test, feature = "private-test-util"))]
 use crate::action::preparation::inputs::WorkflowInputs;
 use crate::model::CommitSha;
 
@@ -158,7 +155,6 @@ impl BackfillInput {
 /// # Errors
 ///
 /// Returns an error for invalid range inputs, clock values, commit references or Git operations.
-#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(test, mutants::skip)] // Native adapter wiring is covered by real-Git integration tests.
 pub async fn prepare_backfill_at(
     inputs_json: &[u8],

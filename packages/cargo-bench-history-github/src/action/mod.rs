@@ -15,7 +15,6 @@ mod publication;
 
 pub(crate) use args::*;
 pub(crate) use execute::run;
-#[cfg(any(test, feature = "private-test-util"))]
 pub use preparation::prepare_backfill_at;
 pub(crate) use preparation::{PrepareWorkflowArgs, prepare_workflow};
 
