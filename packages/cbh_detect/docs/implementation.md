@@ -19,6 +19,12 @@ reachable only by retuning a threshold. Where a test needs to know which gate de
 the detectors record their gate evaluations to an optional log it can inspect, rather than relaxing
 a threshold to make the decision observable.
 
+Gate logs, their inspection helpers and serial analysis drivers are ordinary public items
+of this private implementation crate. They reuse the production detectors and need no
+fixture catalogue or additional dependencies. `private-test-util` excludes the synthetic
+and recorded series catalogue, scatter generation and optional synchronous-executor support
+from production builds, not the ability to observe already-compiled detector decisions.
+
 Branch analysis is a dedicated all-series path rather than another independent per-series
 detector. Per-series preparation remains parallel: it applies the base blessing boundary,
 alternates chronologically ordered observed levels between selector and reference lanes, locates

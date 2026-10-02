@@ -97,18 +97,6 @@ impl Report {
         self.events.iter()
     }
 
-    /// Constructs a report from preassembled metrics.
-    ///
-    /// This does not touch the global event registry. It is intended for in-workspace
-    /// tests and benchmarks that need to drive code paths expecting a [`Report`].
-    #[cfg(any(test, feature = "private-test-util"))]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn fake(events: Vec<EventMetrics>) -> Self {
-        Self::from_unsorted_events(events)
-    }
-
     fn from_unsorted_events(mut events: Vec<EventMetrics>) -> Self {
         events.sort_by(|left, right| left.name().as_ref().cmp(right.name().as_ref()));
 
@@ -333,29 +321,6 @@ impl EventMetrics {
     pub fn histogram(&self) -> Option<&Histogram> {
         self.histogram.as_ref()
     }
-
-    /// Constructs event metrics from precomputed values.
-    ///
-    /// This does not touch the global event registry. The mean is calculated as
-    /// `sum / count`, truncated toward zero; when `count` is zero, the mean is zero.
-    /// This function is intended for in-workspace tests and benchmarks.
-    #[cfg(any(test, feature = "private-test-util"))]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn fake(
-        name: impl Into<EventName>,
-        count: u64,
-        sum: Magnitude,
-        histogram: Option<Histogram>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            count,
-            sum,
-            histogram,
-        }
-    }
 }
 
 impl Display for EventMetrics {
@@ -453,44 +418,58 @@ impl Histogram {
     pub fn buckets(&self) -> impl Iterator<Item = (Magnitude, u64)> {
         self.magnitudes().zip(self.counts())
     }
+}
 
-    /// Constructs a histogram from raw parts.
-    ///
-    /// `bucket_upper_bounds` must be sorted in strictly ascending order and must not
-    /// contain `Magnitude::MAX`, which is synthesized as the terminal bucket.
-    /// `bucket_counts` must have the same length as `bucket_upper_bounds`.
-    /// `overflow_bucket_count` is the count for the synthetic terminal bucket.
-    ///
-    /// This does not touch the global event registry. It is intended for in-workspace
-    /// tests and benchmarks.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the above preconditions are violated.
-    #[cfg(any(test, feature = "private-test-util"))]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn fake(
-        bucket_upper_bounds: &'static [Magnitude],
-        bucket_counts: Vec<u64>,
-        overflow_bucket_count: u64,
-    ) -> Self {
-        assert_eq!(bucket_counts.len(), bucket_upper_bounds.len());
+// Free functions keep maintainer construction out of the nm facade's re-exported types.
+// Ref: packages/nm/docs/implementation.md, "Package boundary".
+/// Constructs a report from preassembled metrics without touching the registry.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[must_use]
+pub fn fake_report(events: Vec<EventMetrics>) -> Report {
+    Report::from_unsorted_events(events)
+}
 
-        assert!(
-            bucket_upper_bounds
-                .array_windows::<2>()
-                .all(|[lower, upper]| lower < upper)
-        );
+/// Constructs event metrics from precomputed values without touching the registry.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[must_use]
+pub fn fake_event_metrics(
+    name: impl Into<EventName>,
+    count: u64,
+    sum: Magnitude,
+    histogram: Option<Histogram>,
+) -> EventMetrics {
+    EventMetrics {
+        name: name.into(),
+        count,
+        sum,
+        histogram,
+    }
+}
 
-        assert!(!bucket_upper_bounds.contains(&Magnitude::MAX));
+/// Constructs a histogram from raw parts without touching the registry.
+///
+/// `bucket_upper_bounds` must be strictly ascending and must not contain `Magnitude::MAX`,
+/// which is synthesized as the terminal bucket. `bucket_counts` must have the same length.
+/// `overflow_bucket_count` is the count for the synthetic terminal bucket.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[must_use]
+pub fn fake_histogram(
+    bucket_upper_bounds: &'static [Magnitude],
+    bucket_counts: Vec<u64>,
+    overflow_bucket_count: u64,
+) -> Histogram {
+    assert_eq!(bucket_counts.len(), bucket_upper_bounds.len());
+    assert!(
+        bucket_upper_bounds
+            .array_windows::<2>()
+            .all(|[lower, upper]| lower < upper)
+    );
+    assert!(!bucket_upper_bounds.contains(&Magnitude::MAX));
 
-        Self {
-            magnitudes: bucket_upper_bounds,
-            counts: bucket_counts.into_boxed_slice(),
-            overflow_bucket_count,
-        }
+    Histogram {
+        magnitudes: bucket_upper_bounds,
+        counts: bucket_counts.into_boxed_slice(),
+        overflow_bucket_count,
     }
 }
 
@@ -814,7 +793,7 @@ mod tests {
             histogram: None,
         };
 
-        let report = Report::fake(vec![later_event, earlier_event]);
+        let report = fake_report(vec![later_event, earlier_event]);
         let event_names = report
             .events()
             .map(|event| event.name().as_ref())
@@ -1293,7 +1272,7 @@ mod tests {
 
     #[test]
     fn event_metrics_fake_calculates_mean_correctly() {
-        let metrics = EventMetrics::fake("test_event", 10, 100, None);
+        let metrics = fake_event_metrics("test_event", 10, 100, None);
 
         assert_eq!(metrics.name(), "test_event");
         assert_eq!(metrics.count(), 10);
@@ -1304,14 +1283,14 @@ mod tests {
 
     #[test]
     fn event_metrics_fake_calculates_mean_with_different_values() {
-        let metrics = EventMetrics::fake("test_event", 25, 500, None);
+        let metrics = fake_event_metrics("test_event", 25, 500, None);
 
         assert_eq!(metrics.mean(), 20);
     }
 
     #[test]
     fn event_metrics_fake_mean_zero_when_count_zero() {
-        let metrics = EventMetrics::fake("test_event", 0, 100, None);
+        let metrics = fake_event_metrics("test_event", 0, 100, None);
 
         assert_eq!(metrics.count(), 0);
         assert_eq!(metrics.sum(), 100);
@@ -1320,14 +1299,14 @@ mod tests {
 
     #[test]
     fn event_metrics_fake_mean_truncates_toward_zero() {
-        let metrics = EventMetrics::fake("test_event", 3, -10, None);
+        let metrics = fake_event_metrics("test_event", 3, -10, None);
 
         assert_eq!(metrics.mean(), -3);
     }
 
     #[test]
     fn histogram_fake_happy_path() {
-        let histogram = Histogram::fake(&[10, 50, 100], vec![3, 7, 2], 5);
+        let histogram = fake_histogram(&[10, 50, 100], vec![3, 7, 2], 5);
 
         let buckets: Vec<_> = histogram.buckets().collect();
         assert_eq!(
@@ -1338,7 +1317,7 @@ mod tests {
 
     #[test]
     fn histogram_fake_empty_magnitudes_is_allowed() {
-        let histogram = Histogram::fake(&[], vec![], 42);
+        let histogram = fake_histogram(&[], vec![], 42);
 
         let buckets: Vec<_> = histogram.buckets().collect();
         assert_eq!(buckets, vec![(Magnitude::MAX, 42)]);
@@ -1347,24 +1326,24 @@ mod tests {
     #[test]
     #[should_panic]
     fn histogram_fake_panics_on_length_mismatch() {
-        _ = Histogram::fake(&[10, 50, 100], vec![3, 7], 0);
+        _ = fake_histogram(&[10, 50, 100], vec![3, 7], 0);
     }
 
     #[test]
     #[should_panic]
     fn histogram_fake_panics_on_unsorted_magnitudes() {
-        _ = Histogram::fake(&[10, 100, 50], vec![3, 7, 2], 0);
+        _ = fake_histogram(&[10, 100, 50], vec![3, 7, 2], 0);
     }
 
     #[test]
     #[should_panic]
     fn histogram_fake_panics_on_equal_magnitudes() {
-        _ = Histogram::fake(&[10, 10, 100], vec![3, 7, 2], 0);
+        _ = fake_histogram(&[10, 10, 100], vec![3, 7, 2], 0);
     }
 
     #[test]
     #[should_panic]
     fn histogram_fake_panics_on_magnitude_max_in_buckets() {
-        _ = Histogram::fake(&[10, 50, Magnitude::MAX], vec![3, 7, 2], 0);
+        _ = fake_histogram(&[10, 50, Magnitude::MAX], vec![3, 7, 2], 0);
     }
 }

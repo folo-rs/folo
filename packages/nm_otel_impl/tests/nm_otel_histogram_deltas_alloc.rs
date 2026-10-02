@@ -1,10 +1,10 @@
 //! Allocation assertion test for the histogram delta computation path.
 //!
-//! Verifies that [`EventState::histogram_deltas`] performs no heap allocations on the
+//! Verifies that [`EventDeltaState::histogram_deltas`] performs no heap allocations on the
 //! warm path after the first call has sized the bucket storage.
 
 use alloc_tracker::{Allocator, Session};
-use nm_otel_impl::EventState;
+use nm_otel_impl::EventDeltaState;
 use testing::DefaultAllocator;
 
 #[global_allocator]
@@ -31,7 +31,7 @@ fn histogram_deltas_does_not_allocate_on_steady_state() {
     let session = Session::new().no_stdout().no_file();
     let op = session.operation(OPERATION_NAME);
 
-    let mut state = EventState::default();
+    let mut state = EventDeltaState::default();
 
     // Drive the initializing path outside the allocation measurement.
     let expected_first: [(i64, u64, u64); 4] =

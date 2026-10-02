@@ -16,7 +16,7 @@ private-api = true
 doc = false
 
 [dependencies]
-crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
+crp_diag = { path = "../crp_diag" }
 crp_publication = { path = "../crp_publication" }
 ohno = { workspace = true, features = ["app-err"] }
 serde_json = { workspace = true }

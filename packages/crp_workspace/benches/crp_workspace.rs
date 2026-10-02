@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use crp_workspace::__private::benchmark_lockfile_closures;
+use crp_workspace::lockfile::benchmark_lockfile_closures;
 
 ::testing::set_allocator!();
 

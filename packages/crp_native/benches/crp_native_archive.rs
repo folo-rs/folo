@@ -3,7 +3,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use crp_native::__private::benchmark_archive;
+use crp_native::benchmark_archive;
 
 ::testing::set_allocator!();
 

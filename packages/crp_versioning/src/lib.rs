@@ -1,7 +1,4 @@
-#![cfg_attr(
-    all(coverage_nightly, any(test, feature = "private-test-util")),
-    feature(coverage_attribute)
-)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, doc(hidden))]
 #![allow(
@@ -16,6 +13,7 @@
 
 pub use check::*;
 pub(crate) use crp_diag::{quote_path, short_commit};
+pub use diff::benchmark_patch_rendering;
 pub(crate) use errors::*;
 
 pub mod analysis_order;
@@ -36,12 +34,6 @@ pub mod prospective;
 pub mod report;
 pub mod resolved;
 pub mod semver_targets;
-
-/// Internal algorithm driver for the owner-local benchmark.
-#[cfg(any(test, feature = "private-test-util"))]
-pub mod __private {
-    pub use crate::diff::benchmark_patch_rendering;
-}
 
 #[cfg(test)]
 ::testing::set_allocator!();

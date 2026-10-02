@@ -5,7 +5,7 @@
 
 use nm::Event;
 use nm_otel::Publisher;
-use nm_otel_impl::{create_test_provider, find_u64_sum};
+use nm_otel_impl::{create_test_provider, find_u64_sum, run_one_iteration_for_test};
 use tick::Clock;
 
 // A test-specific name lets the assertion distinguish this event from registry noise.
@@ -44,7 +44,7 @@ fn run_one_iteration_computes_deltas_across_collections() {
     // Recording an nm event alone must not publish it to this provider.
     assert_eq!(find_u64_sum(&reader.collect(), EVENT_NAME), None);
 
-    publisher.run_one_iteration_for_test();
+    run_one_iteration_for_test(&mut publisher);
     let metrics = reader.collect();
     assert_eq!(
         find_u64_sum(&metrics, EVENT_NAME),
@@ -52,7 +52,7 @@ fn run_one_iteration_computes_deltas_across_collections() {
     );
 
     // A fresh collection without new observations must not replay cumulative counts.
-    publisher.run_one_iteration_for_test();
+    run_one_iteration_for_test(&mut publisher);
     let metrics = reader.collect();
     assert_eq!(
         find_u64_sum(&metrics, EVENT_NAME),
@@ -65,7 +65,7 @@ fn run_one_iteration_computes_deltas_across_collections() {
             .observe(ADDITIONAL_MAGNITUDE);
     });
 
-    publisher.run_one_iteration_for_test();
+    run_one_iteration_for_test(&mut publisher);
     let metrics = reader.collect();
     assert_eq!(
         find_u64_sum(&metrics, EVENT_NAME),

@@ -66,7 +66,6 @@
 use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::ops::Range;
-#[cfg(any(test, feature = "private-test-util"))]
 use std::slice;
 use std::sync::Arc;
 
@@ -201,7 +200,6 @@ impl UnjudgedReason {
     /// Reachable from the documentation generator as well as from this crate's own tests,
     /// because the appendix lists every reason and a list nothing checks would fall
     /// silently out of step the first time the set changed.
-    #[cfg(any(test, feature = "private-test-util"))]
     pub const ALL: [Self; 7] = [
         Self::Ghost,
         Self::TooFewPoints,
@@ -1358,7 +1356,6 @@ pub fn short_commit(commit: &str) -> String {
 /// unit tests (the tests below and the `signal_validation` suite), and the
 /// documentation generator's batch entry point. Production detection goes through
 /// [`find_changes_spawned`].
-#[cfg(any(test, feature = "private-test-util"))]
 #[must_use]
 pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
     if context.mode == AnalysisMode::Branch {
@@ -1553,7 +1550,6 @@ fn finalize_findings(
 /// Detects every series sequentially, returning the raised candidates in series
 /// order — the order [`finalize_findings`] relies on — and the census of what was
 /// judged.
-#[cfg(any(test, feature = "private-test-util"))]
 fn detect_all(series: &[Series], context: &AnalysisContext, family_size: usize) -> Vec<Candidate> {
     detect_range(
         series,
@@ -1690,10 +1686,8 @@ fn detect_one(
 ///
 /// Exists for tests that must assert *why* a series was reported or was quiet, and for
 /// the documentation figures, which read the log rather than restating the policy. It is
-/// an inspection facility, not part of the analysis API, so it is available only to
-/// in-workspace consumers under `private-test-util`; the recording itself is compiled
-/// unconditionally, so what is observed here is what production runs.
-#[cfg(any(test, feature = "private-test-util"))]
+/// an ordinary entry point of this private implementation crate; the recording runs
+/// through the same detector operations as production.
 #[must_use]
 pub fn evaluate_with_log(series: &Series, context: &AnalysisContext) -> (Option<Finding>, GateLog) {
     if context.mode == AnalysisMode::Branch {

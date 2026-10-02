@@ -17,9 +17,6 @@ all-features = true
 [package.metadata.release-plan]
 private-api = true
 
-[package.metadata.cargo-udeps.ignore]
-development = ["criterion"]
-
 [package.metadata.cargo_check_external_types]
 allowed_external_types = [
     "ignore::gitignore::Gitignore",
@@ -41,6 +38,8 @@ allowed_external_types = [
 doc = false
 
 [features]
+# Excludes repository creation, filesystem fixtures and native I/O scheduling support.
+# Inert Git observations and the lockfile driver are available without this feature.
 private-test-util = []
 
 [dependencies]
@@ -55,7 +54,6 @@ toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
-crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 # Integration targets use the same opt-in fixture as other component tests.
 crp_workspace = { path = ".", features = ["private-test-util"] }
 mutants = { workspace = true }
@@ -65,7 +63,6 @@ testing = { path = "../testing" }
 [[bench]]
 name = "crp_workspace"
 harness = false
-required-features = ["private-test-util"]
 
 [lints]
 workspace = true

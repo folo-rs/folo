@@ -21,6 +21,7 @@ allowed_external_types = [
     "clap_builder::derive::FromArgMatches",
     "clap_builder::derive::Parser",
     "ohno::app::error::AppError",
+    "tick::clock::Clock",
 ]
 
 [package.metadata.binstall]
@@ -36,7 +37,8 @@ name = "cargo-bench-history-github"
 path = "src/main.rs"
 
 [features]
-# Native integration tests inject completed job discovery without live GitHub access.
+# Excludes the fake GitHub port, command snapshots and publication fixture drivers.
+# The explicit-clock native backfill adapter needs none of that support.
 private-test-util = []
 
 [dependencies]

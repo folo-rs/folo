@@ -964,8 +964,9 @@ scale with workspace size:
 Criterion tracks wall-clock behavior without subprocess or filesystem noise.
 Callgrind is not used because both measured paths allocate variable-sized output
 or parse state, and its fixed allocator model would omit a material part of their
-cost. Benchmark-only drivers belong to `crp_versioning` and `crp_workspace`, enabled
-in unit-test builds or through their `private-test-util` features, not normal builds.
+cost. Lightweight benchmark drivers are ordinary public functions in the private
+`crp_versioning` and `crp_workspace` components. They reuse production algorithms without
+requiring fixture support or a visibility-only feature.
 Criterion workload identifiers stay application-scoped across package ownership.
 Small unit tests
 exercise the adapters' byte and line statistics, root selection and repeated-walk

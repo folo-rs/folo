@@ -79,7 +79,7 @@ impl CollectionState {
 /// subtract them and publish only the increment. It holds no gauge-type state, because sum
 /// is exported as an absolute value and needs no history.
 #[derive(Debug, Default)]
-pub(crate) struct EventDeltaState {
+pub struct EventDeltaState {
     /// Previous cumulative count.
     pub(crate) count: u64,
 
@@ -127,7 +127,7 @@ impl EventDeltaState {
     /// fixed for the lifetime of an event. The check fires either when an extra bucket
     /// is yielded beyond the established length, or when the source iterator is exhausted
     /// before all established buckets have been visited.
-    pub(crate) fn histogram_deltas<'a>(
+    pub fn histogram_deltas<'a>(
         &'a mut self,
         magnitudes: impl IntoIterator<Item = Magnitude> + 'a,
         non_cumulative_counts: impl IntoIterator<Item = u64> + 'a,
@@ -150,35 +150,6 @@ impl EventDeltaState {
             running_cumulative: INITIAL_CUMULATIVE,
             index: FIRST_BUCKET_INDEX,
         }
-    }
-}
-
-/// Exposes histogram delta state to in-workspace allocation tests.
-///
-/// The production exporter owns [`EventDeltaState`] privately. This facade exists only when
-/// `private-test-util` is active so integration tests can measure the same streaming operation
-/// without making its callback-capable iterator part of the normal implementation-crate surface.
-#[cfg(any(test, feature = "private-test-util"))]
-#[doc(hidden)]
-#[derive(Debug, Default)]
-pub struct EventState {
-    inner: EventDeltaState,
-}
-
-#[cfg(any(test, feature = "private-test-util"))]
-impl EventState {
-    /// Computes streaming cumulative histogram values and deltas.
-    // Trivial private-test-util forwarder for allocation tests and benchmarks.
-    // Mutation coverage belongs to EventDeltaState and its streaming iterator.
-    #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    pub fn histogram_deltas<'a>(
-        &'a mut self,
-        magnitudes: impl IntoIterator<Item = Magnitude> + 'a,
-        non_cumulative_counts: impl IntoIterator<Item = u64> + 'a,
-    ) -> impl Iterator<Item = (Magnitude, u64, u64)> + 'a {
-        self.inner
-            .histogram_deltas(magnitudes, non_cumulative_counts)
     }
 }
 
@@ -273,9 +244,14 @@ impl<I> HistogramDeltas<'_, I> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
     use testing::assert_panics;
 
     use super::*;
+
+    assert_impl_all!(EventDeltaState: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn event_state_count_delta_first_collection() {

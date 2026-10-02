@@ -1,19 +1,15 @@
 use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsStr;
-#[cfg(feature = "private-test-util")]
-use std::mem;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{fs, io};
+use std::{fs, io, mem};
 
 use crp_diag::DiagnosticSink;
-#[cfg(feature = "private-test-util")]
-use crp_native::__private::write_archive_for_test;
 use crp_native::command::{capture, strings};
-use crp_native::{BuildRequest, Native, SourceProvider};
+use crp_native::{BuildRequest, Native, SourceProvider, write_archive_for_test};
 use crp_workspace::testing::{Repository, with_io_slot};
 use ohno::AppError;
 use tempfile::TempDir;
@@ -127,7 +123,6 @@ impl SourceProvider for LocalSource {
 }
 
 #[test]
-#[cfg(feature = "private-test-util")]
 #[cfg_attr(miri, ignore = "writes and inspects real archive files")]
 fn interrupted_archive_never_reaches_the_final_asset_path() {
     let directory = TempDir::new().unwrap();

@@ -22,9 +22,6 @@ allowed_external_types = []
 [lib]
 doc = false
 
-[features]
-private-test-util = []
-
 [dev-dependencies]
 mutants = { workspace = true }
 static_assertions = { workspace = true }

@@ -11,6 +11,12 @@ behind this shell prevents internal helpers and storage choices from becoming ac
 API while allowing examples, documentation, and re-export contract tests to live with the
 owning package.
 
+Preassembled report, event and histogram constructors are ordinary free functions in
+`nm_impl`, not inherent methods on the shell's re-exported types. They reuse report
+assembly without registering events and require no optional dependencies or substantial
+fixture implementation, so they compile without a private feature. The shell's explicit
+re-exports exclude these constructors.
+
 ## Observation storage
 
 Each event handle owns publication-model-specific observation storage and a cached

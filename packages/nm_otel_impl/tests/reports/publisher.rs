@@ -1,6 +1,7 @@
-use nm::{EventMetrics, Histogram, Magnitude, Report};
+use nm::{Magnitude, Report};
+use nm_impl::{fake_event_metrics, fake_histogram, fake_report};
 use nm_otel::Publisher;
-use nm_otel_impl::create_test_provider;
+use nm_otel_impl::{create_test_provider, run_one_iteration_with_report};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 use tick::Clock;
@@ -16,13 +17,13 @@ fn make_fake_report(
     bucket_counts: Vec<u64>,
     plus_infinity_bucket_count: u64,
 ) -> Report {
-    let histogram = Histogram::fake(
+    let histogram = fake_histogram(
         FAKE_HISTOGRAM_MAGNITUDES,
         bucket_counts,
         plus_infinity_bucket_count,
     );
-    let event = EventMetrics::fake(FAKE_EVENT_NAME, count, sum, Some(histogram));
-    Report::fake(vec![event])
+    let event = fake_event_metrics(FAKE_EVENT_NAME, count, sum, Some(histogram));
+    fake_report(vec![event])
 }
 
 fn find_metric_value(metrics: &ResourceMetrics, name: &str, bucket: Option<&str>) -> Option<u64> {
@@ -63,7 +64,7 @@ fn run_one_iteration_with_report_publishes_fake_report() {
         .build();
 
     let initial_report = make_fake_report(10, 4567, vec![4, 3, 2], 1);
-    publisher.run_one_iteration_with_report(&initial_report);
+    run_one_iteration_with_report(&mut publisher, &initial_report);
 
     let metrics = reader.collect();
     let has_expected_scope = metrics
@@ -75,7 +76,7 @@ fn run_one_iteration_with_report_publishes_fake_report() {
     assert_eq!(find_metric_value(&metrics, FAKE_EVENT_NAME, None), Some(10));
 
     let next_report = make_fake_report(25, 8901, vec![6, 5, 3], 2);
-    publisher.run_one_iteration_with_report(&next_report);
+    run_one_iteration_with_report(&mut publisher, &next_report);
     let metrics = reader.collect();
 
     // Cumulative SDK output distinguishes exporting deltas from replaying cumulative reports.

@@ -18,23 +18,8 @@
 //! figures pass a [`recording`](GateLog::recording) one. The gates themselves run
 //! identically either way.
 //!
-//! The types are compiled unconditionally because the detectors take a log by reference and
-//! so name them in their own signatures. Reaching them from outside the crate is gated on
-//! `private-test-util`, since a log is inspection machinery rather than something a consumer
-//! of the analysis acts on. The inspection-only items — the reader half and the display
-//! labels — are compiled only under that gate, so a default build keeps the lint's full
-//! reach over the unconditional types and write path.
-
-#![cfg_attr(
-    not(any(test, feature = "private-test-util")),
-    expect(
-        unreachable_pub,
-        reason = "the gate types name themselves in the detectors' signatures, so they \
-                  compile in every build as `pub` items of a `pub(crate)` module, while \
-                  their reader half is reachable only under `private-test-util` (see the \
-                  module documentation above)"
-    )
-)]
+//! Recording and inspection use the same types in every build. They need no fixture
+//! catalogue or test executor and are ordinary public items of this private implementation crate.
 
 /// What the detectors decided, gate by gate, about one series.
 ///
@@ -91,7 +76,6 @@ impl GateLog {
 /// unconditionally — every gate reports its decision on every build — so the chain an
 /// observer reads is the chain production executed, which is the only reason reading it
 /// proves anything.
-#[cfg(any(test, feature = "private-test-util"))]
 impl GateLog {
     /// A log that records every gate decision the evaluation makes.
     #[must_use]
@@ -190,10 +174,6 @@ pub enum GateStage {
 
 impl GateStage {
     /// A stable identifier for display, matching the detector's name in the report.
-    ///
-    /// Inspection-only, like the rest of the reader surface, so it is compiled only
-    /// where a log is read.
-    #[cfg(any(test, feature = "private-test-util"))]
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -252,10 +232,6 @@ pub enum Gate {
 
 impl Gate {
     /// A stable identifier for display.
-    ///
-    /// Inspection-only, like the rest of the reader surface, so it is compiled only
-    /// where a log is read.
-    #[cfg(any(test, feature = "private-test-util"))]
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -280,7 +256,6 @@ impl Gate {
     /// Reachable from the documentation generator as well as from this crate's own tests,
     /// because the appendix names the gates in prose and a list nothing checks would fall
     /// silently out of step the first time the set changed.
-    #[cfg(any(test, feature = "private-test-util"))]
     pub const ALL: [Self; 13] = [
         Self::MinSeriesPoints,
         Self::MinBaseCommits,

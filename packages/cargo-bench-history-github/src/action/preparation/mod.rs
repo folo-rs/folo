@@ -7,7 +7,6 @@ mod inputs;
 mod scope;
 
 pub(crate) use args::*;
-#[cfg(any(test, feature = "private-test-util"))]
 pub use backfill::prepare_backfill_at;
 pub(crate) use execute::*;
 

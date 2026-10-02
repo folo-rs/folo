@@ -30,13 +30,6 @@ private-api = true
 # items to in-workspace tests and benchmarks; user-facing documentation lives in `nm`.
 doc = false
 
-[features]
-# Internal-only API surface for in-workspace tests and benchmarks. Never
-# forwarded by the `nm` shell crate, so end-user builds never see these items.
-# See docs/impl-crate-split.md for the `test-util` vs `private-test-util`
-# distinction.
-private-test-util = []
-
 [dependencies]
 fast_time = { workspace = true }
 num-traits = { workspace = true }
@@ -71,12 +64,10 @@ harness = false
 [[bench]]
 name = "nm_rendering"
 harness = false
-required-features = ["private-test-util"]
 
 [[bench]]
 name = "nm_rendering_cg"
 harness = false
-required-features = ["private-test-util"]
 
 [[bench]]
 name = "nm_performance_cg"

@@ -157,7 +157,7 @@ against and what a user reads when a finding does not make sense.
   configured values, and serialized excerpts that materially depend on executable behaviour.
   Every behaviour-bearing table, figure, computed example, configured value, and serialized
   excerpt is produced by `cargo-bench-history-figures` from the production type, key builder,
-  adapter fixture, or `private-test-util` inspection surface that owns the behaviour.
+  adapter fixture, or implementation-owned inspection surface that owns the behaviour.
   Completeness and derivation tests pin those links — enum `ALL` coverage, exhaustive matches,
   real key-builder assertions, and fixture-backed adapter checks — and freshness tests fail if
   the checked-in includes drift from regenerated output. Genuinely explanatory,
@@ -165,7 +165,7 @@ against and what a user reads when a finding does not make sense.
   The generated-evidence boundary is owned by `cargo-bench-history-figures`: it manages the asset
   registry, write/check reconciliation, rendering, and preview for appendix evidence. Its
   dependencies are one-way from the generator to narrow production-owned projections such as
-  `cbh_analyze::auto_mode`, the `cbh_detect` `private-test-util` inspection surface,
+  `cbh_analyze::auto_mode`, the `cbh_detect` gate-log inspection surface,
   `cbh_render::CoverageState::ALL`, and `UnjudgedReason::ALL`; the generator is book
   infrastructure and is not shipped with the application. Component ownership detail lives in the
   [implementation guide](implementation.md#ownership-map).

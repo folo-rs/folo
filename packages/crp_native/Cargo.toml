@@ -16,18 +16,11 @@ all-features = true
 [package.metadata.release-plan]
 private-api = true
 
-[package.metadata.cargo-udeps.ignore]
-# The default-feature dependency check omits the private-test-util-gated archive benchmark.
-development = ["criterion"]
-
 [package.metadata.cargo_check_external_types]
 allowed_external_types = ["crp_diag::*", "ohno::app::error::AppError"]
 
 [lib]
 doc = false
-
-[features]
-private-test-util = []
 
 [dependencies]
 command-group = { workspace = true }
@@ -49,7 +42,6 @@ zip = { workspace = true, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
-crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 crp_workspace = { path = "../crp_workspace", features = ["private-test-util"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
@@ -58,7 +50,6 @@ testing = { path = "../testing" }
 [[bench]]
 name = "crp_native_archive"
 harness = false
-required-features = ["private-test-util"]
 
 [lints]
 workspace = true

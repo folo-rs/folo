@@ -46,9 +46,10 @@ mod linux {
     use std::iter;
 
     use gungraun::prelude::*;
-    use nm::{EventMetrics, Histogram, Magnitude, Report};
+    use nm::{Magnitude, Report};
+    use nm_impl::{fake_event_metrics, fake_histogram, fake_report};
     use nm_otel::Publisher;
-    use nm_otel_impl::{EventState, create_test_provider};
+    use nm_otel_impl::{EventDeltaState, create_test_provider, run_one_iteration_with_report};
     use tick::Clock;
 
     // A stable synthetic name avoids introducing registry-dependent setup.
@@ -115,7 +116,7 @@ mod linux {
         per_bucket_count: u64,
         plus_infinity_bucket_count: u64,
     ) -> Report {
-        let histogram = Histogram::fake(
+        let histogram = fake_histogram(
             bucket_bounds,
             vec![per_bucket_count; bucket_bounds.len()],
             plus_infinity_bucket_count,
@@ -124,8 +125,8 @@ mod linux {
         let total_buckets = u64::try_from(total_buckets).unwrap_or(u64::MAX);
         let event_count = per_bucket_count.saturating_mul(total_buckets);
         let event_sum = Magnitude::default();
-        let event = EventMetrics::fake(EVENT_NAME, event_count, event_sum, Some(histogram));
-        Report::fake(vec![event])
+        let event = fake_event_metrics(EVENT_NAME, event_count, event_sum, Some(histogram));
+        fake_report(vec![event])
     }
 
     fn warm_publisher(bucket_bounds: &'static [Magnitude]) -> Publisher {
@@ -135,7 +136,7 @@ mod linux {
             WARM_PER_BUCKET_COUNT,
             WARM_PLUS_INFINITY_BUCKET_COUNT,
         );
-        publisher.run_one_iteration_with_report(&warm_report);
+        run_one_iteration_with_report(&mut publisher, &warm_report);
         publisher
     }
 
@@ -175,7 +176,7 @@ mod linux {
 
     fn run_export(inputs: ExportInputs) -> ExportInputs {
         let (mut publisher, report) = inputs;
-        publisher.run_one_iteration_with_report(black_box(&report));
+        run_one_iteration_with_report(&mut publisher, black_box(&report));
         (publisher, report)
     }
 
@@ -229,13 +230,13 @@ mod linux {
     /// Carries warm delta state and the next collection's non-cumulative bucket counts.
     #[derive(Debug)]
     struct DeltaInputs {
-        state: EventState,
+        state: EventDeltaState,
         bucket_bounds: &'static [Magnitude],
         counts: Vec<u64>,
     }
 
     fn setup_delta(bucket_bounds: &'static [Magnitude]) -> DeltaInputs {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
         let bucket_count = bucket_bounds
             .len()
             .checked_add(1)

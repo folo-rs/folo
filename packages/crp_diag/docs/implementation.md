@@ -6,7 +6,9 @@ It owns lazy diagnostic reporting and deterministic presentation, not release be
 
 Producers receive a reporting capability rather than acquiring a process stream.
 The application selects stderr; private recording support observes the same operations
-in memory. Disabled verbose reporting does not evaluate message-building closures.
+in memory through an ordinary `NoteSink` implementation for a string-vector `RefCell`.
+This small adapter needs neither a feature gate nor additional dependencies.
+Disabled verbose reporting does not evaluate message-building closures.
 Lazy construction avoids formatting disabled notes. Their tool prefix attributes
 interleaved output, and note delivery is best-effort. Unconditional diagnostics retain
 their explicit failure behavior; child-output streaming reports delivery errors only

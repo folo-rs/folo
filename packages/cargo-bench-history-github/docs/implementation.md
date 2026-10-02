@@ -19,6 +19,11 @@ process setup. Native integration scenarios use the same dispatcher with ordinar
 an in-memory GitHub port and a frozen clock. They observe publication snapshots after each command,
 so argument wiring and terminal transitions are covered without credentials or network writes.
 
+The explicit-checkout, explicit-clock backfill adapter is an ordinary public function in this
+unsupported library. It uses the production native range planner without fake GitHub state or
+command snapshots. `private-test-util` gates those separate fixture implementations, not the
+lightweight range adapter.
+
 Collection receipt loading accepts the artifact downloader's direct single-artifact layout
 as well as its per-artifact directories. Each selected layout remains receipt-only; platform,
 run, attempt and commit identity come from validated receipt contents and job reconciliation,

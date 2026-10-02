@@ -76,5 +76,8 @@ identifier admission, interruption decisions and ZIP64 header reservation remain
 in-process behavior coverage; large declared sizes require no large input allocation.
 
 The low/high in-memory archive benchmark measures ZIP/Deflate work independently
-of source acquisition and filesystem noise. Maintainer drivers and file-boundary
-interruption injection use `private-test-util`; production execution is unchanged.
+of source acquisition and filesystem noise. Its driver and file-boundary interruption
+adapters are ordinary public functions in this private component. They forward to the
+production copy/archive operations without fixture generation or extra dependencies,
+so they need no private feature. The in-memory writer specialization is shared with
+unit coverage rather than introducing a separate benchmark archive implementation.

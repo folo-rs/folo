@@ -277,41 +277,25 @@ impl Publisher {
         self.export(&report);
     }
 
-    /// Collects and publishes metrics once for an in-workspace test.
-    ///
-    /// # Panics
-    ///
-    /// Panics if nm report collection finds incompatible configurations for the same event, or
-    /// if the collection contains a different histogram bucket count from a previous collection.
-    #[cfg(any(test, feature = "private-test-util"))]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[doc(hidden)]
-    // Trivial forwarder for integration tests of the real collection-to-export adapter.
-    #[cfg_attr(test, mutants::skip)]
-    pub fn run_one_iteration_for_test(&mut self) {
-        self.run_one_iteration();
-    }
-
-    /// Publishes the supplied report once.
-    ///
-    /// This bypasses [`Report::collect`] so callers can drive the export pipeline with
-    /// a pre-built [`Report`] (typically constructed via `Report::fake` in tests and
-    /// benchmarks).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the report contains a different histogram bucket count from a previous
-    /// report for the same event.
-    #[cfg(any(test, feature = "private-test-util"))]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[doc(hidden)]
-    pub fn run_one_iteration_with_report(&mut self, report: &Report) {
-        self.export(report);
-    }
-
     fn export(&mut self, report: &Report) {
         export_report(report, &mut self.state, &mut self.instruments);
     }
+}
+
+// Free functions do not add inherent methods to the Publisher re-exported by nm_otel.
+// Ref: packages/nm_otel/docs/implementation.md, "Package boundary".
+/// Collects and publishes metrics once for an in-workspace test.
+#[cfg_attr(coverage_nightly, coverage(off))]
+// Real collection-to-export wiring is covered by native integration tests.
+#[cfg_attr(test, mutants::skip)]
+pub fn run_one_iteration_for_test(publisher: &mut Publisher) {
+    publisher.run_one_iteration();
+}
+
+/// Publishes a preassembled report without collecting from the global registry.
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub fn run_one_iteration_with_report(publisher: &mut Publisher, report: &Report) {
+    publisher.export(report);
 }
 
 #[cfg(test)]
@@ -319,7 +303,8 @@ impl Publisher {
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use nm::{EventMetrics, Histogram, Magnitude};
+    use nm::Magnitude;
+    use nm_impl::{fake_event_metrics, fake_histogram, fake_report};
     use opentelemetry::metrics::NoopMeterProvider;
     use static_assertions::assert_impl_all;
     use testing::assert_panics;
@@ -379,13 +364,13 @@ mod tests {
         bucket_counts: Vec<u64>,
         plus_infinity_bucket_count: u64,
     ) -> Report {
-        let histogram = Histogram::fake(
+        let histogram = fake_histogram(
             FAKE_HISTOGRAM_MAGNITUDES,
             bucket_counts,
             plus_infinity_bucket_count,
         );
-        let event = EventMetrics::fake(FAKE_EVENT_NAME, count, sum, Some(histogram));
-        Report::fake(vec![event])
+        let event = fake_event_metrics(FAKE_EVENT_NAME, count, sum, Some(histogram));
+        fake_report(vec![event])
     }
 
     #[test]
@@ -396,14 +381,14 @@ mod tests {
             .build();
 
         let initial_report = make_fake_report(10, 4567, vec![4, 3, 2], 1);
-        publisher.run_one_iteration_with_report(&initial_report);
+        run_one_iteration_with_report(&mut publisher, &initial_report);
 
-        let histogram = Histogram::fake(&[10, 50], vec![6, 5], 2);
-        let event = EventMetrics::fake(FAKE_EVENT_NAME, 25, 8901, Some(histogram));
-        let incompatible_report = Report::fake(vec![event]);
+        let histogram = fake_histogram(&[10, 50], vec![6, 5], 2);
+        let event = fake_event_metrics(FAKE_EVENT_NAME, 25, 8901, Some(histogram));
+        let incompatible_report = fake_report(vec![event]);
 
         assert_panics(|| {
-            publisher.run_one_iteration_with_report(&incompatible_report);
+            run_one_iteration_with_report(&mut publisher, &incompatible_report);
         });
     }
 }

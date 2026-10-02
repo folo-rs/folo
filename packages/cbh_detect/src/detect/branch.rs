@@ -92,7 +92,6 @@ struct BranchJudgment<'a> {
 }
 
 /// Runs branch analysis sequentially.
-#[cfg(any(test, feature = "private-test-util"))]
 pub(crate) fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
     let entries: Vec<PreparedEntry> = series
         .iter()
@@ -139,7 +138,6 @@ pub(crate) fn testability(series: &Series, context: &AnalysisContext) -> Testabi
 }
 
 /// Evaluates one series with the same branch evaluator production uses.
-#[cfg(any(test, feature = "private-test-util"))]
 pub(crate) fn evaluate_with_log(
     series: &Series,
     context: &AnalysisContext,

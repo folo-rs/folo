@@ -61,7 +61,6 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
-crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }

@@ -7,7 +7,6 @@
 // Ref: packages/cargo-release-plan/docs/design.md, "Relevant lockfile closures".
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-#[cfg(any(test, feature = "private-test-util"))]
 use std::iter;
 use std::sync::Arc;
 
@@ -402,9 +401,7 @@ impl Lockfile {
 }
 
 /// Parses and walks several closures for an in-workspace benchmark.
-#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[doc(hidden)]
 #[must_use]
 pub fn benchmark_lockfile_closures(
     text: &str,

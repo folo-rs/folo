@@ -5,7 +5,7 @@
 
 use nm::Event;
 use nm_otel::Publisher;
-use nm_otel_impl::{create_test_provider, find_u64_sum};
+use nm_otel_impl::{create_test_provider, find_u64_sum, run_one_iteration_for_test};
 use tick::Clock;
 
 // A test-specific name lets the assertion distinguish this event from registry noise.
@@ -40,7 +40,7 @@ fn run_one_iteration_exports_recorded_events() {
         .clock(Clock::new_frozen())
         .build();
 
-    publisher.run_one_iteration_for_test();
+    run_one_iteration_for_test(&mut publisher);
     let metrics = reader.collect();
 
     assert_eq!(

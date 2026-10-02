@@ -23,7 +23,6 @@ use crate::{
     UnresolvedRevisionError,
 };
 
-#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
 
