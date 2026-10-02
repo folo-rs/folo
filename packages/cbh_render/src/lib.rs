@@ -1,4 +1,4 @@
-#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, doc(hidden))]
 #![expect(
     clippy::exhaustive_enums,
@@ -24,6 +24,9 @@ mod report;
 
 pub use coverage::*;
 pub use report::*;
+
+#[cfg(any(test, feature = "private-test-util"))]
+pub mod testing;
 
 #[cfg(test)]
 ::testing::set_allocator!();
