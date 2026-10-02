@@ -460,10 +460,9 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
 /// Explains, under `--verbose`, which series the detectors judged and what each of
 /// the rest lacked.
 ///
-/// The report discloses the tallies; this trail names the individual series behind
-/// them and the gate that declined each, so the verdict can be reconstructed rather
-/// than merely counted. Ghost-filtered series are already named one by one where they
-/// are dropped, so only the summary repeats them here.
+/// History testability is a cheap count check. Branch diagnostics consume the recorded
+/// preparation decisions in `note_branch_evaluation` instead of repeating regime selection.
+/// Ghost-filtered series are named where they are dropped, so only the summary repeats them.
 fn note_series_census<R: Reporter + ?Sized>(
     reporter: &R,
     series: &[Series],
@@ -471,37 +470,34 @@ fn note_series_census<R: Reporter + ?Sized>(
     census: &SeriesCensus,
 ) {
     reporter.if_enabled(|notes| {
-        for one in series {
-            let Testability::Unjudged(reason) = testability(one, context) else {
-                continue;
-            };
-            let evidence = match context.mode {
-                // A blessed history series is judged only on what came after the blessing,
-                // so name that window rather than the misleading full length.
-                AnalysisMode::History if one.active_start > 0 => format!(
-                    "{}, of which {} since its blessing",
-                    count_noun(one.points.len(), "point"),
-                    one.points.len().saturating_sub(one.active_start),
-                ),
-                AnalysisMode::History => count_noun(one.points.len(), "point"),
-                AnalysisMode::Branch => {
-                    let retained = count_noun(one.base_window.len(), "base-branch commit");
-                    let available = count_noun(
-                        one.base_history_count.max(one.base_window.len()),
-                        "base-branch commit",
-                    );
+        if context.mode == AnalysisMode::History {
+            for one in series {
+                let Testability::Unjudged(reason) = testability(one, context) else {
+                    continue;
+                };
+                let active_points = one.points.len().saturating_sub(one.active_start);
+                let evidence = if let Some(blessing) = &one.blessing {
                     format!(
-                        "{retained} retained from {available} available before the cap and blessings"
+                        "{active_points} of {} usable at or after blessing {}",
+                        count_noun(one.points.len(), "point"),
+                        short_commit(&blessing.commit),
                     )
-                }
-            };
-            notes.note(&format!(
-                "not judging {} {} in {}: {} — it carries {evidence}",
-                one.id.qualified(),
-                one.kind.as_str(),
-                one.set,
-                reason.describe(),
-            ));
+                } else {
+                    format!(
+                        "{} usable in the analyzed window",
+                        count_noun(active_points, "point"),
+                    )
+                };
+                notes.note(&format!(
+                    "not judging {} {} in {}: {}; {evidence}; at least {} are required \
+                     to evaluate a series",
+                    one.id.qualified(),
+                    one.kind.as_str(),
+                    one.set,
+                    reason.describe(),
+                    count_noun(MIN_SERIES_POINTS, "point"),
+                ));
+            }
         }
         let rule = match context.mode {
             AnalysisMode::History => format!(
@@ -512,7 +508,8 @@ fn note_series_census<R: Reporter + ?Sized>(
             ),
             AnalysisMode::Branch => format!(
                 "branch mode judges a series only with a measurement on the branch and \
-                 {} in the {}-commit comparison window to judge it against",
+                 at least {} in the {}-commit comparison window, and only when its \
+                 current base regime is resolved",
                 count_noun(MIN_SERIES_POINTS, "base-branch commit"),
                 MAX_BRANCH_BASE_COMMITS,
             ),
@@ -535,7 +532,50 @@ fn note_series_census<R: Reporter + ?Sized>(
             coverage.judged(),
             coverage.in_scope(),
         ));
+        // Several reasons can share a remedy. Emit each hint once per analysis, not once
+        // per series, while keeping the census's pipeline ordering.
+        let mut hints = Vec::new();
+        for (reason, _) in census.reasons() {
+            if let Some(hint) = baseline_guidance(reason)
+                && !hints.contains(&hint)
+            {
+                notes.note(&format!("baseline guidance: {hint}"));
+                hints.push(hint);
+            }
+        }
     });
+}
+
+/// Conditional remedies explain possible next steps without inferring why data is absent.
+fn baseline_guidance(reason: UnjudgedReason) -> Option<&'static str> {
+    match reason {
+        UnjudgedReason::TooFewPoints | UnjudgedReason::TooFewPointsSinceBlessing => Some(
+            "collect more history in the same engine, target triple and machine-key partition, \
+             within the analyzed window and at or after any blessing. If older eligible commits \
+             contain the benchmark, backfill on a matching machine can fill gaps; it cannot \
+             supply measurements for commits where the benchmark did not exist.",
+        ),
+        UnjudgedReason::TooFewBaseCommits | UnjudgedReason::TooFewBaseCommitsSinceBlessing => Some(
+            "collect more distinct base-branch commits in the same engine, target triple and \
+             machine-key partition, within the comparison window and at or after any blessing. \
+             Rerunning the same PR or base commit does not add distinct base commits. If older \
+             eligible base commits contain the benchmark, backfill on a matching machine can \
+             fill gaps; a benchmark introduced only on the branch may need future base history \
+             after merge.",
+        ),
+        UnjudgedReason::CurrentBaseRegimeUnresolved => Some(
+            "collect comparable measurements on additional distinct base-branch commits to \
+             establish the recent level. Rerunning the same PR or base commit does not add \
+             distinct base commits. Older measurements or merely meeting the count minimum \
+             do not establish that level; no fixed number of additional base commits \
+             guarantees a comparison.",
+        ),
+        UnjudgedReason::NotMeasuredOnBranch => Some(
+            "collect this benchmark at the analyzed context commit in the selected partition; \
+             more base history cannot replace the missing branch measurement.",
+        ),
+        UnjudgedReason::Ghost => None,
+    }
 }
 
 /// Explains branch regime selection and report-wide historical comparison.
@@ -543,16 +583,57 @@ fn note_branch_evaluation<R: Reporter + ?Sized>(reporter: &R, trace: &BranchEval
     reporter.if_enabled(|notes| {
         for series in &trace.series {
             if let Some(reason) = series.unresolved {
+                if reason == UnjudgedReason::NotMeasuredOnBranch {
+                    notes.note(&format!(
+                        "not judging {} {} in {}: {}; a measurement at the analyzed context \
+                         commit is required before baseline comparison",
+                        series.id.qualified(),
+                        series.kind.as_str(),
+                        series.set,
+                        reason.describe(),
+                    ));
+                    continue;
+                }
+                let blessing = series
+                    .blessing_commit
+                    .as_ref()
+                    .map_or_else(String::new, |commit| {
+                        format!(
+                            "; only evidence at or after blessing {} is usable",
+                            short_commit(commit)
+                        )
+                    });
+                let requirement = match reason {
+                    UnjudgedReason::CurrentBaseRegimeUnresolved => format!(
+                        "the count minimum of {} is met, but recent base measurements suggest \
+                         a changed level that is not yet established",
+                        count_noun(MIN_SERIES_POINTS, "base-branch commit"),
+                    ),
+                    UnjudgedReason::TooFewBaseCommits
+                    | UnjudgedReason::TooFewBaseCommitsSinceBlessing => format!(
+                        "at least {} are required before current-base regime evaluation",
+                        count_noun(MIN_SERIES_POINTS, "distinct base-branch commit"),
+                    ),
+                    UnjudgedReason::Ghost
+                    | UnjudgedReason::TooFewPoints
+                    | UnjudgedReason::TooFewPointsSinceBlessing
+                    | UnjudgedReason::NotMeasuredOnBranch => {
+                        unreachable!(
+                            "branch preparation records only branch reasons; missing context \
+                             is handled before baseline diagnostics"
+                        )
+                    }
+                };
                 notes.note(&format!(
-                    "branch evidence for {} {} in {} was withheld: {}; {} base commits were \
-                     available, {} remained after the cap and blessings, split into {} selector \
-                     and {} reference commits",
+                    "not judging {} {} in {}: {}; {} retained from {} available before the \
+                     cap and blessings{blessing}; {requirement}; {} selector and {} reference \
+                     commits",
                     series.id.qualified(),
                     series.kind.as_str(),
                     series.set,
                     reason.describe(),
-                    series.available_base_commits,
-                    series.retained_base_commits,
+                    count_noun(series.retained_base_commits, "distinct base-branch commit"),
+                    count_noun(series.available_base_commits, "distinct base-branch commit"),
                     series.selector_commits.len(),
                     series.reference_commits.len(),
                 ));
@@ -598,6 +679,7 @@ mod tests {
     use std::path::PathBuf;
 
     use cbh_config::Config;
+    use cbh_detect::{Blessing, examples, find_changes};
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
@@ -1691,22 +1773,11 @@ mod tests {
         let mut values = vec![100.0; 16];
         values.extend(std::iter::repeat_n(200.0, 4));
         values.push(220.0);
-        let exact = cbh_detect::examples::with_base_window(
-            cbh_detect::examples::series("exact", &values, MetricKind::InstructionCount, 0),
+        let exact = examples::with_base_window(
+            examples::series("exact", &values, MetricKind::InstructionCount, 0),
             19,
         );
-        let context = cbh_detect::examples::branch_context(&exact, 19);
-        assert_eq!(
-            testability(&exact, &context),
-            Testability::Unjudged(UnjudgedReason::CurrentBaseRegimeUnresolved)
-        );
-        let detection = cbh_detect::find_changes(std::slice::from_ref(&exact), &context);
-        assert_eq!(detection.census.judged(), 0);
-        assert_eq!(detection.census.unjudged(), 1);
-        assert_eq!(
-            detection.branch_trace.series[0].unresolved,
-            Some(UnjudgedReason::CurrentBaseRegimeUnresolved)
-        );
+        let context = examples::branch_context(&exact, 19);
 
         let mut different_set = exact.clone();
         different_set.set.machine_key = "other".into();
@@ -1715,8 +1786,15 @@ mod tests {
         let mut different_kind = exact.clone();
         different_kind.kind = MetricKind::ConditionalBranches;
         let series = [exact, different_set, different_id, different_kind];
+        let detection = find_changes(&series, &context);
+        assert_eq!(detection.census.judged(), 0);
+        assert_eq!(
+            detection.census.reasons().collect::<Vec<_>>(),
+            [(UnjudgedReason::CurrentBaseRegimeUnresolved, series.len())]
+        );
         let reporter = RecordingReporter::new();
 
+        note_branch_evaluation(&reporter, &detection.branch_trace);
         note_series_census(&reporter, &series, &context, &detection.census);
 
         let recorded_notes = reporter.notes();
@@ -1744,10 +1822,215 @@ mod tests {
         );
         assert!(notes.iter().all(|note| {
             note.contains(
-                "20 base-branch commits retained from 20 base-branch commits available before \
+                "20 distinct base-branch commits retained from 20 distinct base-branch commits available before \
                  the cap and blessings",
             )
         }));
+        assert!(notes.iter().all(|note| {
+            note.contains(&format!(
+                "count minimum of {MIN_SERIES_POINTS} base-branch commits is met"
+            )) && note.contains("changed level that is not yet established")
+        }));
+        assert_eq!(
+            recorded_notes
+                .iter()
+                .filter(|note| note.starts_with("baseline guidance:"))
+                .count(),
+            1
+        );
+        assert!(reporter.contains("measurements on additional distinct base-branch commits"));
+        assert!(reporter.contains("Rerunning the same PR or base commit does not add"));
+        assert!(reporter.contains("no fixed number of additional base commits"));
+    }
+
+    #[test]
+    fn branch_diagnostics_use_recorded_distinct_commit_counts_once() {
+        // Repeated measurements of the same base commit must not count as more evidence.
+        let mut one = examples::series("short", &[100.0; 4], MetricKind::InstructionCount, 0);
+        let mut repeated = one.points[0].clone();
+        repeated.object_ordinal = 4;
+        one.points.push(repeated);
+        one.points
+            .sort_by_key(|point| (point.topo_index, point.dirty, point.object_ordinal));
+        let mut one = examples::with_base_window(one, 2);
+        let context = examples::branch_context(&one, 2);
+        let detection = find_changes(std::slice::from_ref(&one), &context);
+        assert_eq!(detection.branch_trace.series[0].retained_base_commits, 3);
+        assert_eq!(detection.branch_trace.series[0].blessing_commit, None);
+
+        // Logging consumes the detector's snapshot, not another decision on the source.
+        one.base_window.clear();
+        let reporter = RecordingReporter::new();
+        note_branch_evaluation(&reporter, &detection.branch_trace);
+        note_series_census(
+            &reporter,
+            std::slice::from_ref(&one),
+            &context,
+            &detection.census,
+        );
+        let recorded = reporter.notes();
+        let withheld = recorded
+            .iter()
+            .filter(|note| note.starts_with("not judging"))
+            .collect::<Vec<_>>();
+        assert_eq!(withheld.len(), 1);
+        assert!(withheld[0].contains("3 distinct base-branch commits retained"));
+        assert!(withheld[0].contains(&format!(
+            "at least {MIN_SERIES_POINTS} distinct base-branch commits are required"
+        )));
+        assert!(!withheld[0].contains("after blessing"));
+        assert!(reporter.contains("Rerunning the same PR or base commit"));
+        assert!(reporter.contains("benchmark introduced only on the branch"));
+    }
+
+    #[test]
+    fn history_diagnostics_pair_usable_counts_with_thresholds_and_blessing() {
+        // Flat values isolate count eligibility; only the evidence boundary differs.
+        let one = examples::series(
+            "short",
+            &[100.0; MIN_SERIES_POINTS - 1],
+            MetricKind::InstructionCount,
+            0,
+        );
+        let mut blessed = one.clone();
+        blessed.id = BenchmarkId::new(nonempty!["blessed".to_owned()]);
+        blessed.active_start = blessed.points.len() - 1;
+        blessed.blessing = Some(Blessing {
+            commit: "accepted-baseline".to_owned(),
+            commit_time: None,
+        });
+        let context = examples::history_context(&one);
+        let series = [one, blessed];
+        let detection = find_changes(&series, &context);
+        let reporter = RecordingReporter::new();
+        note_series_census(&reporter, &series, &context, &detection.census);
+        let recorded = reporter.notes();
+        let withheld = recorded
+            .iter()
+            .filter(|note| note.starts_with("not judging"))
+            .collect::<Vec<_>>();
+        assert_eq!(withheld.len(), 2);
+        assert!(withheld[0].contains(&format!(
+            "{} points usable in the analyzed window; at least {MIN_SERIES_POINTS} points",
+            MIN_SERIES_POINTS - 1
+        )));
+        assert!(withheld[1].contains(&format!(
+            "1 of {} points usable at or after blessing {}; at least {MIN_SERIES_POINTS} points",
+            MIN_SERIES_POINTS - 1,
+            short_commit("accepted-baseline")
+        )));
+        assert_eq!(
+            recorded
+                .iter()
+                .filter(|note| note.starts_with("baseline guidance:"))
+                .count(),
+            1,
+            "ordinary and post-blessing shortages share one conditional remedy"
+        );
+        assert!(reporter.contains("within the analyzed window and at or after any blessing"));
+        assert!(reporter.contains("where the benchmark did not exist"));
+    }
+
+    #[test]
+    fn missing_branch_measurement_is_not_a_count_shortfall() {
+        let one = examples::with_base_window(
+            examples::series("absent", &[100.0; 3], MetricKind::InstructionCount, 0),
+            2,
+        );
+        let mut context = examples::branch_context(&one, 2);
+        context.tip_index += 1;
+        let detection = find_changes(std::slice::from_ref(&one), &context);
+        let reporter = RecordingReporter::new();
+        note_branch_evaluation(&reporter, &detection.branch_trace);
+        note_series_census(
+            &reporter,
+            std::slice::from_ref(&one),
+            &context,
+            &detection.census,
+        );
+        let recorded = reporter.notes();
+        let withheld = recorded
+            .iter()
+            .filter(|note| note.starts_with("not judging"))
+            .collect::<Vec<_>>();
+        assert_eq!(withheld.len(), 1);
+        assert!(withheld[0].contains("a measurement at the analyzed context commit is required"));
+        assert!(!withheld[0].contains("count minimum"));
+        assert!(!withheld[0].contains("at least"));
+        assert!(
+            reporter.contains("more base history cannot replace the missing branch measurement")
+        );
+        assert!(!reporter.contains("backfill"));
+    }
+
+    #[test]
+    fn baseline_guidance_is_deduplicated_and_absent_without_shortfalls() {
+        let context = AnalysisContext {
+            mode: AnalysisMode::Branch,
+            merge_base_index: None,
+            base_ref_index: None,
+            tip_index: 0,
+        };
+        let mut census = SeriesCensus::default();
+        census.record(Testability::Judged);
+        census.record_unjudged(UnjudgedReason::Ghost, 2);
+        let reporter = RecordingReporter::new();
+        note_series_census(&reporter, &[], &context, &census);
+        assert!(!reporter.contains("baseline guidance:"));
+
+        census.record_unjudged(UnjudgedReason::TooFewBaseCommits, 2);
+        census.record_unjudged(UnjudgedReason::TooFewBaseCommitsSinceBlessing, 1);
+        census.record_unjudged(UnjudgedReason::NotMeasuredOnBranch, 1);
+        let reporter = RecordingReporter::new();
+        note_series_census(&reporter, &[], &context, &census);
+        let hints = reporter
+            .notes()
+            .into_iter()
+            .filter(|note| note.starts_with("baseline guidance:"))
+            .collect::<Vec<_>>();
+        assert_eq!(hints.len(), 2);
+        assert!(hints[0].contains("missing branch measurement"));
+        assert!(hints[1].contains("same engine, target triple and machine-key partition"));
+        assert!(hints[1].contains("at or after any blessing"));
+    }
+
+    #[test]
+    fn baseline_verbose_history_logging_leaves_every_report_unchanged() {
+        assert_baseline_reports_unchanged(&linear_git(), "c3");
+    }
+
+    #[test]
+    fn baseline_verbose_branch_logging_leaves_every_report_unchanged() {
+        assert_baseline_reports_unchanged(&feature_git(), "f2");
+    }
+
+    fn assert_baseline_reports_unchanged(git: &FakeGitHistory, commit: &str) {
+        let storage = MemoryStorage::new();
+        // One context measurement is enough to exercise insufficient evidence in either mode.
+        store(&storage, &clean_key(commit), &ir_set(3, commit, 100.0));
+        let mut opts = options();
+        opts.markdown = Some(PathBuf::from("report.md"));
+        opts.markdown_summary = Some(PathBuf::from("summary.md"));
+        opts.json = Some(PathBuf::from("report.json"));
+        let verbose = RecordingReporter::new();
+        let quiet = RecordingReporter::quiet();
+        let verbose_result = analyze_reports_with_reporter(git, &storage, "folo", &opts, &verbose);
+        let quiet_result = analyze_reports_with_reporter(git, &storage, "folo", &opts, &quiet);
+        assert_eq!(verbose_result, quiet_result);
+        assert_eq!(
+            verbose_result.0.outcome,
+            Some(AnalysisOutcome::InsufficientBaseline)
+        );
+        assert_eq!(
+            verbose
+                .notes()
+                .iter()
+                .filter(|note| note.starts_with("not judging"))
+                .count(),
+            1
+        );
+        assert!(verbose.contains("series census:"));
+        assert!(quiet.notes().is_empty());
     }
 
     #[test]
@@ -1783,10 +2066,10 @@ mod tests {
             "{report}"
         );
         assert!(
-            reporter.contains(
-                "with too few points since being blessed — it carries 10 points, \
-                 of which 3 since its blessing"
-            ),
+            reporter.contains(&format!(
+                "with too few points since being blessed; 3 of {HISTORY_COMMITS} points \
+                 usable at or after blessing {blessed_at}; at least {MIN_SERIES_POINTS} points",
+            )),
             "{:?}",
             reporter.notes()
         );
@@ -1828,18 +2111,19 @@ mod tests {
             "{report}"
         );
         assert!(
-            reporter.contains(
-                "with too few base-ref commits remaining since being blessed; 10 base commits \
-                 were available, 2 remained after the cap and blessings"
-            ),
+            reporter.contains(&format!(
+                "with too few base-ref commits remaining since being blessed; 2 distinct \
+                 base-branch commits retained from {BASE_COMMITS} distinct base-branch commits \
+                 available",
+            )),
             "{:?}",
             reporter.notes()
         );
         assert!(
-            reporter.contains(
-                "it carries 2 base-branch commits retained from 10 base-branch commits available \
-                 before the cap and blessings"
-            ),
+            reporter.contains(&format!(
+                "only evidence at or after blessing {blessed_at} is usable; at least \
+                 {MIN_SERIES_POINTS} distinct base-branch commits are required",
+            )),
             "{:?}",
             reporter.notes()
         );
@@ -1939,7 +2223,10 @@ mod tests {
             reporter.notes()
         );
         assert!(
-            reporter.contains("with too few points in the analyzed window — it carries 2 points"),
+            reporter.contains(&format!(
+                "with too few points in the analyzed window; 2 points usable in the analyzed \
+                 window; at least {MIN_SERIES_POINTS} points",
+            )),
             "{:?}",
             reporter.notes()
         );

@@ -88,6 +88,8 @@ series were judged. Every series goes straight into the parallel preparation chu
 census is assembled from the prepared entries after they are recombined. Both pipelines reach
 their verdicts through one shared testability definition, including unresolved current-base
 regimes, so the census, the detector, and the verbose diagnostics stay aligned.
+Branch preparation records the withholding reason, retained evidence counts and blessing commit
+for diagnostic consumers, which need not repeat the statistical decision.
 
 Permutation-independent magnitude and noise gates run before selection adjustment. The detector
 also fits the drift before calibration and calibrates a step only when that model fits at least as
