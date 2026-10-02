@@ -13,7 +13,9 @@
 //! run. The adapter therefore reads the warmup-robust per-iteration slope. Every
 //! metric carries a slope; multi-span output additionally carries a confidence
 //! interval, so the interval fields are parsed as optional (a single span has no
-//! dispersion). The committed fixtures under `tests/fixtures/alloc_tracker/` are
+//! dispersion). Peak outstanding bytes is consumed whenever present; process scope and
+//! explicit `no_peak()` spans withhold it without removing the other metrics.
+//! The committed fixtures under `tests/fixtures/alloc_tracker/` are
 //! representative samples of the current schema; the authoritative schema-drift
 //! guard is the `super::schema_roundtrip` test, which feeds real producer output
 //! through this parser so a field renamed or dropped on either side of the
@@ -100,8 +102,19 @@ fn output_to_record(output: &OperationOutput) -> Option<BenchmarkResult> {
         output.interval_high_allocations_per_iteration,
     );
 
+    let mut metrics = vec![bytes, allocations];
+    if let Some(value) = super::usable_slope(output.slope_peak_bytes) {
+        metrics.push(
+            Metric::new(MetricKind::PeakOutstandingBytes, value).with_dispersion(
+                None,
+                output.interval_low_peak_bytes,
+                output.interval_high_peak_bytes,
+            ),
+        );
+    }
+
     let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
-    Some(BenchmarkResult::new(id, vec![bytes, allocations]))
+    Some(BenchmarkResult::new(id, metrics))
 }
 
 /// The subset of an `alloc_tracker` operation file the tool reads. The `total_*`
@@ -124,6 +137,12 @@ struct OperationOutput {
     interval_low_allocations_per_iteration: Option<f64>,
     #[serde(default)]
     interval_high_allocations_per_iteration: Option<f64>,
+    #[serde(default)]
+    slope_peak_bytes: Option<f64>,
+    #[serde(default)]
+    interval_low_peak_bytes: Option<f64>,
+    #[serde(default)]
+    interval_high_peak_bytes: Option<f64>,
 }
 
 #[cfg(test)]
@@ -194,6 +213,56 @@ mod tests {
 
         let count = metric(&record, MetricKind::AllocationCount);
         assert_eq!(count.value, 2.0);
+    }
+
+    #[test]
+    fn records_peak_with_its_own_interval_when_present() {
+        let json = serde_json::json!({
+            "operation": "peak",
+            "slope_bytes_per_iteration": 200.0,
+            "slope_allocations_per_iteration": 2.0,
+            "slope_peak_bytes": 64.0,
+            "interval_low_peak_bytes": 60.0,
+            "interval_high_peak_bytes": 68.0
+        });
+        let record = parse_record(&json.to_string());
+        assert_eq!(record.metrics.len(), 3);
+        let peak = metric(&record, MetricKind::PeakOutstandingBytes);
+        assert_eq!(peak.value, 64.0);
+        assert_eq!(peak.std_dev, None);
+        assert_eq!(peak.interval_low, Some(60.0));
+        assert_eq!(peak.interval_high, Some(68.0));
+        assert_eq!(metric(&record, MetricKind::AllocatedBytes).value, 200.0);
+        assert_eq!(metric(&record, MetricKind::AllocationCount).value, 2.0);
+    }
+
+    #[test]
+    fn zero_peak_without_interval_is_a_measurement_not_an_omission() {
+        let json = serde_json::json!({
+            "operation": "peak",
+            "slope_bytes_per_iteration": 200.0,
+            "slope_allocations_per_iteration": 2.0,
+            "slope_peak_bytes": 0.0
+        });
+        let record = parse_record(&json.to_string());
+        let peak = metric(&record, MetricKind::PeakOutstandingBytes);
+        assert_eq!(peak.value, 0.0);
+        assert_eq!(peak.interval_low, None);
+        assert_eq!(peak.interval_high, None);
+    }
+
+    #[test]
+    fn null_peak_preserves_the_other_metrics() {
+        let json = serde_json::json!({
+            "operation": "peak",
+            "slope_bytes_per_iteration": 200.0,
+            "slope_allocations_per_iteration": 2.0,
+            "slope_peak_bytes": null
+        });
+        let record = parse_record(&json.to_string());
+        assert_eq!(record.metrics.len(), 2);
+        assert_eq!(metric(&record, MetricKind::AllocatedBytes).value, 200.0);
+        assert_eq!(metric(&record, MetricKind::AllocationCount).value, 2.0);
     }
 
     #[test]

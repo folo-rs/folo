@@ -12,7 +12,7 @@ different microarchitectures — so every engine is partitioned by machine key.
 |---|---|---|
 | **Criterion** | Wall-clock time | Yes |
 | **Callgrind** (via Gungraun) | Simulated instruction / branch counts | No (single value) |
-| **`alloc_tracker`** | Heap allocations (bytes and counts) | Only when the operation was measured over several spans |
+| **`alloc_tracker`** | Heap allocations (bytes and counts), plus optional peak outstanding bytes | Only when the operation was measured over several spans |
 | **`all_the_time`** | Processor (CPU) time | Only when the operation was measured over several spans |
 
 An interval needs something to vary across, so the two operation engines report one only
@@ -39,6 +39,25 @@ counts (`Bc`, `Bi`) — they count *what the code did*. The cache-simulation cou
 `EstimatedCycles`, and the branch-misprediction counts reflect *where the code and data landed
 in memory* and swing by tens of percent between two builds of identical source, so they are
 never parsed or persisted.
+
+## Allocation peaks
+
+Available allocation peaks are collected and analyzed automatically as
+`peak_outstanding_bytes`. This is allocator-requested memory relative to the start of a span,
+not RSS or the simultaneous total across worker threads.
+
+**Benchmarks that accumulate memory between iterations should use
+`operation.measure_thread().no_peak().iterations(n)` in `alloc_tracker`.** Their peak depends
+on the batch size the harness selects and can produce false regression alerts even with a
+narrow confidence interval. Varying iteration workloads can also make the batch maximum
+depend on batch size; freeing pre-existing allocations or transferring allocations across
+threads can make the reported peak unsuitable for comparison.
+
+Opting out withholds the operation's peak from both human and machine-readable producer
+reports, without losing bytes allocated or allocation count. Process-scoped measurements
+already withhold peaks. Missing peaks are not zero measurements, and opting out does not
+erase historical data. Use the opt-out consistently across repetitions of a `--best-of` run,
+which must all report the same metric set.
 
 ## Shared shape
 

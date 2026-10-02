@@ -204,7 +204,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -249,7 +250,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -294,7 +296,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -342,7 +345,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -387,7 +391,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -432,7 +437,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -480,7 +486,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -525,7 +532,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
@@ -570,7 +578,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 }
             }
 
-            let _span = allocs_op.measure_thread().iterations(iters);
+            // Each iteration's pool retains any newly allocated slabs until the batch ends.
+            let _span = allocs_op.measure_thread().no_peak().iterations(iters);
             let start = Instant::now();
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 let mut rng = SmallRng::seed_from_u64(42);
