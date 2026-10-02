@@ -492,7 +492,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-figures"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "cbh_analyze",
  "cbh_detect",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-github"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cargo-detect-package",
  "cbh_config",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-stress"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "all_the_time",
  "cargo-bench-history",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "clap",
  "crp_diag",
@@ -665,7 +665,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbh_analyze"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyspawn",
  "cbh_command",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_cli"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "cbh_command",
  "cbh_model",
@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_codec"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "alloc_tracker",
  "cbh_model",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_command"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "cbh_model",
  "mutants",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_config"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "cbh_command",
  "mutants",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_detect"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyspawn",
  "cbh_model",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_diag"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "mutants",
  "testing",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_engines"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_git"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "cbh_model",
  "futures",
@@ -803,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_model"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "criterion",
  "jiff",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_probe"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "cbh_git",
  "cbh_model",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_render"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "cbh_detect",
  "cbh_model",
@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_stats"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "criterion",
  "mutants",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_storage"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -1020,7 +1020,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "crp_diag"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1225,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "crp_native"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "command-group",
  "criterion",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "crp_publication"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "crp-publication-test-helper",
  "crp_diag",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "crp_versioning"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "criterion",
  "crp_diag",
@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "crp_workspace"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "criterion",
  "crp_diag",
@@ -1514,7 +1514,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2654,7 +2654,7 @@ dependencies = [
 
 [[package]]
 name = "nm"
-version = "0.1.52"
+version = "0.1.53"
 dependencies = [
  "nm_impl",
  "static_assertions",
@@ -2663,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "nm_impl"
-version = "0.1.52"
+version = "0.1.53"
 dependencies = [
  "criterion",
  "fast_time",
@@ -2680,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "nm",
  "nm_otel_impl",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -3182,7 +3182,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3487,7 +3487,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3544,7 +3544,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3915,7 +3915,7 @@ dependencies = [
  "fastrand",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4500,7 +4500,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vicinal"
-version = "0.1.43"
+version = "0.1.44"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -4675,7 +4675,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
