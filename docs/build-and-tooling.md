@@ -182,6 +182,17 @@ compiled native helper merely to launch tests with a scoped environment. It forw
 literal test arguments and exit status and retains unrelated environment, including
 the runtime library search path.
 
+Merged doctests retain rustdoc's per-example process isolation. The runner sets
+`RUSTDOC_DOCTEST_BIN_PATH` to the executable it launches: the pinned
+[rustdoc invocation](https://github.com/rust-lang/rust/blob/bc2112ed56c99fa649e09ab3ab286afab3d9059a/src/librustdoc/doctest.rs)
+omits that variable when a custom run tool is configured. The generated
+[merged harness](https://github.com/rust-lang/rust/blob/bc2112ed56c99fa649e09ab3ab286afab3d9059a/src/librustdoc/doctest/runner.rs)
+consumes it and dispatches each example in a fresh child process, inheriting the
+restored compiler environment. Ordinary test executables do not consume this
+rustdoc-specific variable. This preserves merged compilation and instrumentation
+without sharing metrics registries or other process-global state between examples.
+Serial execution alone does not provide that isolation.
+
 ### Mutation target selection
 
 `just mutants` selects Cargo library unit-test targets with `--lib`.

@@ -23,6 +23,10 @@ $start = [Diagnostics.ProcessStartInfo]::new()
 $start.FileName = $Executable
 $start.WorkingDirectory = (Get-Location).ProviderPath
 $start.UseShellExecute = $false
+# Rustdoc omits this dispatch variable for custom runners. Its merged harness needs it to
+# spawn each example separately; ordinary test executables ignore it. See "Careful test
+# execution" in docs/build-and-tooling.md for the pinned rustdoc protocol.
+$start.Environment['RUSTDOC_DOCTEST_BIN_PATH'] = $Executable
 foreach ($argument in $TestArguments) { $start.ArgumentList.Add($argument) }
 foreach ($name in @('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTDOCFLAGS', 'CARGO_ENCODED_RUSTDOCFLAGS')) {
     if (-not $flags.ContainsKey($name)) { throw "Missing captured compiler environment: $name" }
