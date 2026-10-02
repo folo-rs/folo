@@ -133,6 +133,9 @@ impl<T: 'static> BoxedLocalReceiver<T> {
     ///     println!("Received message: {message}");
     /// }
     /// ```
+    // Keep result conversion in the caller's hot path. See docs/implementation.md,
+    // "Endpoint wrapper inlining".
+    #[inline]
     pub fn into_value(self) -> Result<T, IntoValueError<Self>> {
         match self.inner.into_value() {
             Ok(value) => Ok(value),

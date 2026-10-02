@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.40"
+version = "0.5.41"
 dependencies = [
  "criterion",
  "futures",
@@ -4500,7 +4500,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vicinal"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "all_the_time",
  "alloc_tracker",

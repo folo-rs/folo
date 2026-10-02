@@ -564,9 +564,11 @@ fn baseline_guidance(reason: UnjudgedReason) -> Option<&'static str> {
              after merge.",
         ),
         UnjudgedReason::CurrentBaseRegimeUnresolved => Some(
-            "collect more comparable base-branch measurements to establish the recent level. \
-             Older measurements or merely meeting the count minimum do not establish that level; \
-             there is no fixed number of additional runs that guarantees a comparison.",
+            "collect comparable measurements on additional distinct base-branch commits to \
+             establish the recent level. Rerunning the same PR or base commit does not add \
+             distinct base commits. Older measurements or merely meeting the count minimum \
+             do not establish that level; no fixed number of additional base commits \
+             guarantees a comparison.",
         ),
         UnjudgedReason::NotMeasuredOnBranch => Some(
             "collect this benchmark at the analyzed context commit in the selected partition; \
@@ -1836,7 +1838,9 @@ mod tests {
                 .count(),
             1
         );
-        assert!(reporter.contains("no fixed number of additional runs"));
+        assert!(reporter.contains("measurements on additional distinct base-branch commits"));
+        assert!(reporter.contains("Rerunning the same PR or base commit does not add"));
+        assert!(reporter.contains("no fixed number of additional base commits"));
     }
 
     #[test]

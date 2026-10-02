@@ -64,7 +64,7 @@ event-listener = { version = "5.4.0", default-features = false, features = [
     "std",
 ] }
 events = { version = "0.7.19", path = "packages/events", default-features = false }
-events_once = { version = "0.5.40", path = "packages/events_once", default-features = false }
+events_once = { version = "0.5.41", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0.5", default-features = false }
 fast_time = { version = "0.1.33", path = "packages/fast_time", default-features = false }
 flate2 = { version = "1.1.10", default-features = false }
@@ -158,7 +158,7 @@ toml = { version = "1.1.2", default-features = false }
 toml_edit = { version = "0.25.12", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
-vicinal = { version = "0.1.44", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.1.45", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 zip = { version = "8.6.0", default-features = false }
 
