@@ -410,6 +410,13 @@ flapping as partial uploads arrive. The gate keys off "every expected upload suc
 legitimately skipped", never off a hardcoded upload count, because the Azure upload is
 conditional; when no coverage landed at all, it releases nothing.
 
+Codecov operations trust the upstream action and HTTPS CLI distribution without
+additional signature or checksum verification. This avoids intermittent verification-key
+import failures across coverage uploads, test-result uploads and notification release.
+Required operations still fail on uploader errors, and coverage targets remain enforced.
+See the [Codecov triage guidance](../../docs/triage.md#codecov-verification-key-import-failures)
+for the tracked failure and troubleshooting.
+
 ## Azure backend testing
 
 The `cargo-bench-history` Azure storage backend is validated in layers of increasing

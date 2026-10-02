@@ -416,6 +416,11 @@ jobs:
         if: ${{ !cancelled() && steps.coverage.outputs.report == 'true' }}
         uses: codecov/codecov-action@v7
         with:
+          # Skip signature/checksum verification to avoid intermittent GPG key-import failures.
+          # Ref: .github/workflows/design.md#coverage-reporting.
+          # https://github.com/folo-rs/folo/issues/722
+          # https://github.com/codecov/codecov-action/issues/1876
+          skip_validation: true
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           fail_ci_if_error: true
@@ -424,6 +429,11 @@ jobs:
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v7
         with:
+          # Skip signature/checksum verification to avoid intermittent GPG key-import failures.
+          # Ref: .github/workflows/design.md#coverage-reporting.
+          # https://github.com/folo-rs/folo/issues/722
+          # https://github.com/codecov/codecov-action/issues/1876
+          skip_validation: true
           token: ${{ secrets.CODECOV_TOKEN }}
           files: target/nextest/default/junit.xml
           flags: ${{ matrix.platform }}
@@ -509,6 +519,11 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
+          # Skip signature/checksum verification to avoid intermittent GPG key-import failures.
+          # Ref: .github/workflows/design.md#coverage-reporting.
+          # https://github.com/folo-rs/folo/issues/722
+          # https://github.com/codecov/codecov-action/issues/1876
+          skip_validation: true
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           flags: azure
@@ -639,6 +654,11 @@ jobs:
       - name: Release Codecov coverage notifications
         uses: codecov/codecov-action@v7
         with:
+          # Skip signature/checksum verification to avoid intermittent GPG key-import failures.
+          # Ref: .github/workflows/design.md#coverage-reporting.
+          # https://github.com/folo-rs/folo/issues/722
+          # https://github.com/codecov/codecov-action/issues/1876
+          skip_validation: true
           token: ${{ secrets.CODECOV_TOKEN }}
           run_command: send-notifications
           fail_ci_if_error: true

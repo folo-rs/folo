@@ -263,6 +263,11 @@ jobs:
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v7
         with:
+          # Skip signature/checksum verification to avoid intermittent GPG key-import failures.
+          # Ref: .github/workflows/design.md#coverage-reporting.
+          # https://github.com/folo-rs/folo/issues/722
+          # https://github.com/codecov/codecov-action/issues/1876
+          skip_validation: true
           token: ${{ secrets.CODECOV_TOKEN }}
           files: target/nextest/default/junit.xml
           flags: ${{ matrix.platform }}
