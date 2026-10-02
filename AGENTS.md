@@ -348,8 +348,9 @@ values); adding a new async primitive that needs a reentrancy contract.
 ### [docs/impl-crate-split.md](docs/impl-crate-split.md)
 
 The `_impl` crate split pattern for exposing internal surface to in-workspace
-benches and tests: when to apply it, the `private-test-util` Cargo feature
-naming rule, doctest-cycle dev-dependencies, lockstep versioning, how a
+benches and tests: when to apply it, plain `pub` as the default and
+`private-test-util` only for justified production-compilation exclusions (not
+additional hiding), doctest-cycle dev-dependencies, lockstep versioning, how a
 private-use `*-core` package acts as an impl crate with no separate shell, and
 how the split differs from the in-crate `__private` macro-visibility convention.
 

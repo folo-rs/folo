@@ -43,3 +43,44 @@ private to the responsibility that owns their context, while component failures 
 as sources. The shell can therefore convert the aggregate into `ohno::AppError` without exposing
 an internal taxonomy or losing causal diagnostics. The boundary follows the workspace
 [error-handling guide](../../../docs/error-handling.md).
+
+## Preparation benchmarks
+
+`cbh_analyze_preparation` measures preparation without running detection or rendering.
+The candidate workload calls the production filter on an already-listed project's keys,
+separating selection from storage access and diagnostic timing. Each repeated batch contains
+selected clean and dirty runs, a machine-relaxed clean sibling, and exclusions for machine,
+engine, target triple, malformed key and non-JSON suffix. Only the number of batches varies.
+Both Criterion and Callgrind use this workload.
+
+The folding workload supplies uncompressed JSON through `MemoryStorage` and explicit topology
+to the production chunked loader. Its synchronous spawner executes every task inline: varying
+worker capacity measures partitioning and recombination, not parallel throughput. It includes
+UTF-8/JSON parsing, series accumulation, run tallies and admission flags, plus the fake's key
+validation, sorted-map lookup, locking and byte copy. Those fixture costs are not a proxy for
+real storage performance; compression, real adapters and topology discovery are absent.
+The returned builder is not finished in measurement, keeping the workload focused on streaming
+folding rather than the detector's series-finalization workload.
+
+History length and benchmark population scale independently from a shared low case. Machine
+partitions, clean/dirty observations and metric count stay fixed. The uneven multi-worker
+case splits a commit's observations between partial results, exercising overlapping tally and
+series merges. Setup checks the selected key identities, per-set and per-commit counts, dirty
+exceptions and every resulting point's topology, provenance, ordinal and value. Fixture
+construction and input cloning are outside measurement, and both harnesses consume the complete
+results rather than only their sizes.
+
+Folding intentionally has no Callgrind counterpart: the production series builder uses
+randomized hash tables for commit interning and series grouping, making instruction counts
+vary on unchanged source. Benchmark access must not substitute a different hashing policy or
+alter storage/detection semantics to manufacture deterministic counts.
+
+The `private-test-util` feature is a compilation boundary, not an API-hiding mechanism.
+It excludes the shared synthetic-history generation and full output-verification machinery
+from ordinary library builds, including the generic loader's in-memory specialization.
+These fixtures require the detector/storage private features to compile; ungating them
+would require enabling those features on production dependencies as well, compiling the
+detector's synthetic-example catalogue and the in-memory storage implementation.
+The application shell does not forward the feature. Production selection and folding remain
+unconditionally compiled; lightweight access to existing implementation items alone would
+not justify a gate under the [workspace guidance](../../../docs/impl-crate-split.md#internal-only-testbench-helpers-private-test-util).

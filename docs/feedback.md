@@ -67,6 +67,11 @@ keep making*, not a replacement for the rules.
   a `reason` is cleaner than scattering `#[non_exhaustive]` on every type.
 * **Prefer `pub(crate)` for genuinely internal items.** Promote to `pub` only when
   something outside the crate truly needs it.
+* **Do not use private features as another hiding layer.** Lightweight test/bench
+  access in a private implementation crate normally needs only `pub`.
+  `private-test-util` must exclude code with a concrete production-compilation
+  concern, not merely mark unsupported API. Follow the
+  [implementation-crate guidance](impl-crate-split.md#internal-only-testbench-helpers-private-test-util).
 
 ## Code style
 

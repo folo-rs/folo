@@ -232,6 +232,24 @@ pub(crate) async fn list_candidates<S: Storage>(
     reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
     reporter.note_with(|| format!("storage returned {}", count_noun(keys.len(), "object key")));
 
+    Ok(filter_candidates(
+        keys,
+        discriminants,
+        collect_siblings,
+        reporter,
+    ))
+}
+
+/// Partitions an already-listed project's keys without storage access or stage timing.
+///
+/// Keeping this computation separate lets preparation benchmarks measure the same
+/// admission policy as queries without measuring an adapter or diagnostic clock.
+pub(crate) fn filter_candidates(
+    keys: Vec<String>,
+    discriminants: &DiscriminantSetQuery,
+    collect_siblings: bool,
+    reporter: &dyn Reporter,
+) -> CandidateListing {
     // Sibling discovery keeps the engine and target-triple filters but relaxes the
     // machine key, so a run under any machine key that shares the comparable axes can
     // surface as a potential newer base-side observation.
@@ -297,7 +315,7 @@ pub(crate) async fn list_candidates<S: Storage>(
             )
         });
     }
-    Ok(CandidateListing { selected, siblings })
+    CandidateListing { selected, siblings }
 }
 
 /// How many stored objects to fetch concurrently while loading a data set.
