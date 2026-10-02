@@ -23,10 +23,9 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::*;
-
-#[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig, main};
+#[cfg(target_os = "linux")]
+pub use linux::*;
 
 #[cfg(target_os = "linux")]
 main!(

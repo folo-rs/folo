@@ -4,7 +4,7 @@
 name = "cbh_render"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.23"
+version = "0.2.24"
 
 authors.workspace = true
 edition.workspace = true
@@ -36,19 +36,39 @@ private-api = true
 # This is an implementation crate whose surface is documented on `cargo-bench-history`.
 doc = false
 
+[features]
+# Shared in-workspace benchmark fixtures, never forwarded by the application shell.
+# Ref: docs/impl-crate-split.md.
+private-test-util = ["dep:nonempty"]
+
 [dependencies]
 cbh_detect = { workspace = true }
 cbh_model = { workspace = true }
 colored = { workspace = true }
+nonempty = { workspace = true, optional = true }
 rasciigraph = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 mutants = { workspace = true }
 nonempty = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
+[[bench]]
+name = "cbh_render_reports"
+harness = false
+required-features = ["private-test-util"]
+
+[[bench]]
+name = "cbh_render_reports_cg"
+harness = false
+required-features = ["private-test-util"]
 
 [lints]
 workspace = true
