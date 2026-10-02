@@ -3,6 +3,7 @@
 
 # Exercises the real `just careful` Cargo runner with an owned native child. The runner must
 # restore original compiler settings without changing argv, unrelated environment or failures.
+# Real merged rustdoc examples also require separate processes, including with serial execution.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -12,6 +13,11 @@ BeforeAll {
     $script:probe = Join-Path $TestDrive $(if ($IsWindows) { 'probe.exe' } else { 'probe' })
     & rustc --edition=2024 -D warnings --crate-name careful_probe `
         (Join-Path $PSScriptRoot 'fixtures\careful\probe.rs') -o $probe
+
+    $script:doctestSource = Join-Path $PSScriptRoot 'fixtures\careful\doctests.rs'
+    $script:doctestLibrary = Join-Path $TestDrive 'libcareful_doctests.rlib'
+    & rustc "+$env:RUST_NIGHTLY" --edition=2024 -D warnings --cfg careful `
+        --crate-name careful_doctests --crate-type lib $doctestSource -o $doctestLibrary
 
     function Invoke-CarefulRunnerProbe {
         param(
@@ -88,5 +94,44 @@ Describe 'Careful test runner' {
         $result = Invoke-CarefulRunnerProbe -Flags @{ RUSTFLAGS = $null }
         $result.Code | Should -Not -Be 0
         $result.Output | Should -BeNullOrEmpty
+    }
+
+    It 'isolates merged doctests with <Threads> test threads and restores nested-build flags' -ForEach @(
+        @{ Threads = 1 }
+        @{ Threads = 2 }
+    ) {
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = (Get-Command rustdoc -CommandType Application | Select-Object -First 1).Source
+        $start.UseShellExecute = $false
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        foreach ($argument in @("+$env:RUST_NIGHTLY", '--test', '--edition=2024', '-Dwarnings',
+                '--cfg=careful', '-Zunstable-options', '--merge-doctests=yes',
+                "--extern=careful_doctests=$doctestLibrary", "--test-args=--test-threads=$Threads",
+                '--test-runtool=pwsh', '--test-runtool-arg=-NoLogo', '--test-runtool-arg=-NoProfile',
+                '--test-runtool-arg=-NonInteractive', '--test-runtool-arg=-File',
+                "--test-runtool-arg=$runner", $doctestSource)) {
+            $start.ArgumentList.Add($argument)
+        }
+        $flags = @{}
+        foreach ($name in @('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTDOCFLAGS', 'CARGO_ENCODED_RUSTDOCFLAGS')) {
+            $flags[$name] = $null
+            $start.Environment[$name] = '--cfg=careful'
+        }
+        $start.Environment['FOLO_CAREFUL_BUILD_FLAGS'] = $flags | ConvertTo-Json -Compress
+        $null = $start.Environment.Remove('RUSTDOC_DOCTEST_BIN_PATH')
+        $null = $start.Environment.Remove('RUSTDOC_DOCTEST_RUN_NB_TEST')
+        $process = [Diagnostics.Process]::new()
+        $process.StartInfo = $start
+        try {
+            $null = $process.Start()
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            $output = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
+            $process.ExitCode | Should -Be 0 -Because $output
+            $output | Should -Match '2 passed; 0 failed'
+            $output | Should -Not -Match 'WARNING:'
+        } finally { $process.Dispose() }
     }
 }
