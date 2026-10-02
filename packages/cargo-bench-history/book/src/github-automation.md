@@ -53,6 +53,9 @@ repository variables from the same output:
 
 These are identifiers, not secrets. The workflows use short-lived identity tokens
 to authenticate; you do not need a stored credential or an `azure/login` step.
+GitHub token requests retry transient service and connection failures with bounded backoff.
+Authentication and permission rejections are not retried, and exhausting retries reports a
+failure without switching credentials.
 
 ## 2. Add the history workflow
 

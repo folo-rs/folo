@@ -335,6 +335,11 @@ The two backends:
   handshake per object (and exhausting ephemeral ports); the transport keeps automatic
   decompression off, since the storage layer inflates gzip itself.
 
+GitHub OIDC acquisition retries transient issuer and transport failures with bounded backoff.
+Non-transient authentication or permission rejection fails immediately; retry exhaustion remains
+an explicit authentication failure, never a reason to switch credentials. Token-request
+credentials and returned tokens are excluded from diagnostics.
+
 The Azure backend is exercised in CI two complementary ways: against the **Azurite
 emulator** (the default, fork-safe path — Azurite has no real Entra, so it runs in a
 signature-free OAuth mode over HTTPS behind a throwaway certificate, with a faked token and

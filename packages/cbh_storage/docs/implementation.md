@@ -36,3 +36,20 @@ serialization within a test binary; concurrent processes and jobs can use the sa
 without sharing test data or cleanup targets.
 The `bh-it-` prefix keeps real-Azure containers discoverable by the infrastructure's
 leftover-container cleanup script.
+
+## GitHub OIDC acquisition
+
+GitHub assertion acquisition owns a finite retry budget independently of Azure blob requests.
+It retries the Azure SDK's transient HTTP status set and connection/I/O failures, including
+interrupted successful response bodies. Short exponential waits give the issuer time to recover
+while limiting the extra delay introduced by retries. Status rejection takes precedence over
+reading an error body; token parsing and non-transient rejection do not consume retries.
+
+The adapter reuses the shared HTTP client and SDK sleep primitive, but not the SDK retry pipeline:
+that pipeline reads its own clock and can log raw transport diagnostics. A fixed delay sequence
+keeps the retry budget independent of real time, and an injected sleeper makes the complete
+acquisition policy testable in process. Exhaustion returns a credential error rather than
+delegating further transport retries to an outer policy.
+
+Diagnostics retain HTTP status or transport classification, not raw URLs, request headers,
+response bodies or transport/parser error sources that could quote credentials.
