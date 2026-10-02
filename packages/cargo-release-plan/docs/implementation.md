@@ -568,7 +568,13 @@ then follows in-workspace path dependencies to a fixed point while honoring
 same Git repository; their workspace-relative parent components are retained
 while Git access remains repository-relative. A non-virtual root is always a
 member. Parsed manifests are cached per commit because anchor resolution and
-content comparison revisit the same snapshots across packages.
+content comparison revisit the same snapshots across packages and preview passes.
+Reuse is scoped to one operation and bound to the repository, workspace location,
+probed path-case rules and registry interpretation. Committed lockfiles share that
+cache lifetime; candidate metadata, contents and lockfiles, history-ref resolution
+and drift checks are reacquired on each pass.
+Historical manifests are read by recorded blob identity in a batch; text decoding
+and parsing remain demand-driven so unrelated manifests do not affect membership.
 
 Each snapshot resolves the package fields that may inherit from
 `[workspace.package]` and the path dependencies inherited through
@@ -898,7 +904,9 @@ version consequences and captured file contents are unchanged. Library tests
 drive successive resolver outputs through this same loop, including changing
 files with unchanged version decisions, before any final evidence verification.
 The loop returns the stable artifacts; the callback retains that pass's
-classification in the caller for report emission.
+classification in the caller for both readiness validation and report emission.
+No resolver or candidate edit occurs between those consumers. Original source/history
+and retained candidate verification still guard publication of the completed plan.
 
 Cycle history retains a Git object digest for each complete version/artifact
 state rather than retaining serialized lockfiles and manifests for every pass.

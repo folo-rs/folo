@@ -12,6 +12,47 @@ use tempfile::tempdir;
 
 use crate::git_fixture as testing;
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads real Git blobs through concurrent subprocess pipes"
+)]
+fn blob_batches_preserve_bytes_and_drain_output_while_sending_large_requests() {
+    crate::with_io_test(|| {
+        let fixture = testing::Repository::new();
+        // Both directions exceed pipe capacity so a write-all-before-read adapter deadlocks.
+        let bytes = b"binary\0\xff\n".repeat(8192);
+        fixture.write("space [literal]/Cargo.toml", &bytes);
+        fixture.write("empty", b"");
+        fixture.command(&["add", "-A"]);
+        fixture.command(&["commit", "--quiet", "-m", "blob batch"]);
+        let git = fixture.repo();
+        let id = fixture.command(&["rev-parse", "HEAD:space [literal]/Cargo.toml"]);
+        let id = id.trim();
+        let empty = fixture.command(&["rev-parse", "HEAD:empty"]);
+        let empty = empty.trim();
+        let mut ids = vec![empty; 4096];
+        ids.insert(0, id);
+        ids.push(id);
+        let actual = git.show_blob_batch(&ids).unwrap();
+        assert_eq!(actual.len(), ids.len());
+        assert_eq!(actual.first().unwrap(), &bytes);
+        assert_eq!(actual.last().unwrap(), &bytes);
+        assert!(
+            actual
+                .get(1..actual.len() - 1)
+                .unwrap()
+                .iter()
+                .all(Vec::is_empty)
+        );
+        assert!(git.show_blob_batch(&[]).unwrap().is_empty());
+        let missing = "0".repeat(id.len());
+        git.show_blob_batch(&[&missing]).unwrap_err();
+        let tree = fixture.command(&["rev-parse", "HEAD:"]);
+        git.show_blob_batch(&[tree.trim()]).unwrap_err();
+    });
+}
+
 /// An empty pathspec list never reaches Git.
 ///
 /// `git ls-files` with no pathspec lists the whole repository, which would report executable

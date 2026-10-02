@@ -23,6 +23,9 @@ use crate::{
     UnresolvedRevisionError,
 };
 
+mod blob_batch;
+pub use blob_batch::decode_blob_batch;
+
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
 
@@ -500,6 +503,13 @@ impl GitRepo {
         run_capture_bytes("git", &["cat-file", "blob", id], &self.root)
     }
 
+    /// Reads recorded blob identities in one subprocess, without interpreting their bytes.
+    // Native adapter; blob_batch validates request/response framing independently of Git.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn show_blob_batch(&self, ids: &[&str]) -> Result<Vec<Vec<u8>>, AppError> {
+        blob_batch::read(ids, &self.root)
+    }
+
     /// Every path at `commit`, used to reconstruct historical package metadata.
     // Native tree query with the separately unit-tested lossless path decoder.
     #[cfg_attr(test, mutants::skip)]
@@ -568,7 +578,8 @@ fn retain_manifest_commits(all: Vec<String>, stdout: &str) -> Vec<String> {
         .collect()
 }
 
-fn decode_file(
+/// Interprets optional manifest bytes without replacing invalid UTF-8.
+pub fn decode_file(
     bytes: Option<Vec<u8>>,
     commit: &str,
     path: &str,

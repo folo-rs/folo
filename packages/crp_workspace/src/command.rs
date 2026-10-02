@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::thread;
 
 use ohno::{AppError, OhnoCore};
 
@@ -85,6 +86,19 @@ pub fn run_capture_input(
     bytes: &[u8],
     cwd: &Path,
 ) -> Result<String, CommandError> {
+    run_capture_input_bytes(program, args, bytes, cwd)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Sends captured input while draining both output streams, preserving binary stdout.
+// Pipe lifetimes require native boundary tests, including input/output larger than pipe buffers.
+#[cfg_attr(test, mutants::skip)]
+pub fn run_capture_input_bytes(
+    program: &str,
+    args: &[&str],
+    bytes: &[u8],
+    cwd: &Path,
+) -> Result<Vec<u8>, CommandError> {
     let mut child = Command::new(program)
         .args(args)
         .current_dir(subprocess_cwd(cwd))
@@ -95,16 +109,24 @@ pub fn run_capture_input(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| CommandIoError::caused_by(program, error))?;
-    child
+    let mut stdin = child
         .stdin
         .take()
-        .expect("the child was started with a piped standard input")
-        .write_all(bytes)
-        .map_err(|error| CommandIoError::caused_by(program, error))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| CommandIoError::caused_by(program, error))?;
-    captured_output(program, output).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .expect("the child was started with a piped standard input");
+    // A batch consumer can fill stdout before consuming all stdin. Feed it concurrently with
+    // wait_with_output, which drains stdout/stderr; always close input and reap the child.
+    thread::scope(|scope| {
+        let writer = scope.spawn(move || stdin.write_all(bytes));
+        let output = child.wait_with_output();
+        let written = writer
+            .join()
+            .expect("writing a captured byte slice does not execute callbacks or panic");
+        let output = output.map_err(|error| CommandIoError::caused_by(program, error))?;
+        // Prefer the child's diagnostic over a broken pipe caused by its unsuccessful exit.
+        let output = captured_output(program, output)?;
+        written.map_err(|error| CommandIoError::caused_by(program, error))?;
+        Ok(output)
+    })
 }
 
 /// Runs `program` with `args` in `cwd` and returns UTF-8 stdout on success.

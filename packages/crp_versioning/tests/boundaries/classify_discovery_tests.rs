@@ -5,6 +5,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
+use crp_diag::{Discard, Verbose};
 use crp_versioning::classify::*;
 use crp_workspace::git::{GitRepo, WorkTreeModes};
 use crp_workspace::manifest::{PathCase, WorkspaceInherit, parse_package_manifest};
@@ -12,6 +13,39 @@ use crp_workspace::metadata::WorkPackage;
 use crp_workspace::packaging::PackagingRules;
 
 use crate::git_fixture::Repository;
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "classifies real Git history with offline Cargo metadata"
+)]
+fn historical_manifest_batches_decode_only_selected_members() {
+    let fixture = Repository::new();
+    fixture.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['member space']\nresolver='3'\n",
+    );
+    fixture.write(
+        "member space/Cargo.toml",
+        b"[package]\nname='member'\nversion='1.0.0'\nedition='2024'\n",
+    );
+    fixture.write("member space/src/lib.rs", b"pub fn value() {}\n");
+    fixture.write("unrelated/Cargo.toml", b"\xff invalid UTF-8 and TOML");
+    fixture.command(&["add", "-A"]);
+    fixture.command(&["commit", "--quiet", "-m", "historical manifests"]);
+    let manifest = fixture.path().join("Cargo.toml");
+    let initial = classify(&manifest, Some("HEAD"), Verbose::new(false, &Discard)).unwrap();
+    assert_eq!(initial.packages.len(), 1);
+    assert_eq!(
+        initial.packages.first().unwrap().status(),
+        PackageStatus::Unchanged
+    );
+    fixture.write("member space/src/lib.rs", b"pub fn changed() {}\n");
+    let changed = classify(&manifest, Some("HEAD"), Verbose::new(false, &Discard)).unwrap();
+    let changed = changed.packages.first().unwrap();
+    assert_eq!(changed.status(), PackageStatus::NeedsIncrement);
+    assert!(!changed.patch().is_empty());
+}
 
 #[test]
 #[cfg_attr(miri, ignore = "uses real filesystem metadata and a Git index")]

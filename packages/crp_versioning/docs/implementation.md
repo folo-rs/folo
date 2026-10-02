@@ -89,6 +89,11 @@ Released-content comparison consumes acquired archive paths, object identities a
 It requests bytes lazily only for content changes, independently of mode-only changes.
 Historical member discovery reads recorded paths through the same cache and membership
 logic whether observations come from Git or an in-process fixture.
+Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by resolved commit
+and invalidated by repository, workspace, case-rule or registry-context changes.
+Candidate observations and lockfiles are never retained across passes, and history refs
+are still resolved and verified. The converged classification supplies both the final
+readiness verdict and report, followed by the original source and candidate checks.
 
 Captured-source traversal, artifact admission and prospective evidence ownership use
 injected observations and effects. This keeps transitive membership, original/final

@@ -104,6 +104,20 @@ fn check_workspace(
     packaging_warnings: impl FnOnce(&Classification) -> String,
 ) -> Result<(bool, String, String), AppError> {
     let classification = classify()?;
+    let (passed, message) = check_classification(&classification, format);
+    let warnings = if verify_packaging {
+        packaging_warnings(&classification)
+    } else {
+        String::new()
+    };
+    Ok((passed, message, warnings))
+}
+
+/// Applies all readiness rules to the same observations used to produce the report.
+pub(crate) fn check_classification(
+    classification: &Classification,
+    format: CheckFormat,
+) -> (bool, String) {
     // Every gating defect appends at least one diagnostic line, so the verdict is read back from
     // the rendered diagnostics. Recomputing it from the classification instead would let a rule
     // added to the rendering below be reported without ever failing the check.
@@ -116,12 +130,6 @@ fn check_workspace(
         &classification.work_tree.exact_dependencies,
     );
 
-    let warnings = if verify_packaging {
-        packaging_warnings(&classification)
-    } else {
-        String::new()
-    };
-
     let passed = message.is_empty();
     if !passed && let Some(target) = &classification.merge_target {
         writeln!(message,
@@ -133,7 +141,7 @@ fn check_workspace(
         message = success.to_string();
     }
 
-    Ok((passed, message, warnings))
+    (passed, message)
 }
 
 fn default_success_message(passed: bool, message: &str) -> Option<&'static str> {
@@ -601,6 +609,18 @@ mod tests {
 
     /// Stands in for whichever revision a run classified against.
     const RELEASE_HISTORY: &str = "origin/main";
+
+    #[test]
+    fn reused_classifications_apply_the_same_gating_rules_as_fresh_checks() {
+        let mut data = classification(vec![package("api", PackageStatus::NeedsIncrement, "")]);
+        assert!(!check_classification(&data, CheckFormat::Text).0);
+        data.packages = vec![package("api", PackageStatus::PendingRelease, "")];
+        let outcome = check_classification(&data, CheckFormat::Text);
+        assert!(outcome.0);
+        let (passed, message, _) =
+            check_workspace(|| Ok(data), CheckFormat::Text, false, |_| panic!()).unwrap();
+        assert_eq!(outcome, (passed, message));
+    }
 
     #[test]
     fn failed_target_assessments_retain_target_guidance_without_changing_success_output() {
