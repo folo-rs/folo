@@ -391,6 +391,8 @@ pub struct BranchSeriesTrace {
     pub available_base_commits: usize,
     /// Base levels retained after the cap and blessings.
     pub retained_base_commits: usize,
+    /// Commit of the blessing that limits usable base evidence, when present.
+    pub blessing_commit: Option<String>,
     /// Selector-lane first-parent coordinates.
     pub selector_commits: Vec<usize>,
     /// Reference-lane first-parent coordinates.

@@ -17,6 +17,12 @@ expose it in process or write the requested outcome file. It uses the
 [shared projection](../../cbh_render/docs/implementation.md), not an orchestration-specific
 mapping from findings and series coverage.
 
+Verbose branch diagnostics consume the detector's recorded preparation decisions and blessing
+provenance rather than rerunning regime selection. Each withheld series has one explanation;
+the census supplies aggregate coverage and deduplicated conditional guidance. History diagnostics
+use the shared count-based testability predicate. Neither path adds report fields or changes
+detection policy.
+
 The public command entry points own production wiring: they resolve and construct the configured
 storage, repository, diagnostics, environment, time, and task-execution capabilities before
 delegating. Their inner `*_with` orchestrators receive generic ports and explicit runtime values,
