@@ -23,6 +23,16 @@ The package is built from three layers, each with a single responsibility:
 Keeping the cores generic over the reference policy is what allows every storage strategy to
 share one state machine implementation, so a lifecycle fix applies to all of them at once.
 
+### Endpoint wrapper inlining
+
+The boxed local receiver's value-extraction wrapper has an ordinary inlining hint so its
+result conversion can stay in the caller's hot path. Cargo package selection can change
+inlining decisions even when the event source is identical, and the result-conversion boundary
+can materially affect pending-receive latency. The hint targets the thin wrapper independently
+of the state-machine core and does not guarantee a particular instruction sequence.
+Evaluate it with the paired `into_value` benchmarks and caller disassembly across build
+selections: instruction counts alone do not capture the cost of the generated data movement.
+
 ## The state machine is the single source of truth
 
 `core/state.rs` defines the states and their meaning: which fields are initialized, when the
