@@ -189,6 +189,10 @@ fn prepare_series(
         kind: series.kind,
         available_base_commits: series.base_history_count.max(series.base_window.len()),
         retained_base_commits: series.base_window.len(),
+        blessing_commit: series
+            .blessing
+            .as_ref()
+            .map(|blessing| blessing.commit.clone()),
         selector_commits,
         reference_commits,
         current_regime_start: None,
@@ -2124,6 +2128,10 @@ mod tests {
         );
         assert_eq!(detection.branch_trace.series[0].available_base_commits, 40);
         assert_eq!(detection.branch_trace.series[0].retained_base_commits, 9);
+        assert_eq!(
+            detection.branch_trace.series[0].blessing_commit.as_deref(),
+            Some("blessed-commit")
+        );
     }
 
     #[test]

@@ -1613,6 +1613,13 @@ How it surfaces (§8.7) follows what a reader needs where:
   when selecting a message.
 * **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
   and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.
+  Count shortfalls state usable evidence and the required minimum together, using points in
+  history mode and distinct base commits in branch mode. A blessing names the commit that limits
+  usable evidence. An unresolved current base regime explains why meeting the count minimum
+  does not establish a comparison. Conditional guidance is emitted once per distinct remedy,
+  not per series: backfill can fill eligible gaps only where the benchmark already existed,
+  within the same comparable partition and evidence window. It cannot manufacture a new
+  benchmark's past or promise a fixed number of runs until a comparison becomes possible.
 * An analysis with **nothing in scope** states no coverage ratio — there is nothing to take a
   ratio of — and says so in its own words instead. Where nothing was accounted for at all, the
   verdict states that nothing was analyzed rather than reporting an absence of change, which it
