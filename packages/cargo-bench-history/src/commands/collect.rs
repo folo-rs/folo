@@ -2925,7 +2925,8 @@ mod tests {
             kinds,
             vec![
                 crate::MetricKind::AllocatedBytes,
-                crate::MetricKind::AllocationCount
+                crate::MetricKind::AllocationCount,
+                crate::MetricKind::PeakOutstandingBytes
             ]
         );
     }
