@@ -127,8 +127,11 @@ public API.
 Exact leaf and field assertions belong in the defining module's unit tests.
 Integration tests and downstream packages validate the public return type,
 observable behavior, side effects, supported aggregate queries, or a deliberately
-unsupported `private-test-util` hook. Test placement never justifies making a
-leaf, constructor, field, accessor, or aggregate internal public.
+unsupported hook in a private implementation package. Such a hook does not
+automatically need `private-test-util`; apply the
+[production-compilation criterion](impl-crate-split.md#internal-only-testbench-helpers-private-test-util).
+Test placement never justifies making a leaf, constructor, field, accessor, or
+aggregate internal part of the supported public API.
 
 Further rules:
 

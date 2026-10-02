@@ -73,5 +73,14 @@ results rather than only their sizes.
 Folding intentionally has no Callgrind counterpart: the production series builder uses
 randomized hash tables for commit interning and series grouping, making instruction counts
 vary on unchanged source. Benchmark access must not substitute a different hashing policy or
-alter storage/detection semantics to manufacture deterministic counts. The `private-test-util`
-feature exposes only maintainer fixtures and is not forwarded by the application shell.
+alter storage/detection semantics to manufacture deterministic counts.
+
+The `private-test-util` feature is a compilation boundary, not an API-hiding mechanism.
+It excludes the shared synthetic-history generation and full output-verification machinery
+from ordinary library builds, including the generic loader's in-memory specialization.
+These fixtures require the detector/storage private features to compile; ungating them
+would require enabling those features on production dependencies as well, compiling the
+detector's synthetic-example catalogue and the in-memory storage implementation.
+The application shell does not forward the feature. Production selection and folding remain
+unconditionally compiled; lightweight access to existing implementation items alone would
+not justify a gate under the [workspace guidance](../../../docs/impl-crate-split.md#internal-only-testbench-helpers-private-test-util).

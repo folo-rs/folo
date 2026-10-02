@@ -42,8 +42,8 @@ The visibility model becomes:
   outside the crate boundary, without `#[cfg]` gates and without a Cargo
   feature to expose internal API for testing. Items that genuinely only need
   to be visible within the impl crate stay `pub(crate)` as usual.
-- The narrow exception is the **internal-only test/bench API surface** that
-  some crates expose behind a `private-test-util` Cargo feature: see
+- The narrow exception is test/bench support with a concrete reason to exclude
+  it from production compilation, using a `private-test-util` Cargo feature: see
   "Internal-only test/bench helpers (`private-test-util`)" below.
 
 `foo_impl` is published and reachable on crates.io, but documented as
@@ -145,16 +145,15 @@ twin to defer documentation to). A *published* private-use impl crate may still
 opt into those markings — to discourage external dependents on crates.io — as the
 `cbh_*` family does; nothing *forces* it to. What carries over is:
 
-- The internal-helper convention: a `private-test-util` Cargo feature (the
-  `private-*` prefix in general) that gates
-  `#[cfg(any(test, feature = "private-test-util"))]` helpers for in-workspace
-  tests and benches, exactly as described in "Internal-only test/bench helpers"
-  below. The sibling shell takes a regular dependency on the `-core` package
-  *without* the feature, so end-user builds never compile those items; the
-  shell's own tests activate it through a separate dev-dependency.
 - Plain `pub` on internal items that out-of-crate benches/tests must reach,
-  without a public feature gate, since the package is not a surface anyone is
-  expected to depend on directly.
+  without a feature gate, since the package is not a supported API surface.
+  Being used only by tests or benchmarks is not itself a reason for a Cargo
+  feature.
+- The optional compilation boundary described in "Internal-only test/bench
+  helpers" below: use `private-test-util` only when compiling the support in
+  production would be problematic, such as substantial fixture machinery or
+  additional test-only dependencies. The sibling shell omits that feature from
+  its regular dependency; its tests can activate it through a dev-dependency.
 - Lockstep versioning, **if** the shell exact-pins the `-core` package: the
   `=X.Y.Z` pin in `[workspace.dependencies]` derives their version group and
   keeps the pair from drifting apart, exactly as for a `foo`/`foo_impl` pair
@@ -207,77 +206,98 @@ differently so they do not collide.
 | Feature kind          | Naming             | Forwarded by `foo`? | Audience |
 | --------------------- | ------------------ | ------------------- | -------- |
 | Public functional or testing feature | `test-util`, `metrics`, `tokio`, etc. (whatever the public-API name is) | Yes, 1:1. `foo` declares `feature-name = ["foo_impl/feature-name"]`. | End users of `foo`. |
-| Internal-only helpers | `private-test-util` (`private-*` prefix in general) | **No.** Never forwarded by `foo`. | In-workspace dev-dependencies only. |
+| Test/bench support excluded from production compilation for a concrete reason | `private-test-util` (`private-*` prefix in general) | **No.** Never forwarded by `foo`. | Development-only in-workspace consumers. |
 
 The `private-*` prefix mirrors the workspace's existing `__private` /
 `__private_*` "logically private but mechanically public" naming convention.
 
-A package may have either kind, both, or neither. The rule is just that the
-internal-only feature must be distinguishable by name from any public-API
-feature so the shell crate can forward the right things without accidentally
-exposing the wrong ones.
+A package may have either kind, both, or neither. The private feature name
+distinguishes a development-only compilation option from an advertised feature.
+It does not add a privacy boundary to an already-private implementation API.
 
 ## Internal-only test/bench helpers (`private-test-util`)
 
-Some items only make sense in a test or benchmark context — for example,
-constructors that build a data structure from pre-assembled parts without
-going through the normal entry path, accessors that expose internal state
-for assertion, or methods that bypass an outer layer to drive a hot path
-directly. Two competing concerns apply:
+**Default to plain `pub`, not a feature gate.** A private implementation package
+already establishes that its surface is unsupported for external consumers.
+Lightweight constructors, accessors, and wrappers that let another workspace
+crate reach existing logic do not need another layer of hiding. A helper's
+test/bench audience or absence of production callers is not sufficient
+justification for `private-test-util`; an unused function does not necessarily
+survive into the linked production binary.
 
-1. They must be reachable from external benches/tests in other workspace
-   crates, which requires them to be `pub` in `foo_impl`.
-2. They are pure dead weight in production builds and should not bloat the
-   binary that real users ship.
+`private-test-util` is a **production-compilation boundary**, permitted only on
+packages whose API is private. Use it when compiling the enabled code in an
+ordinary production build would be problematic: substantial fixture generators
+or validation machinery, costly test-support dependencies, or another concrete
+compilation concern. State what the feature excludes and why that matters next
+to its declaration or in the owning implementation guide. Do not justify it
+merely with "internal-only", "for benchmarks", or "not part of the public API".
 
-The convention is to put these items directly on the type they relate to,
-gated behind a `private-test-util` Cargo feature on `foo_impl`:
+For example, a lightweight constructor can be an ordinary implementation-crate
+function:
 
 ```rust
 // in foo_impl/src/reports.rs
 
-impl Report {
-    /// Constructs a `Report` from pre-assembled parts without touching the
-    /// global event registry.
-    ///
-    /// Intended for in-workspace tests and benchmarks.
-    #[cfg(any(test, feature = "private-test-util"))]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn fake(events: Vec<EventMetrics>) -> Self {
-        Self {
-            events: events.into_boxed_slice(),
-        }
+/// Constructs a report from pre-assembled events without the global registry.
+#[must_use]
+pub fn report_from_parts(events: Vec<EventMetrics>) -> Report {
+    Report {
+        events: events.into_boxed_slice(),
     }
 }
+```
+
+Re-export it from `foo_impl`, not from the public `foo` facade. Inherent methods
+on a type re-exported by `foo` are reachable through that type too; use an
+implementation-only function when the helper must not become part of that
+facade's API. Do not introduce a feature merely to conceal an inherent method.
+
+By contrast, a shared fixture module that requires an additional test-support
+SDK can justify conditional compilation:
+
+```rust
+#[cfg(any(test, feature = "private-test-util"))]
+pub mod fixtures;
 ```
 
 ```toml
 # foo_impl/Cargo.toml
 [features]
-# Internal-only API surface for in-workspace tests and benchmarks. Never
-# forwarded by the `foo` shell crate, so end-user builds never see these
-# items.
-private-test-util = []
+# Keep the synthetic telemetry pipeline and its SDK out of production compilation.
+private-test-util = ["dep:opentelemetry_sdk"]
+
+[dependencies]
+opentelemetry_sdk = { workspace = true, optional = true }
+
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true }
 ```
 
-The `private-test-util` feature lives on `foo_impl` and is never declared on
-`foo`. The `foo` shell crate's `Cargo.toml` declares
-`foo_impl = { workspace = true }` without forwarding any private feature, so
-end users running `cargo add foo` never get these items compiled into their
-build. In-workspace consumers (`foo_otel` etc.) activate the feature on
-their own `foo_impl` dev-dependency:
+An empty `private-test-util = []` is also valid when the implementation itself
+justifies exclusion without an optional dependency. The empty feature is not a
+default requirement for exposing helpers.
+
+The feature lives on `foo_impl`, never on `foo`. The shell's regular dependency
+does not enable it, so ordinary production builds omit the gated support.
+In-workspace consumers activate it on their `foo_impl` dev-dependency:
 
 ```toml
 [dev-dependencies]
 foo_impl = { path = "../foo_impl", features = ["private-test-util"] }
 ```
 
+Maintainer-only tools, such as documentation-figure generators, may enable it on
+regular dependencies because those tools are not part of production builds.
+Private implementation packages may forward sibling private features through
+their own justified `private-test-util` gate when their gated support needs them;
+the public facade still must not forward it.
+
 Cargo's feature unification then makes the gated items available across the
-workspace's test/bench build graph. The
-`cfg(any(test, feature = "private-test-util"))` form means `foo_impl`'s own
-unit tests automatically see the items without anyone needing to opt the
-workspace into the feature.
+workspace's test/bench build graph. With the required dev-dependency mirror for
+each optional dependency, `cfg(any(test, feature = "private-test-util"))` also
+makes the items available to `foo_impl`'s own unit tests without explicitly
+enabling the feature. Follow [feature flags](feature-flags.md) for that wiring.
 
 If `foo_impl`'s own benches use the feature-gated items, add
 `required-features = ["private-test-util"]` to those bench entries so Cargo
@@ -290,23 +310,10 @@ harness = false
 required-features = ["private-test-util"]
 ```
 
-Call sites become natural and symmetric with the rest of the public API:
-
-```rust
-use foo::{EventMetrics, Histogram, Report};
-
-let report = Report::fake(vec![
-    EventMetrics::fake("event_a", 10, 100, None),
-    EventMetrics::fake("event_b", 20, 200, Some(Histogram::fake(...))),
-]);
-```
-
-Call sites name the types through `foo` (the public crate), not through
-`foo_impl`. Gated items declared as inherent methods on a type are reachable
-via any path that names the type — and `foo`'s re-exports expose the type,
-even though `foo` does not advertise the gated method itself. The `foo_impl`
-dev-dependency exists only to activate the `private-test-util` feature; no
-`use foo_impl::*;` import is required in test code.
+Only add `required-features` when the target actually uses justified gated
+support. Benchmarks calling ordinary `pub` implementation items require no
+private feature. Code used only by the crate's own unit tests still belongs
+behind `#[cfg(test)]`; it needs no Cargo feature.
 
 ## Public testing APIs that the shell crate exposes (`test-util`)
 
@@ -334,8 +341,8 @@ private-test-util = []   # internal only
 
 A crate may have *both* features simultaneously. They are independent: the
 public `test-util` items are advertised by `foo`'s documentation and become
-part of `foo`'s SemVer surface, while `private-test-util` items remain
-unreachable from `foo` and stay in the impl crate's internal scope.
+part of `foo`'s SemVer surface. The private feature is not advertised or
+forwarded by `foo`; it controls compilation of implementation-only support.
 
 ## How to do the split
 
@@ -380,16 +387,13 @@ unreachable from `foo` and stay in the impl crate's internal scope.
    - Declare modules and re-export items just as the original `foo` lib.rs
      did.
 
-7. Convert any internal-only API surface that already existed in `foo`
-   (typically gated behind a workspace-internal `test-util` feature) so it
-   lives in `foo_impl` instead. Add a `private-test-util = []` feature to
-   `foo_impl/Cargo.toml`. Keep the
-   `cfg(any(test, feature = "private-test-util"))` gate and the
-   `#[doc(hidden)]` attribute on each item. See "Internal-only test/bench
-   helpers (`private-test-util`)" above for the full rationale. If
-   `foo_impl`'s own benches consume these items, set
-   `required-features = ["private-test-util"]` on the affected `[[bench]]`
-   entries.
+7. Move internal-only API surface from `foo` into `foo_impl`, using ordinary
+   `pub` items that the shell does not re-export. Reassess any feature that
+   existed merely to expose those items: do not mechanically rename it to
+   `private-test-util`. Retain or introduce that gate only for a documented
+   production-compilation concern, following "Internal-only test/bench
+   helpers (`private-test-util`)" above. Only targets using such gated support
+   need `required-features = ["private-test-util"]`.
 
    If `foo` *also* has a public-API testing feature (e.g. `many_cpus`'s
    `test-util` exposing `fake::FakeHardware` for downstream user tests),
@@ -397,13 +401,10 @@ unreachable from `foo` and stay in the impl crate's internal scope.
    — see "Public testing APIs that the shell crate exposes (`test-util`)"
    above.
 
-8. Update in-workspace consumers (dev-dependencies that previously activated
-   an internal feature on `foo` to reach these items) to instead declare
-   `foo_impl = { path = "../foo_impl", features = ["private-test-util"] }`
-   as a dev-dependency. Call sites continue to name types through `foo`
-   (e.g. `use foo::Report; Report::fake(...)`); no `use foo_impl::*;` import
-   is needed because gated inherent methods are reachable via any path that
-   names the type, and `foo` re-exports the type.
+8. Update in-workspace consumers to take a path-only dev-dependency on
+   `foo_impl` and call its implementation helpers directly. Enable
+   `private-test-util` on that dependency only when they use the gated support.
+   Public API types can still be named through `foo`.
 
 9. Add `foo` itself as a dev-dependency of `foo_impl` so doctests written
     from the user's perspective (`use foo::Event;`) compile in
@@ -444,13 +445,9 @@ Concrete files to study:
   `nm_impl = { workspace = true }`.
 - `packages/nm/src/lib.rs` — preserved crate docs + explicit re-export list.
 - `packages/nm/tests/nm_reexports.rs` — re-export smoke test.
-- `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false`, the
-  `private-test-util` feature for internal helpers, and the `nm` dev-dep for
-  the doctest cycle.
+- `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false` and
+  the `nm` dev-dependency for the doctest cycle.
 - `packages/nm_impl/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root.
-- `packages/nm_impl/src/reports.rs` —
-  `#[cfg(any(test, feature = "private-test-util"))] #[doc(hidden)] pub fn fake(...)`
-  constructors on `Report`, `EventMetrics`, and `Histogram`.
 - `packages/nm_impl/README.md` — "do not depend on this directly" notice.
 - `Cargo.toml` (workspace) — the exact `nm_impl` entry in
   `[workspace.dependencies]` derives the pair's version group.
@@ -465,12 +462,9 @@ Concrete files to study:
   explicit `pub use nm_otel_impl::{Publisher, PublisherBuilder};`.
 - `packages/nm_otel/tests/nm_otel_reexports.rs` — re-export smoke test.
 - `packages/nm_otel_impl/Cargo.toml` — impl manifest with `[lib] doc = false`,
-  the `private-test-util` feature gating one-iteration publisher drivers and
-  histogram delta test state, the `nm_otel` dev-dep for the doctest cycle, and
-  the `nm_impl` dev-dep with
-  `features = ["private-test-util"]` so the impl-hosted benches can build
-  input reports via `Report::fake`. Both `[[bench]]` entries declare
-  `required-features = ["private-test-util"]`.
+  the `private-test-util` feature excluding the telemetry SDK and synthetic
+  publisher support from production compilation, and the `nm_otel`
+  dev-dependency for the doctest cycle.
 - `packages/nm_otel_impl/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root that re-exports
   the public-API subset for the shell crate plus feature-gated `EventState` for
   the alloc-tracking integration test.
@@ -505,9 +499,9 @@ Concrete files to study:
   `pub fn get_all_processors_for_bench`, and
   `pub fn affinity_mask_to_processor_ids_for_bench` wrappers on
   `BuildTargetPlatform`. These are plain `pub fn` rather than feature-gated,
-  because the entire impl crate is `#![cfg_attr(docsrs, doc(hidden))]` and "do not depend on
-  directly", so end users never see them; the `_for_bench` name suffix
-  signals the intent at the call site.
+  because the wrappers add no substantial support machinery or dependencies to
+  production compilation. The implementation crate already marks their API
+  private; the `_for_bench` name suffix signals the intent at the call site.
 - `packages/many_cpus_impl/benches/many_cpus_pal_windows.rs` — consumes those
   helpers via `use many_cpus_impl::pal::BUILD_TARGET_PLATFORM;`, bypassing
   the high-level public API to measure the PAL primitives directly.
@@ -551,15 +545,18 @@ marking discourages external dependents even though there is no re-export shell
 deferring their documentation. Concrete files to study:
 
 - `packages/cbh_detect/Cargo.toml` — declares
-  `private-test-util = ["dep:thread_aware"]` and `[lib] doc = false`.
+  `private-test-util = ["dep:thread_aware"]` and `[lib] doc = false`. The gate
+  excludes the synthetic detector-example catalogue and the custom synchronous
+  spawner's additional dependency from ordinary detector compilation.
 - `packages/cbh_detect/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root that re-exports
   every type flat from the crate root.
 - `packages/cbh_detect/src/testing.rs` — the `synchronous_spawner` helper,
-  gated `#[cfg(feature = "private-test-util")]` (feature-only rather than the
-  `any(test, …)` form used elsewhere, because the helper pulls in the optional
-  `thread_aware` dependency that only the feature enables; the crate's own test
-  that uses it is likewise feature-gated), that in-workspace tests inject in
-  place of the production Tokio spawner.
+  which in-workspace tests inject in place of the production Tokio spawner.
+- `packages/cbh_analyze/src/benchmarks.rs` — shared generated-history fixtures
+  and complete output verification, not visibility wrappers around production
+  items. Its gate excludes that machinery and avoids enabling detector/storage
+  test-support modules in ordinary analysis builds; see its
+  [implementation guide](../packages/cbh_analyze/docs/implementation.md#preparation-benchmarks).
 - `packages/cargo-bench-history/Cargo.toml` — the consuming CLI (a binary, not a
   thin re-export). Its regular `[dependencies]` omit every `private-test-util`
   feature, so the test-only surface never reaches production builds; separate
