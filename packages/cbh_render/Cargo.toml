@@ -4,7 +4,7 @@
 name = "cbh_render"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.25"
+version = "0.2.26"
 
 authors.workspace = true
 edition.workspace = true
@@ -12,6 +12,10 @@ include.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+[package.metadata.cargo-udeps.ignore]
+# The default-feature dependency check skips the private-test-util-gated benchmarks.
+development = ["criterion", "gungraun"]
 
 # Baseline of external types intentionally exposed in the public API. Any new
 # external type must be reviewed and added explicitly.
