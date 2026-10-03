@@ -37,8 +37,9 @@ parser or option-rewriting language; repeated options retain rustc's own semanti
 The composed environment applies only to measured child processes and collection's machine-key
 query, never to the companion process globally.
 
-Analysis validates full Git history, resolves the context commit and uses only the
-actual supplied machine keys. History analysis selects that commit as both context and base;
+Analysis validates full Git history and resolves the context commit. Combined workflows supply
+exact current snapshots; standalone analysis may instead supply machine-key selectors.
+History analysis selects that commit as both context and base;
 PR analysis accepts the caller's base or the core default and requires a branch-mode report.
 Platform coverage is explicit workflow evidence, never inferred from deduplicated fingerprints.
 

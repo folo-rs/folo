@@ -95,10 +95,9 @@ pub(crate) fn preparation_diagnostics(
     messages
 }
 
-/// Plans the analyzer's key-file tree using only successfully reconciled receipts.
+/// Plans the analyzer's snapshot tree using only successfully reconciled receipts.
 ///
-/// Preparation materializes these relative paths in a validated fresh directory. Measurement
-/// objects stay in configured storage rather than being copied into collection artifacts.
+/// Preparation materializes the selected measurement payloads in a validated fresh directory.
 pub(crate) fn collection_files(
     selection: &Selection,
     receipts: &[Receipt],

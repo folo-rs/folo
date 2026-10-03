@@ -2181,13 +2181,9 @@ mod tests {
     fn skipped_history_retains_fresh_snapshot_values_and_only_measured_benchmarks() {
         let storage = MemoryStorage::new();
         let key = seed_callgrind_run(&storage, false, FROZEN_UNIX);
-        let mut old: Run = serde_json::from_slice(&block_on(storage.get(&key)).unwrap()).unwrap();
-        for result in &mut old.results {
-            for metric in &mut result.metrics {
-                metric.value = 999.0;
-            }
-        }
-        let original = old.to_json().unwrap();
+        // Persistence needs only the occupied key; even unreadable historical bytes must not
+        // replace the fresh execution's values. Native integration also covers valid stale runs.
+        let original = "unrelated stored measurement payload";
         block_on(storage.put_overwrite(&key, original.as_bytes())).unwrap();
         let runner = FakeRunner::succeeding();
         let options = CollectOptions {

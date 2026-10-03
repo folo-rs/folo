@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Exact measurements captured by one collection, independent of shared storage.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(try_from = "CollectionWire")]
 pub struct CollectionSnapshot {
     version: u32,
@@ -208,7 +208,7 @@ struct CollectionWire {
 }
 
 /// One engine's measured payload, retaining the execution's full context.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CollectionRun {
     engine: Engine,
@@ -217,7 +217,7 @@ struct CollectionRun {
 }
 
 /// Strict current metrics, unlike historical runs that tolerate retired metric names.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CollectionResult {
     id: BenchmarkId,
@@ -296,6 +296,9 @@ mod tests {
         let original = snapshot();
         let decoded = CollectionSnapshot::from_slice(&original.to_json().unwrap()).unwrap();
         assert_eq!(decoded, original);
+        assert_eq!(decoded.project(), "project");
+        assert_eq!(decoded.commit(), "a".repeat(40));
+        assert_eq!(decoded.machine_key().as_str(), "0123456789abcdef");
         let (_, run) = decoded.runs().next().unwrap();
         assert_eq!(run.results[0].metrics[0].value, 123.5);
         assert_eq!(run.results[0].metrics[0].interval_high, Some(126.0));
@@ -315,8 +318,7 @@ mod tests {
         );
     }
 
-    fn reject_changes(changes: &[(&str, serde_json::Value)]) {
-        let raw = serde_json::to_value(snapshot()).unwrap();
+    fn reject_changes(raw: &serde_json::Value, changes: &[(&str, serde_json::Value)]) {
         for (pointer, value) in changes {
             let mut invalid = raw.clone();
             *invalid.pointer_mut(pointer).unwrap() = value.clone();
@@ -326,44 +328,62 @@ mod tests {
 
     #[test]
     fn rejects_corrupt_collection_header() {
-        reject_changes(&[
-            ("/version", json!(2)),
-            ("/project", json!("a/b")),
-            ("/commit", json!("bad")),
-            ("/target_triple", json!("")),
-            ("/machine_key", json!("bad")),
-        ]);
+        let mut raw = serde_json::to_value(snapshot()).unwrap();
+        // An empty execution has no run context to redundantly reject a malformed header.
+        raw["runs"] = json!([]);
+        reject_changes(
+            &raw,
+            &[
+                ("/version", json!(2)),
+                ("/project", json!("a/b")),
+                ("/commit", json!("bad")),
+                ("/target_triple", json!("")),
+                ("/target_triple", json!("a/b")),
+                ("/machine_key", json!("bad")),
+            ],
+        );
     }
 
     #[test]
     fn rejects_mismatched_or_dirty_run_context() {
-        reject_changes(&[
-            ("/runs/0/context/git/dirty", json!(true)),
-            ("/runs/0/context/git/commit", json!("b".repeat(40))),
-            ("/runs/0/context/toolchain/target_triple", json!("other")),
-            (
-                "/runs/0/context/machine/fingerprint",
-                json!("fedcba9876543210"),
-            ),
-            ("/runs/0/context/best_of", json!(null)),
-        ]);
+        reject_changes(
+            &serde_json::to_value(snapshot()).unwrap(),
+            &[
+                ("/runs/0/context/git/dirty", json!(true)),
+                ("/runs/0/context/git/commit", json!("b".repeat(40))),
+                ("/runs/0/context/toolchain/target_triple", json!("other")),
+                (
+                    "/runs/0/context/machine/fingerprint",
+                    json!("fedcba9876543210"),
+                ),
+                ("/runs/0/context/best_of", json!(null)),
+            ],
+        );
     }
 
     #[test]
     fn rejects_empty_measurements_and_unknown_metric_kinds() {
-        reject_changes(&[
-            ("/runs/0/results", json!([])),
-            ("/runs/0/results/0/metrics", json!([])),
-            ("/runs/0/results/0/metrics/0/kind", json!("future_metric")),
-        ]);
+        reject_changes(
+            &serde_json::to_value(snapshot()).unwrap(),
+            &[
+                ("/runs/0/results", json!([])),
+                ("/runs/0/results/0/metrics", json!([])),
+                ("/runs/0/results/0/metrics/0/kind", json!("future_metric")),
+            ],
+        );
     }
 
     #[test]
     fn rejects_non_hex_identity_with_correct_width() {
-        reject_changes(&[
-            ("/commit", json!("g".repeat(COMMIT_HEX_LENGTH))),
-            ("/machine_key", json!("g".repeat(MACHINE_KEY_HEX_LENGTH))),
-        ]);
+        let mut raw = serde_json::to_value(snapshot()).unwrap();
+        raw["runs"] = json!([]);
+        reject_changes(
+            &raw,
+            &[
+                ("/commit", json!("g".repeat(COMMIT_HEX_LENGTH))),
+                ("/machine_key", json!("g".repeat(MACHINE_KEY_HEX_LENGTH))),
+            ],
+        );
     }
 
     #[test]

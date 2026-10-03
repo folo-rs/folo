@@ -309,8 +309,8 @@ mod tests {
         let storage = MemoryStorage::new();
         for (triple, key) in [(LINUX, KEY), (WINDOWS, OTHER_KEY), (WINDOWS, KEY)] {
             store(&storage, &first, triple, key, 10.0);
-            store(&storage, &tip, triple, key, 900.0);
         }
+        store(&storage, &tip, WINDOWS, KEY, 900.0);
         let current = CurrentCollections::new(
             "project",
             &[
@@ -321,7 +321,7 @@ mod tests {
         .unwrap();
         // A later unrelated writer can even corrupt the exact current objects: no reread is valid.
         for (triple, key) in [(LINUX, KEY), (WINDOWS, OTHER_KEY)] {
-            let (set, _) = measured(&tip, triple, key, 1.0);
+            let set = DiscriminantSet::new(Engine::Callgrind, &triple.into(), &key.into());
             block_on(storage.put_overwrite(&set.clean_key("project", &tip), b"not JSON")).unwrap();
         }
         let selected = dataset(&git, &storage, &current);
@@ -403,6 +403,16 @@ mod tests {
         .unwrap();
         assert!(!current.admits_history(&unselected));
         assert!(current.admits_sibling(&unselected));
+        let mut other_engine = unselected.clone();
+        other_engine.set.engine = Engine::Criterion;
+        let mut other_target = unselected.clone();
+        other_target.set.target_triple = WINDOWS.into();
+        let mut current_commit = unselected;
+        current_commit.commit.clone_from(&tip);
+        for unrelated in [other_engine, other_target, current_commit] {
+            assert!(!current.admits_history(&unrelated));
+            assert!(!current.admits_sibling(&unrelated));
+        }
     }
 
     #[test]
@@ -477,6 +487,7 @@ mod tests {
             CurrentCollections::new("project", &[snapshot(&tip, LINUX, KEY, 20.0)]).unwrap();
         let options = AnalyzeOptions {
             json: Some("report.json".into()),
+            no_text: true,
             ..AnalyzeOptions::default()
         };
         let (reports, _) = block_on(analyze_with_current(
@@ -490,7 +501,7 @@ mod tests {
                 machine_key: "other".to_owned(),
             },
             "2026-01-02T00:00:00Z".parse().unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             false,
             &synchronous_spawner(),
             NonZero::<usize>::MIN,
@@ -502,5 +513,79 @@ mod tests {
         assert_eq!(report["census"]["in_scope"], 1);
         assert_eq!(report["census"]["judged"], 0);
         assert_eq!(report["outcome"], "insufficient_baseline");
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Full minimum-length stored baseline through detection and rendering; small scoped selection tests retain interpreter coverage."
+    )]
+    fn scoped_regression_is_detected_despite_clean_shared_current_data() {
+        assert_scoped_verdict(130.0, 100.0, "findings", 1);
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Full minimum-length stored baseline through detection and rendering; small scoped selection tests retain interpreter coverage."
+    )]
+    fn scoped_clean_measurement_does_not_inherit_a_shared_current_regression() {
+        assert_scoped_verdict(100.0, 130.0, "clean", 0);
+    }
+
+    fn assert_scoped_verdict(value: f64, stored: f64, outcome: &str, regressions: usize) {
+        let storage = MemoryStorage::new();
+        let mut git = FakeGitHistory::new();
+        let mut parent = None;
+        // Use the detector's minimum comparable baseline, matching pipeline branch fixtures.
+        // Flat base and clearly separated excursion values exercise production gates unchanged.
+        for index in 0..cbh_detect::MIN_SERIES_POINTS {
+            let commit = format!("{index:040x}");
+            git.commit(&commit, parent.as_deref());
+            store(&storage, &commit, LINUX, KEY, 100.0);
+            parent = Some(commit);
+        }
+        let base = parent.unwrap();
+        let tip = "f".repeat(40);
+        git.commit(&tip, Some(&base))
+            .branch("master", &base)
+            .branch("feature", &tip)
+            .head("feature")
+            .mark_default("master");
+        store(&storage, &tip, LINUX, KEY, stored);
+        let current =
+            CurrentCollections::new("project", &[snapshot(&tip, LINUX, KEY, value)]).unwrap();
+        let options = AnalyzeOptions {
+            since: Some("2020-01-01".to_owned()),
+            json: Some("report.json".into()),
+            no_text: true,
+            ..AnalyzeOptions::default()
+        };
+        let (reports, actual_regressions) = block_on(analyze_with_current(
+            &git,
+            &storage,
+            "project",
+            &Config::default(),
+            &options,
+            &AutoDiscriminants {
+                triple: "other".to_owned(),
+                machine_key: "other".to_owned(),
+            },
+            "2026-01-02T00:00:00Z".parse().unwrap(),
+            &RecordingReporter::quiet(),
+            false,
+            &synchronous_spawner(),
+            NonZero::<usize>::MIN,
+            Some(&current),
+        ))
+        .unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(reports.json.as_ref().unwrap()).unwrap();
+        assert_eq!(actual_regressions, regressions, "{report}");
+        assert_eq!(report["mode"], "branch");
+        assert_eq!(report["census"]["in_scope"], 1);
+        assert_eq!(report["census"]["judged"], 1);
+        assert_eq!(report["outcome"], outcome, "{report}");
+        assert_eq!(report["findings"].as_array().unwrap().len(), regressions);
     }
 }

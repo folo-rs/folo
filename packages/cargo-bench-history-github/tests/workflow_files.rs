@@ -8,6 +8,7 @@
 )]
 
 use std::env::consts::OS;
+#[cfg(feature = "private-test-util")]
 use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -18,9 +19,11 @@ use std::{fs, thread};
 
 #[cfg(feature = "private-test-util")]
 use cargo_bench_history_github::{__private, Cli};
+use cbh_model::CollectionSnapshot;
+#[cfg(feature = "private-test-util")]
 use cbh_model::{
-    BenchmarkResult, CollectionSnapshot, Engine, EnvironmentInfo, GitInfo, MachineInfo, Metric,
-    MetricKind, Run, RunContext, ToolchainInfo,
+    BenchmarkResult, Engine, EnvironmentInfo, GitInfo, MachineInfo, Metric, MetricKind, Run,
+    RunContext, ToolchainInfo,
 };
 #[cfg(feature = "private-test-util")]
 use clap::Parser as _;

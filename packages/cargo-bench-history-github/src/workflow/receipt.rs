@@ -107,7 +107,7 @@ pub(crate) struct InvalidReceipt;
 #[display("Machine key must contain exactly 16 hexadecimal digits")]
 pub(crate) struct InvalidMachineKey;
 
-/// Platform identifiers also name machine-key files, not arbitrary relative paths.
+/// Platform identifiers also name snapshot directories, not arbitrary relative paths.
 #[ohno::error]
 #[display("Collection platform must be a nonempty ASCII matrix identifier, not a path")]
 pub(crate) struct InvalidCollectionPlatform;
