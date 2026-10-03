@@ -4,6 +4,16 @@ Tracking notes for follow-up work that is intentionally deferred. Each entry
 should describe the task, the trigger condition that makes it actionable, and
 links to the relevant code.
 
+## Consider filter-safe cross-package classification hashing
+
+Classification shares eligible fresh Git listings but keeps per-package
+[`hash_objects`](packages/crp_workspace/src/git.rs) boundaries. Coalescing hashes is
+deferred: the existing effective-attribute gate for mode sharing would need to cover
+hash-process coalescing while preserving built-in normalization, per-package
+symlink admission and ordering for ineligible requests. Revisit only when further
+hash-process elimination justifies this extra acquisition and eligibility model;
+do not infer safety from checked-in `.gitattributes` or presumed filter statelessness.
+
 ## Reorder bench-history object-key segments to `triple/machine/engine`
 
 `cargo-bench-history` keys stored objects as

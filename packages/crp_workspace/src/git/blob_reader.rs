@@ -13,7 +13,7 @@ use crate::git::blob_batch::InvalidBlobBatch;
 /// A modest buffer amortizes Git startup across ordinary source files without retaining a
 /// package's entire changed contents. Ref: docs/implementation.md, "Patch content acquisition".
 pub const BLOB_BATCH_BYTES: NonZero<usize> =
-    NonZero::new(1024 * 1024).expect("the fixed lookahead budget is nonzero");
+    NonZero::new(1_048_576).expect("the fixed lookahead budget is nonzero");
 
 /// Caps framing and map overhead even when payloads are empty.
 /// This is secondary to the byte budget, not a file-count admission limit.
@@ -235,6 +235,26 @@ mod tests {
     }
 
     #[test]
+    fn empty_objects_fit_after_an_exact_budget_payload() {
+        let mut reader =
+            BlobReader::new(&["a", "b"], NonZero::new(1).unwrap(), |_| Ok(vec![1, 0])).unwrap();
+        assert_eq!(
+            *reader
+                .read("a", |ids| {
+                    assert_eq!(ids, ["a", "b"]);
+                    Ok(vec![vec![1], vec![]])
+                })
+                .unwrap(),
+            [1]
+        );
+        assert!(reader.read("b", |_| panic!("retained")).unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "native-scale metadata limit; small batch tests retain scheduler coverage"
+    )]
     fn empty_payloads_still_bound_retained_metadata() {
         let ids: Vec<_> = (0..=MAX_BATCH_OBJECTS)
             .map(|index| index.to_string())

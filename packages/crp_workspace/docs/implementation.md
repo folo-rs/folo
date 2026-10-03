@@ -94,6 +94,31 @@ identities and Git interpretation context. Singleton reads bypass serialization 
 can exceed the lookahead budget. Live size acquisition still detects unavailable required
 objects before a multi-object cache hit; no missing object becomes an empty file.
 
+## Fresh classification listings
+
+Each classification pass borrows its own metadata acquisition's complete tracked listing.
+Index modes, their worktree overlay and untracked candidates are acquired over the union of
+relevant literal pathspecs, splitting arguments at the native command-line budget. Untracked
+queries do not expand to unrelated repository paths. Packages select overlapping scopes, so
+shared resources and outer/nested consumers retain independent packaging interpretation.
+
+Selection follows Git's literal component boundaries and ASCII byte case comparison, not the
+filesystem's Unicode case model. Noncanonical scopes, non-ASCII insensitive scopes, overridden
+pathspec environments and requests outside acquired scopes use the narrow native query.
+Presence, nested-manifest removal, symlink admission and packaging rules remain in their
+existing owners. Effective modes retain the index baseline followed by worktree changes.
+The observation value expires with its pass and never enters committed or persistent storage.
+
+Raw mode diffs can execute clean filters for racily clean index entries. Effective filter
+attributes are therefore acquired for the relevant tracked paths before sharing mode queries.
+If Git reports a filter attribute, the entire pass retains per-package mode-query ordering; no
+assumption about driver statelessness or configuration absence permits sharing. Attribute
+query failures propagate. This gate never executes a driver, does not widen to unrelated
+paths, and does not change the independently shared tracked and untracked listings.
+The all-attributes query distinguishes absent attributes from a driver literally named
+`unspecified`; an `unset` response conservatively retains narrow acquisition because it
+can also name a driver.
+
 ## Observation boundaries and tests
 
 Pure parsing and graph tests remain in process. Real Git/Cargo/filesystem tests

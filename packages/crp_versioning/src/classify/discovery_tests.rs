@@ -177,74 +177,86 @@ fn acquired_hashes_keep_archive_names_and_source_order() {
 }
 
 #[test]
-fn acquired_diff_distinguishes_presence_content_and_modes() {
-    for old_present in [false, true] {
-        for new_present in [false, true] {
-            for old_executable in [false, true] {
-                for new_executable in [false, true] {
-                    for same_content in [false, true] {
-                        let mut entry = tree_entry("old/file", tree_mode(old_executable));
-                        entry.id = "old-id".into();
-                        let tree =
-                            HistoricalTree::new(if old_present { vec![entry] } else { vec![] });
-                        let anchor = if old_present {
-                            HashMap::from([("file".into(), "old/file".into())])
-                        } else {
-                            HashMap::new()
-                        };
-                        // A tracked work-tree path remains selected even when deleted on disk.
-                        let work = HashMap::from([("file".into(), "new/file".into())]);
-                        let new_id = if same_content { "old-id" } else { "new-id" };
-                        let ids = if new_present {
-                            HashMap::from([("file".into(), new_id.into())])
-                        } else {
-                            HashMap::new()
-                        };
-                        let mut modes = WorkTreeModes::default();
-                        modes.set("new/file", tree_mode(new_executable));
-                        let content_changed =
-                            old_present != new_present || (old_present && !same_content);
-                        let mode_changed =
-                            old_present && new_present && old_executable != new_executable;
-                        let (changes, patch, stat) = PackageDiff {
-                            anchor_files: &anchor,
-                            work_files: &work,
-                            anchor_tree: &tree,
-                            work_modes: &modes,
-                            work_ids: &ids,
-                        }
-                        .identify()
-                        .render(|id| {
-                            assert!(content_changed);
-                            if old_present && id == "old-id" {
-                                Ok(Rc::from(b"old\n".as_slice()))
-                            } else {
-                                assert!(new_present);
-                                assert_eq!(id, new_id);
-                                Ok(Rc::from(b"new\n".as_slice()))
-                            }
-                        })
-                        .unwrap();
-                        let changed = content_changed || mode_changed;
-                        assert_eq!(changes.len(), usize::from(changed));
-                        assert_eq!(stat.files, usize::from(changed));
-                        assert_eq!(patch.contains("old mode "), mode_changed);
-                        if changed {
-                            let kind = match (old_present, new_present) {
-                                (false, true) => "added",
-                                (true, false) => "deleted",
-                                _ => "modified",
-                            };
-                            assert!(
-                                matches!(changes.first().unwrap(), ChangedItem::Package { path, change } if path == "file" && change == kind)
-                            );
-                        } else {
-                            assert!(patch.is_empty());
-                        }
-                        assert_eq!(stat.insertions, usize::from(content_changed && new_present));
-                        assert_eq!(stat.deletions, usize::from(content_changed && old_present));
-                    }
+fn acquired_diff_absent_at_both_ends() {
+    check_acquired_diff(false, false);
+}
+
+#[test]
+fn acquired_diff_added() {
+    check_acquired_diff(false, true);
+}
+
+#[test]
+fn acquired_diff_deleted() {
+    check_acquired_diff(true, false);
+}
+
+#[test]
+fn acquired_diff_present_at_both_ends() {
+    check_acquired_diff(true, true);
+}
+
+fn check_acquired_diff(old_present: bool, new_present: bool) {
+    for old_executable in [false, true] {
+        for new_executable in [false, true] {
+            for same_content in [false, true] {
+                let mut entry = tree_entry("old/file", tree_mode(old_executable));
+                entry.id = "old-id".into();
+                let tree = HistoricalTree::new(if old_present { vec![entry] } else { vec![] });
+                let anchor = if old_present {
+                    HashMap::from([("file".into(), "old/file".into())])
+                } else {
+                    HashMap::new()
+                };
+                // A tracked work-tree path remains selected even when deleted on disk.
+                let work = HashMap::from([("file".into(), "new/file".into())]);
+                let new_id = if same_content { "old-id" } else { "new-id" };
+                let ids = if new_present {
+                    HashMap::from([("file".into(), new_id.into())])
+                } else {
+                    HashMap::new()
+                };
+                let mut modes = WorkTreeModes::default();
+                modes.set("new/file", tree_mode(new_executable));
+                let content_changed = old_present != new_present || (old_present && !same_content);
+                let mode_changed = old_present && new_present && old_executable != new_executable;
+                let (changes, patch, stat) = PackageDiff {
+                    anchor_files: &anchor,
+                    work_files: &work,
+                    anchor_tree: &tree,
+                    work_modes: &modes,
+                    work_ids: &ids,
                 }
+                .identify()
+                .render(|id| {
+                    assert!(content_changed);
+                    if old_present && id == "old-id" {
+                        Ok(Rc::from(b"old\n".as_slice()))
+                    } else {
+                        assert!(new_present);
+                        assert_eq!(id, new_id);
+                        Ok(Rc::from(b"new\n".as_slice()))
+                    }
+                })
+                .unwrap();
+                let changed = content_changed || mode_changed;
+                assert_eq!(changes.len(), usize::from(changed));
+                assert_eq!(stat.files, usize::from(changed));
+                assert_eq!(patch.contains("old mode "), mode_changed);
+                if changed {
+                    let kind = match (old_present, new_present) {
+                        (false, true) => "added",
+                        (true, false) => "deleted",
+                        _ => "modified",
+                    };
+                    assert!(
+                        matches!(changes.first().unwrap(), ChangedItem::Package { path, change } if path == "file" && change == kind)
+                    );
+                } else {
+                    assert!(patch.is_empty());
+                }
+                assert_eq!(stat.insertions, usize::from(content_changed && new_present));
+                assert_eq!(stat.deletions, usize::from(content_changed && old_present));
             }
         }
     }

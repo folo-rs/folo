@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::{fs, thread};
 
 use crp_versioning::plan::SCHEMA_VERSION;
@@ -97,6 +97,28 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
             );
         }
         let trace_text = fs::read_to_string(&trace).unwrap();
+        for operation in [
+            "git ls-files -s -z -- ",
+            "git diff-files --raw -z --no-renames -- ",
+            "git ls-files -z --others --exclude-standard -- ",
+        ] {
+            assert_eq!(
+                trace_text
+                    .lines()
+                    .filter(|line| line.contains(operation))
+                    .count(),
+                1
+            );
+        }
+        // Disabled storage has only the metadata pass's tracked listing. Enabled storage
+        // also admits its directory against tracked source before that classification pass.
+        assert_eq!(
+            trace_text
+                .lines()
+                .filter(|line| line.contains("git ls-files -z -- "))
+                .count(),
+            if name == "disabled" { 1 } else { 2 }
+        );
         // Historical manifests use one separate batch. A warm cache removes the patch's
         // content batch, while size queries remain fresh availability observations.
         assert_eq!(
@@ -139,6 +161,91 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
             .git(&["status", "--porcelain", "--untracked-files=all"])
             .contains("cache")
     );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes a stateful Git clean filter and the application"
+)]
+fn shared_resource_filters_keep_each_packages_original_conversion_and_process_boundary() {
+    let fixture = Fixture::new("[workspace.package]\nreadme='README.md'\n");
+    for name in ["first", "second"] {
+        write_package(&fixture, name, "0.1.0", "readme.workspace=true\n");
+    }
+    fixture.write("README.md", "original\n");
+    fixture.commit("shared resource");
+    fixture.git(&["update-index", "--refresh"]);
+    // A synthetic old index timestamp forces Git's racy-clean content check without a clock
+    // or sleep. Even raw mode queries then execute the filter, before each package's hash.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(fixture.path().join(".git/index"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    fixture.write(".git/info/attributes", "README.md filter=count\n");
+    // This executable fixture makes repeated conversion observable without a clock.
+    // Git owns invoking it; the test verifies that rendering never runs the driver again.
+    fixture.write(
+        ".git/clean.ps1",
+        r#"#requires -Version 7.6
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+# Git clean fixture for cache tests: count each conversion of a shared released resource.
+$null = [Console]::In.ReadToEnd()
+$path = '.git/filter-count'
+$count = if (Test-Path -LiteralPath $path) { [int][IO.File]::ReadAllText($path) } else { 0 }
+$count += 1
+[IO.File]::WriteAllText($path, [string]$count)
+[Console]::Write("converted-$count`n")
+"#,
+    );
+    fixture.git(&[
+        "config",
+        "filter.count.clean",
+        "pwsh -NoProfile -File .git/clean.ps1",
+    ]);
+    fixture.git(&["config", "filter.count.required", "true"]);
+    let evidence = TempDir::new().unwrap();
+    for pass in 0..2 {
+        let output = evidence.path().join(format!("pass-{pass}"));
+        let trace = evidence.path().join(format!("pass-{pass}.trace"));
+        report(&fixture, &output, &trace, &[]);
+        let trace = fs::read_to_string(trace).unwrap();
+        let hashes: Vec<_> = trace
+            .lines()
+            .filter(|line| line.contains("git hash-object -w --"))
+            .collect();
+        assert_eq!(hashes.len(), 2, "{trace}");
+        assert_eq!(
+            trace
+                .lines()
+                .filter(|line| line.contains("git diff-files --raw"))
+                .count(),
+            2,
+            "{trace}"
+        );
+        // Discovery need not enumerate package directories in alphabetical order.
+        // Each patch must use the conversion from that package's own hash process.
+        for (index, command) in hashes.iter().enumerate() {
+            let name = ["first", "second"]
+                .into_iter()
+                .find(|name| command.contains(&format!("{name}/Cargo.toml")))
+                .unwrap();
+            let patch = fs::read_to_string(output.join(format!("diffs/{name}.patch"))).unwrap();
+            assert!(
+                patch.contains(&format!("+converted-{}\n", pass * 4 + index * 2 + 2)),
+                "pass {pass}, package {name}, count {}\n{patch}\n{trace}",
+                fixture.read(".git/filter-count")
+            );
+        }
+        assert_eq!(
+            fixture.read(".git/filter-count"),
+            (pass * 4 + 4).to_string()
+        );
+    }
 }
 
 #[test]

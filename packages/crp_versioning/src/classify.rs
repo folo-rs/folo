@@ -16,7 +16,7 @@ use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_n
 use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::git::{
     BLOB_BATCH_BYTES, BlobReader, CommitHeaders, GitObjectContext, GitRepo, HistoricalTree,
-    TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode,
+    LiveObservations, TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode,
 };
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
@@ -520,12 +520,28 @@ pub fn classify_with_cache(
         anchors: mem::take(&mut cache.lockfiles),
     };
 
+    let observations = LiveObservations::acquire(
+        &git,
+        &work_tree.tracked_paths,
+        &work_tree
+            .packages
+            .iter()
+            .map(|package| package.manifest.directory.as_str())
+            .collect::<Vec<_>>(),
+        &work_tree
+            .packages
+            .iter()
+            .flat_map(|package| package.resources.values().map(String::as_str))
+            .collect::<Vec<_>>(),
+        cache.case(),
+    )?;
     for package in &work_tree.packages {
         let class = classify_one(
             package,
             &work_tree,
             &groups,
             &git,
+            &observations,
             history_commit,
             &commits,
             &history_snapshot,
@@ -583,6 +599,7 @@ fn classify_one(
     work_tree: &WorkTree,
     groups: &Groups,
     git: &GitRepo,
+    observations: &LiveObservations<'_>,
     history_commit: &str,
     commits: &[String],
     history_snapshot: &CommitSnapshot,
@@ -631,13 +648,21 @@ fn classify_one(
         });
         let side = work_tree_side(package, cache.case());
         let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-        let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
+        let tracked_paths = observations.tracked_paths(&resource_paths, || {
+            git.tracked_paths(&resource_paths, side.case)
+        })?;
         let tracked_resources = tracked_resources(&side, &tracked_paths);
-        let content = released_in_work_tree(git, &side, &tracked_resources)?;
-        let work_modes = work_tree_modes(git, &side, &tracked_resources)?;
+        let content = released_in_work_tree(git, &side, &tracked_resources, Some(observations))?;
+        let work_modes =
+            observed_work_tree_modes(git, &side, &tracked_resources, Some(observations))?;
         _ = validated_work_tree_files(git, name, &content.released, &work_modes)?;
-        let untracked =
-            untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
+        let untracked = observed_untracked_released(
+            git,
+            &side,
+            &tracked_resources,
+            &content.present_tracked,
+            Some(observations),
+        )?;
         log_untracked(&verbose, name, untracked.len());
         return Ok(PackageClass {
             name: name.clone(),
@@ -683,6 +708,7 @@ fn classify_one(
         },
         &work_tree_side(package, cache.case()),
         &anchor_snapshot.tree,
+        Some(observations),
         |ids| cache.objects.blobs(git, ids, &cache.storage, verbose),
     )?;
 
@@ -925,7 +951,7 @@ pub fn diff_package(
     work_side: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     let tree = HistoricalTree::new(git.ls_tree(anchor_commit, &[])?);
-    diff_package_with_tree(git, name, anchor, work_side, &tree, |ids| {
+    diff_package_with_tree(git, name, anchor, work_side, &tree, None, |ids| {
         read_patch_blobs(git, ids)
     })
 }
@@ -937,6 +963,7 @@ fn diff_package_with_tree(
     anchor: &PackageSide<'_>,
     work_side: &PackageSide<'_>,
     anchor_tree: &HistoricalTree,
+    observations: Option<&LiveObservations<'_>>,
     mut read_blobs: impl FnMut(&[&str]) -> Result<Vec<Vec<u8>>, AppError>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
@@ -945,11 +972,15 @@ fn diff_package_with_tree(
     // paths keeps an untracked README from being read off disk and reported as
     // a content change. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
     let resource_paths: Vec<&str> = work_side.resources.values().map(String::as_str).collect();
-    let tracked_paths = git.tracked_paths(&resource_paths, work_side.case)?;
+    let narrow = || git.tracked_paths(&resource_paths, work_side.case);
+    let tracked_paths = match observations {
+        Some(observations) => observations.tracked_paths(&resource_paths, narrow)?,
+        None => narrow()?,
+    };
     let tracked_resources = tracked_resources(work_side, &tracked_paths);
 
     let anchor_files = released_at_commit(anchor_tree, anchor);
-    let work = released_in_work_tree(git, work_side, &tracked_resources)?;
+    let work = released_in_work_tree(git, work_side, &tracked_resources, observations)?;
     let work_files = &work.released;
 
     reject_anchor_symlinks(name, anchor_tree, &anchor_files)?;
@@ -960,7 +991,7 @@ fn diff_package_with_tree(
     // representation Git itself compares by, which is what keeps an LFS-tracked
     // asset or a line-ending rule from making an untouched package look
     // changed. Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
-    let work_modes = work_tree_modes(git, work_side, &tracked_resources)?;
+    let work_modes = observed_work_tree_modes(git, work_side, &tracked_resources, observations)?;
     let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
 
     let identified = PackageDiff {
@@ -974,7 +1005,13 @@ fn diff_package_with_tree(
     let ids = identified.blob_ids();
     let mut reader = BlobReader::new(&ids, BLOB_BATCH_BYTES, |ids| git.blob_sizes(ids))?;
     let (changed, patch, stat) = identified.render(|id| reader.read(id, &mut read_blobs))?;
-    let untracked = untracked_released(git, work_side, &tracked_resources, &work.present_tracked)?;
+    let untracked = observed_untracked_released(
+        git,
+        work_side,
+        &tracked_resources,
+        &work.present_tracked,
+        observations,
+    )?;
     Ok((changed, patch, stat, untracked))
 }
 
@@ -1149,9 +1186,22 @@ pub fn work_tree_modes(
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
 ) -> Result<WorkTreeModes, AppError> {
+    observed_work_tree_modes(git, side, tracked_resources, None)
+}
+
+fn observed_work_tree_modes(
+    git: &GitRepo,
+    side: &PackageSide<'_>,
+    tracked_resources: &BTreeMap<String, String>,
+    observations: Option<&LiveObservations<'_>>,
+) -> Result<WorkTreeModes, AppError> {
     let mut pathspecs = vec![side.dir];
     pathspecs.extend(tracked_resources.values().map(String::as_str));
-    git.work_tree_modes(&pathspecs, side.case)
+    let narrow = || git.work_tree_modes(&pathspecs, side.case);
+    match observations {
+        Some(observations) => observations.modes(&pathspecs, narrow),
+        None => narrow(),
+    }
 }
 
 /// Object ids the released work-tree files would be stored under.
@@ -1336,7 +1386,21 @@ pub fn untracked_released(
     tracked_resources: &BTreeMap<String, String>,
     tracked: &[String],
 ) -> Result<Vec<String>, AppError> {
-    let listed: Vec<String> = git.ls_untracked(side.dir, side.case)?;
+    observed_untracked_released(git, side, tracked_resources, tracked, None)
+}
+
+fn observed_untracked_released(
+    git: &GitRepo,
+    side: &PackageSide<'_>,
+    tracked_resources: &BTreeMap<String, String>,
+    tracked: &[String],
+    observations: Option<&LiveObservations<'_>>,
+) -> Result<Vec<String>, AppError> {
+    let narrow = || git.ls_untracked(side.dir, side.case);
+    let listed = match observations {
+        Some(observations) => observations.untracked_paths(side.dir, narrow)?,
+        None => narrow()?,
+    };
     Ok(untracked_released_with(
         side,
         tracked_resources,
@@ -1416,7 +1480,7 @@ pub fn released_work_tree_paths(
     let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
     let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
     let tracked_resources = tracked_resources(&side, &tracked_paths);
-    let content = released_in_work_tree(git, &side, &tracked_resources)?;
+    let content = released_in_work_tree(git, &side, &tracked_resources, None)?;
     Ok(content.released.into_keys().collect())
 }
 
@@ -1445,8 +1509,13 @@ fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
+    observations: Option<&LiveObservations<'_>>,
 ) -> Result<WorkTreeContent, AppError> {
-    let tracked = git.tracked_paths(&[side.dir], side.case)?;
+    let narrow = || git.tracked_paths(&[side.dir], side.case);
+    let tracked = match observations {
+        Some(observations) => observations.tracked_paths(&[side.dir], narrow)?,
+        None => narrow()?,
+    };
     let present = present_in_work_tree(git, &tracked)?;
     let mut released = released_from_paths(&tracked, &present, side);
     add_resources(&mut released, tracked_resources.iter());

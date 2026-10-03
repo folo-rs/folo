@@ -1,6 +1,7 @@
 //! External acquisition for git.
 
 use std::fs;
+use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
@@ -55,6 +56,42 @@ fn blob_batches_preserve_bytes_and_drain_output_while_sending_large_requests() {
         git.show_blob_batch(&[tree.trim()]).unwrap_err();
         git.blob_sizes(&[tree.trim()]).unwrap_err();
     });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "reads bounded binary and empty objects from real Git")]
+fn bounded_reader_preserves_binary_duplicates_and_oversized_objects() {
+    let fixture = testing::Repository::new();
+    let binary = b"\0binary\xff\n";
+    fixture.write("binary", binary);
+    fixture.write("empty", b"");
+    fixture.write("small", b"x");
+    fixture.command(&["add", "binary", "empty", "small"]);
+    let git = fixture.repo();
+    let ids = git.hash_objects(&["binary", "empty", "small"]).unwrap();
+    let binary_id = ids.first().unwrap().as_str();
+    let empty_id = ids.get(1).unwrap().as_str();
+    let small_id = ids.get(2).unwrap().as_str();
+    let requests = [binary_id, binary_id, empty_id, small_id];
+    // The small test budget exercises the production oversized-object path without large data.
+    let mut reader = BlobReader::new(&requests, NonZero::new(4).unwrap(), |ids| {
+        git.blob_sizes(ids)
+    })
+    .unwrap();
+    let mut batches = 0;
+    for (id, expected) in requests
+        .into_iter()
+        .zip([binary.as_slice(), binary, b"", b"x"])
+    {
+        let actual = reader
+            .read(id, |ids| {
+                batches += 1;
+                git.show_blob_batch(ids)
+            })
+            .unwrap();
+        assert_eq!(actual.as_ref(), expected);
+    }
+    assert_eq!(batches, 2);
 }
 
 /// An empty pathspec list never reaches Git.

@@ -91,6 +91,10 @@ retains its separate prospective acquisition. See the component guides for these
 Patch generation requests only differing objects, resolving both endpoints to exact identities
 before rendering. Workspace supplies byte-bounded batches and immutable content reuse; the
 renderer retains only its current comparison in addition to that bounded lookahead.
+Fresh classification-pass Git listings share the metadata pass's tracked paths and acquire
+scoped mode/untracked observations across packages. Each package applies the existing resource
+and packaging rules independently; acquisition sharing never partitions shared resources or
+extends source admission across edits, resolution or another classification.
 
 ## Executable identity
 

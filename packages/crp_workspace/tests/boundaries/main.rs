@@ -9,6 +9,7 @@ mod cache;
 mod command;
 mod git;
 mod git_history_tests;
+mod live;
 mod manifest;
 mod metadata;
 mod metadata_dependency_tests;

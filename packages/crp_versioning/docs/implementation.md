@@ -92,6 +92,13 @@ from exact blob identities. Historical paths resolve through the retained tree; 
 name the objects written by the original clean conversion, never a second filter execution.
 Workspace's bounded reader shares duplicate identities within each batch and releases content
 as rendering advances. The existing content and mode renderers still own patch semantics.
+Every pass uses workspace's fresh, scoped Git listings alongside that pass's metadata tracked
+paths. Resource selection overlaps across packages and the existing packaging/presence helpers
+interpret each selection. Symlink and presence checks precede that package's hashes. Hashing
+keeps per-package ordering and process boundaries, including for shared resources selected by
+stateful clean filters; mutable listings never enter the committed-snapshot cache.
+When effective attributes select any relevant filter driver, mode observations also retain
+per-package acquisition because Git's raw diff can perform clean conversion.
 Historical member discovery reads recorded paths through the same cache and membership
 logic whether observations come from Git or an in-process fixture.
 Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by
