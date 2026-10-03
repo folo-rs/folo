@@ -11,6 +11,7 @@ use crp_diag::short_type_name;
 use ignore::overrides::{Override, OverrideBuilder};
 use ohno::AppError;
 use semver::{Version, VersionReq};
+use serde::Serialize;
 use toml_edit::{DocumentMut, Item, TableLike, Value};
 
 use crate::git::{join_git_rel, os_path};
@@ -114,7 +115,7 @@ impl Default for TargetDiscovery {
 /// edges. Matching normal and build declarations by package name, requirement,
 /// and source recovers installation edges without resolving dependencies.
 /// Ref: packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct InstallationDependency {
     pub name: String,
     /// Path and Git declarations may omit a registry version constraint.
@@ -183,7 +184,7 @@ pub fn installation_error(error: AppError) -> InstallationError {
 ///
 /// A Cargo requirement can accept several path packages in the lockfile. The
 /// referenced manifest, rather than that range, determines which one is used.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PackageIdentity {
     pub name: String,
     pub version: Version,
@@ -194,7 +195,7 @@ pub struct PackageIdentity {
 /// Local declarations retain their package directory in that endpoint's path
 /// space. Inherited dependencies and root patches are workspace-relative and
 /// therefore have no package-directory override.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct DependencyPath {
     pub path: String,
     pub package_directory: Option<String>,
@@ -232,7 +233,7 @@ impl DependencyPath {
 /// Cargo.lock does not store paths: a path package is identified there by its
 /// source-less name and version. Git references remain distinct while their
 /// resolved commit is compared as released content, not as a declaration.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum DependencySource {
     Path(PackageIdentity),
     UnresolvedPath(DependencyPath),
@@ -302,7 +303,7 @@ impl DependencySource {
 }
 
 /// Git's requested reference, separate from its resolved lockfile commit.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum GitReference {
     Default,
     Branch(String),
@@ -342,7 +343,7 @@ pub struct WorkspaceMembers {
 /// spelling recorded in the tree, so member matching only agrees with Cargo when
 /// it applies the same case rules. Case sensitivity is a property of the volume
 /// and directory rather than of the operating system, so it is probed.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub enum PathCase {
     /// Two spellings that differ in case name different paths.
     #[default]

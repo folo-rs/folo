@@ -151,7 +151,9 @@ impl GitObjectContext {
         })
     }
 
-    fn portable(&self) -> bool {
+    /// Whether exact object identities can be reused without replacement availability checks.
+    #[must_use]
+    pub fn portable(&self) -> bool {
         self.replacements.is_empty() && self.grafts.is_empty()
     }
 

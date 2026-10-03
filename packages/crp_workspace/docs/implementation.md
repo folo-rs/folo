@@ -63,6 +63,13 @@ writers still parse original files. Lockfile admission checks graph index bounds
 identities before closure traversal. Installation declarations and registry context remain
 separate from the content-only lock graph.
 
+Installation graphs expose a deterministic key projection of successful declarations, resolved
+path identities, source/patch rules and registry interpretation. Deferred errors have no persisted
+success representation; a derived-computation consumer must bypass reuse while retaining their
+live causes. Parsed lock graph serialization orders root indexes independently of hash-map seeds.
+Versioning consumes these observations for its complete-input decisions; workspace does not own
+classification policy or store a live workspace as a decision entry.
+
 Historical workspace interpretation requests cached root/member syntax on demand, deriving
 inheritance, compiled matchers, membership and deferred installation errors in the current
 context. Unrelated manifests are neither decoded nor parsed. Cargo configuration is not stored.

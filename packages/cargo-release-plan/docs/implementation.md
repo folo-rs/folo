@@ -83,8 +83,12 @@ retains the full historical tree and its lookup indexes with each committed snap
 and retains raw commit-parent facts separately from fresh history-availability decisions.
 Complete manifest text and lockfile text also identify reusable parsed syntax and dependency
 graphs. Workspace owns these subjects; historical workspace reconstruction remains lazy and
-context-bound. Current bytes are acquired before parse reuse. Mutable Cargo metadata,
-classification decisions and successful verification verdicts are not persistent entries.
+context-bound. Current bytes are acquired before parse reuse. Versioning owns a separate
+complete-input decision entry: fresh acquired observations identify reusable package/group policy
+and rendered evidence. Mutable Cargo metadata and successful verification verdicts are not entries.
+Every classification envelope retains the current pass's workspace, Git handle, HEAD and paths,
+including when decisions are reused. See the
+[decision boundary](../../crp_versioning/docs/implementation.md#complete-input-classification-decisions).
 Adjacent consumers explicitly share the same acquisition's root/member documents and tracked
 listing. Preview reacquires after edits/resolution and reads artifact contents freshly; preparation
 retains its separate prospective acquisition. See the component guides for these lifetimes.

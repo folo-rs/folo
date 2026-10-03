@@ -1,5 +1,7 @@
 //! Executable cache selection, persistence and evidence independence over hermetic repositories.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime};
@@ -64,6 +66,22 @@ fn entries(directory: &Path, subject: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn assert_reuse_diagnostics(name: &str, output: &Output) {
+    let diagnostics = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        diagnostics.contains("acquiring manifest-document "),
+        name == "cold"
+    );
+    assert_eq!(
+        diagnostics.contains("computed classification decisions"),
+        name == "cold"
+    );
+    assert_eq!(
+        diagnostics.contains("reusing classification decisions from storage"),
+        name == "warm"
+    );
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "executes Git, Cargo and the compiled application")]
 fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing_reports() {
@@ -87,15 +105,7 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
         let mut options = options.to_vec();
         options.push("--verbose");
         let result = report(&fixture, output, &trace, &options);
-        if name == "cold" {
-            assert!(
-                String::from_utf8_lossy(&result.stderr).contains("acquiring manifest-document ")
-            );
-        } else if name == "warm" {
-            assert!(
-                !String::from_utf8_lossy(&result.stderr).contains("acquiring manifest-document ")
-            );
-        }
+        assert_reuse_diagnostics(name, &result);
         let trace_text = fs::read_to_string(&trace).unwrap();
         for operation in [
             "git ls-files -s -z -- ",
@@ -156,6 +166,7 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
     assert_eq!(entries(&storage, "git-parent-headers").len(), 1);
     assert_eq!(entries(&storage, "git-blob-batches").len(), 1);
     assert!(!entries(&storage, "manifest-document").is_empty());
+    assert_eq!(entries(&storage, "classification-decisions").len(), 1);
     assert!(
         !fixture
             .git(&["status", "--porcelain", "--untracked-files=all"])
@@ -212,7 +223,13 @@ $count += 1
     for pass in 0..2 {
         let output = evidence.path().join(format!("pass-{pass}"));
         let trace = evidence.path().join(format!("pass-{pass}.trace"));
-        report(&fixture, &output, &trace, &[]);
+        let result = report(&fixture, &output, &trace, &["--verbose"]);
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("computed classification decisions")
+        );
+        assert!(
+            !String::from_utf8_lossy(&result.stderr).contains("reusing classification decisions")
+        );
         let trace = fs::read_to_string(trace).unwrap();
         let hashes: Vec<_> = trace
             .lines()
@@ -533,9 +550,9 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
     .unwrap();
     let preview = evidence.path().join("preview");
     let trace = evidence.path().join("preview.trace");
-    success(
+    let result = success(
         command(&fixture)
-            .args(["preview", "--prepared"])
+            .args(["preview", "--verbose", "--prepared"])
             .arg(prepared.join("prepared.json"))
             .arg("--plan")
             .arg(&plan)
@@ -544,6 +561,10 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .env("GIT_TRACE", &trace)
             .output()
             .unwrap(),
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("reusing classification decisions from memory")
     );
     assert_eq!(acquisitions(&trace), (0, 0));
     let resolved: serde_json::Value =
@@ -557,6 +578,71 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .as_str()
             .unwrap(),
     );
+    let relocated = evidence.path().join("relocated-preview");
+    let result = success(
+        command(&fixture)
+            .args(["preview", "--verbose", "--prepared"])
+            .arg(prepared.join("prepared.json"))
+            .arg("--plan")
+            .arg(&plan)
+            .arg("--output")
+            .arg(&relocated)
+            .output()
+            .unwrap(),
+    );
+    let diagnostics = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        diagnostics.contains("reusing classification decisions from storage"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("computed classification decisions"),
+        "{diagnostics}"
+    );
+    assert_eq!(
+        fs::read(preview.join("report.json")).unwrap(),
+        fs::read(relocated.join("report.json")).unwrap()
+    );
+    let relocated_plan: serde_json::Value =
+        serde_json::from_slice(&fs::read(relocated.join("plan.json")).unwrap()).unwrap();
+    for path in ["/increments", "/resolved/files", "/resolved/final_digest"] {
+        assert_eq!(
+            resolved.pointer(path).unwrap(),
+            relocated_plan.pointer(path).unwrap()
+        );
+    }
+    assert_ne!(
+        resolved
+            .pointer("/resolved/evidence_manifest_path")
+            .unwrap(),
+        relocated_plan
+            .pointer("/resolved/evidence_manifest_path")
+            .unwrap()
+    );
+    let uncached = evidence.path().join("uncached-preview");
+    success(
+        command(&fixture)
+            .args(["preview", "--no-cache", "--prepared"])
+            .arg(prepared.join("prepared.json"))
+            .arg("--plan")
+            .arg(&plan)
+            .arg("--output")
+            .arg(&uncached)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        fs::read(preview.join("report.json")).unwrap(),
+        fs::read(uncached.join("report.json")).unwrap()
+    );
+    let uncached_plan: serde_json::Value =
+        serde_json::from_slice(&fs::read(uncached.join("plan.json")).unwrap()).unwrap();
+    for path in ["/resolved/files", "/resolved/final_digest"] {
+        assert_eq!(
+            resolved.pointer(path).unwrap(),
+            uncached_plan.pointer(path).unwrap()
+        );
+    }
     let compatibility_trace = evidence.path().join("compatibility.trace");
     success(
         command(&fixture)
@@ -612,4 +698,151 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
         1
     );
     assert!(!storage.exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes independent application processes and changes native inputs"
+)]
+fn decision_entries_recompute_changed_inputs_and_reject_incompatible_or_corrupt_payloads() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    let storage = evidence.path().join("cache");
+    let options = ["--cache", storage.to_str().unwrap(), "--verbose"];
+    let run = |name: &str| {
+        report(
+            &fixture,
+            &evidence.path().join(name),
+            &evidence.path().join(format!("{name}.trace")),
+            &options,
+        )
+    };
+    run("initial");
+    let check = success(
+        command(&fixture)
+            .args(["check", "--release-history", "HEAD"])
+            .args(options)
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        String::from_utf8_lossy(&check.stderr)
+            .contains("reusing classification decisions from storage")
+    );
+    let uncached_check = success(
+        command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--no-cache"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(check.stdout, uncached_check.stdout);
+
+    let path = entries(&storage, "classification-decisions").pop().unwrap();
+    let original: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut incompatible = original.clone();
+    *incompatible.get_mut("revision").unwrap() =
+        json!(original.get("revision").unwrap().as_u64().unwrap() + 1);
+    fs::write(&path, serde_json::to_vec(&incompatible).unwrap()).unwrap();
+    let result = run("incompatible");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("computed classification decisions"));
+    let mut corrupt = original;
+    *corrupt.get_mut("checksum").unwrap() = "damaged".into();
+    fs::write(&path, serde_json::to_vec(&corrupt).unwrap()).unwrap();
+    let result = run("corrupt");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("corrupt cache"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("computed classification decisions"));
+    assert_eq!(
+        fs::read(evidence.path().join("initial/report.json")).unwrap(),
+        fs::read(evidence.path().join("corrupt/report.json")).unwrap()
+    );
+
+    fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
+    let result = run("content");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("computed classification decisions"));
+    fixture.write("packages/demo/advisory.txt", "untracked");
+    let result = run("advisory");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("computed classification decisions"));
+    fixture.git(&["update-index", "--chmod=+x", "packages/demo/src/lib.rs"]);
+    // Unix observes the filesystem overlay; Windows preserves the index's executable bit.
+    #[cfg(unix)]
+    {
+        let path = fixture.path().join("packages/demo/src/lib.rs");
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(permissions.mode() | 0o111);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    let result = run("mode");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("computed classification decisions"));
+    report(
+        &fixture,
+        &evidence.path().join("fresh"),
+        &evidence.path().join("fresh.trace"),
+        &["--no-cache"],
+    );
+    assert_eq!(
+        fs::read(evidence.path().join("mode/report.json")).unwrap(),
+        fs::read(evidence.path().join("fresh/report.json")).unwrap()
+    );
+    assert_eq!(
+        fs::read(evidence.path().join("mode/diffs/demo.patch")).unwrap(),
+        fs::read(evidence.path().join("fresh/diffs/demo.patch")).unwrap()
+    );
+
+    fixture.write("packages/demo/Cargo.toml", "not a manifest");
+    let failed = command(&fixture)
+        .args(["check", "--release-history", "HEAD"])
+        .args(options)
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(!String::from_utf8_lossy(&failed.stderr).contains("reusing classification decisions"));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "commits unrelated source while reusing decisions in separate processes"
+)]
+fn decision_hit_reconstructs_current_head_instead_of_returning_a_cached_classification() {
+    let fixture = seeded_package();
+    let history = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let evidence = TempDir::new().unwrap();
+    let run = |name: &str| {
+        success(
+            command(&fixture)
+                .args([
+                    "report",
+                    "--release-history",
+                    &history,
+                    "--verbose",
+                    "--out-dir",
+                ])
+                .arg(evidence.path().join(name))
+                .output()
+                .unwrap(),
+        )
+    };
+    run("before");
+    fixture.write("unrelated.txt", "outside released package scope");
+    fixture.commit("unrelated committed file");
+    let head = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let result = run("after");
+    let diagnostics = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        diagnostics.contains("reusing classification decisions from storage"),
+        "{diagnostics}"
+    );
+    let before: serde_json::Value =
+        serde_json::from_slice(&fs::read(evidence.path().join("before/report.json")).unwrap())
+            .unwrap();
+    let after: serde_json::Value =
+        serde_json::from_slice(&fs::read(evidence.path().join("after/report.json")).unwrap())
+            .unwrap();
+    assert_ne!(history, head);
+    assert_eq!(after.get("head").unwrap(), &head);
+    assert_eq!(
+        before.get("packages").unwrap(),
+        after.get("packages").unwrap()
+    );
 }

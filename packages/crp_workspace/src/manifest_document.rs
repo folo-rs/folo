@@ -68,8 +68,8 @@ impl ManifestDocuments {
 /// `toml_edit` does not serialize its syntax tree. A tagged tree retains inline tables versus
 /// tables, array-of-tables, datetime values and floating-point bits; a JSON value projection
 /// would conflate them. Rehydration builds nodes directly, never reparsing the source document.
-#[derive(Deserialize, Serialize)]
-struct ManifestDocument(Vec<(String, Syntax)>);
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ManifestDocument(Vec<(String, Syntax)>);
 
 impl CacheEntry for ManifestDocument {
     const SUBJECT: &'static str = "manifest-document";
@@ -79,7 +79,8 @@ impl CacheEntry for ManifestDocument {
 }
 
 impl ManifestDocument {
-    fn from_document(document: &DocumentMut) -> Self {
+    #[must_use]
+    pub fn from_document(document: &DocumentMut) -> Self {
         Self(table_syntax(document.as_table()))
     }
 
@@ -89,7 +90,7 @@ impl ManifestDocument {
 }
 
 /// TOML item distinctions needed by manifest and inherited-value interpretation.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 enum Syntax {
     Absent,
     Value(Scalar),
@@ -98,7 +99,7 @@ enum Syntax {
 }
 
 /// TOML values retain exact strings rather than Cargo-normalized equivalents.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 enum Scalar {
     String(String),
     Integer(i64),

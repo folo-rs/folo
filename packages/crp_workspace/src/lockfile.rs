@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crp_diag::Verbose;
 use ohno::AppError;
 use semver::Version;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use toml_edit::{DocumentMut, Item};
 
 use crate::cache::{Cache, CacheEntry};
@@ -49,6 +49,43 @@ pub struct InstallationGraph {
 }
 
 impl InstallationGraph {
+    /// Complete successful declarations for a consumer's derived-computation key.
+    ///
+    /// Deferred errors cannot be persisted as successful observations. Their original causes
+    /// stay live and the consumer must compute without reuse, preserving demand-driven errors.
+    #[must_use]
+    pub fn cache_input(&self) -> Option<InstallationInput<'_>> {
+        if !self.path_errors.is_empty() || self.registry_error.is_some() {
+            return None;
+        }
+        let members = self
+            .members
+            .iter()
+            .map(|(name, (version, dependencies))| match dependencies {
+                InstallationDependencies::Parsed(dependencies) => {
+                    Some((name, (version, dependencies.as_slice())))
+                }
+                InstallationDependencies::Invalid(_) => None,
+            })
+            .collect::<Option<_>>()?;
+        let patches = self
+            .patches
+            .iter()
+            .map(|patch| {
+                Some((
+                    patch.origin.as_str(),
+                    patch.name.as_str(),
+                    patch.replacement.as_ref().ok()?,
+                ))
+            })
+            .collect::<Option<_>>()?;
+        Some(InstallationInput {
+            members,
+            patches,
+            registries: &self.registries,
+        })
+    }
+
     pub fn insert(
         &mut self,
         name: String,
@@ -228,16 +265,39 @@ impl InstallationGraph {
     }
 }
 
+/// Location-independent successful inputs consumed by installation-closure traversal.
+///
+/// Resolved path dependencies carry package identities; unresolved declarations retain their
+/// path interpretation. This is a key projection, not a cached closure or error verdict.
+#[derive(Debug, Serialize)]
+pub struct InstallationInput<'a> {
+    members: BTreeMap<&'a String, (&'a Version, &'a [InstallationDependency])>,
+    patches: Vec<(&'a str, &'a str, &'a InstallationDependency)>,
+    registries: &'a BTreeMap<String, String>,
+}
+
 /// The locked packages of one Cargo lockfile, indexed for closure walks.
 ///
 /// Only what a closure walk needs is retained: which entries exist, how each is
 /// identified, and which entries each names as a dependency. Ref:
 /// packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(try_from = "LockfileGraph")]
 pub struct Lockfile {
     pub entries: Vec<LockEntry>,
+    #[serde(serialize_with = "serialize_roots")]
     pub roots: HashMap<String, HashMap<String, usize>>,
+}
+
+fn serialize_roots<S: Serializer>(
+    roots: &HashMap<String, HashMap<String, usize>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    roots
+        .iter()
+        .map(|(name, versions)| (name, versions.iter().collect::<BTreeMap<_, _>>()))
+        .collect::<BTreeMap<_, _>>()
+        .serialize(serializer)
 }
 
 impl Lockfile {
@@ -488,7 +548,7 @@ pub fn benchmark_lockfile_closures(
 }
 
 /// One `[[package]]` entry of a lockfile.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LockEntry {
     pub name: String,
     pub version: Version,
@@ -680,6 +740,90 @@ mod tests {
     use crate::manifest::DependencySource;
 
     const LABEL: &str = "Cargo.lock";
+
+    #[test]
+    fn decision_key_projection_preserves_declarations_and_rejects_each_deferred_error() {
+        let mut graph = InstallationGraph::default();
+        let dependency = InstallationDependency {
+            name: "d".into(),
+            requirement: Some("1".parse().unwrap()),
+            source: DependencySource::Path(PackageIdentity {
+                name: "d".into(),
+                version: Version::new(1, 0, 0),
+            }),
+        };
+        graph.insert("p".into(), Version::new(1, 0, 0), vec![dependency.clone()]);
+        let original = serde_json::to_string(&graph.cache_input().unwrap()).unwrap();
+        graph.patches.push(DependencyPatch {
+            name: "d".into(),
+            origin: "crates-io".into(),
+            replacement: Ok(dependency),
+        });
+        assert_ne!(
+            original,
+            serde_json::to_string(&graph.cache_input().unwrap()).unwrap()
+        );
+        let valid = graph.clone();
+        graph.registry_error = Some(installation_error(ReadFileError::new("registry").into()));
+        assert!(graph.cache_input().is_none());
+        graph = valid.clone();
+        graph.path_errors.insert(
+            DependencyPath {
+                path: "missing".into(),
+                package_directory: None,
+            },
+            installation_error(ReadFileError::new("path").into()),
+        );
+        assert!(graph.cache_input().is_none());
+        graph = valid.clone();
+        graph.patches.first_mut().unwrap().replacement =
+            Err(installation_error(ReadFileError::new("patch").into()));
+        assert!(graph.cache_input().is_none());
+        graph = valid;
+        graph.members.insert(
+            "unrelated".into(),
+            (
+                Version::new(1, 0, 0),
+                InstallationDependencies::Invalid(installation_error(
+                    ReadFileError::new("member").into(),
+                )),
+            ),
+        );
+        assert!(graph.cache_input().is_none());
+    }
+
+    #[test]
+    fn decision_key_lock_roots_ignore_hash_insertion_order_without_losing_versions() {
+        let text = "version=4\n[[package]]\nname='p'\nversion='1.0.0'\n\
+                    [[package]]\nname='d'\nversion='1.0.0'\n\
+                    [[package]]\nname='d'\nversion='2.0.0'\n";
+        let first = Lockfile::parse(text, LABEL).unwrap();
+        let mut second = first.clone();
+        second.roots = first
+            .roots
+            .iter()
+            .map(|(name, versions)| {
+                let mut ordered: Vec<_> = versions.iter().collect();
+                ordered.sort_by(|(left, _), (right, _)| right.cmp(left));
+                (
+                    name.clone(),
+                    ordered
+                        .into_iter()
+                        .map(|(version, index)| (version.clone(), *index))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap()
+        );
+        second.roots.get_mut("d").unwrap().remove("2.0.0");
+        assert_ne!(
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap()
+        );
+    }
 
     #[test]
     fn stored_lock_graph_preserves_closures_and_rejects_invalid_indices() {

@@ -174,8 +174,8 @@ fn binary_endpoints_independently_contribute_locked_closures() {
     let mut cache = LockfileCache {
         storage: Cache::default(),
         verbose: Verbose::new(false, &crp_diag::Discard),
-        work: Some(lock("2.0.0")),
-        anchors: HashMap::from([("anchor".into(), lock("1.0.0"))]),
+        work: Some(Rc::new(lock("2.0.0"))),
+        anchors: HashMap::from([("anchor".into(), Rc::new(lock("1.0.0")))]),
         case: PathCase::Sensitive,
     };
     for anchor_binary in [false, true] {

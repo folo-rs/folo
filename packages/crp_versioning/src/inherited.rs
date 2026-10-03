@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crp_workspace::inherited::InheritedKeys;
+use serde::Serialize;
 use toml_edit::{DocumentMut, Item, Value};
 
 /// One inherited field that changed between the package's anchor and the work tree.
@@ -17,52 +18,90 @@ pub(crate) struct InheritedChange {
 }
 
 /// Compares inherited workspace values at the package's anchor vs the work tree.
+#[cfg(test)]
 pub(crate) fn inherited_changes(
     keys: &InheritedKeys,
     workspace_at_anchor: &DocumentMut,
     workspace_at_work_tree: &DocumentMut,
 ) -> Vec<InheritedChange> {
-    let mut changes = Vec::new();
+    InheritedInputs::acquire(keys, workspace_at_anchor, workspace_at_work_tree).changes()
+}
 
-    for key in &keys.package {
-        let old = workspace_package_value(workspace_at_anchor, key);
-        let new = workspace_package_value(workspace_at_work_tree, key);
-        if old != new {
-            changes.push(InheritedChange {
-                field: format!("workspace.package.{key}"),
-            });
+/// Canonical endpoint values consumed by inheritance attribution, without live documents.
+///
+/// The selected fields retain TOML shapes but discard formatting and unpublished path keys.
+#[derive(Clone, Debug, Default, Serialize)]
+pub(crate) struct InheritedInputs {
+    package: BTreeMap<String, (Option<CanonicalValue>, Option<CanonicalValue>)>,
+    dependencies: BTreeMap<String, DependencyValues>,
+}
+
+impl InheritedInputs {
+    pub(crate) fn acquire(keys: &InheritedKeys, anchor: &DocumentMut, work: &DocumentMut) -> Self {
+        Self {
+            package: keys
+                .package
+                .iter()
+                .map(|key| {
+                    (
+                        key.clone(),
+                        (
+                            workspace_package_value(anchor, key),
+                            workspace_package_value(work, key),
+                        ),
+                    )
+                })
+                .collect(),
+            dependencies: keys
+                .dependencies
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        DependencyValues {
+                            dev_only: keys.dev_only_dependencies.binary_search(name).is_ok(),
+                            anchor: workspace_dependency_fields(anchor, name),
+                            work: workspace_dependency_fields(work, name),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 
-    for dep in &keys.dependencies {
-        let old = workspace_dependency_fields(workspace_at_anchor, dep);
-        let new = workspace_dependency_fields(workspace_at_work_tree, dep);
-        if keys.dev_only_dependencies.binary_search(dep).is_ok()
-            && !old.contains_key("version")
-            && !new.contains_key("version")
-        {
-            continue;
-        }
-        if old == new {
-            continue;
-        }
-        let names: Vec<String> = old
-            .keys()
-            .chain(new.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        for field in &names {
-            if old.get(field) != new.get(field) {
+    pub(crate) fn changes(&self) -> Vec<InheritedChange> {
+        let mut changes = Vec::new();
+        for (key, (old, new)) in &self.package {
+            if old != new {
                 changes.push(InheritedChange {
-                    field: format!("workspace.dependencies.{dep}.{field}"),
+                    field: format!("workspace.package.{key}"),
                 });
             }
         }
+        for (dep, values) in &self.dependencies {
+            let (old, new) = (&values.anchor, &values.work);
+            if values.dev_only && !old.contains_key("version") && !new.contains_key("version") {
+                continue;
+            }
+            let names: BTreeSet<_> = old.keys().chain(new.keys()).collect();
+            for field in names {
+                if old.get(field) != new.get(field) {
+                    changes.push(InheritedChange {
+                        field: format!("workspace.dependencies.{dep}.{field}"),
+                    });
+                }
+            }
+        }
+        changes
     }
+}
 
-    changes
+/// Both declarations and their packaging eligibility participate in comparison.
+#[derive(Clone, Debug, Serialize)]
+struct DependencyValues {
+    dev_only: bool,
+    anchor: BTreeMap<String, CanonicalValue>,
+    work: BTreeMap<String, CanonicalValue>,
 }
 
 fn workspace_package_value(doc: &DocumentMut, key: &str) -> Option<CanonicalValue> {
@@ -135,7 +174,7 @@ fn is_unpublished_dependency_key(key: &str) -> bool {
 /// rendering would make `["a,b"]` and `["a", "b"]` compare equal and hide a real
 /// root-manifest edit. Formatting, comments, and key order are deliberately
 /// discarded because they do not alter what a package inherits.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 enum CanonicalValue {
     Text(String),
     Integer(i64),

@@ -126,6 +126,43 @@ post-resolution classification's workspace/member paths while reading artifact c
 Preparation has no preceding prospective classification and acquires its own prospective
 metadata; original-workspace observations never stand in for the candidate.
 
+### Complete-input classification decisions
+
+Acquisition and decision computation have distinct boundaries. Acquisition obtains a fresh
+workspace, history traversal and availability, selected anchors, package/resource selection,
+symlink admission, modes, cleaned object identities and untracked advisories. Resolving anchors
+is necessary to select the historical endpoints to acquire. Relevant lockfile graphs and their
+installation declarations are acquired without walking closures. No previous raw source digest,
+artifact equality or unchanged version substitutes for these observations.
+
+Decision computation receives a closed, location-independent model, not a workspace or Git
+handle. It derives exact-edge groups, compares released identities/modes and inherited values,
+walks binary installation closures, assigns package/group outcomes and renders evidence.
+Its only acquisition callbacks read sizes and bytes for exact immutable object identities.
+The input key serializes the model deterministically with the producer and computation revision,
+including interpretation context and both endpoint graphs. Dependency kinds remain explicit
+even though the public dependency JSON omits them. Manifest syntax retains packaging controls
+without including formatting; selected archive endpoints retain unchanged files as well as changes.
+Git-relative paths retain path-sensitive interpretation without prospective absolute roots.
+Packages reference shared worktree and commit lockfile endpoints, so each endpoint's parsed
+lockfile and installation graph occurs once in the closed model and its serialized key.
+
+The subject uses the shared storage interface and retains only the preceding key/result in
+operation memory. A matching entry skips decision computation, not acquisition. Replacement
+or graft interpretation and required graphs carrying deferred errors bypass decision reuse;
+errors keep their original live causes and demand-driven behavior. Cache I/O failures retain
+the storage layer's advisory behavior. Successful decisions contain package verdicts, patches,
+statistics, group membership and group outcomes, never source admission or checker verdicts.
+
+Every result constructs a new classification envelope from this pass's workspace, Git handle,
+HEAD, history provenance, dependency facts and live manifest paths. Untracked advisories accompany
+fresh acquisition; decision evidence diagnostics are replayed from the admitted decisions.
+Verbose-only messages distinguish computation from memory
+and persistent reuse. A moved prospective root can share equal decisions without importing old
+paths. Preview still performs every edit/resolution callback, captures actual files, applies
+consequences to the current plan, and checks file/version convergence and cycles. Source,
+candidate and history verification remain independent of decision cache admission.
+
 Source capture reuses the tracked listing and parsed root/member documents acquired by its own
 metadata projection, including during path-dependency traversal. Files reached outside those
 documents are still acquired, and ignored/untracked build-source traversal and index capture

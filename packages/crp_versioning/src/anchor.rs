@@ -7,11 +7,12 @@
 
 use ohno::AppError;
 use semver::Version;
+use serde::{Deserialize, Serialize};
 
 use crate::ShallowHistoryError;
 
 /// The commit that last changed a package's declared version on the release-history line.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Anchor {
     pub commit: String,
     pub version: Version,

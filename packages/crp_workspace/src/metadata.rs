@@ -166,7 +166,7 @@ pub struct ReportedDep {
 /// Only a normal dependency can supply types to a library's public API. A
 /// development dependency additionally does not survive packaging when it is
 /// declared without a version, so it reaches no published manifest at all.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
 pub enum DepKind {
     #[default]
     Normal,

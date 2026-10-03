@@ -227,6 +227,7 @@ fn check_acquired_diff(old_present: bool, new_present: bool) {
                     work_modes: &modes,
                     work_ids: &ids,
                 }
+                .capture()
                 .identify()
                 .render(|id| {
                     assert!(content_changed);

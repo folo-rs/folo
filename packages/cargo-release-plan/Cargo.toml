@@ -3,7 +3,7 @@
 name = "cargo-release-plan"
 description = "Plan workspace releases and publish captured exact versions to crates.io and GitHub"
 publish = true
-version = "0.5.14"
+version = "0.5.15"
 
 authors.workspace = true
 edition.workspace = true
@@ -25,6 +25,7 @@ allowed_external_types = [
     "clap_builder::derive::FromArgMatches",
     "clap_builder::derive::Parser",
     "crp_versioning::*",
+    "crp_workspace::*",
     "ohno::app::error::AppError",
 ]
 
