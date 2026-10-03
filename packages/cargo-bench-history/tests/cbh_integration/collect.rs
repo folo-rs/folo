@@ -1,6 +1,88 @@
+use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+
 use cbh_model::CollectionSnapshot;
 
 use crate::harness::{serial, *};
+
+#[tokio::test]
+#[cfg_attr(miri, ignore = "Native collection destination preflight.")]
+async fn occupied_collection_output_does_not_run_benchmarks_or_store_measurements() {
+    for directory in [false, true] {
+        let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+        let workspace =
+            Workspace::clean_repo(&storage_only_config()).with_bench(&["--callgrind", &bench]);
+        let target = workspace.root().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let path = target.join("collection.json");
+        if directory {
+            std::fs::create_dir_all(&path).unwrap();
+        } else {
+            std::fs::write(&path, "original snapshot").unwrap();
+        }
+
+        workspace
+            .drive(&[
+                "collect",
+                "--overwrite",
+                "--collection-output",
+                path.to_str().unwrap(),
+            ])
+            .await
+            .unwrap_err();
+
+        assert!(workspace.stored_objects().is_empty());
+        // The faker adds an engine-output directory whenever it actually executes.
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+        if !directory {
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "original snapshot");
+        }
+    }
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore = "Native collection destination inspection failure.")]
+async fn uninspectable_collection_output_does_not_run_benchmarks_or_store_measurements() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace =
+        Workspace::clean_repo(&storage_only_config()).with_bench(&["--callgrind", &bench]);
+    let target = workspace.root().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let path = target.join("invalid\0path");
+
+    let error = workspace
+        .drive(&["collect", "--collection-output", path.to_str().unwrap()])
+        .await
+        .unwrap_err();
+
+    assert!(error.find_source::<io::Error>().is_some());
+    assert!(workspace.stored_objects().is_empty());
+    assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[cfg_attr(miri, ignore = "Native dangling-link collection destination.")]
+async fn dangling_collection_output_is_occupied() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace =
+        Workspace::clean_repo(&storage_only_config()).with_bench(&["--callgrind", &bench]);
+    let target = workspace.root().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let path = target.join("collection.json");
+    let missing = target.join("missing.json");
+    symlink(&missing, &path).unwrap();
+
+    workspace
+        .drive(&["collect", "--collection-output", path.to_str().unwrap()])
+        .await
+        .unwrap_err();
+
+    assert!(workspace.stored_objects().is_empty());
+    assert_eq!(std::fs::read_link(&path).unwrap(), missing);
+    assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+}
 
 #[tokio::test]
 #[cfg_attr(

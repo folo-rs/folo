@@ -97,6 +97,18 @@ Integration-only benchmark engines and stress tools remain outside the productio
 boundary. They drive the same public shell or persisted format without adding test-only behavior
 to the shipped application.
 
+### Collection snapshots
+
+Snapshot capture is opt-in at finalization: ordinary collection, import and backfill release
+each reduced engine payload after persistence rather than accumulating unused evidence.
+Snapshot mode retains the fresh payload even when append-only persistence skips an occupied key.
+
+The shell checks the output destination through the write-once file port before running
+benchmarks and validates the captured identity before writing shared history. Final publication
+still uses create-new semantics to reject a destination occupied after preflight. Snapshot
+publication follows successful collection and cache invalidation, so an incomplete execution
+does not emit usable evidence.
+
 ### Backfill execution
 
 Backfill classifies the entire inclusive range against the partition pre-check before

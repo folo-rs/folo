@@ -1,5 +1,5 @@
-//! The write-once configuration writer port used by `install`: it creates a new
-//! configuration file but never clobbers one that already exists. The production
+//! The write-once file writer used by `install` and collection snapshots. It creates
+//! a new file but never clobbers one that already exists. The production
 //! adapter is backed by `tokio::fs`; tests drive an in-memory fake.
 
 use std::future::Future;
@@ -10,6 +10,9 @@ use tokio::io::AsyncWriteExt;
 
 /// Writes a new configuration file without overwriting an existing one.
 pub(crate) trait ConfigWriter {
+    /// Checks whether any entry, including a dangling link, occupies `path`.
+    fn exists(&self, path: &Path) -> impl Future<Output = io::Result<bool>>;
+
     /// Writes `contents` to `path`, creating parent directories as needed.
     ///
     /// Returns `Ok(true)` when the file was created, `Ok(false)` when a file
@@ -23,6 +26,16 @@ pub(crate) trait ConfigWriter {
 pub(crate) struct TokioConfigWriter;
 
 impl ConfigWriter for TokioConfigWriter {
+    // Native collection integration tests cover filesystem inspection and error propagation.
+    #[cfg_attr(test, mutants::skip)]
+    async fn exists(&self, path: &Path) -> io::Result<bool> {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn write_new(&self, path: &Path, contents: &str) -> io::Result<bool> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -83,7 +96,7 @@ mod fake {
             writer
         }
 
-        /// A writer that fails every write with an injected I/O error.
+        /// A writer that fails every operation with an injected I/O error.
         pub(crate) fn failing() -> Self {
             Self {
                 files: Mutex::default(),
@@ -98,6 +111,13 @@ mod fake {
     }
 
     impl ConfigWriter for MemoryConfigWriter {
+        fn exists(&self, path: &Path) -> impl Future<Output = io::Result<bool>> {
+            ready(self.failure.map_or_else(
+                || Ok(self.files.lock().unwrap().contains_key(path)),
+                |kind| Err(io::Error::from(kind)),
+            ))
+        }
+
         fn write_new(&self, path: &Path, contents: &str) -> impl Future<Output = io::Result<bool>> {
             let result = if let Some(kind) = self.failure {
                 Err(io::Error::from(kind))

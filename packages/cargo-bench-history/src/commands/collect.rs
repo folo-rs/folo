@@ -114,6 +114,14 @@ pub(crate) async fn execute(
     let project_id = resolve_project_id(&config, base);
     reporter.note_with(|| format!("project id: {project_id}"));
 
+    let collection_output = options
+        .collection_output
+        .as_ref()
+        .map(|path| workspace_dir.join(path));
+    if let Some(path) = &collection_output {
+        preflight_collection_output(&TokioConfigWriter, path).await?;
+    }
+
     // Under `--no-store` the run produces no stored objects, so storage selection
     // is skipped entirely: the command works with no `--local` and no configured
     // cloud backend, which would otherwise be an error.
@@ -181,7 +189,7 @@ pub(crate) async fn execute(
         None => Ok(()),
     };
     let summary = finish_with_flush(result, flush)?;
-    if let Some(path) = &options.collection_output {
+    if let Some(path) = &collection_output {
         let snapshot = summary
             .snapshot
             .as_ref()
@@ -190,9 +198,8 @@ pub(crate) async fn execute(
             .to_json()
             .map_err(|error| CollectionOutputError::caused_by("encoding", error))?;
         let json = str::from_utf8(&json).expect("JSON serialization always emits UTF-8");
-        let path = workspace_dir.join(path);
         let written = TokioConfigWriter
-            .write_new(&path, json)
+            .write_new(path, json)
             .await
             .map_err(|error| CollectionOutputError::caused_by("writing", error))?;
         if !written {
@@ -202,6 +209,21 @@ pub(crate) async fn execute(
         }
     }
     Ok(collection_outcome(options, &summary))
+}
+
+/// Rejects an occupied snapshot destination before collection can change shared history.
+async fn preflight_collection_output(
+    writer: &impl ConfigWriter,
+    path: &Path,
+) -> Result<(), AppError> {
+    if writer
+        .exists(path)
+        .await
+        .map_err(|error| CollectionOutputError::caused_by("inspecting destination for", error))?
+    {
+        return Err(InvalidCommandError::new("collect", "collection output already exists").into());
+    }
+    Ok(())
 }
 
 /// A short human-readable description of where results are stored, for the
@@ -366,6 +388,8 @@ pub(crate) struct FinalizeDeps<'a, S> {
     pub(crate) tool_version: &'a str,
     /// Sink for `--verbose` diagnostic notes.
     pub(crate) reporter: &'a dyn Reporter,
+    /// Retain fresh payloads only for a requested collection snapshot.
+    pub(crate) capture_runs: bool,
 }
 
 /// How a finalized run is placed in storage, independent of which command
@@ -402,7 +426,7 @@ struct Reduction {
 
 /// The result of harvesting one engine's output.
 struct EngineSummary {
-    /// Fresh payload retained directly from the successful store operation.
+    /// Fresh payload retained for snapshot capture, absent in ordinary collection.
     run: Option<Run>,
     /// Whether a result set was stored.
     stored: bool,
@@ -594,12 +618,18 @@ where
         )
         .into());
     }
+    if options.collection_output.is_some() {
+        // Validate the envelope before any history write; missing Git identity is valid only
+        // for ordinary collection. The final snapshot also validates its measured payloads.
+        _ = collection_snapshot(deps.project_id, &shared, Vec::new())?;
+    }
 
     let store = FinalizeDeps {
         storage: deps.storage,
         project_id: deps.project_id,
         tool_version: deps.tool_version,
         reporter: deps.reporter,
+        capture_runs: options.collection_output.is_some(),
     };
     let params = StoreParams {
         overwrite: options.overwrite,
@@ -617,18 +647,28 @@ where
     )
     .await?;
     if options.collection_output.is_some() {
-        summary.snapshot = Some(
-            CollectionSnapshot::new(
-                deps.project_id,
-                shared.git.commit.as_deref().unwrap_or_default(),
-                shared.target_triple.clone(),
-                partition_of(&shared).machine_key,
-                std::mem::take(&mut summary.runs),
-            )
-            .map_err(|error| CollectionOutputError::caused_by("constructing", error))?,
-        );
+        summary.snapshot = Some(collection_snapshot(
+            deps.project_id,
+            &shared,
+            std::mem::take(&mut summary.runs),
+        )?);
     }
     Ok(summary)
+}
+
+fn collection_snapshot(
+    project_id: &str,
+    shared: &SharedContext,
+    runs: Vec<(Engine, Run)>,
+) -> Result<CollectionSnapshot, AppError> {
+    CollectionSnapshot::new(
+        project_id,
+        shared.git.commit.as_deref().unwrap_or_default(),
+        shared.target_triple.clone(),
+        partition_of(shared).machine_key,
+        runs,
+    )
+    .map_err(|error| CollectionOutputError::caused_by("constructing", error).into())
 }
 
 /// Reduces and stores every engine's harvested records against a resolved context.
@@ -1032,6 +1072,9 @@ where
     )
     .await?;
 
+    // Ordinary collect/import/backfill release each reduced payload after persistence.
+    // Snapshot mode instead retains this execution's values even when storage skips a key.
+    let run = store.capture_runs.then_some(run);
     match outcome {
         StoreOutcome::Skipped => {
             store.reporter.note_with(|| {
@@ -1041,8 +1084,7 @@ where
                 )
             });
             Ok(EngineSummary {
-                // Keep this execution's fresh payload even when persistence retains history.
-                run: Some(run),
+                run,
                 stored: false,
                 count,
                 label: Some(format!(
@@ -1056,7 +1098,7 @@ where
                 .note_with(|| format!("{engine}: stored {object_key}"));
 
             Ok(EngineSummary {
-                run: Some(run),
+                run,
                 stored: true,
                 count,
                 label: Some(format!("{engine}: {count} stored")),
@@ -1270,7 +1312,29 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
+    use crate::config_writer::MemoryConfigWriter;
     use crate::model::{AggregateError, BenchmarkIdPrefix, BlessingRecord};
+
+    #[test]
+    fn snapshot_destination_preflight_preserves_occupied_paths_and_inspection_errors() {
+        let path = Path::new("collection.json");
+        let missing = MemoryConfigWriter::default();
+        block_on(preflight_collection_output(&missing, path)).unwrap();
+        assert!(missing.written(path).is_none());
+
+        let occupied = MemoryConfigWriter::with_existing(path, "original");
+        let error = block_on(preflight_collection_output(&occupied, path)).unwrap_err();
+        assert!(error.find_source::<InvalidCommandError>().is_some());
+        assert_eq!(occupied.written(path).as_deref(), Some("original"));
+
+        let error = block_on(preflight_collection_output(
+            &MemoryConfigWriter::failing(),
+            path,
+        ))
+        .unwrap_err();
+        assert!(error.find_source::<CollectionOutputError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+    }
 
     /// A zero-iteration `alloc_tracker` operation the workload could not run: the
     /// producer emits null slopes (a NaN per-iteration rate), which the adapter
@@ -2254,6 +2318,58 @@ mod tests {
             .err()
             .unwrap();
             assert!(storage.keys().is_empty());
+        }
+    }
+
+    #[test]
+    fn invalid_snapshot_identity_does_not_store_measurements() {
+        for commit in [None, Some("not-a-commit".to_owned())] {
+            let mut probe = FakeProbe::new();
+            probe.git.commit = commit;
+            let storage = MemoryStorage::new();
+            let error = drive_summary(
+                FROZEN_UNIX,
+                &CollectOptions {
+                    collection_output: Some("snapshot.json".into()),
+                    ..CollectOptions::default()
+                },
+                &FakeRunner::succeeding(),
+                &probe,
+                &FakeOutput::with_callgrind_summary(),
+                &storage,
+                &RecordingReporter::quiet(),
+            )
+            .err()
+            .unwrap();
+            assert!(error.find_source::<CollectionOutputError>().is_some());
+            assert!(storage.keys().is_empty());
+        }
+    }
+
+    #[test]
+    fn ordinary_collection_does_not_retain_finalized_runs() {
+        for skip_existing in [false, true] {
+            let storage = MemoryStorage::new();
+            if skip_existing {
+                _ = seed_callgrind_run(&storage, false, FROZEN_UNIX);
+            }
+            let summary = drive_summary(
+                FROZEN_UNIX,
+                &CollectOptions {
+                    skip_existing,
+                    ..CollectOptions::default()
+                },
+                &FakeRunner::succeeding(),
+                &FakeProbe::new(),
+                &FakeOutput::with_callgrind_summary(),
+                &storage,
+                &RecordingReporter::quiet(),
+            )
+            .unwrap();
+            assert_eq!(summary.harvested, 1);
+            assert_eq!(storage.keys().len(), 1);
+            assert!(summary.runs.is_empty());
+            assert!(summary.snapshot.is_none());
         }
     }
 
