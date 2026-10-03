@@ -288,8 +288,14 @@ jobs:
     needs: exercise
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       actions: read
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Artifact-only checks need no Rust setup; shared assertions are covered by Pester.
+      # Ref: implementation.md#reusable-workflow-canary.
       - name: Verify the completed caller contract
         shell: pwsh
         env:
@@ -304,17 +310,10 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          if ($env:OUTCOME -cnotin @('clean', 'insufficient_baseline', 'partial')) {
-            throw "Unexpected synthetic analysis outcome '$env:OUTCOME'."
-          }
-          if ($env:STATE -cnotin @('clean', 'inconclusive') -or
-              $env:NOTABLE -cne 'false' -or $env:REGRESSIONS -cne '0' -or $env:PARTIAL -cne 'false') {
-            throw 'The deterministic matrix did not produce a complete, non-regressing report.'
-          }
-          if ($env:ARTIFACT_ID -notmatch '^[1-9][0-9]*$' -or
-              [string]::IsNullOrWhiteSpace($env:ARTIFACT_URL)) {
-            throw 'The reusable workflow did not expose its uploaded report artifact.'
-          }
+          Import-Module ./scripts/bench-history/HistoryCanary.psm1 -Force
+          Assert-HistoryCanaryOutput -Outcome $env:OUTCOME -State $env:STATE `
+            -Notable $env:NOTABLE -Regressions $env:REGRESSIONS -PartialPlatformCoverage $env:PARTIAL `
+            -ArtifactId $env:ARTIFACT_ID -ArtifactUrl $env:ARTIFACT_URL
       - name: Download the emitted report bundle
         uses: actions/download-artifact@v8
         with:
@@ -330,21 +329,8 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          foreach ($name in @('report.md', 'report.json', 'summary.md')) {
-            $content = Get-Content -LiteralPath (Join-Path $env:REPORT_DIRECTORY $name) -Raw
-            if ([string]::IsNullOrWhiteSpace($content)) { throw "Empty report file '$name'." }
-          }
-          $report = Get-Content -LiteralPath (Join-Path $env:REPORT_DIRECTORY 'report.json') -Raw | ConvertFrom-Json
-          if ($report.mode -cne 'history' -or $report.outcome -cne $env:EXPECTED_OUTCOME) {
-            throw 'The downloaded report does not match the reusable workflow outputs.'
-          }
-          # Each supported native target contributes the fixture's sole Criterion series.
-          $expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
-          $actualTargets = @($report.sets.target_triple | Sort-Object -Unique)
-          if ($report.census.in_scope -ne $expectedTargets.Count -or
-              ($actualTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
-            throw 'The report did not contain the synthetic measurements from every supported target.'
-          }
+          Import-Module ./scripts/bench-history/HistoryCanary.psm1 -Force
+          Assert-HistoryCanaryReport -ReportDirectory $env:REPORT_DIRECTORY -ExpectedOutcome $env:EXPECTED_OUTCOME
 
   result:
     # A selected reusable call cannot succeed through skipped prerequisites or verifiers.

@@ -601,6 +601,10 @@ history. Separate project identities isolate the flows. The fixture produces det
 Criterion data without wall-clock measurements.
 
 History coverage checks receipts, report transport and honest outcome/coverage outputs.
+Every expected target must contribute synthetic measurements, while multiple machine
+partitions per target remain valid. Statistical coverage may be partial or insufficient
+even when platform collection is complete; neither condition permits missing targets,
+inconsistent report artifacts or regressions.
 Backfill coverage freezes the real event head and its first parent as an inclusive range,
 then checks that every expected target has stored historical measurements. A separate
 test-verification query reads the core tool's structured run listing across all machines and

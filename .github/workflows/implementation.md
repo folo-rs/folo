@@ -323,6 +323,17 @@ The history verification job downloads that artifact and checks the expected syn
 series and honest outcome/coverage outputs. Lack of a baseline is not mistaken for failure or
 asserted to be clean.
 
+`HistoryCanary.psm1` owns output and downloaded-file assertions. The artifact-only job uses
+PowerShell because it has no prepared Rust toolchain and must not build the tools merely to
+inspect their reports. Its file-boundary integration tests run in the `bench-history` script
+domain. Verification compares distinct target triples independently of series counts: history
+selection surveys all targets under the union of successful collection machine keys, so a
+target can contribute several comparable partitions. Each partition must contain the fixture's
+sole Criterion series, and the report's series and in-scope census totals must agree with those
+partitions. Excluded ghosts do not enter that comparison. Workflow outputs must still report
+complete platform collection and no regressions, and the nonempty bundle must agree with the
+analysis outcome. Statistical coverage does not substitute for platform collection evidence.
+
 For backfill, configuration freezes the real event head and its first parent as the inclusive
 `to` and `from` endpoints. The shared workflow runs the nested synthetic fixture on Linux,
 Windows and Apple Silicon macOS, using `.cargo/backfill_history.toml` to select the isolated
