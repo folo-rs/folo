@@ -81,16 +81,16 @@ inner operations receive acquired values and narrow ports.
 Unit tests stay in process. Boundary integrations exercise real Git/Cargo and
 filesystem behavior without depending on the application binary. Patch-rendering
 benchmarks use an ordinary public driver in this private component, reusing the production
-renderer without fixture generation or additional dependencies. Versioning-only tests compile only this
-component and its intended lower-level dependencies. Criterion's development
+renderer without fixture generation or additional dependencies. Versioning-only tests
+compile only this component and its intended lower-level dependencies. Criterion's development
 dependencies remain part of benchmark-enabled builds.
 
 Released-content comparison consumes acquired archive paths, object identities and modes.
 It requests bytes lazily only for content changes, independently of mode-only changes.
 Historical member discovery reads recorded paths through the same cache and membership
 logic whether observations come from Git or an in-process fixture.
-Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by resolved commit
-and invalidated by repository, workspace, case-rule or registry-context changes.
+Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by
+resolved commit and invalidated by repository, workspace, case-rule or registry-context changes.
 Candidate observations and lockfiles are never retained across passes, and history refs
 are still resolved and verified. The converged classification supplies both the final
 readiness verdict and report, followed by the original source and candidate checks.
