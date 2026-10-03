@@ -22,7 +22,8 @@ function Assert-HistoryCanaryOutput {
     if ($Outcome -cnotin @('clean', 'insufficient_baseline', 'partial')) {
         throw "Unexpected synthetic analysis outcome '$Outcome'."
     }
-    if ($State -cnotin @('clean', 'inconclusive') -or
+    $expectedState = if ($Outcome -ceq 'clean') { 'clean' } else { 'inconclusive' }
+    if ($State -cne $expectedState -or
         $Notable -cne 'false' -or $Regressions -cne '0' -or $PartialPlatformCoverage -cne 'false') {
         throw 'The deterministic matrix did not produce a complete, non-regressing report.'
     }

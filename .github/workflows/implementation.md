@@ -332,7 +332,9 @@ target can contribute several comparable partitions. Each partition must contain
 sole Criterion series, and the report's series and in-scope census totals must agree with those
 partitions. Excluded ghosts do not enter that comparison. Workflow outputs must still report
 complete platform collection and no regressions, and the nonempty bundle must agree with the
-analysis outcome. Statistical coverage does not substitute for platform collection evidence.
+analysis outcome. Publication state must agree with that outcome: clean analysis is clean,
+while partial or insufficient baselines are inconclusive. Statistical coverage does not
+substitute for platform collection evidence.
 
 For backfill, configuration freezes the real event head and its first parent as the inclusive
 `to` and `from` endpoints. The shared workflow runs the nested synthetic fixture on Linux,

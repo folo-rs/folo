@@ -34,6 +34,16 @@ Describe 'History caller output verification' {
         { Assert-HistoryCanaryOutput @script:Output } | Should -Not -Throw
     }
 
+    It 'rejects contradictory <Outcome> analysis and <State> publication state' -ForEach @(
+        @{ Outcome = 'clean'; State = 'inconclusive' }
+        @{ Outcome = 'insufficient_baseline'; State = 'clean' }
+        @{ Outcome = 'partial'; State = 'clean' }
+    ) {
+        $script:Output.Outcome = $Outcome
+        $script:Output.State = $State
+        { Assert-HistoryCanaryOutput @script:Output } | Should -Throw
+    }
+
     It 'rejects invalid <Field> output <Value>' -ForEach @(
         @{ Field = 'Outcome'; Value = 'regressions' }
         @{ Field = 'Outcome'; Value = '' }
