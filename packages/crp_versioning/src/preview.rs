@@ -14,8 +14,11 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::apply::{ManifestEdit, compute_edits};
-use crate::check::releases_breaking_change;
-use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify_with_target};
+use crate::check::{check_classification, releases_breaking_change};
+use crate::classify::{
+    ChangedItem, PackageClass, PackageStatus, SnapshotCache, classify_with_cache,
+    classify_with_target,
+};
 use crate::groups::{GroupVerdict, Groups};
 use crate::plan::{
     PlanFile, PlanIncrement, PlanStage, ResolvedVersions, SCHEMA_VERSION, VersionBump,
@@ -26,7 +29,7 @@ use crate::report::write_report;
 use crate::resolved::{
     Artifact, Inputs, ResolvedState, StaleInputs, canonical, read_json, write_json,
 };
-use crate::{CheckFormat, CheckRequest, WriteFileError, check_with_target};
+use crate::{CheckFormat, WriteFileError};
 
 /// Post-refresh workspace inputs captured before semantic assessment.
 #[derive(Debug, Deserialize, Serialize)]
@@ -108,11 +111,13 @@ pub fn run_preview(
         inputs.verify(manifest, None).map(|_| ())
     })?;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
-    let mut classification = classify_with_target(
+    let mut cache = SnapshotCache::default();
+    let mut classification = classify_with_cache(
         &prospective.manifest,
         Some(&prepared.inputs.release_history),
         prepared.inputs.merge_target.as_deref(),
         verbose,
+        &mut cache,
     )?;
     let resolved = resolve_plan(
         &plan,
@@ -132,11 +137,12 @@ pub fn run_preview(
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
             })?;
             prospective.resolve(verbose)?;
-            classification = classify_with_target(
+            classification = classify_with_cache(
                 &prospective.manifest,
                 Some(&prepared.inputs.release_history),
                 prepared.inputs.merge_target.as_deref(),
                 verbose,
+                &mut cache,
             )?;
             let files = prospective.artifacts(&prepared.inputs)?;
             let mut expanded = resolved.clone();
@@ -150,17 +156,11 @@ pub fn run_preview(
             Ok((expanded, files))
         },
     )?;
-    let result = check_with_target(
-        &CheckRequest {
-            release_history: Some(&prepared.inputs.release_history),
-            manifest_path: &prospective.manifest,
-            format: CheckFormat::Text,
-            verify_packaging: false,
-        },
-        prepared.inputs.merge_target.as_deref(),
-        verbose,
-    )?;
-    require_complete_preview(result.passed, result.message)?;
+    // Convergence leaves the candidate unchanged after this classification. Keep the readiness
+    // verdict and report on those same observations; source/history verification still follows.
+    // Ref: packages/cargo-release-plan/docs/implementation.md, "Prepared and prospective resolution".
+    let (passed, message) = check_classification(&classification, CheckFormat::Text);
+    require_complete_preview(passed, message)?;
     prepared.inputs.verify(manifest, None)?;
     let final_digest = prepared.inputs.final_digest(&files)?;
     let evidence_manifest_path = prospective.retain(&output, prepared.inputs.root())?;

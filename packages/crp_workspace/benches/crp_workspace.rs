@@ -1,4 +1,4 @@
-//! In-process installation-closure benchmarks.
+//! In-process workspace observation benchmarks.
 
 #![allow(
     missing_docs,
@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use crp_workspace::git::decode_blob_batch;
 use crp_workspace::lockfile::benchmark_lockfile_closures;
 
 ::testing::set_allocator!();
@@ -20,8 +21,34 @@ const HIGH_PACKAGE_COUNT: usize = 64;
 /// Represents several binaries sharing one parsed workspace lockfile.
 const CLOSURE_COUNT: usize = 16;
 
-criterion_group!(benches, lockfile_closure);
+criterion_group!(benches, lockfile_closure, historical_blob_batch);
 criterion_main!(benches);
+
+fn historical_blob_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crp_workspace/historical_blob_batch");
+    for (name, count) in [("low", LOW_PACKAGE_COUNT), ("high", HIGH_PACKAGE_COUNT)] {
+        let ids: Vec<_> = (0..count).map(|index| format!("{index:040x}")).collect();
+        let ids: Vec<_> = ids.iter().map(String::as_str).collect();
+        // A compact manifest-shaped blob keeps the measured operation focused on framing
+        // and allocation across workspace sizes, not TOML interpretation or subprocess latency.
+        let body = b"[package]\nname = 'member'\nversion = '1.0.0'\n";
+        let mut output = Vec::new();
+        for id in &ids {
+            output.extend_from_slice(format!("{id} blob {}\n", body.len()).as_bytes());
+            output.extend_from_slice(body);
+            output.push(b'\n');
+        }
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(
+                    decode_blob_batch(black_box(&ids), black_box(&output))
+                        .expect("the fixture contains one complete blob per requested identity"),
+                )
+            });
+        });
+    }
+    group.finish();
+}
 
 fn lockfile_closure(c: &mut Criterion) {
     // Identifiers name the application workload independently of its implementation partition.

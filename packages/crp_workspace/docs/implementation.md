@@ -17,6 +17,11 @@ rewriting history. Whether a descendant snapshot represents an anticipated squas
 predecessor is versioning policy, not a workspace acquisition rule.
 Ancestry exit-status interpretation stays in process: Git's positive and negative
 answers are distinct from execution failures, including signal termination.
+Historical manifest acquisition batches recorded blob identities through `git cat-file`.
+Requests never encode paths as lines, and responses retain their exact byte lengths.
+Callers decode only the manifests they interpret. Captured-input subprocesses feed
+stdin concurrently with draining stdout and stderr, so large batches cannot deadlock
+on opposing pipe buffers; child failures retain their diagnostics.
 
 Path handling probes actual filesystem alias behavior rather than assuming case
 sensitivity from the operating system. Dependency membership uses the lexical member

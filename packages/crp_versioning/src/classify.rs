@@ -10,10 +10,10 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
-use std::{fs, io, str};
+use std::{fs, io, mem, str};
 
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
-use crp_workspace::git::{GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode};
+use crp_workspace::git::{GitRepo, TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode};
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
 };
@@ -424,6 +424,23 @@ pub fn classify_with_target(
     merge_target: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<Classification, AppError> {
+    classify_with_cache(
+        manifest_path,
+        release_history,
+        merge_target,
+        verbose,
+        &mut SnapshotCache::default(),
+    )
+}
+
+/// Reacquires candidate observations while reusing only context-bound committed snapshots.
+pub(crate) fn classify_with_cache(
+    manifest_path: &Path,
+    release_history: Option<&str>,
+    merge_target: Option<&str>,
+    verbose: Verbose<'_>,
+    cache: &mut SnapshotCache,
+) -> Result<Classification, AppError> {
     let (mut work_tree, git) = load_tracked_work_tree(manifest_path)?;
     let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
     let release_history_revision = history.release_history_revision.clone();
@@ -444,8 +461,10 @@ pub fn classify_with_target(
         )
     });
 
-    let mut cache = SnapshotCache::new(
+    cache.bind(
+        &git,
         &work_tree.workspace_root,
+        PathCase::probe(&work_tree.workspace_root),
         work_tree.installation.registries.clone(),
     );
     let history_snapshot = cache.snapshot(&git, history_commit)?;
@@ -491,7 +510,7 @@ pub fn classify_with_target(
     let mut lockfiles = LockfileCache {
         case: cache.case(),
         work: None,
-        anchors: HashMap::new(),
+        anchors: mem::take(&mut cache.lockfiles),
     };
 
     for package in &work_tree.packages {
@@ -505,12 +524,13 @@ pub fn classify_with_target(
             &history_snapshot,
             projected,
             &work_root_doc,
-            &mut cache,
+            cache,
             &mut lockfiles,
             verbose,
         )?;
         classes.push(class);
     }
+    cache.lockfiles = lockfiles.anchors;
 
     let group_verdicts = groups.verdicts(&versions, &exempt);
     for (name, verdict) in &group_verdicts {
@@ -1570,33 +1590,78 @@ struct CommitSnapshot {
     installation: InstallationGraph,
 }
 
-/// Cache of [`CommitSnapshot`] values so a first-parent walk does not re-parse.
-struct SnapshotCache {
+/// Operation-scoped committed snapshots, never candidate observations or verdicts.
+///
+/// Ref: docs/implementation.md, "Shared operation and tests".
+#[derive(Default)]
+pub(crate) struct SnapshotCache {
     inner: HashMap<String, Rc<CommitSnapshot>>,
+    // Only committed lockfiles survive a pass; candidate lockfiles must be reparsed.
+    lockfiles: HashMap<String, Lockfile>,
+    context: Option<SnapshotContext>,
+}
+
+/// Repository and interpretation inputs under which a commit snapshot is reusable.
+#[derive(Eq, PartialEq)]
+struct SnapshotContext {
+    root: PathBuf,
+    prefix: String,
+    workspace_root: PathBuf,
     case: PathCase,
     registries: BTreeMap<String, String>,
 }
 
 impl SnapshotCache {
-    /// Probes the work tree once; every snapshot matches members the same way.
-    fn new(workspace_root: &Path, registries: BTreeMap<String, String>) -> Self {
-        Self {
-            inner: HashMap::new(),
-            case: PathCase::probe(workspace_root),
+    fn bind(
+        &mut self,
+        git: &GitRepo,
+        workspace_root: &Path,
+        case: PathCase,
+        registries: BTreeMap<String, String>,
+    ) {
+        let context = SnapshotContext {
+            root: git.root().to_path_buf(),
+            prefix: git.prefix().to_owned(),
+            workspace_root: workspace_root.to_path_buf(),
+            case,
             registries,
+        };
+        if self.context.as_ref() != Some(&context) {
+            self.inner.clear();
+            self.lockfiles.clear();
+            self.context = Some(context);
         }
     }
 
     /// The probed case rules, shared by member matching and README detection.
     fn case(&self) -> PathCase {
-        self.case
+        self.context
+            .as_ref()
+            .expect("classification binds its observation context before using snapshots")
+            .case
     }
 
+    // Native acquisition only on a cache miss; snapshot_with owns reuse and error handling.
+    #[cfg_attr(test, mutants::skip)]
     fn snapshot(&mut self, git: &GitRepo, commit: &str) -> Result<Rc<CommitSnapshot>, AppError> {
+        self.snapshot_with(commit, |context| {
+            load_snapshot(git, commit, context.case, &context.registries)
+        })
+    }
+
+    fn snapshot_with(
+        &mut self,
+        commit: &str,
+        load: impl FnOnce(&SnapshotContext) -> Result<CommitSnapshot, AppError>,
+    ) -> Result<Rc<CommitSnapshot>, AppError> {
         if let Some(existing) = self.inner.get(commit) {
             return Ok(Rc::clone(existing));
         }
-        let built = Rc::new(load_snapshot(git, commit, self.case, &self.registries)?);
+        let context = self
+            .context
+            .as_ref()
+            .expect("classification binds its observation context before using snapshots");
+        let built = Rc::new(load(context)?);
         self.inner.insert(commit.to_string(), Rc::clone(&built));
         Ok(built)
     }
@@ -1610,9 +1675,28 @@ fn load_snapshot(
     case: PathCase,
     registries: &BTreeMap<String, String>,
 ) -> Result<CommitSnapshot, AppError> {
-    let tree_paths = git.ls_tree_paths(commit)?;
+    let tree = git.ls_tree(commit, &[])?;
+    let manifests: Vec<_> = tree
+        .iter()
+        // Gitlinks are not blobs, even when a submodule directory is named Cargo.toml.
+        .filter(|entry| {
+            case.is_manifest(&entry.path) && (entry.mode.starts_with("100") || entry.is_symlink())
+        })
+        .collect();
+    let ids: Vec<_> = manifests.iter().map(|entry| entry.id.as_str()).collect();
+    let blobs = git.show_blob_batch(&ids)?;
+    let blobs: HashMap<_, _> = manifests
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .zip(blobs)
+        .collect();
+    let tree_paths: Vec<_> = tree.iter().map(|entry| entry.path.clone()).collect();
     load_snapshot_with(git, case, registries, &tree_paths, |path| {
-        git.show_file(commit, path)
+        match blobs.get(path) {
+            // Decoding stays lazy: unrelated manifests need not be valid TOML or UTF-8.
+            Some(bytes) => decode_file(Some(bytes.clone()), commit, path),
+            None => git.show_file(commit, path),
+        }
     })
 }
 
@@ -2274,6 +2358,7 @@ mod tests {
         );
     }
 
+    use crp_workspace::git::testing::unopened;
     use crp_workspace::inherited::InheritedKeys;
     use crp_workspace::manifest::{InstallationDependencies, TargetDiscovery};
 
@@ -2282,15 +2367,118 @@ mod tests {
     #[test]
     fn snapshot_case_controls_path_identity() {
         for case in [PathCase::Sensitive, PathCase::Insensitive] {
-            let cache = SnapshotCache {
-                inner: HashMap::new(),
-                registries: BTreeMap::new(),
+            let mut cache = SnapshotCache::default();
+            cache.bind(
+                &unopened(Path::new("repository")),
+                Path::new("workspace"),
                 case,
-            };
+                BTreeMap::new(),
+            );
             assert_eq!(
                 cache.case().same_path("a", "A"),
                 case == PathCase::Insensitive
             );
+        }
+    }
+
+    fn empty_snapshot() -> CommitSnapshot {
+        CommitSnapshot {
+            packages: BTreeMap::new(),
+            unpublished: BTreeSet::new(),
+            root_doc: DocumentMut::new(),
+            installation: InstallationGraph::default(),
+        }
+    }
+
+    #[test]
+    fn snapshots_reuse_only_successful_observations_of_the_requested_commit() {
+        let git = unopened(Path::new("repository"));
+        let mut cache = SnapshotCache::default();
+        cache.bind(
+            &git,
+            Path::new("workspace"),
+            PathCase::Sensitive,
+            BTreeMap::new(),
+        );
+        let first = cache
+            .snapshot_with("first", |_| Ok(empty_snapshot()))
+            .unwrap();
+        cache.lockfiles.insert(
+            "first".to_string(),
+            Lockfile::parse("version = 4", "lock").unwrap(),
+        );
+        cache.bind(
+            &git,
+            Path::new("workspace"),
+            PathCase::Sensitive,
+            BTreeMap::new(),
+        );
+        let reused = cache.snapshot_with("first", |_| panic!("cached")).unwrap();
+        assert!(Rc::ptr_eq(&first, &reused));
+        assert!(cache.lockfiles.contains_key("first"));
+        let error = cache
+            .snapshot_with("second", |_| Err(io::Error::other("snapshot").into()))
+            .unwrap_err();
+        assert!(error.find_source::<io::Error>().is_some());
+        assert_eq!(cache.inner.len(), 1);
+        let second = cache
+            .snapshot_with("second", |_| Ok(empty_snapshot()))
+            .unwrap();
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert_eq!(cache.inner.len(), 2);
+    }
+
+    #[test]
+    fn every_snapshot_interpretation_input_invalidates_reuse() {
+        let git = unopened(Path::new("repository"));
+        let workspace = Path::new("workspace");
+        let registries = BTreeMap::from([("custom".to_string(), "registry-index".to_string())]);
+        let mut different_root = git.clone();
+        different_root.root = PathBuf::from("another-repository");
+        let mut different_prefix = git.clone();
+        different_prefix.prefix = "nested".to_string();
+        for (git, workspace, case, registries) in [
+            (
+                different_root,
+                workspace,
+                PathCase::Sensitive,
+                registries.clone(),
+            ),
+            (
+                different_prefix,
+                workspace,
+                PathCase::Sensitive,
+                registries.clone(),
+            ),
+            (
+                git.clone(),
+                Path::new("another-workspace"),
+                PathCase::Sensitive,
+                registries.clone(),
+            ),
+            (git.clone(), workspace, PathCase::Insensitive, registries),
+            (git, workspace, PathCase::Sensitive, BTreeMap::new()),
+        ] {
+            let mut cache = SnapshotCache::default();
+            cache.bind(
+                &unopened(Path::new("repository")),
+                Path::new("workspace"),
+                PathCase::Sensitive,
+                BTreeMap::from([("custom".to_string(), "registry-index".to_string())]),
+            );
+            let before = cache
+                .snapshot_with("commit", |_| Ok(empty_snapshot()))
+                .unwrap();
+            cache.lockfiles.insert(
+                "commit".to_string(),
+                Lockfile::parse("version = 4", "lock").unwrap(),
+            );
+            cache.bind(&git, workspace, case, registries);
+            assert!(cache.lockfiles.is_empty());
+            let after = cache
+                .snapshot_with("commit", |_| Ok(empty_snapshot()))
+                .unwrap();
+            assert!(!Rc::ptr_eq(&before, &after));
         }
     }
 

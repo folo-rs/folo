@@ -8,6 +8,26 @@ use ohno::ErrorExt as _;
 use tempfile::TempDir;
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "spawns a child that rejects its arguments before consuming input"
+)]
+fn early_child_failure_retains_its_diagnostic_instead_of_the_broken_pipe() {
+    crate::with_io_test(|| {
+        // The input exceeds pipe capacity, so rejection can interrupt the writer.
+        let input = vec![b'x'; 1 << 20];
+        let error = run_capture_input_bytes(
+            "git",
+            &["--release-plan-invalid-option"],
+            &input,
+            Path::new("."),
+        )
+        .unwrap_err();
+        assert!(error.is_nonzero_exit());
+    });
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "spawns Git with captured standard input")]
 fn captured_input_failure_preserves_a_nonzero_exit() {
     // Git reads the complete object before validating its tree encoding, so this does
