@@ -35,6 +35,34 @@ Repository-controlled display strings use the diagnostic component's presentatio
 The command boundary also supplies the fixed orchestration credential names shared by
 native, compatibility and registry compilation; each adapter owns environment mutation.
 
+## Disposable immutable observations
+
+The cache storage subject owns location resolution through Cargo metadata, source/evidence
+path admission, typed entry envelopes and atomic publication. Entry subjects own complete
+keys and computation revisions. Exact keys are checked in addition to hashed filenames;
+payload checksums detect accidental corruption, not hostile same-account modification.
+An incompatible entry is a miss. Corruption and storage failures are diagnosed independently
+of acquisition failures, and only successful acquisitions are published. Same-directory
+temporary files and atomic replacement keep concurrent readers on complete entries.
+The tool-owned directory ignores its untracked contents without excluding tracked source;
+an existing ignore file is never replaced. Storage failure diagnostics are advisory and
+reported once through the shared invocation store, including across prospective passes.
+Source directories and workflow evidence cannot contain the cache.
+
+Git's full recorded trees and raw parent-header facts are keyed by resolved object identity
+and effective object interpretation. Their data can be shared across original and prospective
+repositories; package projections remain repository/workspace scoped. Full-tree path and
+mode/object indexes are constructed once and retained by the snapshot owner. Refs, traversal,
+parent availability and shallow verdicts are always acquired freshly.
+
+Replacement refs, replacement environment and graft contents are observed at each
+classification boundary and invalidate invocation memory when they change. Histories with
+replacement refs or grafts bypass persistent observations because their referenced-object
+availability is not immutable. Neither credentials nor Git configuration values containing
+credentials are stored. This is local disposable storage, not a remote trust protocol.
+
+## Observation boundaries and tests
+
 Pure parsing and graph tests remain in process. Real Git/Cargo/filesystem tests
 belong to boundary integration targets, with hermetic Git identity/configuration.
 Shared integration fixtures are opt-in private test support, not acquisition hidden

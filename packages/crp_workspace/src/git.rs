@@ -15,6 +15,7 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Output;
 
 use ohno::AppError;
+use serde::{Deserialize, Serialize};
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes, spawn};
 use crate::manifest::{PathCase, to_git_separators};
@@ -25,6 +26,8 @@ use crate::{
 
 mod blob_batch;
 pub use blob_batch::decode_blob_batch;
+mod observations;
+pub use observations::*;
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
@@ -240,8 +243,18 @@ impl GitRepo {
     // Acquires native history observations; parent_boundary retains the lazy decision protocol.
     #[cfg_attr(test, mutants::skip)]
     pub fn has_parent_or_is_shallow_boundary(&self, commit: &str) -> Result<bool, AppError> {
+        self.parent_boundary_with_header(commit, self.commit_has_parent_header(commit)?)
+    }
+
+    /// Rechecks parent availability and shallow state around a previously acquired raw header.
+    #[cfg_attr(test, mutants::skip)] // Native facts stay fresh; parent_boundary owns pure policy.
+    pub fn parent_boundary_with_header(
+        &self,
+        commit: &str,
+        has_parent: bool,
+    ) -> Result<bool, AppError> {
         parent_boundary(
-            self.commit_has_parent_header(commit)?,
+            has_parent,
             || {
                 let spec = format!("{commit}^");
                 Ok(run_capture_ok("git", &["rev-parse", "--verify", &spec], &self.root)?.is_some())
@@ -687,7 +700,7 @@ fn rendered_arg_cost(path: &str) -> usize {
 /// Classification needs more of a tree record than the path: the mode says
 /// whether the entry is a symbolic link, and the object id is the content
 /// identity a work-tree file is compared against.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TreeEntry {
     pub path: String,
     pub id: String,

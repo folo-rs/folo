@@ -14,6 +14,25 @@ Angle-bracket values below describe arguments to supply, not literal shell
 input. The [integration walkthrough](../integration/local-planning.md) provides
 concrete PowerShell command sequences.
 
+## Disposable cache
+
+`report`, `check`, `prepare`, `preview` and `check-compatibility` cache reusable
+observations automatically in `<Cargo target directory>/cargo-release-plan/cache`.
+Cargo supplies the effective target directory, including `.cargo/config.toml`
+and `CARGO_TARGET_DIR` settings. Prospective workspaces and compatibility checker
+build-directory settings do not relocate this cache away from the original workspace.
+
+Use `--cache <directory>` to place it elsewhere; relative paths start at the
+invocation working directory. Use `--no-cache` to bypass reads and writes.
+The options cannot be combined. Keep the cache separate from source and evidence.
+
+No session identifier or workflow-managed validity check is needed. The tool
+decides which entries match the current inputs and continues to verify source
+and history. You can delete the cache or run `cargo clean` without invalidating
+prepared evidence or resolved plans. Corruption and cache I/O problems are
+reported and observations are reacquired; this does not suppress underlying
+Git or Cargo failures.
+
 ## Release context and identity
 
 ```text

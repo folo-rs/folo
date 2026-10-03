@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use clap::error::ErrorKind;
 use clap::{Error as ClapError, Parser, Subcommand, ValueEnum};
+use crp_workspace::cache::CacheOptions;
 
 use crate::{CheckFormat, RunInput};
 
@@ -61,7 +62,15 @@ impl Cli {
     /// recorded remote default branch, falling back to `origin/main`.
     #[must_use]
     pub fn into_input(self) -> RunInput {
-        match self.command {
+        let cache = match &self.command {
+            Command::Check(args) => args.cache.options(),
+            Command::Report(args) => args.cache.options(),
+            Command::Prepare(args) => args.cache.options(),
+            Command::Preview(args) => args.cache.options(),
+            Command::CheckCompatibility(args) => args.cache.options(),
+            _ => CacheOptions::Default,
+        };
+        let input = match self.command {
             Command::Version => RunInput::Version,
             Command::CheckPublished(args) => RunInput::CheckPublished {
                 manifest_path: args
@@ -214,6 +223,14 @@ impl Cli {
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
                 verbose: args.verbose,
             },
+        };
+        if cache == CacheOptions::Default {
+            input
+        } else {
+            RunInput::Cached {
+                command: Box::new(input),
+                cache,
+            }
         }
     }
 }
@@ -357,6 +374,8 @@ struct PublishedArgs {
 /// Captured evidence or fresh read-only classification supplies the comparison inputs.
 #[derive(Debug, Parser)]
 struct CompatibilityArgs {
+    #[command(flatten)]
+    cache: CacheArgs,
     #[arg(long)]
     manifest_path: Option<PathBuf>,
     /// Check the captured original prepared inputs.
@@ -546,6 +565,8 @@ struct InspectPlanArgs {
 /// Arguments for preparation before semantic assessment.
 #[derive(Debug, Parser)]
 struct PrepareArgs {
+    #[command(flatten)]
+    cache: CacheArgs,
     /// Directory receiving report.json, diffs/, and prepared.json.
     #[arg(long)]
     output: PathBuf,
@@ -566,6 +587,8 @@ struct PrepareArgs {
 /// Arguments for proposal-specific offline resolution.
 #[derive(Debug, Parser)]
 struct PreviewArgs {
+    #[command(flatten)]
+    cache: CacheArgs,
     /// Proposed version decisions.
     #[arg(long)]
     plan: PathBuf,
@@ -600,6 +623,8 @@ struct VerifyPreviewArgs {
 /// Arguments for `report`.
 #[derive(Debug, Parser)]
 struct ReportArgs {
+    #[command(flatten)]
+    cache: CacheArgs,
     /// Directory that receives `report.json` and `diffs/`.
     #[arg(long)]
     out_dir: PathBuf,
@@ -625,6 +650,8 @@ struct ReportArgs {
 /// Arguments for `check`.
 #[derive(Debug, Parser)]
 struct CheckArgs {
+    #[command(flatten)]
+    cache: CacheArgs,
     /// Actual release-history commit whose first-parent line supplies package anchors.
     ///
     /// Defaults to the default branch the `origin` remote advertises.
@@ -655,6 +682,30 @@ struct CheckArgs {
     /// Print explanatory notes for each classification decision.
     #[arg(long)]
     verbose: bool,
+}
+
+/// Shared storage controls; Cargo supplies the effective default target directory.
+#[derive(Debug, Parser)]
+struct CacheArgs {
+    /// Store disposable observations here instead of <Cargo target>/cargo-release-plan/cache.
+    /// Relative paths are resolved from the invocation working directory.
+    #[arg(long, value_name = "DIRECTORY", conflicts_with = "no_cache")]
+    cache: Option<PathBuf>,
+    /// Bypass cache reads and writes.
+    #[arg(long)]
+    no_cache: bool,
+}
+
+impl CacheArgs {
+    fn options(&self) -> CacheOptions {
+        if self.no_cache {
+            CacheOptions::Disabled
+        } else {
+            self.cache.as_ref().map_or(CacheOptions::Default, |path| {
+                CacheOptions::Directory(path.clone())
+            })
+        }
+    }
 }
 
 /// Arguments for `apply`.
@@ -698,12 +749,78 @@ impl From<CliCheckFormat> for CheckFormat {
 mod tests {
     use std::iter;
     use std::panic::{RefUnwindSafe, UnwindSafe};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
+    use crp_workspace::cache::CacheOptions;
     use static_assertions::assert_impl_all;
 
-    use super::{Cli, EarlyExit};
+    use super::{CacheArgs, Cli, EarlyExit};
     use crate::RunInput;
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "repeated full Clap-tree parsing; cache policy mapping has pure interpreter coverage"
+    )]
+    fn classification_commands_share_conflicting_storage_controls() {
+        for arguments in [
+            vec!["check"],
+            vec!["report", "--out-dir", "report"],
+            vec!["prepare", "--output", "prepared"],
+            vec![
+                "preview",
+                "--prepared",
+                "prepared.json",
+                "--plan",
+                "plan.json",
+                "--output",
+                "preview",
+            ],
+            vec!["check-compatibility", "--output", "compatibility"],
+        ] {
+            for controls in [vec!["--cache", "chosen"], vec!["--no-cache"]] {
+                let input = Cli::from_args_os(
+                    iter::once("cargo-release-plan")
+                        .chain(arguments.iter().copied())
+                        .chain(controls.iter().copied()),
+                )
+                .unwrap()
+                .into_input();
+                let RunInput::Cached { cache, .. } = input else {
+                    panic!()
+                };
+                assert_eq!(
+                    cache,
+                    if controls.first() == Some(&"--no-cache") {
+                        CacheOptions::Disabled
+                    } else {
+                        CacheOptions::Directory("chosen".into())
+                    }
+                );
+            }
+            Cli::from_args_os(
+                iter::once("cargo-release-plan")
+                    .chain(arguments.iter().copied())
+                    .chain(["--cache", "chosen", "--no-cache"]),
+            )
+            .unwrap_err();
+        }
+    }
+
+    #[test]
+    fn cache_policy_mapping_preserves_default_override_and_disable() {
+        for (cache, no_cache, expected) in [
+            (None, false, CacheOptions::Default),
+            (None, true, CacheOptions::Disabled),
+            (
+                Some(PathBuf::from("chosen")),
+                false,
+                CacheOptions::Directory("chosen".into()),
+            ),
+        ] {
+            assert_eq!(CacheArgs { cache, no_cache }.options(), expected);
+        }
+    }
 
     assert_impl_all!(Cli: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(EarlyExit: UnwindSafe, RefUnwindSafe);

@@ -13,7 +13,11 @@ use std::rc::Rc;
 use std::{fs, io, mem, str};
 
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
-use crp_workspace::git::{GitRepo, TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode};
+use crp_workspace::cache::{Cache, CacheOptions};
+use crp_workspace::git::{
+    CommitHeaders, GitObjectContext, GitRepo, HistoricalTree, TreeEntry, WorkTreeModes,
+    decode_file, join_git_rel, tree_mode,
+};
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
 };
@@ -429,12 +433,12 @@ pub fn classify_with_target(
         release_history,
         merge_target,
         verbose,
-        &mut SnapshotCache::default(),
+        &mut SnapshotCache::new(Cache::resolve(manifest_path, &CacheOptions::Default)?),
     )
 }
 
 /// Reacquires candidate observations while reusing only context-bound committed snapshots.
-pub(crate) fn classify_with_cache(
+pub fn classify_with_cache(
     manifest_path: &Path,
     release_history: Option<&str>,
     merge_target: Option<&str>,
@@ -461,16 +465,17 @@ pub(crate) fn classify_with_cache(
         )
     });
 
+    cache.bind_objects(GitObjectContext::capture(&git)?);
     cache.bind(
         &git,
         &work_tree.workspace_root,
         PathCase::probe(&work_tree.workspace_root),
         work_tree.installation.registries.clone(),
     );
-    let history_snapshot = cache.snapshot(&git, history_commit)?;
+    let history_snapshot = cache.snapshot(&git, history_commit, verbose)?;
     let target_snapshot = history
         .effective_target()
-        .map(|target| cache.snapshot(&git, target))
+        .map(|target| cache.snapshot(&git, target, verbose))
         .transpose()?;
     let projected = target_snapshot.as_ref().map(|snapshot| {
         let target = history
@@ -605,7 +610,7 @@ fn classify_one(
     let anchor = if let Some(anchor) = anticipated {
         anchor
     } else if history_snapshot.packages.contains_key(name) {
-        let timeline = build_timeline(git, name, commits, cache)?;
+        let timeline = build_timeline(git, name, commits, cache, verbose)?;
         resolve_anchor(name, &timeline)?
     } else {
         // A package the baseline does not publish has no released version to
@@ -658,13 +663,13 @@ fn classify_one(
         package.manifest.version
     ));
 
-    let anchor_snapshot = cache.snapshot(git, &anchor.commit)?;
+    let anchor_snapshot = cache.snapshot(git, &anchor.commit, verbose)?;
     let anchor_pkg = anchor_snapshot
         .packages
         .get(name)
         .expect("the anchor commit is the newest commit at which the anchor version was observed, and both the timeline and this snapshot read that version from the same cache, so the package is present here");
 
-    let (changed_files, patch, stat, untracked) = diff_package(
+    let (changed_files, patch, stat, untracked) = diff_package_with_tree(
         git,
         name,
         &anchor.commit,
@@ -676,6 +681,7 @@ fn classify_one(
             case: cache.case(),
         },
         &work_tree_side(package, cache.case()),
+        &anchor_snapshot.tree,
     )?;
 
     let mut changed = changed_files;
@@ -764,15 +770,26 @@ fn build_timeline(
     name: &str,
     commits: &[String],
     cache: &mut SnapshotCache,
+    verbose: Verbose<'_>,
 ) -> Result<Vec<TimelineEntry>, AppError> {
-    build_timeline_with(
+    // Header memory has a separate lifetime from live boundary verdicts. Split ownership
+    // for the callbacks and restore it even when snapshot or history acquisition fails.
+    let mut headers = mem::take(&mut cache.headers);
+    let storage = cache.storage.clone();
+    let objects = cache.objects.clone();
+    let result = build_timeline_with(
         commits,
         |commit| {
-            let snapshot = cache.snapshot(git, commit)?;
+            let snapshot = cache.snapshot(git, commit, verbose)?;
             Ok(snapshot_presence(&snapshot, name))
         },
-        |commit| git.has_parent_or_is_shallow_boundary(commit),
-    )
+        |commit| {
+            let parent = headers.has_parent(git, commit, &objects, &storage, verbose)?;
+            git.parent_boundary_with_header(commit, parent)
+        },
+    );
+    cache.headers = headers;
+    result
 }
 
 fn snapshot_presence(snapshot: &CommitSnapshot, name: &str) -> Presence {
@@ -905,6 +922,19 @@ pub fn diff_package(
     anchor: &PackageSide<'_>,
     work_side: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
+    let tree = HistoricalTree::new(git.ls_tree(anchor_commit, &[])?);
+    diff_package_with_tree(git, name, anchor_commit, anchor, work_side, &tree)
+}
+
+#[cfg_attr(test, mutants::skip)] // Native current-input acquisition and blob reads.
+fn diff_package_with_tree(
+    git: &GitRepo,
+    name: &str,
+    anchor_commit: &str,
+    anchor: &PackageSide<'_>,
+    work_side: &PackageSide<'_>,
+    anchor_tree: &HistoricalTree,
+) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
     // resource may sit outside the package directory or outside its packaging
     // rules, so the directory listing does not cover it. Querying Git for those
@@ -914,12 +944,11 @@ pub fn diff_package(
     let tracked_paths = git.tracked_paths(&resource_paths, work_side.case)?;
     let tracked_resources = tracked_resources(work_side, &tracked_paths);
 
-    let anchor_tree = anchor_tree_entries(anchor, |paths| git.ls_tree(anchor_commit, paths))?;
-    let anchor_files = released_at_commit(&anchor_tree, anchor);
+    let anchor_files = released_at_commit(anchor_tree, anchor);
     let work = released_in_work_tree(git, work_side, &tracked_resources)?;
     let work_files = &work.released;
 
-    reject_anchor_symlinks(name, &anchor_tree, &anchor_files)?;
+    reject_anchor_symlinks(name, anchor_tree, &anchor_files)?;
 
     // Git converts content on its way into the object database, so a file on
     // disk and the blob recording it need not hold the same bytes. Comparing
@@ -933,7 +962,7 @@ pub fn diff_package(
     let (changed, patch, stat) = PackageDiff {
         anchor_files: &anchor_files,
         work_files,
-        anchor_tree: &anchor_tree,
+        anchor_tree,
         work_modes: &work_modes,
         work_ids: &work_ids,
     }
@@ -952,7 +981,7 @@ pub fn diff_package(
 struct PackageDiff<'a> {
     anchor_files: &'a HashMap<String, String>,
     work_files: &'a HashMap<String, String>,
-    anchor_tree: &'a [TreeEntry],
+    anchor_tree: &'a HistoricalTree,
     work_modes: &'a WorkTreeModes,
     work_ids: &'a HashMap<String, String>,
 }
@@ -970,18 +999,9 @@ impl PackageDiff<'_> {
             work_modes,
             work_ids,
         } = self;
-        let anchor_ids: HashMap<&str, &str> = anchor_tree
-            .iter()
-            .map(|entry| (entry.path.as_str(), entry.id.as_str()))
-            .collect();
         // Cargo copies the executable bit into the archive, so a file made
         // executable without an edit is released content that changed even though
         // its blob is untouched. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
-        let anchor_exec: HashSet<&str> = anchor_tree
-            .iter()
-            .filter(|entry| entry.is_executable())
-            .map(|entry| entry.path.as_str())
-            .collect();
         let rels: BTreeSet<&str> = anchor_files
             .keys()
             .chain(work_files.keys())
@@ -996,13 +1016,17 @@ impl PackageDiff<'_> {
         for rel in rels {
             let old_id = anchor_files
                 .get(rel)
-                .and_then(|path| anchor_ids.get(path.as_str()).copied());
+                .and_then(|path| anchor_tree.entry(path).map(|entry| entry.id.as_str()));
             let new_id = work_ids.get(rel).map(String::as_str);
             // The mode is only a change while the file exists at both ends: an
             // addition or a deletion is already reported by presence alone.
             let mode_change = match (anchor_files.get(rel), work_files.get(rel)) {
                 (Some(old_path), Some(new_path)) if old_id.is_some() && new_id.is_some() => {
-                    let old_mode = tree_mode(anchor_exec.contains(old_path.as_str()));
+                    let old_mode = tree_mode(
+                        anchor_tree
+                            .entry(old_path)
+                            .is_some_and(TreeEntry::is_executable),
+                    );
                     let new_mode = tree_mode(work_modes.is_executable(new_path));
                     (old_mode != new_mode).then_some((old_mode, new_mode))
                 }
@@ -1037,11 +1061,11 @@ impl PackageDiff<'_> {
             let new = new_id.map(&mut new_bytes).transpose()?;
             let old_side = old.as_deref().map(|content| FileVersion {
                 content,
-                mode: tree_mode(
-                    anchor_files
-                        .get(rel)
-                        .is_some_and(|path| anchor_exec.contains(path.as_str())),
-                ),
+                mode: tree_mode(anchor_files.get(rel).is_some_and(|path| {
+                    anchor_tree
+                        .entry(path)
+                        .is_some_and(TreeEntry::is_executable)
+                })),
             });
             let new_side = new.as_deref().map(|content| FileVersion {
                 content,
@@ -1173,22 +1197,14 @@ fn validated_work_tree_files_with<'a>(
 /// released at the anchor are matched against the links the tree records.
 fn reject_anchor_symlinks(
     name: &str,
-    entries: &[TreeEntry],
+    tree: &HistoricalTree,
     released: &HashMap<String, String>,
 ) -> Result<(), AppError> {
-    let links: HashSet<&str> = entries
-        .iter()
-        .filter(|entry| entry.is_symlink())
-        .map(|entry| entry.path.as_str())
-        .collect();
-    if links.is_empty() {
-        return Ok(());
-    }
     // The released paths are a hash map, so the lowest matching path is chosen
     // to keep the reported one stable across runs.
     let offender = released
         .values()
-        .filter(|path| links.contains(path.as_str()))
+        .filter(|path| tree.entry(path).is_some_and(TreeEntry::is_symlink))
         .min()
         .cloned();
     match offender {
@@ -1197,32 +1213,23 @@ fn reject_anchor_symlinks(
     }
 }
 
-/// Lists the tree at `commit` for everything a package could release.
-///
-/// The package directory alone does not cover a manifest resource that lives
-/// outside it, so those paths are asked for in the same listing.
-fn anchor_tree_entries(
-    side: &PackageSide<'_>,
-    mut list: impl FnMut(&[&str]) -> Result<Vec<TreeEntry>, AppError>,
-) -> Result<Vec<TreeEntry>, AppError> {
-    if side.case == PathCase::Insensitive {
-        // Git can record files under differently cased directory prefixes that
-        // the checkout merges into one directory. ls-tree rejects icase magic,
-        // so only a full listing covers both directory and resource aliases.
-        return list(&[""]);
+fn released_at_commit(tree: &HistoricalTree, side: &PackageSide<'_>) -> HashMap<String, String> {
+    let mut released = released_by_rules(tree.paths(), tree.paths(), side);
+    if side.auto_readme
+        && let Some((name, path)) =
+            detected_readme_with(side.dir, side.case, |candidate| match side.case {
+                PathCase::Sensitive => tree.entry(candidate).map(|entry| entry.path.clone()),
+                PathCase::Insensitive => tree
+                    .paths()
+                    .iter()
+                    .filter(|path| side.case.same_path(path, candidate))
+                    .min()
+                    .cloned(),
+            })
+    {
+        released.entry(name).or_insert(path);
     }
-    let mut pathspecs: Vec<&str> = vec![side.dir];
-    pathspecs.extend(side.resources.values().map(String::as_str));
-    list(&pathspecs)
-}
-
-fn released_at_commit(entries: &[TreeEntry], side: &PackageSide<'_>) -> HashMap<String, String> {
-    let paths: Vec<String> = entries
-        .iter()
-        .map(|entry| entry.path.clone())
-        .collect::<Vec<_>>();
-    let mut released = released_from_paths(&paths, &paths, side);
-    let resources = tracked_resources(side, &paths);
+    let resources = tracked_resources(side, tree.paths());
     // Reading a resource back from the commit yields nothing when the commit
     // did not track it, so the tree itself performs the tracked-only filter the
     // work tree needs `tracked_paths` for.
@@ -1479,6 +1486,21 @@ fn released_from_paths(
     present: &[String],
     side: &PackageSide<'_>,
 ) -> HashMap<String, String> {
+    let mut map = released_by_rules(tracked, present, side);
+    if side.auto_readme {
+        let present: HashSet<&str> = present.iter().map(String::as_str).collect();
+        if let Some((name, full)) = detected_readme(side.dir, &present, side.case) {
+            map.entry(name).or_insert(full);
+        }
+    }
+    map
+}
+
+fn released_by_rules(
+    tracked: &[String],
+    present: &[String],
+    side: &PackageSide<'_>,
+) -> HashMap<String, String> {
     let nested = nested_package_dirs(present, side.dir, side.case);
     let mut map = HashMap::new();
     for full in tracked {
@@ -1490,12 +1512,6 @@ fn released_from_paths(
         };
         if side.rules.is_released(rel) {
             map.insert(rel.to_string(), full.clone());
-        }
-    }
-    if side.auto_readme {
-        let present: HashSet<&str> = present.iter().map(String::as_str).collect();
-        if let Some((name, full)) = detected_readme(side.dir, &present, side.case) {
-            map.entry(name).or_insert(full);
         }
     }
     map
@@ -1516,18 +1532,24 @@ fn released_from_paths(
 /// content change it is.
 /// Ref: packages/cargo-release-plan/docs/design.md, "Released content".
 fn detected_readme(dir: &str, present: &HashSet<&str>, case: PathCase) -> Option<(String, String)> {
+    detected_readme_with(dir, case, |candidate| match case {
+        PathCase::Sensitive => present.contains(candidate).then(|| candidate.to_string()),
+        PathCase::Insensitive => present
+            .iter()
+            .filter(|held| case.same_path(held, candidate))
+            .min()
+            .map(|held| (*held).to_string()),
+    })
+}
+
+fn detected_readme_with(
+    dir: &str,
+    case: PathCase,
+    mut recorded: impl FnMut(&str) -> Option<String>,
+) -> Option<(String, String)> {
     DEFAULT_README_FILES.iter().find_map(|name| {
         let candidate = join_relative(dir, name)?;
-        let full = match case {
-            PathCase::Sensitive => present.contains(candidate.as_str()).then_some(candidate),
-            // A volume cannot hold two spellings that differ only in case, so at
-            // most one entry can match; `min` only keeps the scan deterministic.
-            PathCase::Insensitive => present
-                .iter()
-                .filter(|held| case.same_path(held, &candidate))
-                .min()
-                .map(|held| (*held).to_string()),
-        }?;
+        let full = recorded(&candidate)?;
         let rel = case.relativize(&full, dir)?.to_string();
         Some((rel, full))
     })
@@ -1579,6 +1601,7 @@ pub struct HistoricalPackage {
 /// Workspace members and root manifest at one commit.
 #[derive(Clone, Debug)]
 struct CommitSnapshot {
+    tree: Rc<HistoricalTree>,
     packages: BTreeMap<String, HistoricalPackage>,
     /// Members that declared `publish = false` at this commit.
     ///
@@ -1593,16 +1616,19 @@ struct CommitSnapshot {
 /// Operation-scoped committed snapshots, never candidate observations or verdicts.
 ///
 /// Ref: docs/implementation.md, "Shared operation and tests".
-#[derive(Default)]
-pub(crate) struct SnapshotCache {
+#[derive(Debug, Default)]
+pub struct SnapshotCache {
     inner: HashMap<String, Rc<CommitSnapshot>>,
     // Only committed lockfiles survive a pass; candidate lockfiles must be reparsed.
     lockfiles: HashMap<String, Lockfile>,
     context: Option<SnapshotContext>,
+    storage: Cache,
+    objects: GitObjectContext,
+    headers: CommitHeaders,
 }
 
 /// Repository and interpretation inputs under which a commit snapshot is reusable.
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 struct SnapshotContext {
     root: PathBuf,
     prefix: String,
@@ -1612,6 +1638,27 @@ struct SnapshotContext {
 }
 
 impl SnapshotCache {
+    #[must_use]
+    pub fn new(storage: Cache) -> Self {
+        Self {
+            storage,
+            ..Self::default()
+        }
+    }
+
+    fn clear(&mut self) {
+        self.inner.clear();
+        self.lockfiles.clear();
+        self.headers.clear();
+    }
+
+    fn bind_objects(&mut self, objects: GitObjectContext) {
+        if self.objects != objects {
+            self.clear();
+            self.objects = objects;
+        }
+    }
+
     fn bind(
         &mut self,
         git: &GitRepo,
@@ -1627,8 +1674,7 @@ impl SnapshotCache {
             registries,
         };
         if self.context.as_ref() != Some(&context) {
-            self.inner.clear();
-            self.lockfiles.clear();
+            self.clear();
             self.context = Some(context);
         }
     }
@@ -1643,9 +1689,23 @@ impl SnapshotCache {
 
     // Native acquisition only on a cache miss; snapshot_with owns reuse and error handling.
     #[cfg_attr(test, mutants::skip)]
-    fn snapshot(&mut self, git: &GitRepo, commit: &str) -> Result<Rc<CommitSnapshot>, AppError> {
+    fn snapshot(
+        &mut self,
+        git: &GitRepo,
+        commit: &str,
+        verbose: Verbose<'_>,
+    ) -> Result<Rc<CommitSnapshot>, AppError> {
+        let storage = self.storage.clone();
+        let objects = self.objects.clone();
         self.snapshot_with(commit, |context| {
-            load_snapshot(git, commit, context.case, &context.registries)
+            let tree = HistoricalTree::load(git, commit, &objects, &storage, verbose)?;
+            load_snapshot(
+                git,
+                commit,
+                context.case,
+                &context.registries,
+                &Rc::new(tree),
+            )
         })
     }
 
@@ -1674,9 +1734,10 @@ fn load_snapshot(
     commit: &str,
     case: PathCase,
     registries: &BTreeMap<String, String>,
+    tree: &Rc<HistoricalTree>,
 ) -> Result<CommitSnapshot, AppError> {
-    let tree = git.ls_tree(commit, &[])?;
     let manifests: Vec<_> = tree
+        .entries()
         .iter()
         // Gitlinks are not blobs, even when a submodule directory is named Cargo.toml.
         .filter(|entry| {
@@ -1690,8 +1751,7 @@ fn load_snapshot(
         .map(|entry| entry.path.as_str())
         .zip(blobs)
         .collect();
-    let tree_paths: Vec<_> = tree.iter().map(|entry| entry.path.clone()).collect();
-    load_snapshot_with(git, case, registries, &tree_paths, |path| {
+    load_snapshot_with(git, case, registries, Rc::clone(tree), |path| {
         match blobs.get(path) {
             // Decoding stays lazy: unrelated manifests need not be valid TOML or UTF-8.
             Some(bytes) => decode_file(Some(bytes.clone()), commit, path),
@@ -1704,9 +1764,10 @@ fn load_snapshot_with(
     git: &GitRepo,
     case: PathCase,
     registries: &BTreeMap<String, String>,
-    tree_paths: &[String],
+    tree: Rc<HistoricalTree>,
     mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
 ) -> Result<CommitSnapshot, AppError> {
+    let tree_paths = tree.paths();
     let requested_root = root_manifest_rel(git);
     let root_rel = case.recorded_path(tree_paths, &requested_root);
     // History before the workspace existed has no root manifest. An empty
@@ -1796,6 +1857,7 @@ fn load_snapshot_with(
         );
     }
     Ok(CommitSnapshot {
+        tree,
         packages,
         unpublished,
         root_doc,
@@ -2383,6 +2445,7 @@ mod tests {
 
     fn empty_snapshot() -> CommitSnapshot {
         CommitSnapshot {
+            tree: Rc::default(),
             packages: BTreeMap::new(),
             unpublished: BTreeSet::new(),
             root_doc: DocumentMut::new(),
@@ -2426,6 +2489,34 @@ mod tests {
             .unwrap();
         assert!(!Rc::ptr_eq(&first, &second));
         assert_eq!(cache.inner.len(), 2);
+    }
+
+    #[test]
+    fn git_interpretation_changes_invalidate_every_retained_observation() {
+        let mut context = serde_json::to_value(GitObjectContext::default()).unwrap();
+        *context.get_mut("format").unwrap() = "sha1".into();
+        let context: GitObjectContext = serde_json::from_value(context).unwrap();
+        let mut cache = SnapshotCache::default();
+        cache
+            .inner
+            .insert("commit".into(), Rc::new(empty_snapshot()));
+        cache.lockfiles.insert(
+            "commit".into(),
+            Lockfile::parse("version = 4", "lock").unwrap(),
+        );
+        cache.headers.parent_with("commit", || Ok(false)).unwrap();
+        cache.bind_objects(context.clone());
+        assert_eq!(cache.objects, context);
+        assert!(cache.inner.is_empty());
+        assert!(cache.lockfiles.is_empty());
+        assert!(cache.headers.parent_with("commit", || Ok(true)).unwrap());
+
+        cache
+            .inner
+            .insert("commit".into(), Rc::new(empty_snapshot()));
+        cache.bind_objects(context);
+        assert_eq!(cache.inner.len(), 1);
+        assert!(cache.headers.parent_with("commit", || panic!()).unwrap());
     }
 
     #[test]
@@ -2473,8 +2564,10 @@ mod tests {
                 "commit".to_string(),
                 Lockfile::parse("version = 4", "lock").unwrap(),
             );
+            assert!(!cache.headers.parent_with("commit", || Ok(false)).unwrap());
             cache.bind(&git, workspace, case, registries);
             assert!(cache.lockfiles.is_empty());
+            assert!(cache.headers.parent_with("commit", || Ok(true)).unwrap());
             let after = cache
                 .snapshot_with("commit", |_| Ok(empty_snapshot()))
                 .unwrap();
@@ -2501,20 +2594,7 @@ mod tests {
                 auto_readme: false,
                 case,
             };
-            let selected = anchor_tree_entries(&side, |paths| {
-                // Git's ls-tree pathspecs are literal and case-sensitive on every host.
-                Ok(tree
-                    .iter()
-                    .filter(|entry| {
-                        paths.iter().any(|path| {
-                            entry.path == *path
-                                || PathCase::Sensitive.relativize(&entry.path, path).is_some()
-                        })
-                    })
-                    .cloned()
-                    .collect())
-            })
-            .unwrap();
+            let selected = HistoricalTree::new(tree.to_vec());
             let released = released_at_commit(&selected, &side);
             assert_eq!(
                 released.get("Cargo.toml").map(String::as_str),
@@ -2529,10 +2609,7 @@ mod tests {
                 PathCase::Insensitive => {
                     assert_eq!(released.get("src/lib.rs").unwrap(), "PACKAGE/src/lib.rs");
                     assert_eq!(released.get("README.md").unwrap(), "Docs/readme.md");
-                    let entry = selected
-                        .iter()
-                        .find(|entry| entry.path == "Docs/readme.md")
-                        .unwrap();
+                    let entry = selected.entry("Docs/readme.md").unwrap();
                     assert_eq!(entry.id, "readme");
                     assert!(entry.is_executable());
                 }
@@ -2748,6 +2825,7 @@ mod tests {
     #[test]
     fn only_a_package_absent_from_the_snapshot_is_new_on_it() {
         let mut snapshot = CommitSnapshot {
+            tree: Rc::default(),
             packages: BTreeMap::new(),
             unpublished: BTreeSet::new(),
             root_doc: DocumentMut::new(),
@@ -2776,6 +2854,7 @@ mod tests {
     fn group_exemption_requires_absence_from_actual_history_and_the_anticipated_parent() {
         fn snapshot(presence: &str) -> CommitSnapshot {
             let mut snapshot = CommitSnapshot {
+                tree: Rc::default(),
                 packages: BTreeMap::new(),
                 unpublished: BTreeSet::new(),
                 root_doc: DocumentMut::new(),

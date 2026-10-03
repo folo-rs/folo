@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crp_diag::Verbose;
+use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::command::run_capture;
 use crp_workspace::git::os_path;
 use crp_workspace::manifest::requirement_names_version;
@@ -14,7 +15,7 @@ use ohno::AppError;
 use semver::Version;
 
 use crate::classify::{
-    ChangedItem, Classification, PackageClass, PackageStatus, classify_with_target,
+    ChangedItem, Classification, PackageClass, PackageStatus, SnapshotCache, classify_with_cache,
     released_work_tree_paths,
 };
 use crate::groups::GroupVerdict;
@@ -77,13 +78,29 @@ pub fn check_with_target(
     merge_target: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<CheckOutcome, AppError> {
+    check_with_cache(
+        request,
+        merge_target,
+        verbose,
+        Cache::resolve(request.manifest_path, &CacheOptions::Default)?,
+    )
+}
+
+#[cfg_attr(test, mutants::skip)] // Native observation acquisition.
+pub fn check_with_cache(
+    request: &CheckRequest<'_>,
+    merge_target: Option<&str>,
+    verbose: Verbose<'_>,
+    cache: Cache,
+) -> Result<CheckOutcome, AppError> {
     let (passed, message, warnings) = check_workspace(
         || {
-            classify_with_target(
+            classify_with_cache(
                 request.manifest_path,
                 request.release_history,
                 merge_target,
                 verbose,
+                &mut SnapshotCache::new(cache),
             )
         },
         request.format,

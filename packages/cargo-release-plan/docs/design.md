@@ -329,6 +329,26 @@ Changed inputs require fresh preparation and assessment.
 
 ## Commands
 
+### Disposable observation cache
+
+Classification commands use a tool-owned cache by default under Cargo's effective
+target directory, in `cargo-release-plan/cache`. Cargo configuration and
+`CARGO_TARGET_DIR` determine that target directory. The location belongs to the
+selected original workspace and remains the same during prospective resolution
+and external compatibility checking.
+
+`report`, `check`, `prepare`, `preview` and `check-compatibility` accept
+`--cache <directory>` to choose another location, or `--no-cache` to bypass cache
+reads and writes. These options conflict. Relative override paths are resolved
+from the initial invocation working directory. Cache locations must be separate
+from source inputs and workflow evidence.
+
+The cache is expendable acceleration, not evidence or workflow state. Removing
+it, including through `cargo clean`, leaves prepared and resolved plans usable.
+Cached observations never replace live source, candidate or history admission.
+Corrupt entries and cache I/O failures produce diagnostics and fresh acquisition;
+underlying Git, Cargo and classification failures remain errors.
+
 ### Standalone planning
 
 The skill has a configured mode and an explicitly requested standalone mode.

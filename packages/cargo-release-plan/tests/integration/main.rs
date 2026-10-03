@@ -13,6 +13,7 @@
 
 mod artifact_commands;
 mod baseline;
+mod cache;
 mod captured;
 mod cli_binary;
 mod compatibility;

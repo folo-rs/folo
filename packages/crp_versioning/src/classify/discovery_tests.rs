@@ -23,10 +23,10 @@ fn declared_resources_keep_the_first_archive_path_claim() {
 
 #[test]
 fn only_released_anchor_symlinks_are_rejected() {
-    let entries = [
+    let entries = HistoricalTree::new(vec![
         tree_entry("pkg/link", "120000"),
         tree_entry("pkg/plain", tree_mode(false)),
-    ];
+    ]);
     let plain = HashMap::from([("plain".to_string(), "pkg/plain".to_string())]);
     reject_anchor_symlinks("pkg", &entries, &plain).unwrap();
     let released = HashMap::from([("link".to_string(), "pkg/link".to_string())]);
@@ -185,7 +185,8 @@ fn acquired_diff_distinguishes_presence_content_and_modes() {
                     for same_content in [false, true] {
                         let mut entry = tree_entry("old/file", tree_mode(old_executable));
                         entry.id = "old-id".into();
-                        let tree = if old_present { vec![entry] } else { vec![] };
+                        let tree =
+                            HistoricalTree::new(if old_present { vec![entry] } else { vec![] });
                         let anchor = if old_present {
                             HashMap::from([("file".into(), "old/file".into())])
                         } else {
@@ -418,15 +419,17 @@ fn acquired_snapshots_distinguish_published_unpublished_and_absent_packages() {
         ),
         ("nested/public/src/main.rs", "fn main() {}"),
     ]);
-    let tree_paths = files
-        .keys()
-        .map(|path| (*path).to_owned())
-        .collect::<Vec<_>>();
+    let tree = HistoricalTree::new(
+        files
+            .keys()
+            .map(|path| tree_entry(path, tree_mode(false)))
+            .collect(),
+    );
     let snapshot = load_snapshot_with(
         &git,
         PathCase::Sensitive,
         &BTreeMap::new(),
-        &tree_paths,
+        Rc::new(tree),
         |path| {
             assert_ne!(path, "nested/unselected/Cargo.toml");
             Ok(files.get(path).map(|text| (*text).to_owned()))
@@ -445,9 +448,13 @@ fn acquired_snapshots_distinguish_published_unpublished_and_absent_packages() {
     assert_eq!(snapshot.packages.len(), 1);
     assert!(snapshot.packages.get("public").unwrap().has_lockfile_target);
     assert_eq!(snapshot.unpublished, BTreeSet::from(["private".into()]));
-    let absent = load_snapshot_with(&git, PathCase::Sensitive, &BTreeMap::new(), &[], |_| {
-        panic!("no tracked manifest")
-    })
+    let absent = load_snapshot_with(
+        &git,
+        PathCase::Sensitive,
+        &BTreeMap::new(),
+        Rc::default(),
+        |_| panic!("no tracked manifest"),
+    )
     .unwrap();
     assert!(absent.packages.is_empty());
     assert!(absent.unpublished.is_empty());

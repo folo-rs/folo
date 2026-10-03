@@ -16,10 +16,11 @@ use crp_publication::PublicationOutput;
 use crp_publication::publication::registry::RegistryClient;
 use crp_versioning::inspect_plan::read_resolved_preview;
 use crp_versioning::preview::Prepared;
-use crp_versioning::report::{read_report, run_report_with_target};
+use crp_versioning::report::{read_report, run_report_with_cache};
 use crp_versioning::resolved::{Inputs, ResolvedState, read_json};
 use crp_versioning::semver_targets::semver_targets;
 use crp_workspace::artifact_path::write_new;
+use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::command::{BUILD_CREDENTIAL_VARIABLES, run_capture};
 use crp_workspace::git::GitRepo;
 use crp_workspace::metadata::{MetadataJson, capture_metadata};
@@ -351,6 +352,7 @@ pub(crate) fn check_with_target(
     output: &Path,
     deny_findings: bool,
     verbose: bool,
+    cache_options: &CacheOptions,
 ) -> Result<(bool, String), AppError> {
     let deferred = Arc::new(DeferredDiagnostics::new(Arc::new(Stderr)));
     let diagnostics = PublicationOutput::new(
@@ -367,6 +369,7 @@ pub(crate) fn check_with_target(
         output,
         deny_findings,
         &diagnostics,
+        cache_options,
     );
     finish_delivery(result, deferred.take_failure())
 }
@@ -387,6 +390,7 @@ fn check_with_output(
     output: &Path,
     deny_findings: bool,
     diagnostics: &PublicationOutput,
+    cache_options: &CacheOptions,
 ) -> Result<(bool, String), AppError> {
     let verbose = diagnostics.notes();
     if output.try_exists()? {
@@ -409,12 +413,21 @@ fn check_with_output(
     };
     // Derive target selection from the bound source rather than trusting an adjacent report
     // that could have been replaced independently of the prepared/preview artifact.
-    run_report_with_target(
+    let observation_cache = Cache::resolve(
+        &evidence.inputs().root.join(&evidence.inputs().manifest),
+        cache_options,
+    )?;
+    observation_cache.protect(output)?;
+    if let Some(path) = prepared.or(plan) {
+        observation_cache.protect(path)?;
+    }
+    run_report_with_cache(
         output,
         Some(&evidence.inputs().release_history),
         evidence.inputs().merge_target.as_deref(),
         &manifest,
         verbose,
+        observation_cache,
     )?;
     evidence.verify(&manifest)?;
     let report = output.join("report.json");
