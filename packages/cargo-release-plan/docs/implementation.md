@@ -88,6 +88,9 @@ classification decisions and successful verification verdicts are not persistent
 Adjacent consumers explicitly share the same acquisition's root/member documents and tracked
 listing. Preview reacquires after edits/resolution and reads artifact contents freshly; preparation
 retains its separate prospective acquisition. See the component guides for these lifetimes.
+Patch generation requests only differing objects, resolving both endpoints to exact identities
+before rendering. Workspace supplies byte-bounded batches and immutable content reuse; the
+renderer retains only its current comparison in addition to that bounded lookahead.
 
 ## Executable identity
 

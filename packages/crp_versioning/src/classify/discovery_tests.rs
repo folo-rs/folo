@@ -213,18 +213,17 @@ fn acquired_diff_distinguishes_presence_content_and_modes() {
                             work_modes: &modes,
                             work_ids: &ids,
                         }
-                        .render(
-                            |path| {
-                                assert!(content_changed && old_present);
-                                assert_eq!(path, "old/file");
-                                Ok(Some(b"old\n".to_vec()))
-                            },
-                            |id| {
-                                assert!(content_changed && new_present);
+                        .identify()
+                        .render(|id| {
+                            assert!(content_changed);
+                            if old_present && id == "old-id" {
+                                Ok(Rc::from(b"old\n".as_slice()))
+                            } else {
+                                assert!(new_present);
                                 assert_eq!(id, new_id);
-                                Ok(b"new\n".to_vec())
-                            },
-                        )
+                                Ok(Rc::from(b"new\n".as_slice()))
+                            }
+                        })
                         .unwrap();
                         let changed = content_changed || mode_changed;
                         assert_eq!(changes.len(), usize::from(changed));

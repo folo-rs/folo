@@ -78,6 +78,22 @@ replacement refs or grafts bypass persistent observations because their referenc
 availability is not immutable. Neither credentials nor Git configuration values containing
 credentials are stored. This is local disposable storage, not a remote trust protocol.
 
+## Patch content acquisition
+
+Patch readers receive ordered, exact object identities, not historical paths or raw worktree
+bytes. A shared length-framed size query plans byte-budgeted lookahead; repeated identities
+within a batch share one payload. Advancing releases that batch, while the renderer can retain
+the endpoints of its current comparison. A single oversized object is accepted alone rather
+than turning the lookahead budget into a content limit. A single distinct object needs no size
+query. A secondary object-count bound limits framing and retained-map overhead even for empty
+blobs. Request identity, blob type, exact length and framing remain checked, and subprocess
+stdin is written concurrently with output draining.
+
+Ordinary multi-object batches use the existing typed cache keyed by their ordered immutable
+identities and Git interpretation context. Singleton reads bypass serialization because they
+can exceed the lookahead budget. Live size acquisition still detects unavailable required
+objects before a multi-object cache hit; no missing object becomes an empty file.
+
 ## Observation boundaries and tests
 
 Pure parsing and graph tests remain in process. Real Git/Cargo/filesystem tests

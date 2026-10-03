@@ -35,6 +35,8 @@ fn blob_batches_preserve_bytes_and_drain_output_while_sending_large_requests() {
         ids.insert(0, id);
         ids.push(id);
         let actual = git.show_blob_batch(&ids).unwrap();
+        let sizes = git.blob_sizes(&ids).unwrap();
+        assert_eq!(sizes, actual.iter().map(Vec::len).collect::<Vec<_>>());
         assert_eq!(actual.len(), ids.len());
         assert_eq!(actual.first().unwrap(), &bytes);
         assert_eq!(actual.last().unwrap(), &bytes);
@@ -48,8 +50,10 @@ fn blob_batches_preserve_bytes_and_drain_output_while_sending_large_requests() {
         assert!(git.show_blob_batch(&[]).unwrap().is_empty());
         let missing = "0".repeat(id.len());
         git.show_blob_batch(&[&missing]).unwrap_err();
+        git.blob_sizes(&[&missing]).unwrap_err();
         let tree = fixture.command(&["rev-parse", "HEAD:"]);
         git.show_blob_batch(&[tree.trim()]).unwrap_err();
+        git.blob_sizes(&[tree.trim()]).unwrap_err();
     });
 }
 

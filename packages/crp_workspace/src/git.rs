@@ -25,7 +25,9 @@ use crate::{
 };
 
 mod blob_batch;
-pub use blob_batch::decode_blob_batch;
+pub use blob_batch::{decode_blob_batch, decode_blob_sizes};
+mod blob_reader;
+pub use blob_reader::*;
 mod observations;
 pub use observations::*;
 
@@ -521,6 +523,12 @@ impl GitRepo {
     #[cfg_attr(test, mutants::skip)]
     pub fn show_blob_batch(&self, ids: &[&str]) -> Result<Vec<Vec<u8>>, AppError> {
         blob_batch::read(ids, &self.root)
+    }
+
+    /// Sizes of required blob identities, acquired together before bounded content reads.
+    #[cfg_attr(test, mutants::skip)] // Native adapter; header admission is covered in process.
+    pub fn blob_sizes(&self, ids: &[&str]) -> Result<Vec<usize>, AppError> {
+        blob_batch::sizes(ids, &self.root)
     }
 
     /// Every path at `commit`, used to reconstruct historical package metadata.

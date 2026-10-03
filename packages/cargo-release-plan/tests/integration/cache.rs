@@ -96,6 +96,16 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
                 !String::from_utf8_lossy(&result.stderr).contains("acquiring manifest-document ")
             );
         }
+        let trace_text = fs::read_to_string(&trace).unwrap();
+        // Historical manifests use one separate batch. A warm cache removes the patch's
+        // content batch, while size queries remain fresh availability observations.
+        assert_eq!(
+            trace_text
+                .lines()
+                .filter(|line| line.ends_with("git cat-file --batch"))
+                .count(),
+            if name == "warm" { 1 } else { 2 }
+        );
         assert_eq!(
             acquisitions(&trace),
             if name == "warm" { (0, 0) } else { (1, 1) }
@@ -122,6 +132,7 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
         .join("cache");
     assert_eq!(entries(&storage, "git-trees").len(), 1);
     assert_eq!(entries(&storage, "git-parent-headers").len(), 1);
+    assert_eq!(entries(&storage, "git-blob-batches").len(), 1);
     assert!(!entries(&storage, "manifest-document").is_empty());
     assert!(
         !fixture

@@ -87,6 +87,35 @@ pub struct GitObjectContext {
 }
 
 impl GitObjectContext {
+    /// Reuses a bounded immutable content batch without retaining it beyond its consumer.
+    #[cfg_attr(test, mutants::skip)] // Storage and Git adapters; entry admission is shared.
+    pub fn blobs(
+        &self,
+        git: &GitRepo,
+        ids: &[&str],
+        cache: &Cache,
+        verbose: Verbose<'_>,
+    ) -> Result<Vec<Vec<u8>>, AppError> {
+        let acquire = || {
+            let blobs = match ids {
+                [id] => vec![git.show_blob_bytes(id)?],
+                _ => git.show_blob_batch(ids)?,
+            };
+            Ok(BlobObservation(blobs))
+        };
+        // A singleton can be oversized or have no queried size. Avoid another size query
+        // and unbounded JSON serialization; multi-object batches obey the reader's budget.
+        let reusable = self.portable() && ids.len() > 1;
+        if !reusable {
+            return acquire().map(|value| value.0);
+        }
+        let key = ids
+            .iter()
+            .map(|id| self.key(id))
+            .collect::<Result<_, _>>()?;
+        cache.get(&key, verbose, acquire).map(|value| value.0)
+    }
+
     #[cfg_attr(test, mutants::skip)] // Acquires Git/environment/filesystem interpretation inputs.
     pub fn capture(git: &GitRepo) -> Result<Self, AppError> {
         let replacement_base = env::var("GIT_REPLACE_REF_BASE").ok();
@@ -215,6 +244,16 @@ impl CacheEntry for ParentObservation {
     const SUBJECT: &'static str = "git-parent-headers";
     const REVISION: u32 = 1;
     type Key = ObjectKey;
+}
+
+/// Exact binary content of an ordered, byte-bounded set of immutable objects.
+#[derive(Deserialize, Serialize)]
+struct BlobObservation(Vec<Vec<u8>>);
+
+impl CacheEntry for BlobObservation {
+    const SUBJECT: &'static str = "git-blob-batches";
+    const REVISION: u32 = 1;
+    type Key = Vec<ObjectKey>;
 }
 
 #[ohno::error]

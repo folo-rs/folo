@@ -15,8 +15,8 @@ use std::{fs, io, mem, str};
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
 use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::git::{
-    CommitHeaders, GitObjectContext, GitRepo, HistoricalTree, TreeEntry, WorkTreeModes,
-    decode_file, join_git_rel, tree_mode,
+    BLOB_BATCH_BYTES, BlobReader, CommitHeaders, GitObjectContext, GitRepo, HistoricalTree,
+    TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode,
 };
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
@@ -674,7 +674,6 @@ fn classify_one(
     let (changed_files, patch, stat, untracked) = diff_package_with_tree(
         git,
         name,
-        &anchor.commit,
         &PackageSide {
             dir: &anchor_pkg.directory,
             rules: &anchor_pkg.packaging,
@@ -684,6 +683,7 @@ fn classify_one(
         },
         &work_tree_side(package, cache.case()),
         &anchor_snapshot.tree,
+        |ids| cache.objects.blobs(git, ids, &cache.storage, verbose),
     )?;
 
     let mut changed = changed_files;
@@ -925,17 +925,19 @@ pub fn diff_package(
     work_side: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     let tree = HistoricalTree::new(git.ls_tree(anchor_commit, &[])?);
-    diff_package_with_tree(git, name, anchor_commit, anchor, work_side, &tree)
+    diff_package_with_tree(git, name, anchor, work_side, &tree, |ids| {
+        read_patch_blobs(git, ids)
+    })
 }
 
 #[cfg_attr(test, mutants::skip)] // Native current-input acquisition and blob reads.
 fn diff_package_with_tree(
     git: &GitRepo,
     name: &str,
-    anchor_commit: &str,
     anchor: &PackageSide<'_>,
     work_side: &PackageSide<'_>,
     anchor_tree: &HistoricalTree,
+    mut read_blobs: impl FnMut(&[&str]) -> Result<Vec<Vec<u8>>, AppError>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
     // resource may sit outside the package directory or outside its packaging
@@ -961,19 +963,26 @@ fn diff_package_with_tree(
     let work_modes = work_tree_modes(git, work_side, &tracked_resources)?;
     let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
 
-    let (changed, patch, stat) = PackageDiff {
+    let identified = PackageDiff {
         anchor_files: &anchor_files,
         work_files,
         anchor_tree,
         work_modes: &work_modes,
         work_ids: &work_ids,
     }
-    .render(
-        |path| git.show_file_bytes(anchor_commit, path),
-        |id| git.show_blob_bytes(id),
-    )?;
+    .identify();
+    let ids = identified.blob_ids();
+    let mut reader = BlobReader::new(&ids, BLOB_BATCH_BYTES, |ids| git.blob_sizes(ids))?;
+    let (changed, patch, stat) = identified.render(|id| reader.read(id, &mut read_blobs))?;
     let untracked = untracked_released(git, work_side, &tracked_resources, &work.present_tracked)?;
     Ok((changed, patch, stat, untracked))
+}
+
+fn read_patch_blobs(git: &GitRepo, ids: &[&str]) -> Result<Vec<Vec<u8>>, AppError> {
+    match ids {
+        [id] => git.show_blob_bytes(id).map(|blob| vec![blob]),
+        _ => git.show_blob_batch(ids),
+    }
 }
 
 /// Acquired endpoint identities for one package's released-content comparison.
@@ -988,12 +997,8 @@ struct PackageDiff<'a> {
     work_ids: &'a HashMap<String, String>,
 }
 
-impl PackageDiff<'_> {
-    fn render(
-        &self,
-        mut old_bytes: impl FnMut(&str) -> Result<Option<Vec<u8>>, AppError>,
-        mut new_bytes: impl FnMut(&str) -> Result<Vec<u8>, AppError>,
-    ) -> Result<(Vec<ChangedItem>, String, DiffStat), AppError> {
+impl<'a> PackageDiff<'a> {
+    fn identify(&self) -> IdentifiedDiff<'a> {
         let Self {
             anchor_files,
             work_files,
@@ -1010,11 +1015,7 @@ impl PackageDiff<'_> {
             .map(String::as_str)
             .collect();
 
-        let mut changed = Vec::new();
-        let mut patch = String::new();
-        let mut insertions = 0_usize;
-        let mut deletions = 0_usize;
-
+        let mut entries = Vec::new();
         for rel in rels {
             let old_id = anchor_files
                 .get(rel)
@@ -1037,47 +1038,80 @@ impl PackageDiff<'_> {
             if old_id == new_id && mode_change.is_none() {
                 continue;
             }
-            let kind = match (old_id.is_some(), new_id.is_some()) {
+            entries.push(ChangedFile {
+                path: rel,
+                old_id,
+                new_id,
+                old_mode: tree_mode(anchor_files.get(rel).is_some_and(|path| {
+                    anchor_tree
+                        .entry(path)
+                        .is_some_and(TreeEntry::is_executable)
+                })),
+                new_mode: tree_mode(
+                    work_files
+                        .get(rel)
+                        .is_some_and(|path| work_modes.is_executable(path)),
+                ),
+                mode_change,
+            });
+        }
+        IdentifiedDiff { entries }
+    }
+}
+
+/// Deterministically ordered changes; no content acquisition or live path lookup remains.
+struct IdentifiedDiff<'a> {
+    entries: Vec<ChangedFile<'a>>,
+}
+
+impl IdentifiedDiff<'_> {
+    fn blob_ids(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.old_id != entry.new_id)
+            .flat_map(|entry| [entry.old_id, entry.new_id].into_iter().flatten())
+            .collect()
+    }
+
+    fn render(
+        &self,
+        mut bytes: impl FnMut(&str) -> Result<Rc<[u8]>, AppError>,
+    ) -> Result<(Vec<ChangedItem>, String, DiffStat), AppError> {
+        let mut changed = Vec::new();
+        let mut patch = String::new();
+        let mut insertions = 0_usize;
+        let mut deletions = 0_usize;
+        for entry in &self.entries {
+            let kind = match (entry.old_id.is_some(), entry.new_id.is_some()) {
                 (false, true) => "added",
                 (true, false) => "deleted",
                 _ => "modified",
             };
             changed.push(ChangedItem::Package {
-                path: rel.to_string(),
+                path: entry.path.to_string(),
                 change: kind.to_string(),
             });
-            if let Some((old_mode, new_mode)) = mode_change {
-                patch.push_str(&mode_change_diff(rel, old_mode, new_mode).text);
+            if let Some((old_mode, new_mode)) = entry.mode_change {
+                patch.push_str(&mode_change_diff(entry.path, old_mode, new_mode).text);
             }
             // Equal object ids prove the bytes are unchanged. This check comes after
             // mode rendering so a mode-only binary change cannot gain a false
             // "Binary files differ" line from the content renderer.
-            if old_id == new_id {
+            if entry.old_id == entry.new_id {
                 continue;
             }
             // The content itself is only needed to render an identity change.
-            let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
-                Some(path) => old_bytes(path)?,
-                None => None,
-            };
-            let new = new_id.map(&mut new_bytes).transpose()?;
+            let old = entry.old_id.map(&mut bytes).transpose()?;
+            let new = entry.new_id.map(&mut bytes).transpose()?;
             let old_side = old.as_deref().map(|content| FileVersion {
                 content,
-                mode: tree_mode(anchor_files.get(rel).is_some_and(|path| {
-                    anchor_tree
-                        .entry(path)
-                        .is_some_and(TreeEntry::is_executable)
-                })),
+                mode: entry.old_mode,
             });
             let new_side = new.as_deref().map(|content| FileVersion {
                 content,
-                mode: tree_mode(
-                    work_files
-                        .get(rel)
-                        .is_some_and(|path| work_modes.is_executable(path)),
-                ),
+                mode: entry.new_mode,
             });
-            let file_diff = file_diff(rel, old_side, new_side);
+            let file_diff = file_diff(entry.path, old_side, new_side);
             insertions = insertions.saturating_add(file_diff.insertions);
             deletions = deletions.saturating_add(file_diff.deletions);
             patch.push_str(&file_diff.text);
@@ -1090,6 +1124,16 @@ impl PackageDiff<'_> {
         };
         Ok((changed, patch, stat))
     }
+}
+
+/// Presence, immutable content identities and archive modes for one changed path.
+struct ChangedFile<'a> {
+    path: &'a str,
+    old_id: Option<&'a str>,
+    new_id: Option<&'a str>,
+    old_mode: &'static str,
+    new_mode: &'static str,
+    mode_change: Option<(&'static str, &'static str)>,
 }
 
 /// Git modes for released work-tree paths.

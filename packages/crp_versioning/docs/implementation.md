@@ -87,6 +87,11 @@ dependencies remain part of benchmark-enabled builds.
 
 Released-content comparison consumes acquired archive paths, object identities and modes.
 It requests bytes lazily only for content changes, independently of mode-only changes.
+Comparison first identifies changes in deterministic archive-path order, then renders them
+from exact blob identities. Historical paths resolve through the retained tree; current IDs
+name the objects written by the original clean conversion, never a second filter execution.
+Workspace's bounded reader shares duplicate identities within each batch and releases content
+as rendering advances. The existing content and mode renderers still own patch semantics.
 Historical member discovery reads recorded paths through the same cache and membership
 logic whether observations come from Git or an in-process fixture.
 Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by
