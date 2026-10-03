@@ -119,6 +119,11 @@ Restoration happens before every early exit in the drop path, including the pani
 case and the missing-iteration-count panic. A span abandoned without recording must still
 return the watermark, or it would silently suppress the peak of the span enclosing it.
 
+`ThreadSpan::no_peak` changes only whether the closing span submits a peak. It retains
+watermark restoration and allocator counters so enclosing spans remain inclusive. The
+modifier takes effect when the span records, just like process-scope unavailability, rather
+than mutating shared operation state while a span is still live.
+
 The hand-back is what makes reverse-order drops a requirement rather than a convention:
 restoring an outer span's saved watermark while an inner span is still live would raise the
 inner span's baseline and inflate its reported peak. The requirement is stated in the
@@ -152,7 +157,9 @@ millionth of their weight.
 
 Whether a peak is available at all is not a property of the accumulator, so the accumulator
 is held inside the state that says a peak is available. Any span lacking a watermark replaces
-that state with the unavailable one, which no later span or merge can undo. Folding an
+that state with the unavailable one, which no later span or merge can undo. Explicitly opted-out
+thread spans submit the same absent peak, discarding the operation's peak accumulator rather
+than retaining or publishing an estimate over a partial population. Folding an
 unmeasurable span in as a zero would understate the operation instead of withholding it.
 
 ## Reporting

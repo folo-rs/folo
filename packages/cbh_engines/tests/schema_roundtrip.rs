@@ -18,11 +18,16 @@
 
 #![cfg(not(miri))]
 
+use std::hint::black_box;
+
+use alloc_tracker::Allocator;
 use cbh_engines::{parse_all_the_time_operation, parse_alloc_tracker_operation};
 use cbh_model::{BenchmarkResult, Metric, MetricKind};
 use tempfile::tempdir;
+use testing::DefaultAllocator;
 
-::testing::set_allocator!();
+#[global_allocator]
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
     record
@@ -33,6 +38,7 @@ fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
 }
 
 #[test]
+#[allow(clippy::float_cmp, reason = "the peak byte count is exact")]
 #[cfg_attr(
     miri,
     ignore = "writes files, which is not supported under Miri isolation"
@@ -42,6 +48,7 @@ fn alloc_tracker_single_span_output_parses() {
     {
         let operation = session.operation("roundtrip_single");
         let _span = operation.measure_thread().iterations(4);
+        black_box(vec![0_u8; 64]);
     }
     let directory = tempdir().unwrap();
     session.to_report().write_to_directory(directory.path());
@@ -51,7 +58,7 @@ fn alloc_tracker_single_span_output_parses() {
         .expect("the adapter must parse real single-span alloc_tracker output")
         .expect("a single-span operation has a usable measurement");
 
-    // Both allocation metrics are always present with a finite point estimate, and a
+    // Allocation metrics are present with a finite point estimate, and a
     // single span carries no confidence interval.
     let bytes = metric(&record, MetricKind::AllocatedBytes);
     assert!(bytes.value.is_finite(), "bytes value should be finite");
@@ -62,9 +69,18 @@ fn alloc_tracker_single_span_output_parses() {
     assert!(count.value.is_finite(), "allocation count should be finite");
     assert_eq!(count.interval_low, None);
     assert_eq!(count.interval_high, None);
+
+    let peak = metric(&record, MetricKind::PeakOutstandingBytes);
+    assert_eq!(peak.value, 64.0);
+    assert_eq!(peak.interval_low, None);
+    assert_eq!(peak.interval_high, None);
 }
 
 #[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "the peak byte count and interval are exact"
+)]
 #[cfg_attr(
     miri,
     ignore = "writes files, which is not supported under Miri isolation"
@@ -74,6 +90,7 @@ fn alloc_tracker_multi_span_output_carries_interval() {
     for _ in 0..4 {
         let operation = session.operation("roundtrip_multi");
         let _span = operation.measure_thread().iterations(4);
+        black_box(vec![0_u8; 64]);
     }
     let directory = tempdir().unwrap();
     session.to_report().write_to_directory(directory.path());
@@ -83,7 +100,7 @@ fn alloc_tracker_multi_span_output_carries_interval() {
         .expect("the adapter must parse real multi-span alloc_tracker output")
         .expect("a multi-span operation has a usable measurement");
 
-    // Multiple spans clear the dispersion threshold, so both metrics carry an
+    // Multiple spans clear the dispersion threshold, so the metrics carry an
     // interval — proving the adapter's interval field names still match the
     // producer's.
     let bytes = metric(&record, MetricKind::AllocatedBytes);
@@ -93,6 +110,61 @@ fn alloc_tracker_multi_span_output_carries_interval() {
     let count = metric(&record, MetricKind::AllocationCount);
     assert!(count.interval_low.is_some(), "count interval low missing");
     assert!(count.interval_high.is_some(), "count interval high missing");
+
+    let peak = metric(&record, MetricKind::PeakOutstandingBytes);
+    assert_eq!(peak.value, 64.0);
+    assert_eq!(peak.interval_low, Some(64.0));
+    assert_eq!(peak.interval_high, Some(64.0));
+}
+
+#[test]
+fn alloc_tracker_withheld_peaks_leave_other_metrics_usable() {
+    for process_scope in [false, true] {
+        let session = ::alloc_tracker::Session::new().no_stdout().no_file();
+        let operation = session.operation("withheld");
+        {
+            let _span = operation.measure_thread().iterations(1);
+            black_box(vec![0_u8; 64]);
+        }
+        if process_scope {
+            drop(operation.measure_process().iterations(1));
+        } else {
+            drop(operation.measure_thread().no_peak().iterations(1));
+        }
+        {
+            let _span = operation.measure_thread().iterations(1);
+            black_box(vec![0_u8; 64]);
+        }
+        let report = session.to_report();
+        assert_eq!(
+            report
+                .operations()
+                .next()
+                .unwrap()
+                .1
+                .peak_outstanding_bytes(),
+            None
+        );
+        assert!(
+            report.to_string().contains("n/a"),
+            "the human report must not display a partial peak"
+        );
+        let directory = tempdir().unwrap();
+        report.write_to_directory(directory.path());
+        let json = std::fs::read_to_string(directory.path().join("withheld.json")).unwrap();
+        let output: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for field in [
+            "slope_peak_bytes",
+            "interval_low_peak_bytes",
+            "interval_high_peak_bytes",
+        ] {
+            assert!(output.get(field).is_none(), "withheld field {field}");
+        }
+        let record = parse_alloc_tracker_operation(&json).unwrap().unwrap();
+        assert_eq!(record.metrics.len(), 2);
+        assert!(metric(&record, MetricKind::AllocatedBytes).value > 0.0);
+        assert!(metric(&record, MetricKind::AllocationCount).value > 0.0);
+    }
 }
 
 #[test]

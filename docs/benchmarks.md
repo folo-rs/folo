@@ -119,6 +119,13 @@ the `bench_function` name may itself contain `/` segments) so the two reports
 correlate — see the tracking-session operation-name rule in
 [`docs/naming.md`](naming.md).
 
+For allocation tracking, keep peak recording enabled for batch-size-independent workloads.
+Use `measure_thread().no_peak().iterations(n)` when memory accumulates between iterations,
+including per-iteration fixtures that retain newly allocated storage until the batch ends.
+Such peaks vary with the harness-selected batch size and can create false regression alerts.
+The opt-out preserves allocated bytes and allocation counts while withholding the entire
+operation's peak. Other comparability limits are described in the `alloc_tracker` API docs.
+
 ## Stack pin vs. `Box::pin` on the measured path
 
 Do not use `Box::pin(value)` on the measured path. It allocates a `Box` on the
