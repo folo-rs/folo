@@ -13,12 +13,17 @@ the publisher identity. Registry jobs use OIDC, GitHub reconciliation/binary job
 use the workflow's `GITHUB_TOKEN` with `contents: write`; failure reporting needs
 `issues: write`.
 
-Folo invokes the immutable shared `release.yml` with `install-method: path` and
+Folo pins its root action, check, publication and identity-probe entry points to the
+immutable commit of
+[`cargo-release-plan-action v0.1.0`](https://github.com/folo-rs/cargo-release-plan-action/releases/tag/v0.1.0).
+It invokes the shared `release.yml` with `install-method: path` and
 `source-path: .`; registry, GitHub, native execution and reporting stay in that graph.
 The workflow implementation and shared entry points are described in
 [the workflow implementation guide](../.github/workflows/implementation.md).
 The invocation checkout at the workflow event SHA supplies the release controller;
 binary builds use separate immutable source worktrees at the peeled package-tag commits.
+Source installation lets Folo's controller advance independently of the action's
+published-tool pin.
 The optional `source` dispatch input is a full original publication-source SHA for
 recovery, not an override of the controller revision.
 
