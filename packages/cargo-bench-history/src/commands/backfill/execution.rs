@@ -838,6 +838,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         // A backfilled run is always clean (the worktree is a pristine checkout)
         // and takes its timeline position from the commit's committer date.
         let collect_options = CollectOptions {
+            collection_output: None,
             config_path: None,
             repo: None,
             local: None,

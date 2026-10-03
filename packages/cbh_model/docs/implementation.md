@@ -11,6 +11,13 @@ identity, measurements, run context, persistence discriminants, stored records, 
 object-key layout with its construction and parsing. Engine-specific schemas, backend-specific
 representations, and storage-facing safety validation stay outside this boundary.
 
+`CollectionSnapshot` is the independently versioned handoff for one clean execution.
+It contains full engine payloads plus project, commit, target and hardware identity, including
+identity for a successful empty collection. Its strict decoder validates identity consistency,
+unique engines, benchmark IDs and metric kinds, and finite measurements. Unlike historical
+`Run` decoding, unknown metric kinds are errors: silently dropping them would change the
+claimed current roster. Snapshot values come from collection finalization, never a store read.
+
 Domain validation and reduction operations expose aggregates where the model owns semantic
 context. JSON conversion returns `serde_json::Error` directly because the model cannot identify
 the caller's storage or command operation. That caller adds semantic context while preserving the

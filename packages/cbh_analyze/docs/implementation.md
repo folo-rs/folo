@@ -44,6 +44,16 @@ cloud cache before the shared selection pipeline and report cache activity after
 Git-topology selection separates the target branch's measurements from the base-ref history
 within that store; unrelated branch commits do not enter the comparison.
 
+Analyze-only `CurrentCollections` receives validated collection snapshots from the command
+adapter. It checks project/context attribution and rejects overlapping current measurement
+identities. Dataset selection excludes stored context-commit payloads before fetching,
+retains matching historical partitions, and folds captured values directly through `RunPoints`.
+The final series roster is the exact `(discriminant set, benchmark ID, metric kind)` union
+of selected snapshots. In branch mode, ordinary base-ref windows load independently; no
+other branch-side observations are folded. Machine-relaxed sibling history remains
+diagnostic-only for comparison-base lag. Other query commands have no execution handoff and
+retain ordinary selection.
+
 Operations cross the crate boundary through a transparent aggregate. Concrete conditions remain
 private to the responsibility that owns their context, while component failures remain attached
 as sources. The shell can therefore convert the aggregate into `ohno::AppError` without exposing

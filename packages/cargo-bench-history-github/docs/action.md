@@ -126,9 +126,9 @@ there is no success default.
 
 | Command | Inputs |
 | --- | --- |
-| `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features`, `rustflags` |
-| `backfill` | Collection inputs plus required `from`, `to`, and optional `ignore-errors`, `max-commits` |
-| `analyze-history` | `local-path`, `cache`, required `machine-keys`, `context`, `since`, required `expected-platforms`, `completed-platforms` |
+| `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features`, `rustflags`, `collection-snapshot` |
+| `backfill` | Collection inputs except `collection-snapshot`, plus required `from`, `to`, and optional `ignore-errors`, `max-commits` |
+| `analyze-history` | `local-path`, `cache`, exactly one of `current-collections` or `machine-keys`, `context`, `since`, required `expected-platforms`, `completed-platforms` |
 | `analyze-pr` | The history inputs except `since`, plus optional `base` |
 | `publish-comment-findings`, `publish-comment-clean` | Report inputs, run ownership, `pr-number`, required `packages` |
 | `publish-issue-findings`, `publish-issue-clean` | Report inputs and run ownership |
@@ -155,13 +155,26 @@ Collection accepts `error`, `skip` and `overwrite`. Backfill accepts only `skip`
 Analysis defaults `context` to `HEAD` and resolves it to a full commit SHA.
 History passes that SHA as both context and base. PR analysis passes an explicit `base`
 when supplied, otherwise leaves base selection to the core. Its report must be branch mode.
-Analysis always passes `--engine all --target-triple all --no-dirty --no-text --verbose`.
+Analysis always passes `--no-dirty --no-text --verbose`.
 `local-path` conflicts with `cache`. Other main work also enables verbose diagnostics.
+
+`collection-snapshot` is a collect-only boolean, default `false`. When true, the core writes
+fresh measurements to a new `collection.json` outside the checkout and the action emits its
+absolute `collection-file` path. `on-existing: skip` still preserves existing shared history:
+it does not skip benchmark execution or read stored values into the snapshot.
+
+`current-collections` is a directory of ordinary `collection.json` files, directly or in
+ordinary subdirectories. The tree must contain snapshots and no unrelated files or links.
+Each snapshot becomes a repeated core `--current-collection` argument; no broad engine,
+target or machine selectors accompany it. Combined workflows use the directory emitted by
+receipt reconciliation, never rediscover their current measurements from storage.
 
 `machine-keys` is a directory containing ordinary `machine-key.txt` files, directly or in
 ordinary subdirectories. Each file contains one actual 16-hex-digit fingerprint;
 surrounding whitespace is accepted, case normalized and duplicate keys deduplicated.
 At least one key is required. Other files and filesystem links within this tree are errors.
+This standalone stored-history mode passes `--engine all --target-triple all` and repeated
+machine-key selectors, and is mutually exclusive with `current-collections`.
 Expected and completed platform CSVs are required independently of these keys and use the
 existing platform-coverage validation.
 
@@ -219,8 +232,10 @@ Reports persist after process exit for later job-local artifact upload through t
 JSON and summary path outputs. The action does not clean them or upload them itself.
 
 Successful invocations append `instance=<canonical project namespace>` to `--github-output`.
-Collection additionally appends `machine-key=<fingerprint>`, only after both collection and
-the dedicated machine-key command succeed.
+Collection additionally appends `machine-key=<fingerprint>`. Snapshot mode derives it from
+the validated collection snapshot and also emits `collection-file`; legacy collection obtains
+it through the dedicated machine-key command. No collection output is emitted before all
+required work succeeds.
 
 Analysis appends the shared evidence projection `outcome`, `notable`, `can-clear` and
 `publication-state`, plus `partial-platform-coverage`, `regressions`, `report-markdown`,

@@ -173,6 +173,14 @@ impl Host for FakeHost {
         self.key_roots.borrow_mut().push(root.to_owned());
         Ok(self.keys.clone())
     }
+    fn collection_files(&self, root: &Path) -> Result<Vec<PathBuf>, AppError> {
+        Ok(self
+            .files
+            .keys()
+            .filter(|path| path.starts_with(root) && path.file_name().unwrap() == "collection.json")
+            .cloned()
+            .collect())
+    }
     fn append_outputs(&self, path: &Path, outputs: &str) -> Result<(), AppError> {
         self.outputs
             .borrow_mut()

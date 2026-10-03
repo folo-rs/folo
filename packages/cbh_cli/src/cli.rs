@@ -325,6 +325,12 @@ struct OutputArgs {
 /// Run the workspace benchmarks (`cargo bench`) and store the results.
 #[derive(Args, Debug)]
 struct CollectCommand {
+    /// Write this execution's exact fresh measurements to a new snapshot file.
+    /// The checkout must be clean. Relative paths resolve against the working directory.
+    #[arg(long, value_name = "PATH", help_heading = HEADING_OUTPUT,
+        conflicts_with = "no_store")]
+    collection_output: Option<PathBuf>,
+
     #[command(flatten)]
     env: EnvArgs,
 
@@ -391,6 +397,7 @@ struct CollectCommand {
 impl CollectCommand {
     fn into_options(self) -> CollectOptions {
         CollectOptions {
+            collection_output: self.collection_output,
             config_path: self.env.config,
             repo: self.env.repo,
             local: local_selection(self.env.local),
@@ -520,6 +527,13 @@ impl MachineKeyCommand {
 /// Analyze stored history for notable patterns.
 #[derive(Args, Debug)]
 struct AnalyzeCommand {
+    /// Analyze exact current measurements from these collection snapshots (repeatable).
+    /// Shared storage supplies comparison history only. Relative paths resolve against
+    /// the working directory. Snapshots must match the project and clean context commit.
+    #[arg(long = "current-collection", value_name = "PATH", help_heading = HEADING_FILTER,
+        conflicts_with_all = ["engine", "target_triple", "machine_key"])]
+    current_collections: Vec<PathBuf>,
+
     /// Benchmark-id prefixes to analyze, matched against the qualified identity
     /// (for example, `all_the_time/read_cell` or a family prefix
     /// `overhead/groups_`); repeatable (default: every benchmark).
@@ -563,6 +577,7 @@ struct AnalyzeCommand {
 impl AnalyzeCommand {
     fn into_options(self) -> AnalyzeOptions {
         AnalyzeOptions {
+            current_collections: self.current_collections,
             config_path: self.env.config,
             repo: self.env.repo,
             local: local_selection(self.env.local),
@@ -1108,6 +1123,80 @@ pub(crate) mod tests {
         from_args(&["cargo-bench-history"], args)
             .unwrap()
             .into_command()
+    }
+
+    #[test]
+    fn collection_snapshot_preserves_append_only_storage() {
+        let command = parse(&[
+            "collect",
+            "--collection-output",
+            "snapshot.json",
+            "--skip-existing",
+        ]);
+        let Command::Collect(options) = command else {
+            panic!()
+        };
+        assert!(options.skip_existing);
+        assert_eq!(
+            options.collection_output,
+            Some(PathBuf::from("snapshot.json"))
+        );
+        from_args(
+            &["cargo-bench-history"],
+            &[
+                "collect",
+                "--collection-output",
+                "snapshot.json",
+                "--no-store",
+            ],
+        )
+        .unwrap_err();
+    }
+
+    fn reject_current_selector(selector: &str) {
+        from_args(
+            &["cargo-bench-history"],
+            &[
+                "analyze",
+                "--current-collection",
+                "snapshot.json",
+                selector,
+                "all",
+            ],
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn current_collection_conflicts_with_engine_selector() {
+        reject_current_selector("--engine");
+    }
+
+    #[test]
+    fn current_collection_conflicts_with_machine_selector() {
+        reject_current_selector("--machine-key");
+    }
+
+    #[test]
+    fn current_collection_conflicts_with_target_selector() {
+        reject_current_selector("--target-triple");
+    }
+
+    #[test]
+    fn current_collection_accepts_repeated_snapshot_paths() {
+        let Command::Analyze(options) = parse(&[
+            "analyze",
+            "--current-collection",
+            "first.json",
+            "--current-collection",
+            "second.json",
+        ]) else {
+            panic!()
+        };
+        assert_eq!(
+            options.current_collections,
+            [PathBuf::from("first.json"), PathBuf::from("second.json")]
+        );
     }
 
     #[test]

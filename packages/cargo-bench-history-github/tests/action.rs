@@ -173,6 +173,31 @@ fn success(output: &Output) {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Native Git and collection-directory adapter checks.")]
+fn native_current_directory_rejects_unrelated_files_before_analysis() {
+    let fixture = Fixture::new();
+    fixture.initialize_git();
+    let directory = fixture.path("collections").join("linux");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("collection.json"), "{}").unwrap();
+    fs::write(directory.join("unexpected.json"), "{}").unwrap();
+    let output = fixture
+        .command(&json!({
+            "command":"analyze-history", "current-collections":fixture.path("collections"),
+            "expected-platforms":"linux", "completed-platforms":"linux",
+        }))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("expected ordinary collection.json")
+    );
+    assert!(!fixture.path("outputs").exists());
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "Real Git, executable compilation, child processes and temporary files."

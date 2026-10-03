@@ -1,7 +1,15 @@
 //! Native CLI boundaries for offline receipt creation and validated report outputs.
 //! Tests create only owned, repository-local fixture directories and never use GitHub credentials.
 
+#![allow(
+    clippy::float_cmp,
+    clippy::indexing_slicing,
+    reason = "fixed exact measurement fixtures assert preservation without numerical recomputation"
+)]
+
 use std::env::consts::OS;
+#[cfg(feature = "private-test-util")]
+use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
@@ -11,6 +19,12 @@ use std::{fs, thread};
 
 #[cfg(feature = "private-test-util")]
 use cargo_bench_history_github::{__private, Cli};
+use cbh_model::CollectionSnapshot;
+#[cfg(feature = "private-test-util")]
+use cbh_model::{
+    BenchmarkResult, Engine, EnvironmentInfo, GitInfo, MachineInfo, Metric, MetricKind, Run,
+    RunContext, ToolchainInfo,
+};
 #[cfg(feature = "private-test-util")]
 use clap::Parser as _;
 #[cfg(feature = "private-test-util")]
@@ -70,9 +84,9 @@ impl Fixture {
                 head,
                 "--platform",
                 platform,
-                "--machine-key-file",
+                "--collection-file",
             ])
-            .arg(self.path("machine-key.txt"))
+            .arg(self.path("collection.json"))
             .arg("--file")
             .arg(output)
             .output()
@@ -100,10 +114,99 @@ impl Fixture {
     #[cfg(feature = "private-test-util")]
     fn artifact(&self, platform: &str, key: &str) -> PathBuf {
         let artifact = self.path("receipts").join(platform);
-        fs::write(self.path("machine-key.txt"), key).unwrap();
+        self.collection(key);
         let output = self.receipt(platform, &head(), &artifact.join("receipt.json"));
         assert!(output.status.success(), "{output:?}");
         artifact
+    }
+
+    fn collection(&self, key: &str) {
+        let snapshot = CollectionSnapshot::new(
+            "folo",
+            &head(),
+            "x86_64-unknown-linux-gnu".into(),
+            key.into(),
+            Vec::new(),
+        )
+        .unwrap();
+        fs::write(self.path("collection.json"), snapshot.to_json().unwrap()).unwrap();
+    }
+
+    #[cfg(feature = "private-test-util")]
+    fn measured_artifact(&self, platform: &str, key: &str, attempt: u64, value: f64) {
+        let triple = if platform == "windows" {
+            "x86_64-pc-windows-msvc"
+        } else {
+            "x86_64-unknown-linux-gnu"
+        };
+        let mut context = RunContext::new(
+            "2026-01-01T00:00:00Z".parse().unwrap(),
+            GitInfo {
+                commit: Some(head()),
+                ..GitInfo::default()
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo {
+                target_triple: triple.into(),
+                ..ToolchainInfo::default()
+            },
+            "test".to_owned(),
+        );
+        context.best_of = Some(NonZero::new(1).unwrap());
+        context.machine = Some(MachineInfo {
+            fingerprint: key.to_owned(),
+            processors: 1,
+            memory_regions: 1,
+            processor_models: Vec::new(),
+            processor_speeds: Vec::new(),
+        });
+        let snapshot = CollectionSnapshot::new(
+            "folo",
+            &head(),
+            triple.into(),
+            key.into(),
+            vec![(
+                Engine::Callgrind,
+                Run::new(
+                    context,
+                    vec![BenchmarkResult::new(
+                        serde_json::from_value(json!({"segments":["package","measured"]})).unwrap(),
+                        vec![Metric::new(MetricKind::InstructionCount, value)],
+                    )],
+                ),
+            )],
+        )
+        .unwrap();
+        let artifact = self.path("receipts").join(format!("{platform}-{attempt}"));
+        fs::create_dir_all(&artifact).unwrap();
+        fs::write(
+            artifact.join("receipt.json"),
+            serde_json::to_vec(&json!({
+                "version": 2, "repository": "folo-rs/folo", "instance": "folo", "run_id":42,
+                "run_attempt":attempt, "head":head(), "platform":platform, "collection":snapshot,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[cfg(feature = "private-test-util")]
+    fn selected_collection(&self, platform: &str) -> CollectionSnapshot {
+        CollectionSnapshot::from_slice(
+            &fs::read(self.path("keys").join(platform).join("collection.json")).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(feature = "private-test-util")]
+    fn preparation_output(&self) -> String {
+        let output = fs::read_to_string(self.path("github-output")).unwrap();
+        let (evidence, path) = output.split_once("current-collections=").unwrap();
+        assert_eq!(
+            fs::canonicalize(path.trim()).unwrap(),
+            fs::canonicalize(self.path("keys")).unwrap()
+        );
+        evidence.to_owned()
     }
 
     #[cfg(feature = "private-test-util")]
@@ -130,7 +233,7 @@ impl Fixture {
                 "--receipts-dir",
             ])
             .arg(self.path("receipts"))
-            .arg("--machine-key-dir")
+            .arg("--current-collection-dir")
             .arg(keys)
             .arg("--github-output")
             .arg(output);
@@ -236,7 +339,7 @@ fn invalid_workflow_matrix_cannot_append_partial_setup_outputs() {
 #[cfg_attr(miri, ignore = "Native filesystem and child-process adapter coverage.")]
 fn collection_receipt_is_offline_and_preserves_actual_machine_key() {
     let fixture = Fixture::new();
-    fs::write(fixture.path("machine-key.txt"), "0123456789ABCDEF\r\n").unwrap();
+    fixture.collection("0123456789abcdef");
     let file = fixture.path("artifact").join("receipt.json");
     let output = fixture.receipt("windows", &head(), &file);
     assert!(output.status.success(), "{output:?}");
@@ -244,9 +347,9 @@ fn collection_receipt_is_offline_and_preserves_actual_machine_key() {
     assert_eq!(
         receipt,
         json!({
-            "version": 1, "repository": "folo-rs/folo", "instance": "folo",
+            "version": 2, "repository": "folo-rs/folo", "instance": "folo",
             "run_id": 42, "run_attempt": 2, "head": head(), "platform": "windows",
-            "machine_key": "0123456789abcdef"
+            "collection": serde_json::from_slice::<Value>(&fs::read(fixture.path("collection.json")).unwrap()).unwrap()
         })
     );
     assert!(!fixture.receipt("windows", &head(), &file).status.success());
@@ -258,9 +361,9 @@ fn collection_receipt_is_offline_and_preserves_actual_machine_key() {
 fn collection_rejects_bad_keys_dirty_heads_and_unsafe_platforms_without_output() {
     let fixture = Fixture::new();
     let output = fixture.path("receipt.json");
-    fs::write(fixture.path("machine-key.txt"), "not a real machine key").unwrap();
+    fs::write(fixture.path("collection.json"), "not a real snapshot").unwrap();
     assert!(!fixture.receipt("linux", &head(), &output).status.success());
-    fs::write(fixture.path("machine-key.txt"), "0123456789abcdef").unwrap();
+    fixture.collection("0123456789abcdef");
     assert!(
         !fixture
             .receipt("../outside", &head(), &output)
@@ -280,7 +383,7 @@ fn collection_rejects_bad_keys_dirty_heads_and_unsafe_platforms_without_output()
 #[cfg_attr(miri, ignore = "Native filesystem and child-process adapter coverage.")]
 fn receipt_output_rejects_parent_traversal_even_after_a_missing_component() {
     let fixture = Fixture::new();
-    fs::write(fixture.path("machine-key.txt"), "0123456789abcdef").unwrap();
+    fixture.collection("0123456789abcdef");
     let destination = fixture.path("missing").join("..").join("receipt.json");
     assert!(
         !fixture
@@ -360,8 +463,8 @@ fn preparation_accepts_a_single_downloaded_receipt_at_the_artifact_root() {
         ]))
         .unwrap();
     assert_eq!(
-        fs::read_to_string(fixture.path("keys").join("linux").join("machine-key.txt")).unwrap(),
-        "0123456789abcdef\n"
+        fixture.selected_collection("linux").machine_key().as_str(),
+        "0123456789abcdef"
     );
     assert!(!fixture.path("keys").join("windows").exists());
     assert!(
@@ -369,11 +472,7 @@ fn preparation_accepts_a_single_downloaded_receipt_at_the_artifact_root() {
             .unwrap()
             .contains("completed-platforms=linux\n")
     );
-    assert!(
-        fs::read_to_string(fixture.path("github-output"))
-            .unwrap()
-            .ends_with("complete=false\n")
-    );
+    assert!(fixture.preparation_output().ends_with("complete=false\n"));
 }
 
 #[cfg(feature = "private-test-util")]
@@ -398,10 +497,10 @@ fn preparation_rejects_unexpected_content_beside_a_flat_receipt() {
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn preparation_materializes_only_latest_successful_legs_machine_keys() {
+fn preparation_materializes_only_latest_successful_legs_snapshots() {
     let fixture = Fixture::new();
-    fixture.artifact("linux", "0123456789abcdef");
-    fixture.artifact("windows", "fedcba9876543210");
+    fixture.measured_artifact("linux", "0123456789abcdef", 2, 20.0);
+    fixture.measured_artifact("windows", "fedcba9876543210", 2, 30.0);
     fs::write(fixture.path("github-output"), "earlier=value\n").unwrap();
     fixture
         .prepare(&json!([
@@ -411,13 +510,63 @@ fn preparation_materializes_only_latest_successful_legs_machine_keys() {
         ]))
         .unwrap();
     assert_eq!(
-        fs::read_to_string(fixture.path("keys").join("linux").join("machine-key.txt")).unwrap(),
-        "0123456789abcdef\n"
+        fixture.selected_collection("linux").machine_key().as_str(),
+        "0123456789abcdef"
+    );
+    assert_eq!(
+        fixture
+            .selected_collection("linux")
+            .runs()
+            .next()
+            .unwrap()
+            .1
+            .results[0]
+            .metrics[0]
+            .value,
+        20.0
     );
     assert!(!fixture.path("keys").join("windows").exists());
     assert_eq!(
-        fs::read_to_string(fixture.path("github-output")).unwrap(),
+        fixture.preparation_output(),
         "earlier=value\ncompleted-platforms=linux\nmachine-keys=0123456789abcdef\ncomplete=false\n"
+    );
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Native receipt reconciliation and exact snapshot publication."
+)]
+fn retry_replaces_only_rerun_measurements_and_preserves_non_rerun_success_values() {
+    let fixture = Fixture::new();
+    fixture.measured_artifact("linux", "0123456789abcdef", 2, 20.0);
+    fixture.measured_artifact("windows", "0123456789abcdef", 2, 30.0);
+    fixture.measured_artifact("windows", "fedcba9876543210", 3, 40.0);
+    fixture
+        .prepare(&json!([
+            job(1, "linux", 2, "success"),
+            job(2, "windows", 2, "success"),
+            job(3, "windows", 3, "success"),
+        ]))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .selected_collection("linux")
+            .runs()
+            .next()
+            .unwrap()
+            .1
+            .results[0]
+            .metrics[0]
+            .value,
+        20.0
+    );
+    let latest = fixture.selected_collection("windows");
+    assert_eq!(latest.machine_key().as_str(), "fedcba9876543210");
+    assert_eq!(
+        latest.runs().next().unwrap().1.results[0].metrics[0].value,
+        40.0
     );
 }
 
@@ -430,7 +579,7 @@ fn receipt_only_preparation_sorts_platforms_and_machine_keys() {
     fixture.artifact("linux", "fedcba9876543210");
     fixture.prepare(&successful_jobs()).unwrap();
     assert_eq!(
-        fs::read_to_string(fixture.path("github-output")).unwrap(),
+        fixture.preparation_output(),
         "completed-platforms=linux,windows\nmachine-keys=0123456789abcdef,fedcba9876543210\ncomplete=true\n"
     );
 }
@@ -507,14 +656,13 @@ fn platforms_with_a_shared_machine_key_remain_independent_without_a_fake_report(
     fixture.prepare(&successful_jobs()).unwrap();
     for platform in ["linux", "windows"] {
         assert_eq!(
-            fs::read_to_string(fixture.path("keys").join(platform).join("machine-key.txt"))
-                .unwrap(),
-            "0123456789abcdef\n"
+            fixture.selected_collection(platform).machine_key().as_str(),
+            "0123456789abcdef"
         );
     }
     assert!(!fixture.path("report.json").exists());
     assert_eq!(
-        fs::read_to_string(fixture.path("github-output")).unwrap(),
+        fixture.preparation_output(),
         "completed-platforms=linux,windows\nmachine-keys=0123456789abcdef\ncomplete=true\n"
     );
 }
@@ -602,7 +750,7 @@ fn disjoint_missing_destination_ancestors_are_materialized_after_validation() {
     fixture
         .prepare_to(&successful_jobs(), &keys, &output)
         .unwrap();
-    assert!(keys.join("linux").join("machine-key.txt").is_file());
+    assert!(keys.join("linux").join("collection.json").is_file());
     assert!(output.is_file());
 }
 
@@ -640,16 +788,17 @@ fn preparation_rejects_linked_receipts() {
 #[cfg_attr(miri, ignore = "Native filesystem and child-process adapter coverage.")]
 fn collection_rejects_linked_input_and_output_ancestors() {
     let fixture = Fixture::new();
-    fs::write(fixture.path("real-key"), "0123456789abcdef").unwrap();
-    symlink(fixture.path("real-key"), fixture.path("machine-key.txt")).unwrap();
+    fixture.collection("0123456789abcdef");
+    fs::rename(fixture.path("collection.json"), fixture.path("real-key")).unwrap();
+    symlink(fixture.path("real-key"), fixture.path("collection.json")).unwrap();
     assert!(
         !fixture
             .receipt("linux", &head(), &fixture.path("receipt.json"))
             .status
             .success()
     );
-    fs::remove_file(fixture.path("machine-key.txt")).unwrap();
-    fs::rename(fixture.path("real-key"), fixture.path("machine-key.txt")).unwrap();
+    fs::remove_file(fixture.path("collection.json")).unwrap();
+    fs::rename(fixture.path("real-key"), fixture.path("collection.json")).unwrap();
     fs::create_dir_all(fixture.path("outside")).unwrap();
     symlink(fixture.path("outside"), fixture.path("artifact")).unwrap();
     assert!(

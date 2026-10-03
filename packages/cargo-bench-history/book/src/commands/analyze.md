@@ -55,6 +55,24 @@ See [Analysis](../concepts/analysis.md) for what each mode detects.
   exists is noise. Any run at that commit counts as presence, including one from a dirty
   working tree, and one metric being measured there rescues the benchmark's other metrics too.
 
+## Exact current collections
+
+Repeat `--current-collection PATH` to analyze snapshots written by
+[`collect --collection-output`](collect.md#capturing-this-execution-for-analysis). This
+opt-in mode takes current values and the exact benchmark/metric roster from those
+collections. Other shared-store measurements at the context commit cannot add series
+or replace captured values, even when their target and hardware key match.
+
+Snapshots must belong to the configured project and the clean analysis context. Selected
+executions must have distinct measurement identities and jointly contain measurements.
+The snapshot identities replace the `--engine`, `--target-triple` and `--machine-key`
+selectors. Prefix subjects may still narrow the selected roster.
+
+Older matching history remains available for the selected series. In branch mode, only
+the selected executions supply current branch observations; the comparison uses ordinary
+base-ref history. Historical metrics absent from the current snapshots do not enter the
+report. Without this option, ordinary shared-store querying is unchanged.
+
 ## Output
 
 Each finding names the benchmark and metric, quantifies the move, names a commit somewhere

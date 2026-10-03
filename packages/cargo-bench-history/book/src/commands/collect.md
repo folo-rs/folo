@@ -50,6 +50,21 @@ Two non-overlapping partial runs at one commit do **not** merge — each writes 
 key and the second collides. Coverage gaps are expected to come from *different commits*
 covering different subsets, not from multiple partial runs at one commit.
 
+## Capturing this execution for analysis
+
+`--collection-output PATH` writes a self-contained JSON snapshot of this successful
+collection's exact measurements and identities. It requires a clean commit and a new output
+file, and is incompatible with `--no-store`. Keep the output outside the measured checkout
+or in an ignored directory.
+
+Collection always executes the selected benchmarks. With `--skip-existing`, an existing
+shared-history object remains unchanged, while the snapshot contains the newly measured
+values, not the stored values. A successful collection with no measurements still writes
+an empty snapshot.
+
+Pass snapshots to [`analyze --current-collection`](analyze.md#exact-current-collections)
+when analysis must describe this execution rather than any other collection at the same commit.
+
 ## Scope and passthrough
 
 Scope flags (`--workspace`, `--package`, `--exclude`, `--bench`) and cargo feature flags

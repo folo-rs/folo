@@ -28,6 +28,8 @@ pub(crate) trait Host {
     fn scratch(&self, root: &Path) -> Result<PathBuf, AppError>;
     /// Loads the selected key-file tree; hardware validation and deduplication are separate.
     fn key_files(&self, root: &Path) -> Result<Vec<Vec<u8>>, AppError>;
+    /// Enumerates selected snapshot paths without querying measurement storage.
+    fn collection_files(&self, root: &Path) -> Result<Vec<PathBuf>, AppError>;
     /// Appends the caller's completed output block without replacing earlier step records.
     fn append_outputs(&self, path: &Path, outputs: &str) -> Result<(), AppError>;
     /// Emits the orchestration decision context needed to explain a workflow run.

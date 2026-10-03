@@ -55,6 +55,9 @@ an empty selection from becoming accidental whole-workspace collection.
 
 `workflow-matrix`, `collection-receipt`, `prepare-analysis` and `inspect-report`
 provide matrix, collection-attempt and report evidence for workflow orchestration.
+Receipts embed exact fresh collection snapshots. Preparation selects the latest eligible
+job executions and supplies their current measurements and series roster to analysis;
+configured storage supplies matching historical comparisons, not replacement current values.
 Inspection emits `publication-state=findings|clean|inconclusive` from the same validation
 used by publication; `can-clear` applies only to history issues.
 Workflows forward that state as the publication command suffix. The publisher checks that

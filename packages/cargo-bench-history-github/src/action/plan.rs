@@ -105,6 +105,7 @@ pub(crate) fn analysis_process(
     tool: &OsStr,
     commit: &CommitSha,
     keys: &[String],
+    collections: &[PathBuf],
     reports: &Reports,
 ) -> Process {
     let mut args = vec!["analyze".into()];
@@ -116,10 +117,16 @@ pub(crate) fn analysis_process(
         option(&mut args, "--base", base);
     }
     args.extend(["--no-dirty".into(), "--no-text".into()]);
-    option(&mut args, "--engine", "all");
-    option(&mut args, "--target-triple", "all");
-    for key in keys {
-        option(&mut args, "--machine-key", key);
+    if collections.is_empty() {
+        option(&mut args, "--engine", "all");
+        option(&mut args, "--target-triple", "all");
+        for key in keys {
+            option(&mut args, "--machine-key", key);
+        }
+    } else {
+        for path in collections {
+            option(&mut args, "--current-collection", path);
+        }
     }
     for (flag, path) in [
         ("--markdown", &reports.markdown),

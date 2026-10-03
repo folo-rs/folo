@@ -274,6 +274,7 @@ fn build_options(
         engine: vec!["all".to_owned()],
         target_triple: vec!["all".to_owned()],
         machine_key: vec!["all".to_owned()],
+        current_collections: Vec::new(),
         prefixes: Vec::new(),
         no_text: true,
         markdown: None,

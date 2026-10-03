@@ -105,8 +105,9 @@ splitting. The arguments are joined with Cargo's reserved encoded separator and 
 through the child process environment. No shell interpretation or compiler-option normalization
 is involved. In particular, repeated LLVM alignment options use rustc's last-occurrence behavior.
 
-The collection process and its subsequent machine-key query reuse the same override so measurement
-and receipt capture share their execution context. Backfill descendants inherit it, including
+The collection process receives the override. Snapshot mode captures hardware identity in that
+process; standalone collection's subsequent machine-key query reuses the same override.
+Backfill descendants inherit it, including
 historical builds whose toolchain selection is independently managed by the core runner.
 Git queries, analysis and publication do not request compiler-flag overrides.
 
@@ -315,10 +316,12 @@ the same validated, sorted set, keeping workflow orchestration free of duplicate
 Report coverage uses the same identifier rule, including rejection of dot-only path components.
 
 Receipt decoding and job reconciliation operate on in-memory values. Filesystem adapters read
-receipt-only artifacts, then materialize machine-key files for only the selected indices after all
-identities and latest-attempt decisions have been validated. Collection and analysis use the
-configured measurement store directly; the companion does not traverse or copy measurement
-objects. Filesystem operations do not retry writes or clean existing destinations.
+receipt-only artifacts, then materialize embedded collection snapshots for only the selected
+indices after all identities and latest-attempt decisions have been validated. Collection
+captures fresh finalized engine payloads in memory. Analysis uses these snapshots for current
+values and configured measurement storage only for matching comparison history; the companion
+does not traverse or copy stored objects. Filesystem operations do not retry writes or clean
+existing destinations.
 
 Destination planning resolves missing paths through their existing canonical ancestors without
 creating directories. Input/output separation and destination suitability are checked before
@@ -340,7 +343,7 @@ credentials or real delay.
 
 The `private-test-util` feature exposes a deliberately unsupported preparation entry point for
 native integration tests. It injects already-discovered job records and bypasses only HTTP; real
-receipt loading, selection, fresh machine-key destinations and workflow outputs
+receipt loading, selection, fresh snapshot destinations and workflow outputs
 execute unchanged. Offline commands also run through the binary without credential environment
 variables. This keeps real filesystem and process coverage outside the unit/Miri harness.
 
@@ -359,11 +362,11 @@ cargo-bench-history-github --instance folo workflow-matrix
 
 cargo-bench-history-github --repository owner/name --instance folo collection-receipt
   --run-id N --run-attempt N --head SHA --platform ID
-  --machine-key-file PATH --file ARTIFACT_ROOT\receipt.json
+  --collection-file PATH --file ARTIFACT_ROOT\receipt.json
 
 cargo-bench-history-github --repository owner/name --instance folo prepare-analysis
   --run-id N --head SHA --expected-platforms CSV
-  --receipts-dir DOWNLOAD_ROOT --machine-key-dir KEY_ROOT --github-output PATH
+  --receipts-dir DOWNLOAD_ROOT --current-collection-dir COLLECTION_ROOT --github-output PATH
 
 cargo-bench-history-github inspect-report
   --report-file PATH --analyzed-sha SHA --expected-platforms CSV
@@ -371,9 +374,9 @@ cargo-bench-history-github inspect-report
 ```
 
 These examples wrap arguments for readability, not shell execution. SHA is a full
-hexadecimal commit ID. Run IDs and attempts are positive. Machine-key files contain the actual
-16-hex-digit fingerprint, with surrounding command-output whitespace accepted and hexadecimal
-letters normalized to lowercase. Matrix, receipt and preparation platform identifiers use ASCII
+hexadecimal commit ID. Run IDs and attempts are positive. Collection files are version-1
+`CollectionSnapshot` documents from the core; their project and commit must match the receipt.
+Matrix, receipt and preparation platform identifiers use ASCII
 letters, digits, `.`, `_` and `-`, excluding `.` and `..` as entire identifiers.
 
 Lifecycle commands use the same common options and repository fallback. Rolling commands carry
@@ -426,21 +429,25 @@ DOWNLOAD_ROOT\
 
 Artifact roots contain only `receipt.json`. Distinct historical attempts can be present;
 duplicate receipts for the same platform and attempt are rejected.
-The receipt JSON has `version`, `repository`, `instance`,
-`run_id`, `run_attempt`, `head`, `platform` and `machine_key` fields; unknown fields or versions
-are errors.
+The version-2 receipt JSON has `version`, `repository`, `instance`,
+`run_id`, `run_attempt`, `head`, `platform` and `collection` fields; unknown fields or versions
+are errors. `collection` embeds the independently versioned snapshot, including the hardware
+key and the exact values. Header attribution is checked against that snapshot.
 
-Preparation writes `KEY_ROOT\<platform>\machine-key.txt`, compatible with the existing recursive
-key-directory recipe. It appends single-line outputs in this order:
+Preparation writes `COLLECTION_ROOT\<platform>\collection.json`. The root analyze action
+enumerates these files and passes each to the core's repeatable `--current-collection`.
+It appends single-line outputs in this order:
 
 ```text
 completed-platforms=linux,windows
 machine-keys=0123456789abcdef
 complete=true
+current-collections=ABSOLUTE_COLLECTION_ROOT
 ```
 
 Platform and deduplicated key lists are sorted. `complete` measures platform coverage only.
-The machine-key destination must be absent or empty. `GITHUB_OUTPUT` must be a separate regular
+Machine keys are informational, not analyzer selectors in this workflow. The snapshot
+destination must be absent or empty. `GITHUB_OUTPUT` must be a separate regular
 file with an existing parent directory; output appending preserves earlier workflow values.
 Inspection appends `outcome=<wire value>`, `notable=<bool>`, `can-clear=<bool>` and
 `publication-state=findings|clean|inconclusive`, using lowercase booleans and the tool's existing

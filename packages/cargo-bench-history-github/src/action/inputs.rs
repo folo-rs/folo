@@ -114,6 +114,7 @@ impl Inputs {
             "no-default-features",
             "ignore-errors",
             "empty-scope",
+            "collection-snapshot",
         ] {
             self.boolean(key, false)?;
         }
@@ -168,7 +169,10 @@ impl Inputs {
                 }
             }
             ActionCommand::AnalyzeHistory | ActionCommand::AnalyzePr => {
-                self.required("machine-keys")?;
+                self.conflict("machine-keys", "current-collections")?;
+                if self.get("current-collections").is_none() {
+                    self.required("machine-keys")?;
+                }
                 self.platforms()?;
             }
             ActionCommand::Publish(_, state) => {
@@ -244,6 +248,7 @@ impl ActionCommand {
         match self {
             Self::Collect | Self::Backfill => {
                 BUILD_INPUTS.contains(&key)
+                    || (self == Self::Collect && key == "collection-snapshot")
                     || key == "local-path"
                     || (self == Self::Backfill
                         && matches!(key, "from" | "to" | "ignore-errors" | "max-commits"))
@@ -254,6 +259,7 @@ impl ActionCommand {
                     "local-path"
                         | "cache"
                         | "machine-keys"
+                        | "current-collections"
                         | "context"
                         | "expected-platforms"
                         | "completed-platforms"
@@ -364,6 +370,8 @@ const REPORT_INPUTS: &[&str] = &[
     "completed-platforms",
 ];
 const ALL_INPUTS: &[&str] = &[
+    "collection-snapshot",
+    "current-collections",
     "command",
     "working-directory",
     "config",

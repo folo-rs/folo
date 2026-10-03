@@ -26,6 +26,7 @@
 mod aggregate;
 mod benchmark_id;
 mod bless;
+mod collection;
 mod comparability;
 mod constants;
 mod context;
@@ -36,6 +37,7 @@ mod run;
 pub use aggregate::{AggregateError, Combined, Selection, min_per_metric};
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
+pub use collection::*;
 pub use comparability::{
     DiscriminantSet, Engine, IntervalSupport, ObjectKind, StorageKey, parse_key, sanitize_segment,
 };

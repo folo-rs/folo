@@ -102,6 +102,7 @@ pub(crate) async fn execute(
         project_id: &project_id,
         tool_version: env!("CARGO_PKG_VERSION"),
         reporter: &reporter,
+        capture_runs: false,
     };
 
     let result =
@@ -422,6 +423,7 @@ mod tests {
             project_id: "folo",
             tool_version: "0.0.1",
             reporter: &reporter,
+            capture_runs: false,
         };
         block_on(orchestrate_import(
             options, output, probe, git, &store, &clock, &env,

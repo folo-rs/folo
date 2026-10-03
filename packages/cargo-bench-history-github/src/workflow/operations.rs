@@ -1,7 +1,9 @@
 use std::path::Path;
 
+use cbh_model::CollectionSnapshot;
 use ohno::AppError;
 
+use crate::action::for_output;
 use crate::github::{GitHub, WorkflowJob};
 use crate::model::Instance;
 use crate::operations::{Context, load_evidence};
@@ -12,9 +14,9 @@ use crate::workflow::files::{
     fresh_directory, output_file, read_file, read_receipts, write_new,
 };
 use crate::workflow::projection::{
-    machine_key_files, matrix_outputs, preparation_diagnostics, preparation_outputs, report_outputs,
+    collection_files, matrix_outputs, preparation_diagnostics, preparation_outputs, report_outputs,
 };
-use crate::workflow::receipt::{InvalidMachineKey, Receipt, machine_key, validate_platform};
+use crate::workflow::receipt::{InvalidReceipt, Receipt, validate_platform};
 use crate::workflow::reconcile::{Selection, reconcile};
 
 // File-backed command adapters are covered natively; their transformations are pure unit targets.
@@ -37,15 +39,20 @@ pub(crate) fn workflow_matrix(
     Ok(())
 }
 
-/// Records a caller-confirmed successful collection with its captured hardware fingerprint.
+/// Binds one successful collection's captured measurements to its workflow execution.
 ///
 /// The caller invokes this after collection; this operation does not run benchmarks or copy
-/// measurement storage. A new receipt file is the artifact consumed by preparation.
+/// measurement storage. A new receipt embeds the snapshot consumed by preparation.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn collection_receipt(context: &Context, args: CollectionArgs) -> Result<(), AppError> {
     validate_platform(&args.platform)?;
-    let key = read_file(&args.machine_key_file)?;
-    let key = str::from_utf8(&key).map_err(InvalidMachineKey::caused_by)?;
+    let collection = CollectionSnapshot::from_slice(&read_file(&args.collection_file)?)
+        .map_err(InvalidReceipt::caused_by)?;
+    if collection.project() != context.instance.as_str()
+        || collection.commit() != args.head.as_str()
+    {
+        return Err(InvalidReceipt::new().into());
+    }
     let receipt = Receipt {
         repository: context.repository.clone(),
         instance: context.instance.clone(),
@@ -53,13 +60,16 @@ pub(crate) fn collection_receipt(context: &Context, args: CollectionArgs) -> Res
         run_attempt: args.run_attempt,
         head: args.head,
         platform: args.platform,
-        machine_key: machine_key(key.trim())?,
+        collection,
     };
     write_new(&args.file, &receipt.encode()?)?;
     if context.verbose {
         eprintln!(
             "Recorded platform {} for run {} attempt {} using measured machine key {}.",
-            receipt.platform, receipt.run_id, receipt.run_attempt, receipt.machine_key
+            receipt.platform,
+            receipt.run_id,
+            receipt.run_attempt,
+            receipt.machine_key()
         );
     }
     Ok(())
@@ -91,7 +101,7 @@ pub(crate) async fn prepare_analysis(
     prepare_from_jobs(context, &args, &jobs)
 }
 
-/// Materializes selected key files after receipt, job and destination validation completes.
+/// Materializes exact snapshots after receipt, job and destination validation completes.
 ///
 /// Production supplies discovered jobs; native tests supply the same semantic records directly.
 /// Both use this filesystem orchestration, without copying measurement storage.
@@ -104,21 +114,29 @@ pub(crate) fn prepare_from_jobs(
     let receipts = read_receipts(&args.receipts_dir)?;
     let selection = select_receipts(context, args, &receipts, jobs)?;
     let source = canonical_directory(&args.receipts_dir)?;
-    let keys = directory_destination(&args.machine_key_dir)?;
+    let keys = directory_destination(&args.current_collection_dir)?;
     let output = output_file(&args.github_output)?;
     require_separate(&source, &keys, &output)?;
+    let path = for_output(&keys)?;
+    let snapshots = collection_files(&selection, &receipts)?;
     let keys = fresh_directory(&keys)?;
     let output = output_file(&output)?;
     // Retain actual filesystem identity checks as materialized paths may alias
     // spellings that looked distinct when their final components did not exist.
     require_separate(&source, &keys, &output)?;
-    for (path, key) in machine_key_files(&selection, &receipts) {
-        write_new(&keys.join(path), key.as_bytes())?;
+    for (path, snapshot) in snapshots {
+        write_new(&keys.join(path), &snapshot)?;
     }
-    append_outputs(&output, &preparation_outputs(&selection, &receipts))
+    append_outputs(
+        &output,
+        &format!(
+            "{}current-collections={path}\n",
+            preparation_outputs(&selection, &receipts),
+        ),
+    )
 }
 
-/// Keeps receipt inputs, generated keys and workflow outputs from overlapping.
+/// Keeps receipt inputs, generated snapshots and workflow outputs from overlapping.
 fn require_separate(source: &Path, keys: &Path, output: &Path) -> Result<(), AppError> {
     disjoint(source, keys)?;
     disjoint(source, output)?;
@@ -200,7 +218,7 @@ mod tests {
             head: receipt.head.clone(),
             expected_platforms: "linux".to_owned(),
             receipts_dir: PathBuf::new(),
-            machine_key_dir: PathBuf::new(),
+            current_collection_dir: PathBuf::new(),
             github_output: PathBuf::new(),
         };
         let jobs = block_on(github.workflow_jobs(&context.repository, args.run_id)).unwrap();

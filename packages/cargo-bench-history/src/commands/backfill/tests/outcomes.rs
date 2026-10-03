@@ -168,6 +168,8 @@ fn stopping_error_comes_from_the_explicit_failure_entry() {
 #[test]
 fn map_collect_result_classifies_each_run_outcome() {
     let stored = map_collect_result(Ok(CollectSummary {
+        runs: Vec::new(),
+        snapshot: None,
         stored: 1,
         harvested: 7,
         labels: Vec::new(),
@@ -176,6 +178,8 @@ fn map_collect_result_classifies_each_run_outcome() {
     assert!(matches!(stored, CommitOutcome::Stored { cases: 7 }));
 
     let empty = map_collect_result(Ok(CollectSummary {
+        runs: Vec::new(),
+        snapshot: None,
         stored: 0,
         harvested: 0,
         labels: Vec::new(),

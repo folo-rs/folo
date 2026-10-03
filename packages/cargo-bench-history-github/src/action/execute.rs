@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use cbh_config::rebase;
+use cbh_model::CollectionSnapshot;
 use ohno::AppError;
 use serde::Deserialize;
 
@@ -64,13 +65,42 @@ pub(crate) async fn run_with(
     match inputs.command {
         ActionCommand::Collect | ActionCommand::Backfill => {
             let mut process = build_process(&inputs, &cwd, &tool)?;
+            let collection = if inputs.boolean("collection-snapshot", false)? {
+                let checkout = git(host, &cwd, &["rev-parse", "--show-toplevel"]).await?;
+                let checkout = host.directory(Path::new(checkout.trim()))?;
+                let temp = host.directory(&rebase(&cwd, args.temp_dir))?;
+                host.outside_checkout(&temp, &checkout)?;
+                let directory = host.scratch(&temp)?;
+                host.outside_checkout(&directory, &checkout)?;
+                let path = directory.join("collection.json");
+                process.args.push("--collection-output".into());
+                process.args.push(path.clone().into_os_string());
+                Some(path)
+            } else {
+                None
+            };
             process.env = compiler_environment(inputs.get("rustflags"), host)?;
             host.note(&format!(
                 "Running {} in {} with arguments {:?}; the explicit scope, feature and write-mode selections preserve this command's defaults, and benchmark output streams to the job log.",
                 process.program.to_string_lossy(), process.cwd.display(), process.args
             ));
             host.process(&process).await?;
-            if inputs.command == ActionCommand::Collect {
+            if let Some(path) = collection {
+                let collection =
+                    CollectionSnapshot::from_slice(&host.read(&path)?).map_err(|error| {
+                        InvalidOutput::caused_by("invalid collection snapshot", error)
+                    })?;
+                if collection.project() != instance.as_str() {
+                    return Err(InvalidOutput::new("collection snapshot project mismatch").into());
+                }
+                writeln!(
+                    outputs,
+                    "machine-key={}\ncollection-file={}",
+                    collection.machine_key(),
+                    for_output(&path)?
+                )
+                .expect("formatting into a String cannot fail");
+            } else if inputs.command == ActionCommand::Collect {
                 let key = host
                     .process(&Process {
                         program: tool,
@@ -136,18 +166,36 @@ async fn analyze(
     .await?
     .trim()
     .parse()?;
-    let keys =
-        machine_keys(host.key_files(&rebase(cwd, inputs.required("machine-keys")?.into()))?)?;
+    let (keys, collections) = if let Some(root) = inputs.get("current-collections") {
+        let files = host.collection_files(&rebase(cwd, root.into()))?;
+        if files.is_empty() {
+            return Err(
+                InvalidInput::new("current-collections", "requires collection.json files").into(),
+            );
+        }
+        (Vec::new(), files)
+    } else {
+        (
+            machine_keys(host.key_files(&rebase(cwd, inputs.required("machine-keys")?.into()))?)?,
+            Vec::new(),
+        )
+    };
     let directory = host.scratch(&temp)?;
     host.outside_checkout(&directory, &checkout)?;
     let reports = Reports::new(&directory);
     host.note(&format!(
-        "Resolved context {} to {}; selecting measured keys {:?}, expected platforms {} and completed platforms {}. Coverage comes from platform evidence, not the deduplicated key count. Reports persist in {}.",
-        inputs.get("context").unwrap_or("HEAD"), commit.as_str(), keys,
+        "Resolved context {} to {}; exact collection files {:?}, broad-query keys {:?}, expected platforms {} and completed platforms {}. Coverage comes from platform evidence, not the deduplicated key count. Reports persist in {}.",
+        inputs.get("context").unwrap_or("HEAD"), commit.as_str(), collections, keys,
         inputs.required("expected-platforms")?, inputs.required("completed-platforms")?, directory.display()
     ));
     host.process(&analysis_process(
-        inputs, cwd, tool, &commit, &keys, &reports,
+        inputs,
+        cwd,
+        tool,
+        &commit,
+        &keys,
+        &collections,
+        &reports,
     ))
     .await?;
     analysis_outputs(inputs, &commit, &reports, host)
