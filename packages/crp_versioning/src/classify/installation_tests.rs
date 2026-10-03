@@ -116,6 +116,8 @@ fn historical_path_acquisition_resolves_recorded_identity_and_retains_operationa
 #[test]
 fn anchor_lockfiles_are_acquired_once_per_commit_and_missing_is_an_error() {
     let mut cache = LockfileCache {
+        storage: Cache::default(),
+        verbose: Verbose::new(false, &crp_diag::Discard),
         work: None,
         anchors: HashMap::new(),
         case: PathCase::Sensitive,
@@ -170,6 +172,8 @@ fn binary_endpoints_independently_contribute_locked_closures() {
         manifest.installation_dependencies.clone(),
     );
     let mut cache = LockfileCache {
+        storage: Cache::default(),
+        verbose: Verbose::new(false, &crp_diag::Discard),
         work: Some(lock("2.0.0")),
         anchors: HashMap::from([("anchor".into(), lock("1.0.0"))]),
         case: PathCase::Sensitive,

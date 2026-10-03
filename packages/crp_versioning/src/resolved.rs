@@ -16,10 +16,10 @@ use crp_diag::Verbose;
 use crp_workspace::command::{hash_bytes, run_capture};
 use crp_workspace::git::GitRepo;
 use crp_workspace::manifest::{PathCase, for_each_dependency_table, parse_document};
-use crp_workspace::metadata::load_tracked_work_tree;
+use crp_workspace::metadata::{WorkTree, load_tracked_work_tree};
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
-use toml_edit::{Item, TableLike};
+use toml_edit::{DocumentMut, Item, TableLike};
 
 use self::paths::PathIdentity;
 use crate::groups::Groups;
@@ -66,6 +66,14 @@ impl Inputs {
         release_history: Option<&str>,
         merge_target: Option<&str>,
     ) -> Result<Self, AppError> {
+        Self::capture_workspace(manifest, release_history, merge_target).map(|(inputs, _)| inputs)
+    }
+
+    fn capture_workspace(
+        manifest: &Path,
+        release_history: Option<&str>,
+        merge_target: Option<&str>,
+    ) -> Result<(Self, WorkTree), AppError> {
         // Cargo preserves the supplied path spelling, including Windows short names.
         // Normalize the entry point before discovering any paths that will be rebased.
         let manifest = canonical(manifest)?;
@@ -79,7 +87,7 @@ impl Inputs {
             Verbose::new(false, &crp_diag::Discard),
         )?;
         let mut paths: BTreeSet<PathBuf> =
-            git.ls_files("")?.into_iter().map(PathBuf::from).collect();
+            work_tree.tracked_paths.iter().map(PathBuf::from).collect();
         paths.insert(relative(
             &root,
             &work_tree.workspace_root.join("Cargo.lock"),
@@ -100,28 +108,41 @@ impl Inputs {
             collect_sources(&root, &directory.join("src"), &mut paths)?;
             paths.insert(relative(&root, &directory.join("build.rs"))?);
         }
-        capture_path_dependencies(
+        capture_path_dependencies_documents(
             &root,
             work_tree
                 .member_manifests
                 .iter()
                 .chain([&work_tree.workspace_root.join("Cargo.toml")]),
             &mut paths,
+            |path| match work_tree.manifests.documents.get(path) {
+                Some(document) => Ok(document.clone()),
+                None => {
+                    let text = fs::read_to_string(path)
+                        .map_err(|error| ReadFileError::caused_by(path, error))?;
+                    parse_document(path, &text)
+                }
+            },
+            canonical,
+            |directory, paths| collect_sources(&root, directory, paths),
         )?;
         let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
         history.verify(&git)?;
-        Ok(Self {
-            root,
-            manifest,
-            head: git.head()?,
-            release_history: history.release_history,
-            release_history_revision: history.release_history_revision,
-            merge_target: history.merge_target,
-            merge_target_revision: history.merge_target_revision,
-            index: run_capture("git", &["ls-files", "--stage", "-z"], git.root())?,
-            paths,
-            digest,
-        })
+        Ok((
+            Self {
+                root,
+                manifest,
+                head: git.head()?,
+                release_history: history.release_history,
+                release_history_revision: history.release_history_revision,
+                merge_target: history.merge_target,
+                merge_target_revision: history.merge_target_revision,
+                index: run_capture("git", &["ls-files", "--stage", "-z"], git.root())?,
+                paths,
+                digest,
+            },
+            work_tree,
+        ))
     }
 
     #[must_use]
@@ -237,20 +258,42 @@ impl Inputs {
         self.verify_with(manifest, final_digest, Self::capture_with_target)
     }
 
+    /// Returns observations only after a fresh capture passes source admission.
+    #[cfg_attr(test, mutants::skip)] // Native capture; verification policy remains in verify_with.
+    pub(crate) fn verify_workspace(
+        &self,
+        manifest: &Path,
+        final_digest: Option<&str>,
+    ) -> Result<(bool, WorkTree), AppError> {
+        self.verify_observed(manifest, final_digest, Self::capture_workspace)
+    }
+
     fn verify_with(
         &self,
         manifest: &Path,
         final_digest: Option<&str>,
         capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<Self, AppError>,
     ) -> Result<bool, AppError> {
+        self.verify_observed(manifest, final_digest, |manifest, history, target| {
+            capture(manifest, history, target).map(|inputs| (inputs, ()))
+        })
+        .map(|(applied, ())| applied)
+    }
+
+    fn verify_observed<T>(
+        &self,
+        manifest: &Path,
+        final_digest: Option<&str>,
+        capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<(Self, T), AppError>,
+    ) -> Result<(bool, T), AppError> {
         self.validate_history_fields()?;
-        let current = capture(
+        let (current, observations) = capture(
             manifest,
             Some(&self.release_history_revision),
             self.merge_target_revision.as_deref(),
         )
         .map_err(StaleInputs::caused_by)?;
-        self.compare(&current, final_digest)
+        Ok((self.compare(&current, final_digest)?, observations))
     }
 
     pub fn compare(&self, current: &Self, final_digest: Option<&str>) -> Result<bool, AppError> {
@@ -348,6 +391,24 @@ fn capture_path_dependencies_with<'a>(
     manifests: impl IntoIterator<Item = &'a PathBuf>,
     paths: &mut BTreeSet<PathBuf>,
     mut read: impl FnMut(&Path) -> Result<String, AppError>,
+    canonicalize: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    collect: impl FnMut(&Path, &mut BTreeSet<PathBuf>) -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    capture_path_dependencies_documents(
+        root,
+        manifests,
+        paths,
+        |path| parse_document(path, &read(path)?),
+        canonicalize,
+        collect,
+    )
+}
+
+fn capture_path_dependencies_documents<'a>(
+    root: &Path,
+    manifests: impl IntoIterator<Item = &'a PathBuf>,
+    paths: &mut BTreeSet<PathBuf>,
+    mut document: impl FnMut(&Path) -> Result<DocumentMut, AppError>,
     mut canonicalize: impl FnMut(&Path) -> Result<PathBuf, AppError>,
     mut collect: impl FnMut(&Path, &mut BTreeSet<PathBuf>) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
@@ -358,8 +419,7 @@ fn capture_path_dependencies_with<'a>(
             continue;
         }
         paths.insert(relative(root, &manifest)?);
-        let text = read(&manifest)?;
-        let document = parse_document(&manifest, &text)?;
+        let document = document(&manifest)?;
         let mut dependencies = Vec::new();
         for_each_dependency_table(document.as_table(), &mut |_, table| {
             dependency_paths(table, &mut dependencies);
@@ -543,8 +603,9 @@ pub(crate) fn apply_resolved(
     }
     plan.validate_history(&state.inputs)?;
     let manifest = canonical(manifest)?;
-    let already_applied = state.inputs.verify(&manifest, Some(&state.final_digest))?;
-    let (work_tree, _) = load_tracked_work_tree(&manifest)?;
+    let (already_applied, work_tree) = state
+        .inputs
+        .verify_workspace(&manifest, Some(&state.final_digest))?;
     let resolved = resolve_plan(
         plan,
         &Groups::from_workspace(&work_tree),

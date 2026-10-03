@@ -157,7 +157,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crp_workspace::lockfile::InstallationGraph;
-    use crp_workspace::metadata::VersionTarget;
+    use crp_workspace::metadata::{ManifestSnapshot, VersionTarget};
     use semver::Version;
     use serde_json::json;
 
@@ -393,6 +393,8 @@ mod tests {
 
     fn work_tree(targets: &[(&str, bool)]) -> WorkTree {
         WorkTree {
+            manifests: ManifestSnapshot::default(),
+            tracked_paths: Vec::new(),
             workspace_root: PathBuf::from("workspace"),
             packages: Vec::new(),
             version_targets: targets

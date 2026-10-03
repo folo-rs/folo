@@ -81,7 +81,13 @@ original source rather than the retained candidate.
 The workspace component publishes typed immutable observations atomically. Versioning
 retains the full historical tree and its lookup indexes with each committed snapshot,
 and retains raw commit-parent facts separately from fresh history-availability decisions.
-Candidate observations and classification decisions are not persistent cache entries.
+Complete manifest text and lockfile text also identify reusable parsed syntax and dependency
+graphs. Workspace owns these subjects; historical workspace reconstruction remains lazy and
+context-bound. Current bytes are acquired before parse reuse. Mutable Cargo metadata,
+classification decisions and successful verification verdicts are not persistent entries.
+Adjacent consumers explicitly share the same acquisition's root/member documents and tracked
+listing. Preview reacquires after edits/resolution and reads artifact contents freshly; preparation
+retains its separate prospective acquisition. See the component guides for these lifetimes.
 
 ## Executable identity
 

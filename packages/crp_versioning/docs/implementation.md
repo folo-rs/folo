@@ -99,9 +99,27 @@ invocations. Raw headers never substitute for fresh parent availability or shall
 checks, and first-parent traversals are not retained.
 The original workspace's resolved cache location is carried through prospective passes;
 it remains outside captured source and evidence and is not part of a plan's validity.
-Candidate observations and lockfiles are never retained across passes, and history refs
-are still resolved and verified. The converged classification supplies both the final
+Candidate metadata and lockfile bytes are reacquired at each pass. Workspace's content-keyed
+syntax and lockfile graphs avoid repeating interpretation for equal bytes without preserving
+a mutable metadata snapshot or an availability verdict. Historical workspaces are reconstructed
+from lazily requested parsed documents under the bound context; compiled matchers and deferred
+errors are not serialized. History refs are still resolved and verified. The converged classification supplies both the final
 readiness verdict and report, followed by the original source and candidate checks.
+
+Preview computes the next edits from its preceding classification's workspace root, member
+manifest paths and member directory identities. These remain raw Cargo-relative observations,
+independent of the package directories normalized into Git's path space for comparison. Edits
+and offline resolution precede fresh classification. Artifact selection then uses that
+post-resolution classification's workspace/member paths while reading artifact contents freshly.
+Preparation has no preceding prospective classification and acquires its own prospective
+metadata; original-workspace observations never stand in for the candidate.
+
+Source capture reuses the tracked listing and parsed root/member documents acquired by its own
+metadata projection, including during path-dependency traversal. Files reached outside those
+documents are still acquired, and ignored/untracked build-source traversal and index capture
+remain independent. Successful verification can return its freshly acquired workspace to an
+immediate consumer such as preparation or application. Each verification still captures and
+admits current inputs; only its acquired values are shared, never its verdict.
 
 Captured-source traversal, artifact admission and prospective evidence ownership use
 injected observations and effects. This keeps transitive membership, original/final

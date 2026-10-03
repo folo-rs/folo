@@ -84,7 +84,18 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
         ("disabled", &disabled, &["--no-cache"][..]),
     ] {
         let trace = evidence.path().join(format!("{name}.trace"));
-        report(&fixture, output, &trace, options);
+        let mut options = options.to_vec();
+        options.push("--verbose");
+        let result = report(&fixture, output, &trace, &options);
+        if name == "cold" {
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("acquiring manifest-document ")
+            );
+        } else if name == "warm" {
+            assert!(
+                !String::from_utf8_lossy(&result.stderr).contains("acquiring manifest-document ")
+            );
+        }
         assert_eq!(
             acquisitions(&trace),
             if name == "warm" { (0, 0) } else { (1, 1) }
@@ -111,6 +122,7 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
         .join("cache");
     assert_eq!(entries(&storage, "git-trees").len(), 1);
     assert_eq!(entries(&storage, "git-parent-headers").len(), 1);
+    assert!(!entries(&storage, "manifest-document").is_empty());
     assert!(
         !fixture
             .git(&["status", "--porcelain", "--untracked-files=all"])
@@ -467,8 +479,19 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
         command(&fixture)
             .args(["apply", "--dry-run", "--plan"])
             .arg(preview.join("plan.json"))
+            .env("GIT_TRACE", evidence.path().join("apply.trace"))
             .output()
             .unwrap(),
+    );
+    // Dry-run application has one explicit source verification. Its metadata and retained
+    // listing also serve plan/artifact validation, rather than starting another capture.
+    let trace = fs::read_to_string(evidence.path().join("apply.trace")).unwrap();
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|line| line.contains("built-in: git ls-files -z -- "))
+            .count(),
+        1
     );
     assert!(!storage.exists());
 }

@@ -7,10 +7,13 @@
 
 use std::fmt::Write as _;
 use std::hint::black_box;
+use std::path::Path;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use crp_diag::{Discard, Verbose};
 use crp_workspace::git::decode_blob_batch;
 use crp_workspace::lockfile::benchmark_lockfile_closures;
+use crp_workspace::manifest_document::ManifestDocuments;
 
 ::testing::set_allocator!();
 
@@ -21,8 +24,43 @@ const HIGH_PACKAGE_COUNT: usize = 64;
 /// Represents several binaries sharing one parsed workspace lockfile.
 const CLOSURE_COUNT: usize = 16;
 
-criterion_group!(benches, lockfile_closure, historical_blob_batch);
+criterion_group!(
+    benches,
+    lockfile_closure,
+    historical_blob_batch,
+    manifest_reuse
+);
 criterion_main!(benches);
+
+fn manifest_reuse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crp_workspace/manifest_reuse");
+    for (name, count) in [("low", LOW_PACKAGE_COUNT), ("high", HIGH_PACKAGE_COUNT)] {
+        let mut text = String::from("[workspace.dependencies]\n");
+        for index in 0..count {
+            writeln!(
+                text,
+                "member_{index} = {{ version = '=1.0.0', path = 'member_{index}' }}"
+            )
+            .expect("writing to a String cannot fail");
+        }
+        let mut documents = ManifestDocuments::default();
+        let path = Path::new("Cargo.toml");
+        let verbose = Verbose::new(false, &Discard);
+        documents
+            .parse(path, &text, verbose)
+            .expect("generated TOML is valid");
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                black_box(
+                    documents
+                        .parse(path, black_box(&text), verbose)
+                        .expect("the cached document has already been parsed"),
+                )
+            });
+        });
+    }
+    group.finish();
+}
 
 fn historical_blob_batch(c: &mut Criterion) {
     let mut group = c.benchmark_group("crp_workspace/historical_blob_batch");

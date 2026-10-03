@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf, absolute};
 use std::{fs, io};
 
-use crp_diag::Quotable as _;
+use crp_diag::{Quotable as _, Verbose};
 use ohno::AppError;
 use semver::{Op, Version, VersionReq};
 use serde::Deserialize;
@@ -32,6 +32,7 @@ use crate::manifest::{
     installation_patches, locked_registry_index, package_manifest_from_document, parse_document,
     path_package_identity, workspace_relative_path,
 };
+use crate::manifest_document::ManifestDocuments;
 #[cfg(test)]
 use crate::packaging::PackagingRules;
 use crate::{
@@ -47,6 +48,10 @@ mod dependency_tests;
 #[derive(Debug)]
 pub struct WorkTree {
     pub workspace_root: PathBuf,
+    /// Parsed documents from this acquisition, before any edits or Cargo resolution.
+    pub manifests: ManifestSnapshot,
+    /// The same live index listing used to select this acquisition's tracked members.
+    pub tracked_paths: Vec<String>,
     pub packages: Vec<WorkPackage>,
     /// Every Git-tracked member whose declared version a plan may set.
     pub version_targets: Vec<VersionTarget>,
@@ -296,7 +301,9 @@ pub struct MetadataDep {
 ///
 /// The root and selected member paths may overlap, so loading deduplicates by
 /// path before deriving package facts from the parsed documents.
-#[derive(Debug)]
+/// Documents preserve interpretation syntax, not formatting. Never render them for edits;
+/// a writer must parse the original file to retain comments and representation.
+#[derive(Debug, Default)]
 pub struct ManifestSnapshot {
     pub documents: BTreeMap<PathBuf, DocumentMut>,
     pub packages: BTreeMap<PathBuf, Option<PackageManifest>>,
@@ -359,7 +366,8 @@ impl ManifestSnapshot {
         self.document(&workspace_root.join("Cargo.toml"))
     }
 
-    fn document(&self, path: &Path) -> &DocumentMut {
+    #[must_use]
+    pub fn document(&self, path: &Path) -> &DocumentMut {
         self.documents
             .get(path)
             .expect("the requested manifest belongs to this snapshot")
@@ -441,6 +449,19 @@ impl TrackedMetadata<'_> {
 
 /// Loads the current workspace while restricting release inputs to tracked files.
 pub fn load_tracked_work_tree(manifest_path: &Path) -> Result<(WorkTree, GitRepo), AppError> {
+    load_tracked_work_tree_with_documents(
+        manifest_path,
+        &mut ManifestDocuments::default(),
+        Verbose::new(false, &crp_diag::Discard),
+    )
+}
+
+/// Acquires current metadata and bytes before consulting content-keyed parsed syntax.
+pub fn load_tracked_work_tree_with_documents(
+    manifest_path: &Path,
+    documents: &mut ManifestDocuments,
+    verbose: Verbose<'_>,
+) -> Result<(WorkTree, GitRepo), AppError> {
     let metadata = query_metadata(manifest_path)?;
     let workspace_root = PathBuf::from(&metadata.workspace_root);
     let git = GitRepo::discover(&workspace_root)?;
@@ -450,7 +471,14 @@ pub fn load_tracked_work_tree(manifest_path: &Path) -> Result<(WorkTree, GitRepo
         git: &git,
         workspace_root: &workspace_root,
     };
-    let work_tree = work_tree_from_metadata(&metadata, &tracked)?;
+    let work_tree = work_tree_from_metadata_parsed_with(
+        &metadata,
+        &tracked,
+        |path| fs::read_to_string(path),
+        |path| fs::canonicalize(path),
+        |path| fs::symlink_metadata(path).map(|metadata| metadata.is_file()),
+        |path, text| documents.parse(path, text, verbose),
+    )?;
     Ok((work_tree, git))
 }
 
@@ -533,9 +561,27 @@ pub fn work_tree_from_metadata(
 fn work_tree_from_metadata_with(
     metadata: &MetadataJson,
     tracked: &TrackedMetadata<'_>,
+    read: impl FnMut(&Path) -> io::Result<String>,
+    canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
+    regular: impl FnMut(&Path) -> io::Result<bool>,
+) -> Result<WorkTree, AppError> {
+    work_tree_from_metadata_parsed_with(
+        metadata,
+        tracked,
+        read,
+        canonicalize,
+        regular,
+        parse_document,
+    )
+}
+
+fn work_tree_from_metadata_parsed_with(
+    metadata: &MetadataJson,
+    tracked: &TrackedMetadata<'_>,
     mut read: impl FnMut(&Path) -> io::Result<String>,
     mut canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
     mut regular: impl FnMut(&Path) -> io::Result<bool>,
+    parse: impl FnMut(&Path, &str) -> Result<DocumentMut, AppError>,
 ) -> Result<WorkTree, AppError> {
     let workspace_root = PathBuf::from(&metadata.workspace_root);
     let cargo_member_ids: HashSet<&str> = metadata
@@ -597,7 +643,7 @@ fn work_tree_from_metadata_with(
         &selected_member_ids,
         &workspace_root,
         |path| read(path).map_err(|error| ReadFileError::caused_by(path, error).into()),
-        parse_document,
+        parse,
     )?;
     let root_manifest = manifests.root(&workspace_root);
     let mut version_targets = Vec::new();
@@ -747,6 +793,8 @@ fn work_tree_from_metadata_with(
 
     Ok(WorkTree {
         workspace_root,
+        manifests,
+        tracked_paths: tracked.paths.clone(),
         packages,
         version_targets,
         exact_dependencies,

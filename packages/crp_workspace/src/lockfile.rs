@@ -10,10 +10,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::iter;
 use std::sync::Arc;
 
+use crp_diag::Verbose;
 use ohno::AppError;
 use semver::Version;
+use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item};
 
+use crate::cache::{Cache, CacheEntry};
 use crate::manifest::{
     DependencyPatch, DependencyPath, DependencySource, InstallationDependencies,
     InstallationDependency, InstallationError, PackageIdentity, installation_error,
@@ -230,13 +233,28 @@ impl InstallationGraph {
 /// Only what a closure walk needs is retained: which entries exist, how each is
 /// identified, and which entries each names as a dependency. Ref:
 /// packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(try_from = "LockfileGraph")]
 pub struct Lockfile {
     pub entries: Vec<LockEntry>,
     pub roots: HashMap<String, HashMap<String, usize>>,
 }
 
 impl Lockfile {
+    /// Reuses a resolved lockfile graph only after its complete text is acquired.
+    pub fn parse_cached(
+        text: &str,
+        label: &str,
+        cache: &Cache,
+        verbose: Verbose<'_>,
+    ) -> Result<Self, AppError> {
+        cache.get(
+            &(env!("CARGO_PKG_VERSION"), text.to_owned()),
+            verbose,
+            || Self::parse(text, label),
+        )
+    }
+
     /// Parses a lockfile, naming `label` in any diagnostic.
     pub fn parse(text: &str, label: &str) -> Result<Self, AppError> {
         let doc: DocumentMut = text
@@ -400,6 +418,52 @@ impl Lockfile {
     }
 }
 
+impl CacheEntry for Lockfile {
+    const SUBJECT: &'static str = "lockfile";
+    // Covers TOML interpretation and dependency-reference resolution, not closure policy.
+    const REVISION: u32 = 1;
+    type Key = (&'static str, String);
+}
+
+/// Stored graph indices are admitted before closure traversal can use them.
+#[derive(Deserialize)]
+struct LockfileGraph {
+    entries: Vec<LockEntry>,
+    roots: HashMap<String, HashMap<String, usize>>,
+}
+
+impl TryFrom<LockfileGraph> for Lockfile {
+    type Error = InvalidLockfileGraph;
+
+    fn try_from(graph: LockfileGraph) -> Result<Self, Self::Error> {
+        let length = graph.entries.len();
+        if graph
+            .entries
+            .iter()
+            .any(|entry| entry.dependencies.iter().any(|index| *index >= length))
+            || graph.roots.iter().any(|(name, versions)| {
+                versions.iter().any(|(version, index)| {
+                    graph.entries.get(*index).is_none_or(|entry| {
+                        entry.source.is_some()
+                            || entry.name != *name
+                            || entry.version.to_string() != *version
+                    })
+                })
+            })
+        {
+            return Err(InvalidLockfileGraph::new());
+        }
+        Ok(Self {
+            entries: graph.entries,
+            roots: graph.roots,
+        })
+    }
+}
+
+/// A persisted lock graph must retain the identities and bounds established by parsing.
+#[ohno::error]
+struct InvalidLockfileGraph;
+
 /// Parses and walks several closures for an in-workspace benchmark.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[must_use]
@@ -424,7 +488,7 @@ pub fn benchmark_lockfile_closures(
 }
 
 /// One `[[package]]` entry of a lockfile.
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct LockEntry {
     pub name: String,
     pub version: Version,
@@ -616,6 +680,49 @@ mod tests {
     use crate::manifest::DependencySource;
 
     const LABEL: &str = "Cargo.lock";
+
+    #[test]
+    fn stored_lock_graph_preserves_closures_and_rejects_invalid_indices() {
+        let text = "version=4\n[[package]]\nname='root'\nversion='1.0.0'\ndependencies=['dep']\n\
+                    [[package]]\nname='dep'\nversion='2.0.0'\nsource='registry+https://example.invalid/index'\n";
+        let lockfile = Lockfile::parse(text, LABEL).unwrap();
+        let encoded = serde_json::to_value(&lockfile).unwrap();
+        let restored: Lockfile = serde_json::from_value(encoded.clone()).unwrap();
+        let installation = InstallationGraph::default();
+        assert_eq!(
+            lockfile.closure("root", "1.0.0", &installation).unwrap(),
+            restored.closure("root", "1.0.0", &installation).unwrap(),
+        );
+        for invalid in [
+            ("dependencies", serde_json::json!([2])),
+            ("dependencies", serde_json::json!([usize::MAX])),
+            ("name", serde_json::json!("different")),
+            ("version", serde_json::json!("1.0.1")),
+            (
+                "source",
+                serde_json::json!("registry+https://example.invalid/index"),
+            ),
+        ] {
+            let mut malformed = encoded.clone();
+            *malformed
+                .get_mut("entries")
+                .unwrap()
+                .get_mut(0)
+                .unwrap()
+                .get_mut(invalid.0)
+                .unwrap() = invalid.1;
+            serde_json::from_value::<Lockfile>(malformed).unwrap_err();
+        }
+        let mut malformed = encoded;
+        *malformed
+            .get_mut("roots")
+            .unwrap()
+            .get_mut("root")
+            .unwrap()
+            .get_mut("1.0.0")
+            .unwrap() = serde_json::json!(2);
+        serde_json::from_value::<Lockfile>(malformed).unwrap_err();
+    }
 
     fn closure_of(text: &str, root: &str, version: &str) -> Closure {
         Lockfile::parse(text, LABEL)

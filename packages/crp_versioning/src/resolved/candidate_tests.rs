@@ -103,6 +103,33 @@ fn live_verification_distinguishes_original_final_and_stale_inputs() {
 }
 
 #[test]
+fn successful_verification_returns_its_own_observations_and_never_reuses_the_verdict() {
+    let inputs = inputs();
+    let mut acquisitions = 0;
+    for (digest, admitted) in [("initial", true), ("final", true), ("stale", false)] {
+        let result =
+            inputs.verify_observed(Path::new("root/Cargo.toml"), Some("final"), |_, _, _| {
+                acquisitions += 1;
+                Ok((
+                    Inputs {
+                        digest: digest.into(),
+                        ..inputs.clone()
+                    },
+                    acquisitions,
+                ))
+            });
+        if admitted {
+            let (applied, observation) = result.unwrap();
+            assert_eq!(applied, digest == "final");
+            assert_eq!(observation, acquisitions);
+        } else {
+            assert!(result.unwrap_err().find_source::<StaleInputs>().is_some());
+        }
+    }
+    assert_eq!(acquisitions, 3);
+}
+
+#[test]
 fn final_digest_uses_exact_artifact_bytes_and_propagates_fingerprint_failure() {
     let inputs = inputs();
     let identity = PathIdentity::new(inputs.root(), &|_| PathCase::Sensitive);
@@ -299,7 +326,7 @@ fn local_capture_follows_transitive_aliases_and_cycles_without_reacquiring_visit
         .map(PathBuf::from)
         .into()
     );
-    let table: toml_edit::DocumentMut =
+    let table: DocumentMut =
         "a = { path = 'first' }\nb = '1'\nc = { git = 'url' }\nd = { path = 'second' }\n"
             .parse()
             .unwrap();

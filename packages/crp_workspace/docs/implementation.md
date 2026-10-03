@@ -55,6 +55,23 @@ repositories; package projections remain repository/workspace scoped. Full-tree 
 mode/object indexes are constructed once and retained by the snapshot owner. Refs, traversal,
 parent availability and shallow verdicts are always acquired freshly.
 
+Manifest syntax and resolved lockfile graphs use complete text, computation revision and
+producer version as identity. Their entries contain no acquired absolute paths. Syntax retains
+exact dependency strings and TOML value/table shapes; it does not retain comments or formatting.
+Rehydration constructs syntax nodes rather than reparsing the source text. Format-preserving
+writers still parse original files. Lockfile admission checks graph index bounds and root
+identities before closure traversal. Installation declarations and registry context remain
+separate from the content-only lock graph.
+
+Historical workspace interpretation requests cached root/member syntax on demand, deriving
+inheritance, compiled matchers, membership and deferred installation errors in the current
+context. Unrelated manifests are neither decoded nor parsed. Cargo configuration is not stored.
+Current metadata acquisition reads manifest bytes before consulting parsed syntax; neither
+file timestamps nor cached metadata establish freshness. An acquisition retains its parsed
+root/member documents and tracked listing for adjacent consumers, without extending their
+lifetime across a new observation boundary. Content-keyed syntax can outlive repository
+rebinding because it has no repository interpretation.
+
 Replacement refs, replacement environment and graft contents are observed at each
 classification boundary and invalidate invocation memory when they change. Histories with
 replacement refs or grafts bypass persistent observations because their referenced-object

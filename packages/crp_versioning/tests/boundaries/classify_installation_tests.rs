@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crp_versioning::classify::*;
+use crp_workspace::cache::Cache;
 use crp_workspace::git::GitRepo;
 use crp_workspace::lockfile::{ClosureChange, InstallationGraph};
 use crp_workspace::manifest::{
     DependencySource, PackageIdentity, PathCase, WorkspaceInherit, installation_patches,
     parse_document, parse_package_manifest,
 };
-use crp_workspace::metadata::{WorkPackage, WorkTree};
+use crp_workspace::metadata::{ManifestSnapshot, WorkPackage, WorkTree};
 use semver::Version;
 
 use crate::git_fixture::Repository;
@@ -266,8 +267,10 @@ fn anchor_lockfiles_are_selected_by_commit_not_current_work_tree() {
     }
 }
 
-fn lockfile_cache() -> LockfileCache {
+fn lockfile_cache() -> LockfileCache<'static> {
     LockfileCache {
+        storage: Cache::default(),
+        verbose: crp_diag::Verbose::new(false, &crp_diag::Discard),
         work: None,
         anchors: HashMap::new(),
         case: PathCase::Sensitive,
@@ -311,6 +314,8 @@ fn endpoints(
         resources: BTreeMap::new(),
     };
     let work_tree = WorkTree {
+        manifests: ManifestSnapshot::default(),
+        tracked_paths: Vec::new(),
         workspace_root: root.to_path_buf(),
         packages: vec![work_package.clone()],
         version_targets: Vec::new(),

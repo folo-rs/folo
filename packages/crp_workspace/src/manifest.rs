@@ -498,7 +498,7 @@ pub fn parse_package_manifest(
 }
 
 /// Extracts package facts from an already parsed manifest document.
-pub(crate) fn package_manifest_from_document(
+pub fn package_manifest_from_document(
     doc: &DocumentMut,
     manifest_path: &str,
     workspace: &WorkspaceInherit<'_>,
@@ -1247,6 +1247,14 @@ pub fn parse_workspace_members(
     case: PathCase,
 ) -> Result<WorkspaceMembers, AppError> {
     let doc = parse_document(path, content)?;
+    workspace_members_from_document(&doc, case)
+}
+
+/// Interprets member selection using the same root document as inheritance.
+pub fn workspace_members_from_document(
+    doc: &DocumentMut,
+    case: PathCase,
+) -> Result<WorkspaceMembers, AppError> {
     let Some(workspace) = doc.get("workspace").and_then(Item::as_table_like) else {
         return Ok(WorkspaceMembers::default());
     };

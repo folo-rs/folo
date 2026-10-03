@@ -9,7 +9,7 @@ use crp_workspace::artifact_path::{resolve_path, same_path};
 use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::command::hash_bytes;
 use crp_workspace::manifest::requirement_names_version;
-use crp_workspace::metadata::{WorkTree, load_tracked_work_tree};
+use crp_workspace::metadata::WorkTree;
 use ohno::AppError;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -79,8 +79,7 @@ pub fn run_prepare_with_cache(
     remove_marker(&output.join("prepared.json"))?;
     prospective.resolve(verbose)?;
     let files = prospective.artifacts(&inputs)?;
-    inputs.verify(&manifest, None)?;
-    let (work_tree, _) = load_tracked_work_tree(&manifest)?;
+    let (_, work_tree) = inputs.verify_workspace(&manifest, None)?;
     let lockfile = work_tree.workspace_root.join("Cargo.lock");
     validate_preparation_files(inputs.root(), &lockfile, &files)?;
     // Preparation is the explicit mutation boundary. Install only the successfully resolved
@@ -174,8 +173,8 @@ pub fn run_preview_with_cache(
         resolved,
         |bytes| hash_bytes(bytes, &prospective.root),
         |resolved| {
-            let (work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
-            install_preview_edits(compute_edits(&work_tree, resolved, verbose)?, |edit| {
+            let work_tree = &classification.work_tree;
+            install_preview_edits(compute_edits(work_tree, resolved, verbose)?, |edit| {
                 fs::write(&edit.path, &edit.updated)
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
             })?;
@@ -187,7 +186,11 @@ pub fn run_preview_with_cache(
                 verbose,
                 &mut cache,
             )?;
-            let files = prospective.artifacts(&prepared.inputs)?;
+            let files = prospective.artifacts_from_workspace(
+                &prepared.inputs,
+                &classification.work_tree.workspace_root,
+                &classification.work_tree.member_manifests,
+            )?;
             let mut expanded = resolved.clone();
             add_consequences(
                 &classification.packages,
@@ -546,7 +549,9 @@ mod tests {
     use std::path::PathBuf;
 
     use crp_workspace::lockfile::InstallationGraph;
-    use crp_workspace::metadata::{DepKind, ExactDependency, ReportedDep, VersionTarget};
+    use crp_workspace::metadata::{
+        DepKind, ExactDependency, ManifestSnapshot, ReportedDep, VersionTarget,
+    };
     use serde_json::Value;
 
     use super::*;
@@ -818,6 +823,8 @@ mod tests {
 
     fn work_tree(packages: &[PackageClass]) -> WorkTree {
         WorkTree {
+            manifests: ManifestSnapshot::default(),
+            tracked_paths: Vec::new(),
             workspace_root: PathBuf::new(),
             packages: Vec::new(),
             version_targets: packages

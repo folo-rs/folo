@@ -46,7 +46,7 @@ private-test-util = []
 crp_diag = { workspace = true }
 ignore = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
-semver = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

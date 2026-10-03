@@ -164,13 +164,42 @@ impl Prospective {
     #[cfg_attr(test, mutants::skip)]
     pub fn artifacts(&self, inputs: &Inputs) -> Result<Vec<Artifact>, AppError> {
         let (work_tree, _) = load_tracked_work_tree(&self.manifest)?;
-        let mut paths: BTreeSet<PathBuf> = work_tree.member_manifests.into_iter().collect();
-        paths.insert(work_tree.workspace_root.join("Cargo.toml"));
-        paths.insert(work_tree.workspace_root.join("Cargo.lock"));
-        capture_artifacts(&self.root, inputs.root(), paths, |path| {
-            fs::read_to_string(path)
-        })
+        self.artifacts_from_workspace(
+            inputs,
+            &work_tree.workspace_root,
+            &work_tree.member_manifests,
+        )
     }
+
+    /// Reads artifact bytes using the immediately preceding prospective acquisition.
+    #[cfg_attr(test, mutants::skip)] // File reads are covered by boundary artifact tests.
+    pub fn artifacts_from_workspace(
+        &self,
+        inputs: &Inputs,
+        workspace_root: &Path,
+        member_manifests: &[PathBuf],
+    ) -> Result<Vec<Artifact>, AppError> {
+        capture_workspace_artifacts(
+            &self.root,
+            inputs.root(),
+            workspace_root,
+            member_manifests,
+            |path| fs::read_to_string(path),
+        )
+    }
+}
+
+fn capture_workspace_artifacts(
+    root: &Path,
+    original: &Path,
+    workspace_root: &Path,
+    member_manifests: &[PathBuf],
+    read: impl FnMut(&Path) -> io::Result<String>,
+) -> Result<Vec<Artifact>, AppError> {
+    let mut paths: BTreeSet<PathBuf> = member_manifests.iter().cloned().collect();
+    paths.insert(workspace_root.join("Cargo.toml"));
+    paths.insert(workspace_root.join("Cargo.lock"));
+    capture_artifacts(root, original, paths, read)
 }
 
 fn resolve_offline(
@@ -371,6 +400,45 @@ mod tests {
             } else {
                 result.unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn artifacts_use_supplied_membership_but_read_each_pass_bytes_freshly() {
+        let root = Path::new("candidate");
+        let workspace = root.join("nested");
+        for member in ["old", "new"] {
+            let manifest = workspace.join(member).join("Cargo.toml");
+            let members = [
+                manifest.clone(),
+                workspace.join("Cargo.toml"),
+                manifest.clone(),
+            ];
+            let mut reads = Vec::new();
+            let artifacts = capture_workspace_artifacts(
+                root,
+                Path::new("original"),
+                &workspace,
+                &members,
+                |path| {
+                    reads.push(path.to_owned());
+                    if path.starts_with(root) {
+                        Ok(member.to_owned())
+                    } else {
+                        Ok("original".into())
+                    }
+                },
+            )
+            .unwrap();
+            assert_eq!(artifacts.len(), 3);
+            assert!(artifacts.iter().all(|artifact| artifact.contents == member));
+            assert!(
+                artifacts
+                    .iter()
+                    .any(|artifact| root.join(&artifact.path) == manifest)
+            );
+            assert_eq!(reads.len(), 6);
+            assert_eq!(reads.iter().filter(|path| **path == manifest).count(), 1);
         }
     }
 
