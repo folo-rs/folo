@@ -1,4 +1,88 @@
+use cbh_model::CollectionSnapshot;
+
 use crate::harness::{serial, *};
+
+#[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "Native collection and analysis with real files, git and faker execution."
+)]
+async fn exact_collection_output_drives_analysis_without_adopting_existing_history() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
+    workspace.init_repo();
+    let first_path = workspace
+        .root()
+        .join("target")
+        .join("first-collection.json");
+    workspace
+        .drive(&[
+            "collect",
+            "--collection-output",
+            first_path.to_str().unwrap(),
+        ])
+        .await
+        .unwrap();
+    let first = CollectionSnapshot::from_slice(&std::fs::read(first_path).unwrap()).unwrap();
+    assert_eq!(first.commit(), workspace.head_commit_id());
+    assert_eq!(ir_of(&first.runs().next().unwrap().1.results[0]), 36.0);
+    let (key, mut shared) = workspace.single_object();
+    for result in &mut shared.results {
+        for metric in &mut result.metrics {
+            metric.value = 999.0;
+        }
+    }
+    let mut stale = shared.results[0].clone();
+    stale.id.segments.push("unrelated".to_owned());
+    shared.results.push(stale);
+    workspace.seed(&key, &shared);
+    let path = workspace.root().join("target").join("collection.json");
+    workspace
+        .drive(&[
+            "collect",
+            "--skip-existing",
+            "--collection-output",
+            path.to_str().unwrap(),
+        ])
+        .await
+        .unwrap();
+    let captured = CollectionSnapshot::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let (_, current) = captured.runs().next().unwrap();
+    assert_eq!(current.results.len(), 1);
+    assert_eq!(ir_of(&current.results[0]), 36.0);
+    assert_eq!(workspace.single_object().1, shared);
+    let report: serde_json::Value = serde_json::from_str(
+        &workspace
+            .drive_json(&["analyze", "--current-collection", path.to_str().unwrap()])
+            .await,
+    )
+    .unwrap();
+    assert_eq!(
+        report["census"]["in_scope"],
+        current.results[0].metrics.len()
+    );
+    assert_eq!(report["outcome"], "insufficient_baseline");
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore = "Native collection snapshot file publication.")]
+async fn empty_collection_writes_evidence_but_cannot_supply_an_analysis_roster() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.init_repo();
+    std::fs::create_dir_all(workspace.root().join("target")).unwrap();
+    let path = workspace.root().join("target").join("collection.json");
+    workspace
+        .drive(&["collect", "--collection-output", path.to_str().unwrap()])
+        .await
+        .unwrap();
+    let captured = CollectionSnapshot::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(captured.runs().count(), 0);
+    let error = workspace
+        .drive(&["analyze", "--current-collection", path.to_str().unwrap()])
+        .await
+        .unwrap_err();
+    assert!(format!("{error:?}").contains("no measurements"));
+}
 
 /// End-to-end happy path: a successful no-op engine command, one harvested
 /// summary, and a stored set with the expected object key and context.

@@ -91,7 +91,7 @@ jobs:
 
   exercise:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@99b2e38a479f679c4b2f378060eb4b0ddbaaf5d9 # Collection snapshot contract
     permissions:
       contents: read
       actions: read

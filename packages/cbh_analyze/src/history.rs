@@ -467,6 +467,7 @@ mod tests {
 
     fn selection(base: Option<&'static str>) -> Selection<'static> {
         Selection {
+            current: None,
             context: None,
             base,
             no_dirty: false,

@@ -150,7 +150,7 @@ The fixed `bench-history-setup` hook selects Folo's ordinary cached setup enviro
 Valgrind enabled. The callers supply matching `rustflags` values; the companion appends them
 to effective ambient Cargo arguments using child-only environment overrides. It honors
 `CARGO_ENCODED_RUSTFLAGS` precedence and preserves argument boundaries, and uses the same
-environment for collection and its machine-key query. No configuration job or flag-merging
+environment for collection and snapshot capture. No configuration job or flag-merging
 script is required in a consumer repository.
 
 The shared workflows also use an internal composite action at
@@ -164,21 +164,23 @@ installation/bootstrap failure remains visible and has no second publisher.
 The companion turns the configured platform CSV into the matrix. For history and PR it also
 supplies the collection job prefix.
 Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
-`receipt.json` with its repository, instance, workflow run/attempt, frozen head, platform and
-machine key. Collection artifacts contain only that receipt; measurements remain in the
-configured store. Artifact names are stable per platform within a run and overwritten on
-successful reruns.
+version-2 `receipt.json` with repository, instance, workflow run/attempt, frozen head, platform
+and an embedded version-1 collection snapshot. The snapshot captures finalized fresh engine
+payloads even when append-only persistence skips existing history. Artifacts contain only
+that receipt. The source-built history, PR and caller-canary workflows pin the matching
+snapshot-capable action adapter; backfill retains its independent collection-only contract.
 
 Analysis downloads through the REST run-artifacts endpoint so surviving older-attempt
 artifacts remain visible. Rust reconciles receipts with each platform's latest job attempt,
-then writes the selected machine keys for ordinary configured-store analysis. It
+then writes the selected snapshots for exact-current analysis. It
 rejects missing, conflicting or mismatched evidence instead of silently narrowing success.
 Collection artifacts are outside the persisted history cache.
 Artifact downloads pass the ambient GitHub token, repository and run ID explicitly with
 Actions-read permission. Fork-origin PR runs have a read-only base-repository token capable
 of artifact reads; the same-repository workflow gate is independent of that capability.
-The temporary machine-key file stays outside the uploaded collection root: its value is
-captured in the receipt rather than uploaded as a separate file.
+The temporary collection file stays outside the uploaded collection root: its content is
+embedded in the receipt rather than uploaded as a separate file. Analysis folds those values
+directly and queries shared storage only for matching older comparisons.
 
 Automation and measured source are separate for PR runs. The invocation checkout supplies
 helpers, tool builds and configuration. A full real-head checkout supplies Cargo scope,
@@ -326,9 +328,8 @@ asserted to be clean.
 `HistoryCanary.psm1` owns output and downloaded-file assertions. The artifact-only job uses
 PowerShell because it has no prepared Rust toolchain and must not build the tools merely to
 inspect their reports. Its file-boundary integration tests run in the `bench-history` script
-domain. Verification compares distinct target triples independently of series counts: history
-selection surveys all targets under the union of successful collection machine keys, so a
-target can contribute several comparable partitions. Each partition must contain the fixture's
+domain. Verification compares distinct target triples independently of series counts:
+current partitions come from the exact selected collection snapshots. Each partition must contain the fixture's
 sole Criterion series, and the report's series and in-scope census totals must agree with those
 partitions. Excluded ghosts do not enter that comparison. Workflow outputs must still report
 complete platform collection and no regressions, and the nonempty bundle must agree with the

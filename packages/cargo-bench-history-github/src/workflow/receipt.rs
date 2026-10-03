@@ -1,14 +1,15 @@
 use std::num::NonZero;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
+use cbh_model::CollectionSnapshot;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{CommitSha, Instance, Repository};
 use crate::result::is_platform_identifier;
 
-/// Validated run identity and measured hardware, independent of artifact paths.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Validated workflow execution and its self-contained current measurements.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Receipt {
     pub(crate) repository: Repository,
     pub(crate) instance: Instance,
@@ -16,7 +17,7 @@ pub(crate) struct Receipt {
     pub(crate) run_attempt: NonZero<u64>,
     pub(crate) head: CommitSha,
     pub(crate) platform: String,
-    pub(crate) machine_key: String,
+    pub(crate) collection: CollectionSnapshot,
 }
 
 impl Receipt {
@@ -27,6 +28,9 @@ impl Receipt {
             return Err(InvalidReceipt::new().into());
         }
         validate_platform(&raw.platform)?;
+        if raw.collection.project() != raw.instance || raw.collection.commit() != raw.head {
+            return Err(InvalidReceipt::new().into());
+        }
         Ok(Self {
             repository: raw.repository.parse()?,
             instance: raw.instance.parse()?,
@@ -34,7 +38,7 @@ impl Receipt {
             run_attempt: raw.run_attempt,
             head: raw.head.parse()?,
             platform: raw.platform,
-            machine_key: machine_key(&raw.machine_key)?,
+            collection: raw.collection,
         })
     }
 
@@ -48,14 +52,18 @@ impl Receipt {
             run_attempt: self.run_attempt,
             head: self.head.as_str().to_owned(),
             platform: self.platform.clone(),
-            machine_key: self.machine_key.clone(),
+            collection: self.collection.clone(),
         })
         .map_err(|error| InvalidReceipt::caused_by(error).into())
+    }
+
+    pub(crate) fn machine_key(&self) -> &str {
+        self.collection.machine_key().as_str()
     }
 }
 
 // This versions only the companion's collection record, never the analyzer's report.
-const RECEIPT_VERSION: u32 = 1;
+const RECEIPT_VERSION: u32 = 2;
 
 /// Internal artifact representation decoded before any job reconciliation.
 #[derive(Deserialize, Serialize)]
@@ -68,7 +76,7 @@ struct ReceiptWire {
     run_attempt: NonZero<u64>,
     head: String,
     platform: String,
-    machine_key: String,
+    collection: CollectionSnapshot,
 }
 
 /// Validates and normalizes a captured core fingerprint for receipts and analyzer filters.
@@ -129,7 +137,14 @@ pub(crate) mod tests {
             run_attempt: NonZero::new(attempt).unwrap(),
             head: "a".repeat(40).parse().unwrap(),
             platform: platform.to_owned(),
-            machine_key: "0123456789abcdef".to_owned(),
+            collection: CollectionSnapshot::new(
+                "folo",
+                &"a".repeat(40),
+                "x86_64-unknown-linux-gnu".into(),
+                "0123456789abcdef".into(),
+                Vec::new(),
+            )
+            .unwrap(),
         }
     }
 
@@ -139,7 +154,7 @@ pub(crate) mod tests {
         assert_eq!(Receipt::parse(&receipt.encode().unwrap()).unwrap(), receipt);
         assert_eq!(
             machine_key("0123456789ABCDEF").unwrap(),
-            receipt.machine_key
+            receipt.machine_key()
         );
     }
 
@@ -147,7 +162,7 @@ pub(crate) mod tests {
     fn receipt_requires_known_version_and_valid_fields() {
         let raw: Value = serde_json::from_slice(&receipt("linux", 1).encode().unwrap()).unwrap();
         for (field, value) in [
-            ("version", json!(2)),
+            ("version", json!(1)),
             ("repository", json!("bad")),
             ("instance", json!("invalid/path")),
             ("run_id", json!(0)),

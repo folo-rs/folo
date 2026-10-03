@@ -37,6 +37,25 @@ fn empty_known_inputs_are_unspecified_even_when_not_applicable() {
 }
 
 #[test]
+fn snapshot_inputs_are_optional_command_specific_and_exclusive_with_broad_keys() {
+    for input in [
+        json!({"command":"collect", "collection-snapshot":"true", "on-existing":"skip"}),
+        json!({"command":"backfill", "from":"a", "to":"b", "collection-snapshot":"", "current-collections":""}),
+    ] {
+        Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap();
+    }
+    for input in [
+        json!({"command":"collect", "collection-snapshot":"yes"}),
+        json!({"command":"backfill", "from":"a", "to":"b", "collection-snapshot":"true"}),
+        json!({"command":"collect", "current-collections":"snapshots"}),
+        json!({"command":"analyze-history", "current-collections":"snapshots", "machine-keys":"keys",
+            "expected-platforms":"linux", "completed-platforms":"linux"}),
+    ] {
+        Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap_err();
+    }
+}
+
+#[test]
 fn core_and_alert_commands_have_independent_input_groups() {
     for input in [
         json!({"command":"collect"}),

@@ -40,6 +40,7 @@ use super::dataset::{empty_history_hint, select_dataset};
 use super::discriminants::AutoDiscriminants;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
+use crate::current::{CurrentCollections, InvalidCurrentCollection, read_current_collections};
 use crate::{AnalyzeError, RenderedReports, ReportRequest, ToolchainProbeFailedError};
 
 /// The real `analyze`: load configuration, wire the configured storage and git
@@ -104,7 +105,9 @@ pub async fn execute(
     let spawner = Spawner::new_tokio();
     let available_parallelism = NonZero::new(SystemHardware::current().processors().len())
         .expect("a processor set is never empty");
-    let outcome = analyze_with(
+    let current =
+        read_current_collections(workspace_dir, &options.current_collections, &project_id)?;
+    let outcome = analyze_with_current(
         &git,
         &storage,
         &project_id,
@@ -116,6 +119,7 @@ pub async fn execute(
         color,
         &spawner,
         available_parallelism,
+        current.as_ref(),
     )
     .await;
     // Surface the cache hit/miss tally after the load, so a slow analyze can be
@@ -199,6 +203,7 @@ pub(crate) async fn resolve_auto_discriminants(
     clippy::too_many_arguments,
     reason = "analyze orchestration wires several injected ports plus the rendering color flag"
 )]
+#[cfg(test)]
 pub(crate) async fn analyze_with<G, S>(
     git: &G,
     storage: &S,
@@ -216,6 +221,56 @@ where
     G: GitHistory,
     S: Storage + Clone + 'static,
 {
+    analyze_with_current(
+        git,
+        storage,
+        project_id,
+        config,
+        options,
+        auto,
+        now,
+        reporter,
+        color,
+        spawner,
+        available_parallelism,
+        None,
+    )
+    .await
+}
+
+/// Runs the ordinary detector with an optional exact-current evidence boundary.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the analysis ports plus optional current evidence"
+)]
+pub(crate) async fn analyze_with_current<G, S>(
+    git: &G,
+    storage: &S,
+    project_id: &str,
+    config: &Config,
+    options: &AnalyzeOptions,
+    auto: &AutoDiscriminants,
+    now: Timestamp,
+    reporter: &dyn Reporter,
+    color: bool,
+    spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
+    current: Option<&CurrentCollections>,
+) -> Result<(RenderedReports, usize), AnalyzeError>
+where
+    G: GitHistory,
+    S: Storage + Clone + 'static,
+{
+    if current.is_some()
+        && (!options.engine.is_empty()
+            || !options.target_triple.is_empty()
+            || !options.machine_key.is_empty())
+    {
+        return Err(InvalidCurrentCollection::new(
+            "current snapshots cannot be combined with discriminant selectors",
+        )
+        .into());
+    }
     let request = ReportRequest::resolve_analyze(
         options.no_text,
         options.markdown.as_deref(),
@@ -223,7 +278,8 @@ where
         options.markdown_summary.as_deref(),
         options.outcome.as_deref(),
     )?;
-    let selection = Selection::from_analyze(options);
+    let mut selection = Selection::from_analyze(options);
+    selection.current = current;
     let filter = SeriesFilter {
         prefixes: &options.prefixes,
     };

@@ -85,6 +85,8 @@ pub enum Command {
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollectOptions {
+    /// Write exact fresh measurements to a new collection snapshot file.
+    pub collection_output: Option<PathBuf>,
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
     /// Repository to run benchmarks in and read git state from; defaults to the
@@ -131,6 +133,7 @@ pub struct CollectOptions {
 impl Default for CollectOptions {
     fn default() -> Self {
         Self {
+            collection_output: None,
             config_path: None,
             repo: None,
             local: None,
@@ -245,6 +248,8 @@ pub struct MachineKeyOptions {
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AnalyzeOptions {
+    /// Exact current measurements; shared storage supplies matching history only.
+    pub current_collections: Vec<PathBuf>,
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.

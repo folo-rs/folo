@@ -14,6 +14,7 @@ mod preparation;
 mod publication;
 
 pub(crate) use args::*;
+pub(crate) use artifact_path::for_output;
 pub(crate) use execute::run;
 pub use preparation::prepare_backfill_at;
 pub(crate) use preparation::{PrepareWorkflowArgs, prepare_workflow};

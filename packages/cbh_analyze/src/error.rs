@@ -6,6 +6,8 @@ use cbh_config::ConfigError;
 use cbh_storage::StorageError;
 use ohno::OhnoCore;
 
+use crate::current::InvalidCurrentCollection;
+
 /// An error from an `analyze`-family command (`analyze`, `list`, `prune`,
 /// `examine`, `bless`, `unbless`).
 ///
@@ -37,6 +39,7 @@ use ohno::OhnoCore;
     MergeBaseFailedError
 )]
 #[from(WorkingTreeProbeFailedError, CommitterTimeFailedError)]
+#[from(InvalidCurrentCollection)]
 #[from(DefaultBranchProbeFailedError, ToolchainProbeFailedError)]
 pub struct AnalyzeError {
     #[error]

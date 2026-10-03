@@ -102,37 +102,14 @@ impl Host for NativeHost {
 
     /// Traverses only the selected ordinary key-file tree before pure fingerprint validation.
     fn key_files(&self, root: &Path) -> Result<Vec<Vec<u8>>, AppError> {
-        let mut directories = vec![self.directory(root)?];
-        let mut files = Vec::new();
-        while let Some(directory) = directories.pop() {
-            let entries = fs::read_dir(&directory).map_err(|error| {
-                ActionIo::caused_by("list machine-key directory", &directory, error)
-            })?;
-            for entry in entries {
-                let entry = entry.map_err(|error| {
-                    ActionIo::caused_by("read machine-key entry", &directory, error)
-                })?;
-                let path = entry.path();
-                let kind = entry.file_type().map_err(|error| {
-                    ActionIo::caused_by("inspect machine-key entry", &path, error)
-                })?;
-                if kind.is_dir() {
-                    directories.push(canonical_directory(&path)?);
-                } else if kind.is_file() && entry.file_name() == "machine-key.txt" {
-                    files.push(self.read(&canonical_file(&path)?)?);
-                } else {
-                    return Err(InvalidInput::new(
-                        "machine-keys",
-                        format!(
-                            "expected ordinary machine-key.txt files: {}",
-                            path.display()
-                        ),
-                    )
-                    .into());
-                }
-            }
-        }
-        Ok(files)
+        self.artifact_files(root, "machine-key.txt")?
+            .iter()
+            .map(|path| self.read(path))
+            .collect()
+    }
+
+    fn collection_files(&self, root: &Path) -> Result<Vec<PathBuf>, AppError> {
+        self.artifact_files(root, "collection.json")
     }
 
     /// Uses the shared append-only output adapter after action work has completed successfully.
@@ -156,42 +133,80 @@ impl Host for NativeHost {
     ///
     /// Only dedicated machine output is buffered; benchmark logs stream through inherited handles.
     async fn process(&self, process: &Process) -> Result<String, AppError> {
-        let mut command = NativeCommand::new(&process.program);
-        command
-            .args(&process.args)
-            .envs(process.env.iter().cloned())
-            .current_dir(&process.cwd)
-            .stdin(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true);
-        let program = process.program.to_string_lossy();
-        if process.output == Output::Capture {
-            let output = command
-                .stdout(Stdio::piped())
-                .output()
-                .await
-                .map_err(|error| {
-                    ProcessFailure::caused_by(&*program, "could not execute", error)
+        execute_process(process).await
+    }
+}
+
+#[cfg_attr(test, mutants::skip)]
+impl NativeHost {
+    /// Both legacy keys and exact snapshots use the same ordinary-file traversal rules.
+    fn artifact_files(&self, root: &Path, filename: &str) -> Result<Vec<PathBuf>, AppError> {
+        let mut directories = vec![self.directory(root)?];
+        let mut files = Vec::new();
+        while let Some(directory) = directories.pop() {
+            let entries = fs::read_dir(&directory).map_err(|error| {
+                ActionIo::caused_by("list collection-input directory", &directory, error)
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|error| {
+                    ActionIo::caused_by("read collection-input entry", &directory, error)
                 })?;
-            if !output.status.success() {
-                return Err(ProcessFailure::new(&*program, output.status.to_string()).into());
-            }
-            String::from_utf8(output.stdout).map_err(|error| {
-                ProcessFailure::caused_by(&*program, "non-UTF-8 machine output", error).into()
-            })
-        } else {
-            let status = command
-                .stdout(Stdio::inherit())
-                .status()
-                .await
-                .map_err(|error| {
-                    ProcessFailure::caused_by(&*program, "could not execute", error)
+                let path = entry.path();
+                let kind = entry.file_type().map_err(|error| {
+                    ActionIo::caused_by("inspect collection-input entry", &path, error)
                 })?;
-            if !status.success() {
-                return Err(ProcessFailure::new(&*program, status.to_string()).into());
+                if kind.is_dir() {
+                    directories.push(canonical_directory(&path)?);
+                } else if kind.is_file() && entry.file_name() == filename {
+                    files.push(canonical_file(&path)?);
+                } else {
+                    return Err(InvalidInput::new(
+                        "collection inputs",
+                        format!("expected ordinary {filename} files: {}", path.display()),
+                    )
+                    .into());
+                }
             }
-            Ok(String::new())
         }
+        files.sort();
+        Ok(files)
+    }
+}
+
+/// Native process dispatch, separate from evidence selection.
+#[cfg_attr(test, mutants::skip)]
+async fn execute_process(process: &Process) -> Result<String, AppError> {
+    let mut command = NativeCommand::new(&process.program);
+    command
+        .args(&process.args)
+        .envs(process.env.iter().cloned())
+        .current_dir(&process.cwd)
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    let program = process.program.to_string_lossy();
+    if process.output == Output::Capture {
+        let output = command
+            .stdout(Stdio::piped())
+            .output()
+            .await
+            .map_err(|error| ProcessFailure::caused_by(&*program, "could not execute", error))?;
+        if !output.status.success() {
+            return Err(ProcessFailure::new(&*program, output.status.to_string()).into());
+        }
+        String::from_utf8(output.stdout).map_err(|error| {
+            ProcessFailure::caused_by(&*program, "non-UTF-8 machine output", error).into()
+        })
+    } else {
+        let status = command
+            .stdout(Stdio::inherit())
+            .status()
+            .await
+            .map_err(|error| ProcessFailure::caused_by(&*program, "could not execute", error))?;
+        if !status.success() {
+            return Err(ProcessFailure::new(&*program, status.to_string()).into());
+        }
+        Ok(String::new())
     }
 }
 

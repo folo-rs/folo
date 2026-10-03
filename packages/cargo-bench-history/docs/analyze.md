@@ -56,6 +56,14 @@ in [`DESIGN.md`](DESIGN.md).
 
 ## The load
 
+For `--current-collection`, command preparation decodes exact collection snapshots before
+selection. Their clean project/context identity and nonoverlapping measurement roster define
+the current input; analyzer-host auto filters do not apply. Shared-store current objects are
+excluded before any payload fetch, including matching tuples written by unrelated executions.
+Captured values are folded directly and only snapshot-measured metrics survive finalization.
+Branch analysis loads base-ref comparison windows but no other branch-side measurements.
+The historical loader and detector otherwise retain the same behavior.
+
 ```mermaid
 flowchart TD
   subgraph P1["Phase 1 — key-only filtering (no payload fetched)"]

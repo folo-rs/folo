@@ -16,7 +16,7 @@ pub(crate) struct MatrixArgs {
     pub(crate) github_output: PathBuf,
 }
 
-/// File-backed proof emitted after collection and machine-key capture succeed.
+/// File-backed proof emitted from a successful collection snapshot.
 #[derive(Args, Debug)]
 pub(crate) struct CollectionArgs {
     #[arg(long)]
@@ -28,9 +28,9 @@ pub(crate) struct CollectionArgs {
     /// Stable collection matrix identifier.
     #[arg(long)]
     pub(crate) platform: String,
-    /// File containing the real machine-key command's hexadecimal fingerprint.
+    /// Exact fresh measurements emitted by core collect.
     #[arg(long)]
-    pub(crate) machine_key_file: PathBuf,
+    pub(crate) collection_file: PathBuf,
     /// Receipt destination, uploaded as receipt.json at the artifact root.
     #[arg(long)]
     pub(crate) file: PathBuf,
@@ -48,9 +48,9 @@ pub(crate) struct PrepareArgs {
     /// Download root containing one subdirectory per collection artifact.
     #[arg(long)]
     pub(crate) receipts_dir: PathBuf,
-    /// Absent or empty destination for one machine-key file per successful platform.
+    /// Absent or empty destination for one snapshot per selected successful platform.
     #[arg(long)]
-    pub(crate) machine_key_dir: PathBuf,
+    pub(crate) current_collection_dir: PathBuf,
     #[arg(long)]
     pub(crate) github_output: PathBuf,
 }
@@ -84,7 +84,7 @@ mod tests {
         "linux,windows",
         "--receipts-dir",
         "receipts",
-        "--machine-key-dir",
+        "--current-collection-dir",
         "keys",
         "--github-output",
         "github-output",

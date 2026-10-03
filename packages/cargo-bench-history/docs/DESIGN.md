@@ -473,6 +473,13 @@ snapshots. An engine that harvests zero cases stores nothing, since an empty set
 comparable data. Analysis can account only for series that already exist in history; verifying
 that every expected engine produced output is a separate collection-time check.
 
+`--collection-output PATH` additionally captures a self-contained snapshot of the exact
+fresh measurements. It requires a clean commit, a new output file, and persistence rather
+than `--no-store`. The snapshot is emitted only after collection and persistence succeed.
+`--skip-existing` preserves old shared-history objects but never skips benchmark execution
+or substitutes stored values into this snapshot. An empty successful execution retains its
+identity in an empty snapshot. This handoff is independent of mutable current-commit storage.
+
 Scope flags (`--workspace`, `--package`, `--exclude`, `--bench`) and cargo feature flags
 translate directly to `cargo bench` arguments, and everything after `--` is forwarded
 verbatim. Two non-overlapping partial runs at one commit do **not** merge — each would
@@ -566,6 +573,17 @@ failed), every benchmark is a ghost and the set analyzes empty with a dedicated
 hint — an empty outcome the tool explains rather than guesses
 around. Because it changes only which reconstructed series are detected on (not which runs
 are selected), the ghost filter is analyze-only and outside the shared selection model (§8.5).
+
+`--current-collection PATH` is an analyze-only opt-in for combined collect-and-analyze flows.
+Repeat it for the selected executions' snapshots. Their exact engine, target, hardware,
+benchmark and metric identities define the current roster and their captured values define
+current observations. Snapshots must match the configured project and clean context commit.
+Duplicate exact current identities are errors, as is an aggregate with no measurements.
+The handoff replaces engine/triple/machine selectors; prefix subjects may still narrow it.
+Shared storage supplies ordinary matching older history, never current-commit values or
+additional current series. Branch analysis takes its target observations only from the
+snapshots and its comparison from base-ref history. Without the opt-in, all query commands
+retain ordinary shared-store selection.
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file output flags that compose so a single pass can also write Markdown and JSON to

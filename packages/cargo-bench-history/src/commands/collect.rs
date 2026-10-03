@@ -6,6 +6,7 @@
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
 use std::num::NonZero;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -20,6 +21,7 @@ use cbh_engines::{
     parse_criterion_case,
 };
 use cbh_git::{BenchRunner, TokioBenchRunner};
+use cbh_model::CollectionSnapshot;
 use cbh_probe::{
     EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, describe_fingerprint_components,
     resolve_machine_key,
@@ -29,6 +31,7 @@ use jiff::Timestamp;
 use ohno::AppError;
 use tick::Clock;
 
+use crate::config_writer::{ConfigWriter, TokioConfigWriter};
 use crate::errors::{
     BenchCommandFailedError, EngineFailedError, EngineTerminatedError, GitProbeFailedError,
     HarvestFailedError, InconsistentRunsError, InvalidCommandError, ParseOutputError,
@@ -163,7 +166,7 @@ pub(crate) async fn execute(
         reporter: &reporter,
     };
 
-    let result = execute_collect(options, &deps).await;
+    let result = run_engines(options, &deps).await;
     // Flush the cache-invalidation marker after the run: an `--overwrite` that
     // replaced a stored object armed it, and bumping the marker is what invalidates
     // *other* machines' read-through caches. An append-only run never arms it, so
@@ -177,7 +180,28 @@ pub(crate) async fn execute(
         }
         None => Ok(()),
     };
-    finish_with_flush(result, flush)
+    let summary = finish_with_flush(result, flush)?;
+    if let Some(path) = &options.collection_output {
+        let snapshot = summary
+            .snapshot
+            .as_ref()
+            .expect("snapshot mode constructs evidence before returning collection success");
+        let json = snapshot
+            .to_json()
+            .map_err(|error| CollectionOutputError::caused_by("encoding", error))?;
+        let json = str::from_utf8(&json).expect("JSON serialization always emits UTF-8");
+        let path = workspace_dir.join(path);
+        let written = TokioConfigWriter
+            .write_new(&path, json)
+            .await
+            .map_err(|error| CollectionOutputError::caused_by("writing", error))?;
+        if !written {
+            return Err(
+                InvalidCommandError::new("collect", "collection output already exists").into(),
+            );
+        }
+    }
+    Ok(collection_outcome(options, &summary))
 }
 
 /// A short human-readable description of where results are stored, for the
@@ -378,6 +402,8 @@ struct Reduction {
 
 /// The result of harvesting one engine's output.
 struct EngineSummary {
+    /// Fresh payload retained directly from the successful store operation.
+    run: Option<Run>,
     /// Whether a result set was stored.
     stored: bool,
     /// Number of benchmark cases harvested.
@@ -389,6 +415,10 @@ struct EngineSummary {
 
 /// Aggregate outcome of running every selected engine in one run.
 pub(crate) struct CollectSummary {
+    /// Fresh engine payloads, moved into a snapshot only when explicitly requested.
+    pub(crate) runs: Vec<(Engine, Run)>,
+    /// Successful collection evidence, including an empty collection's identity.
+    pub(crate) snapshot: Option<CollectionSnapshot>,
     /// Number of result sets stored.
     pub(crate) stored: usize,
     /// Number of benchmark cases harvested across all engines.
@@ -397,7 +427,19 @@ pub(crate) struct CollectSummary {
     pub(crate) labels: Vec<String>,
 }
 
+/// The exact-current handoff failed independently of shared-history persistence.
+#[ohno::error]
+#[display("Failed {operation} collection snapshot")]
+struct CollectionOutputError {
+    operation: String,
+}
+
+// The immutable error context cannot reveal partially updated state during unwinding.
+impl UnwindSafe for CollectionOutputError {}
+impl RefUnwindSafe for CollectionOutputError {}
+
 /// Orchestrates a run against injected collaborators.
+#[cfg(test)]
 pub(crate) async fn execute_collect<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
@@ -409,13 +451,17 @@ where
     S: Storage,
 {
     let summary = run_engines(options, deps).await?;
+    Ok(collection_outcome(options, &summary))
+}
+
+fn collection_outcome(options: &CollectOptions, summary: &CollectSummary) -> RunOutcome {
     let message = build_message(
         options.no_store,
         summary.stored,
         summary.harvested,
         &summary.labels,
     );
-    Ok(RunOutcome::Completed { message })
+    RunOutcome::Completed { message }
 }
 
 /// Runs the benchmark command `--best-of` times and harvests every engine's output.
@@ -446,6 +492,13 @@ where
     O: BenchOutputSource,
     S: Storage,
 {
+    if options.collection_output.is_some() && options.no_store {
+        return Err(InvalidCommandError::new(
+            "collect",
+            "collection snapshots require persistence; no-store is incompatible",
+        )
+        .into());
+    }
     let argv = build_bench_argv(deps.bench_command, options)?;
 
     // The benchmark command runs with the union of every engine's injected
@@ -534,6 +587,13 @@ where
     let run_start = first_run_start.expect("best-of runs the suite at least once");
 
     let shared = probe_context(deps.probe, deps.env).await?;
+    if options.collection_output.is_some() && shared.git.dirty {
+        return Err(InvalidCommandError::new(
+            "collect",
+            "collection snapshots require a clean checkout",
+        )
+        .into());
+    }
 
     let store = FinalizeDeps {
         storage: deps.storage,
@@ -546,7 +606,7 @@ where
         skip_existing: options.skip_existing,
         no_store: options.no_store,
     };
-    finalize_and_store(
+    let mut summary = finalize_and_store(
         &store,
         &shared,
         &params,
@@ -555,7 +615,20 @@ where
         &per_engine,
         run_start,
     )
-    .await
+    .await?;
+    if options.collection_output.is_some() {
+        summary.snapshot = Some(
+            CollectionSnapshot::new(
+                deps.project_id,
+                shared.git.commit.as_deref().unwrap_or_default(),
+                shared.target_triple.clone(),
+                partition_of(&shared).machine_key,
+                std::mem::take(&mut summary.runs),
+            )
+            .map_err(|error| CollectionOutputError::caused_by("constructing", error))?,
+        );
+    }
+    Ok(summary)
 }
 
 /// Reduces and stores every engine's harvested records against a resolved context.
@@ -605,6 +678,7 @@ where
     let mut stored = 0_usize;
     let mut harvested = 0_usize;
     let mut labels = Vec::new();
+    let mut collected = Vec::new();
 
     for (bucket, engine) in per_engine.iter().zip(Engine::ALL) {
         let runs = bucket.len();
@@ -632,9 +706,14 @@ where
         if let Some(label) = summary.label {
             labels.push(label);
         }
+        if let Some(run) = summary.run {
+            collected.push((engine, run));
+        }
     }
 
     Ok(CollectSummary {
+        runs: collected,
+        snapshot: None,
         stored,
         harvested,
         labels,
@@ -853,6 +932,7 @@ where
             format!("{engine}: no fresh benchmark cases harvested; nothing to store")
         });
         return Ok(EngineSummary {
+            run: None,
             stored: false,
             count: 0,
             label: None,
@@ -867,6 +947,7 @@ where
             )
         });
         return Ok(EngineSummary {
+            run: None,
             stored: false,
             count,
             label: Some(format!("{engine}: {count} harvested (not stored)")),
@@ -960,6 +1041,8 @@ where
                 )
             });
             Ok(EngineSummary {
+                // Keep this execution's fresh payload even when persistence retains history.
+                run: Some(run),
                 stored: false,
                 count,
                 label: Some(format!(
@@ -973,6 +1056,7 @@ where
                 .note_with(|| format!("{engine}: stored {object_key}"));
 
             Ok(EngineSummary {
+                run: Some(run),
                 stored: true,
                 count,
                 label: Some(format!("{engine}: {count} stored")),
@@ -1838,6 +1922,19 @@ mod tests {
         storage: &MemoryStorage,
         reporter: &dyn Reporter,
     ) -> Result<RunOutcome, AppError> {
+        let summary = drive_summary(now_unix, options, runner, probe, output, storage, reporter)?;
+        Ok(collection_outcome(options, &summary))
+    }
+
+    fn drive_summary(
+        now_unix: u64,
+        options: &CollectOptions,
+        runner: &FakeRunner,
+        probe: &FakeProbe,
+        output: &FakeOutput,
+        storage: &MemoryStorage,
+        reporter: &dyn Reporter,
+    ) -> Result<CollectSummary, AppError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
             .unwrap();
@@ -1857,7 +1954,7 @@ mod tests {
             bench_command: &bench_command,
             reporter,
         };
-        block_on(execute_collect(options, &deps))
+        block_on(run_engines(options, &deps))
     }
 
     #[test]
@@ -2078,6 +2175,90 @@ mod tests {
         assert_eq!(keys.len(), 1, "no new object is written: {keys:?}");
         let after = block_on(storage.get(&keys[0])).unwrap();
         assert_eq!(after, original, "the existing object is left untouched");
+    }
+
+    #[test]
+    fn skipped_history_retains_fresh_snapshot_values_and_only_measured_benchmarks() {
+        let storage = MemoryStorage::new();
+        let key = seed_callgrind_run(&storage, false, FROZEN_UNIX);
+        let mut old: Run = serde_json::from_slice(&block_on(storage.get(&key)).unwrap()).unwrap();
+        for result in &mut old.results {
+            for metric in &mut result.metrics {
+                metric.value = 999.0;
+            }
+        }
+        let original = old.to_json().unwrap();
+        block_on(storage.put_overwrite(&key, original.as_bytes())).unwrap();
+        let runner = FakeRunner::succeeding();
+        let options = CollectOptions {
+            skip_existing: true,
+            collection_output: Some("snapshot.json".into()),
+            ..CollectOptions::default()
+        };
+        let summary = drive_summary(
+            FROZEN_UNIX,
+            &options,
+            &runner,
+            &FakeProbe::new(),
+            &FakeOutput::with_callgrind_summary(),
+            &storage,
+            &RecordingReporter::quiet(),
+        )
+        .unwrap();
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+        assert_eq!(summary.stored, 0);
+        assert_eq!(block_on(storage.get(&key)).unwrap(), original.as_bytes());
+        let snapshot = summary.snapshot.unwrap();
+        let (_, fresh) = snapshot.runs().next().unwrap();
+        assert_eq!(fresh.results.len(), 1);
+        assert_eq!(
+            fresh.results[0]
+                .metrics
+                .iter()
+                .find(|metric| metric.kind == cbh_model::MetricKind::InstructionCount)
+                .unwrap()
+                .value,
+            36.0
+        );
+        assert_eq!(fresh.context.tool_version, "0.0.1");
+    }
+
+    #[test]
+    fn unsuccessful_snapshot_collection_cannot_publish_or_store_measurements() {
+        let options = CollectOptions {
+            collection_output: Some("snapshot.json".into()),
+            ..CollectOptions::default()
+        };
+        for (runner, probe, options) in [
+            (FakeRunner::failing(1), FakeProbe::new(), options.clone()),
+            (
+                FakeRunner::succeeding(),
+                FakeProbe::dirty(),
+                options.clone(),
+            ),
+            (
+                FakeRunner::succeeding(),
+                FakeProbe::new(),
+                CollectOptions {
+                    no_store: true,
+                    ..options
+                },
+            ),
+        ] {
+            let storage = MemoryStorage::new();
+            drive_summary(
+                FROZEN_UNIX,
+                &options,
+                &runner,
+                &probe,
+                &FakeOutput::with_callgrind_summary(),
+                &storage,
+                &RecordingReporter::quiet(),
+            )
+            .err()
+            .unwrap();
+            assert!(storage.keys().is_empty());
+        }
     }
 
     #[test]

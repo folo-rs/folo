@@ -520,11 +520,11 @@ fingerprint**, with no fixed key override. The GitHub-hosted pool is heterogeneo
 single shared key would blend genuinely different machines into one jittery series;
 fingerprinting instead splits the pool into one clean series per hardware type. Because
 collection is a matrix and analysis is a single job that cannot re-derive those keys from its
-own hardware, each collect leg writes a run/attempt-bound receipt with its fingerprint and the analysis job
-threads exactly the successfully collected keys into its selection. This selects partitions
-from the action's collection, not every source that measured the same commit: a manual
-collection on a different PC does not join just because its commit matches. The key describes
-comparable hardware, not collection provenance; measurements sharing a key remain comparable.
+own hardware, each collect leg writes a run/attempt-bound receipt embedding its exact fresh
+measurements. The analysis job uses only the selected executions' current values and measured
+benchmark/metric roster. Unrelated collections cannot join even if all their selectors match.
+The hardware key describes comparability, not provenance: matching older history remains a
+baseline for selected measurements, while current values come only from the receipt snapshot.
 The cost of that split is sparseness: consecutive commits land on whatever
 hardware the pool handed out, so each per-key series sees only a fraction of `main`'s commits.
 The nightly backfill below exists to densify them.
@@ -554,9 +554,9 @@ The stored history can also change *out of band* — a blessing or unblessing, a
 administrative overwrite performed from a developer machine. Those surface in the rolling issue on
 the next push, which re-lists the store (so out-of-band additions are seen) while deletions and
 overwrites bump the cache-invalidation marker (so those are seen too). There is deliberately no
-"analysis only" dispatch mode: analysis threads the *exact machine keys collected this run* from the
-collect matrix into the single analyze job (see below), so a mode that skipped collection would have
-no keys to analyze. A subsequent ordinary collection/analysis run picks up the storage change.
+"analysis only" dispatch mode: analysis takes *exact measurements collected by selected jobs*
+from the collect matrix, so a mode that skipped collection would have no current observations.
+A subsequent ordinary collection/analysis run picks up historical storage changes.
 The downstream job reads accumulated history, uploads its report and publishes without a
 cross-job report handoff. A rolling, advisory issue is found by server-side title search for
 `Benchmark history findings for <project>`, with a locally checked exact project identity.
@@ -709,18 +709,18 @@ comment, without collecting or requiring Azure configuration.
 
 Collection writes the frozen head to the same configured production store as main, using the
 same identity and append-only `--skip-existing` policy. Each successful leg uploads only its
-run/attempt-bound receipt. A successful rerun retains existing stored measurements; its receipt
-records collection completion, not replacement of those measurements. Analysis selects the
-validated successful machine keys and reads both the head and baseline from that store,
-then publishes in the same job.
+run/attempt-bound receipt containing its fresh snapshot. A successful rerun retains existing
+stored history but captures freshly measured current values. Analysis uses selected receipt
+snapshots for the head and ordinary matching stored history for the baseline, then publishes
+in the same job.
 It restores the main history cache without saving PR cache entries; receipt staging is
 outside the persisted cache path. Git topology excludes unrelated PR commits from trunk
 analysis, so sharing storage does not add those measurements to the trunk series. Stored
 PR measurements follow ordinary retention and manual maintenance; the workflow does not prune them.
 
-Analysis remains unscoped by package name. Benchmark identities are engine-dependent, so
-name-prefix filtering could drop valid measurements. The tool's always-on ghost filter
-limits detection to identities present at the measured context in the selected machine partitions.
+Analysis uses the exact benchmark and metric identities captured by collection, not package
+name-prefix guesses. Engine-dependent identities therefore retain every measured series and
+exclude unrelated measurements, including unmeasured metrics of otherwise present benchmarks.
 
 Findings land in a single **rolling PR comment**, identified by a hidden marker. It reports
 both improvements and regressions, and discloses package scope, missing collection platforms,

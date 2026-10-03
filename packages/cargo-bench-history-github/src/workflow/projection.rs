@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::model::Instance;
 use crate::result::{AnalysisMode, Evidence, Outcome, PublicationState, platform_list};
-use crate::workflow::receipt::Receipt;
+use crate::workflow::receipt::{InvalidReceipt, Receipt};
 use crate::workflow::reconcile::{Selection, collection_job_prefix};
 
 /// Builds setup outputs that keep matrix jobs and later evidence on one platform set.
@@ -50,9 +50,7 @@ pub(crate) fn preparation_outputs(selection: &Selection, receipts: &[Receipt]) -
         .clone()
         .map(|receipt| receipt.platform.as_str())
         .collect::<Vec<_>>();
-    let keys = selected
-        .map(|receipt| receipt.machine_key.as_str())
-        .collect::<BTreeSet<_>>();
+    let keys = selected.map(Receipt::machine_key).collect::<BTreeSet<_>>();
     format!(
         "completed-platforms={}\nmachine-keys={}\ncomplete={}\n",
         completed.join(","),
@@ -82,7 +80,7 @@ pub(crate) fn preparation_diagnostics(
         format!(
             "Platform {} contributes machine key {} from run {} attempt {}: its latest collection job succeeded and its receipt matches repository, instance and frozen head {}.",
             receipt.platform,
-            receipt.machine_key,
+            receipt.machine_key(),
             receipt.run_id,
             receipt.run_attempt,
             receipt.head.as_str()
@@ -101,16 +99,19 @@ pub(crate) fn preparation_diagnostics(
 ///
 /// Preparation materializes these relative paths in a validated fresh directory. Measurement
 /// objects stay in configured storage rather than being copied into collection artifacts.
-pub(crate) fn machine_key_files(
+pub(crate) fn collection_files(
     selection: &Selection,
     receipts: &[Receipt],
-) -> Vec<(PathBuf, String)> {
+) -> Result<Vec<(PathBuf, Vec<u8>)>, AppError> {
     selected_receipts(selection, receipts)
         .map(|receipt| {
-            (
-                PathBuf::from(&receipt.platform).join("machine-key.txt"),
-                format!("{}\n", receipt.machine_key),
-            )
+            Ok((
+                PathBuf::from(&receipt.platform).join("collection.json"),
+                receipt
+                    .collection
+                    .to_json()
+                    .map_err(InvalidReceipt::caused_by)?,
+            ))
         })
         .collect()
 }
@@ -237,7 +238,7 @@ mod tests {
         assert!(messages.first().unwrap().contains("complete=true"));
         let platform = messages.get(1).unwrap();
         assert!(platform.contains(&receipts[0].platform));
-        assert!(platform.contains(&receipts[0].machine_key));
+        assert!(platform.contains(receipts[0].machine_key()));
     }
 
     #[test]
@@ -255,19 +256,26 @@ mod tests {
     }
 
     #[test]
-    fn machine_key_tree_contains_only_selected_actual_keys() {
+    fn collection_tree_contains_only_selected_snapshot() {
         let mut windows = receipt("windows", 2);
-        windows.machine_key = "fedcba9876543210".to_owned();
+        windows.collection = cbh_model::CollectionSnapshot::new(
+            "folo",
+            windows.head.as_str(),
+            "x86_64-pc-windows-msvc".into(),
+            "fedcba9876543210".into(),
+            Vec::new(),
+        )
+        .unwrap();
         let receipts = [receipt("linux", 1), windows];
         let selection = Selection {
             receipt_indices: vec![1],
             complete: false,
         };
         assert_eq!(
-            machine_key_files(&selection, &receipts),
+            collection_files(&selection, &receipts).unwrap(),
             vec![(
-                PathBuf::from("windows").join("machine-key.txt"),
-                "fedcba9876543210\n".to_owned()
+                PathBuf::from("windows").join("collection.json"),
+                receipts[1].collection.to_json().unwrap(),
             )]
         );
         assert_eq!(

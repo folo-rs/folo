@@ -273,13 +273,13 @@ The workflow derives its matrix jobs and later evidence inputs from those output
 maintaining separate platform lists or job-name conventions. Setup requires no repository or
 GitHub credential.
 
-Collection persists measurements to the configured store and emits an internal, versioned
-receipt only after both collection and real machine-key capture succeed. Collection artifacts
-contain only `receipt.json`; analysis reads measurements from the configured store for both
-history and pull-request runs. A receipt binds repository, action instance, workflow run and
-attempt, frozen analysis head, platform identifier and machine key. It is not an analysis report
-or checksum manifest. Writing receipts and inspecting reports require neither a GitHub
-credential nor an HTTP client.
+Collection executes fresh measurements and uses the configured store's append-only
+`skip-existing` policy for history. Its internal versioned receipt embeds the exact collection
+snapshot, binding values and their engine, target, hardware, benchmark and metric identities to
+repository, action instance, workflow run/attempt, frozen analysis head and platform.
+The artifact contains only `receipt.json`; it does not copy shared-store measurement objects.
+Existing stored values never substitute for newly measured current values. Writing receipts
+and inspecting reports require neither a GitHub credential nor an HTTP client.
 
 Analysis preparation lists every job attempt for the run with Actions-read permission. The
 collection job name is `cbh-collect:<instance>:<platform>`, either the entire name or its final
@@ -292,13 +292,15 @@ attempt. Unknown states, missing or ambiguous jobs and receipts, mismatched iden
 and incomplete API discovery are errors.
 
 At least one platform must succeed. Total failure does not create a report or authorize an
-empty analysis. Preparation supplies the actual selected machine keys to the existing analyzer
-recipe and reports platform coverage separately from the analyzer's series census.
+empty analysis. Preparation supplies exact snapshots from selected successful executions and
+reports platform coverage separately from the analyzer's series census. A successful empty
+collection is valid job evidence, but an aggregate with no measured subjects cannot analyze.
 
-Preparation writes machine-key files only for selected successful platforms. Collection receipts
-establish job coverage, not measurement availability; the real analyzer determines whether the
-configured store contains enough applicable data for a verdict. Receipt inputs accept only
-ordinary artifact directories and regular receipt files. The machine-key destination must be
+Preparation writes collection snapshots only for selected successful platforms. These determine
+the current observations and exact measured roster; configured storage supplies ordinary
+matching historical baselines without adding unrelated current series. Overlapping exact
+current identities from selected executions are an error, not a merge or tie-break.
+Receipt inputs accept only ordinary artifact directories and regular receipt files. The snapshot destination must be
 absent or empty and separate from receipt inputs and the workflow-output file. Existing unrelated
 data is never deleted.
 

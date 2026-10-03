@@ -123,6 +123,10 @@ pub(crate) struct SiblingObservation {
     clippy::too_many_arguments,
     reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "keeps exact-current admission beside the corresponding linear history-selection stages"
+)]
 pub(crate) async fn select_dataset<G, S>(
     git: &G,
     storage: &S,
@@ -141,11 +145,12 @@ where
     G: GitHistory,
     S: Storage + Clone + 'static,
 {
-    let discriminants = resolve_discriminants(selection, Some(auto))?;
+    let discriminants =
+        resolve_discriminants(selection, selection.current.is_none().then_some(auto))?;
     let listing_started = Instant::now();
     let CandidateListing {
         selected: candidates,
-        siblings: sibling_candidates,
+        siblings: mut sibling_candidates,
     } = list_candidates(
         storage,
         project_id,
@@ -162,7 +167,7 @@ where
     // Separate blessing sidecars from run objects: they share the partition prefix
     // but carry a different payload and are loaded into their own map rather than
     // the series.
-    let (candidates, bless_candidates): (Vec<_>, Vec<_>) = candidates
+    let (mut candidates, mut bless_candidates): (Vec<_>, Vec<_>) = candidates
         .into_iter()
         .partition(|(_, parsed)| !parsed.is_bless());
     if !bless_candidates.is_empty() {
@@ -201,6 +206,17 @@ where
         "git topology resolution (resolve_history)",
         topology_started.elapsed(),
     );
+    if let Some(current) = selection.current {
+        current.validate_context(&tip_commit, tip_dirty)?;
+        current.retain_history(
+            &mut candidates,
+            &mut bless_candidates,
+            &mut sibling_candidates,
+        );
+        reporter.announce(
+            "current measurements: exact collection snapshots; shared storage supplies matching comparison history only",
+        );
+    }
 
     // The topology lookups the parallel fold needs — the commit -> first-parent
     // index map and the base-branch dirty-tree exceptions — are shared read-only
@@ -292,6 +308,11 @@ where
         since,
         reporter,
     );
+    if selection.current.is_some() && mode == AnalysisMode::Branch {
+        // Branch-side observations must come only from selected executions. Older branch
+        // collections are not fresh current evidence; base-ref windows were loaded separately.
+        candidates.clear();
+    }
 
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
@@ -392,11 +413,7 @@ where
         .map(|(rank, (key, parsed))| (rank, key, parsed))
         .collect();
     let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(filter.prefixes);
-    let WorkerFold {
-        builder,
-        run_index,
-        mut admitted,
-    } = fold_runs_chunked(
+    let mut fold = fold_runs_chunked(
         storage,
         spawner,
         available_parallelism,
@@ -406,6 +423,18 @@ where
         prefixes,
     )
     .await?;
+    if let Some(current) = selection.current {
+        let tip_index = order
+            .get(&tip_commit)
+            .copied()
+            .expect("resolved history includes the context commit");
+        current.fold_into(&mut fold, tip_index);
+    }
+    let WorkerFold {
+        builder,
+        run_index,
+        mut admitted,
+    } = fold;
     // Whether at least one dirty run was admitted solely by the base-branch
     // dirty-tree exception, so the report can warn that it is ephemeral.
     let included_dirty_base_exception = admitted.iter().any(|(_, is_exception)| *is_exception);
@@ -431,6 +460,9 @@ where
     }
     let finish_started = Instant::now();
     let mut series = builder.finish();
+    if let Some(current) = selection.current {
+        series.retain(|series| current.contains(series));
+    }
     if !base_series.is_empty() {
         attach_base_windows(&mut series, &base_series, MAX_BRANCH_BASE_COMMITS);
     }

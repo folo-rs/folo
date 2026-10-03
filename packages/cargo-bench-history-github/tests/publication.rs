@@ -11,6 +11,7 @@ use std::time::SystemTime;
 use std::{fs, process, thread};
 
 use cargo_bench_history_github::{__private, Cli};
+use cbh_model::CollectionSnapshot;
 use clap::Parser as _;
 use ohno::AppError;
 use serde_json::{Value, json};
@@ -318,7 +319,7 @@ fn blank_summary_files_are_rejected_for_each_report_publication_form() {
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Native preparation dispatch creates real machine-key outputs."
+    ignore = "Native preparation dispatch creates real collection outputs."
 )]
 fn preparation_dispatch_reads_injected_jobs_and_materializes_selected_receipts() {
     let fixture = Fixture::new();
@@ -327,9 +328,12 @@ fn preparation_dispatch_reads_injected_jobs_and_materializes_selected_receipts()
     fs::write(
         root.join("receipt.json"),
         json!({
-            "version": 1, "repository": "folo-rs/folo", "instance": "project",
+            "version": 2, "repository": "folo-rs/folo", "instance": "project",
             "run_id": 42, "run_attempt": 1, "head": head(), "platform": "linux",
-            "machine_key": "0123456789abcdef"
+            "collection": CollectionSnapshot::new(
+                "project", &head(), "x86_64-unknown-linux-gnu".into(),
+                "0123456789abcdef".into(), Vec::new(),
+            ).unwrap()
         })
         .to_string(),
     )
@@ -347,7 +351,7 @@ fn preparation_dispatch_reads_injected_jobs_and_materializes_selected_receipts()
             "linux",
             "--receipts-dir",
             root.parent().unwrap().to_str().unwrap(),
-            "--machine-key-dir",
+            "--current-collection-dir",
             keys.to_str().unwrap(),
             "--github-output",
             output.to_str().unwrap(),
@@ -369,12 +373,23 @@ fn preparation_dispatch_reads_injected_jobs_and_materializes_selected_receipts()
             .is_empty()
     );
     assert_eq!(
-        fs::read_to_string(keys.join("linux").join("machine-key.txt")).unwrap(),
-        "0123456789abcdef\n"
+        CollectionSnapshot::from_slice(
+            &fs::read(keys.join("linux").join("collection.json")).unwrap()
+        )
+        .unwrap()
+        .machine_key()
+        .as_str(),
+        "0123456789abcdef"
+    );
+    let output = fs::read_to_string(output).unwrap();
+    let (evidence, path) = output.split_once("current-collections=").unwrap();
+    assert_eq!(
+        evidence,
+        "completed-platforms=linux\nmachine-keys=0123456789abcdef\ncomplete=true\n"
     );
     assert_eq!(
-        fs::read_to_string(output).unwrap(),
-        "completed-platforms=linux\nmachine-keys=0123456789abcdef\ncomplete=true\n"
+        fs::canonicalize(path.trim()).unwrap(),
+        fs::canonicalize(keys).unwrap()
     );
 }
 

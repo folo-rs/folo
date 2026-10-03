@@ -56,7 +56,13 @@ impl RunIndex {
     }
 
     /// Records one run on `commit` (first-parent position `topo_index`) in `set`.
-    fn record(&mut self, set: &DiscriminantSet, topo_index: usize, commit: &str, dirty: bool) {
+    pub(crate) fn record(
+        &mut self,
+        set: &DiscriminantSet,
+        topo_index: usize,
+        commit: &str,
+        dirty: bool,
+    ) {
         self.total = self.total.saturating_add(1);
         let entry = self
             .sets
@@ -507,7 +513,7 @@ where
     clippy::cast_possible_truncation,
     reason = "saturating: ordinals only tie-break, and >4 billion in-window objects never occur"
 )]
-fn ordinal_of(rank: usize) -> u32 {
+pub(crate) fn ordinal_of(rank: usize) -> u32 {
     rank.min(u32::MAX as usize) as u32
 }
 

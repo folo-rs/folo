@@ -421,7 +421,7 @@ recollection and other hole-filling automation are outside the action's scope.
 4. **Analyze**:
    `cargo-bench-history analyze [--config <config>] [--local=<path> | --cache=<dir>]
    --context <commit> --base <commit> --no-dirty
-   --engine all --target-triple all --machine-key <k>… --no-text --markdown <scratch>/report.md
+   --current-collection <snapshot>… --no-text --markdown <scratch>/report.md
    --json <scratch>/report.json --markdown-summary <scratch>/summary.md [--since <window>]
    --outcome <scratch>/outcome.txt --verbose`.
    * **Analysis mode is inferred, not passed.** The action resolves the collected commit and
@@ -720,28 +720,31 @@ single `(benchmark, metric)` series and is what a maintainer runs by hand after 
 points at a finding. The action does not wrap it — it is interactive triage, outside the
 collect/analyze/report loop.
 
-### 4.6 Machine-key handoff between collect and analyze
+### 4.6 Exact collection handoff between collect and analyze
 
-Collection stamps **every** result with the runner's **real hardware fingerprint**, and
-analysis must survey exactly those keys — but collection is a matrix across a heterogeneous
-runner pool while analysis is one job that cannot re-derive those keys from its own hardware.
-The action therefore treats the handoff as a first-class concern:
+Current observations must come from the actual selected collection executions, not from a
+later shared-store query that could match unrelated runs. Hardware fingerprints establish
+comparability but do not identify executions. The handoff therefore carries exact values:
 
-* `collect` exposes the leg's fingerprint as its `machine-key` output (§4.1). After success,
-  the workflow writes a **collection receipt** binding that key to the repository, instance,
-  run, attempt, frozen head and platform, and uploads the receipt as the per-platform
-  **artifact**. Measurements remain in configured storage. A receipt confirms successful
-  collection, including `skip` of existing objects, not freshly replaced measurements.
+* `collect` uses `collection-snapshot: true` and exposes a `collection-file` containing its
+  fresh measurements, plus the captured `machine-key`. Collection always runs the benchmarks;
+  `on-existing: skip` preserves an existing shared-history object without replacing the
+  snapshot's fresh values. The workflow writes a version-2 **collection receipt** embedding
+  that version-1 snapshot and binding it to repository, instance, run, attempt, frozen head
+  and platform. The per-platform artifact contains only this receipt, not copied store objects.
 * Before analysis, the companion reconciles receipts with each platform's latest GitHub
   collection job attempt. A failed retry cannot reuse an older successful receipt; an
   untouched successful leg retains its earlier receipt. A successful job without matching
   evidence is an error. The reconciled set defines the **completed platforms**, compared
   with the matrix's **expected platforms** for publication coverage.
-* Reconciliation writes the selected keys into the `machine-keys` directory consumed by
-  `analyze-history` / `analyze-pr`. The composite action scans those selected files and
-  passes each key as a repeated `--machine-key <fingerprint>` argument; it does not infer
-  collection success from arbitrary downloaded files. Hand-assembled workflows perform
-  the same receipt reconciliation before invoking analysis.
+* Reconciliation writes `<platform>/collection.json` under the `current-collections`
+  directory consumed by `analyze-history` / `analyze-pr`. The core receives each snapshot
+  through `--current-collection`. These determine exact current values and the measured
+  benchmark/metric roster, preserving target-to-key association. Shared storage supplies
+  ordinary matching older history only; unrelated current objects and historical-only series
+  cannot join. Duplicate exact current identities are errors. Individual empty collections
+  remain valid job evidence, but an all-empty aggregate cannot analyze. Hand-assembled
+  workflows use the same reconciliation.
 * **The download must be token-authenticated.** When a workflow is partially re-run, the
   artifacts it needs were produced by a *previous* attempt, and `actions/download-artifact`
   only resolves across attempts when it is given an explicit `github-token`. Without it a
@@ -773,7 +776,7 @@ accumulate (which is what the nightly densification pass, §4.8, exists to short
 (allocation bytes/counts) no less than the wall-clock engines (criterion and `all_the_time`) —
 because even integer-count metrics turned out to be machine-dependent (libraries dispatch to
 microarchitecture-specific code paths). There is no ride-along exemption: a result is only
-analyzed when its own machine key was threaded in, so the handoff above is what makes *any*
+analyzed when it belongs to the selected execution snapshot, so the handoff above is what makes *any*
 engine's data visible to analysis, not just the wall-clock ones.
 
 **The artifact steps stay in the workflow, not inside the action.** The upload and download are
@@ -784,12 +787,12 @@ on two more actions to pin and upgrade, a fixed artifact-naming scheme to keep c
 and ownership of their cross-attempt and retention failure modes. Since neither arrangement is
 visible to most consumers, the tie breaks on which we would rather maintain — and the answer is
 the one that adds nothing. Either way the tool stays GitHub-agnostic: it only ever sees
-`--machine-key <fingerprint>`.
+`--current-collection <path>` with GitHub-independent measurement data.
 
 ### 4.7 Two consumption layers — reusable workflows over composite actions
 
 The commands above are *building blocks*. Assembling them into a working setup means writing
-the same job graph every consumer needs: a matrix `collect` across platforms, the machine-key
+the same job graph every consumer needs: a matrix `collect` across platforms, the collection
 artifact handoff, a single `analyze` gated on the matrix, the sink lifecycle jobs, plus
 concurrency, permissions, and (for PRs) the same-repo gate. That graph is identical everywhere
 except for its parameters, so making each consumer retype it is exactly the repo-specific
@@ -1077,7 +1080,7 @@ inputs.
 into the config file: `local-path` (→ `--local=<path>`), `cache` (→ `--cache=<dir>`, cloud
 read-through cache, mutually exclusive with `--local`), the `collect` scope (`exclude` /
 `packages` / `bench`), `best-of`, `on-existing` write mode, the
-`machine-keys` handoff directory, the analysis context/base, and `since`. Collection,
+`current-collections` handoff directory, the analysis context/base, and `since`. Collection,
 backfill and import always derive the machine key from the real host; `--machine-key` is a
 query filter, not a writing-side override.
 The division is clean: the **config file says where history lives; the action inputs say what
@@ -1346,9 +1349,9 @@ fork-aware, and no input configures this.
 
 **PR collection and analysis use the same store as the trunk.** Branch mode compares the PR
 head against the trunk's recorded baseline, so both belong in the selected backend. PR
-collection uses ordinary `collect --skip-existing`, and analysis reads the head and baseline
-from that store. The matrix uploads collection receipts, not measurement objects. Analysis
-selects the successful legs' machine keys from those receipts (§4.6).
+collection uses `collect --skip-existing` with a fresh execution snapshot. Analysis takes
+the head values from selected receipt snapshots and the baseline from the store. The matrix
+uploads self-contained collection receipts, not copies of stored measurement objects (§4.6).
 An optional `--cache=<directory>` mirrors Azure reads; PR workflows restore but do not save
 the Actions cache. Listings still come from Azure, so newly stored measurements remain
 visible after restoring an older cache. `--local` selects filesystem storage instead of
@@ -1423,11 +1426,13 @@ inputs across history, PR and backfill.
 **`collect` inputs:** `packages` (comma-separated list → `--package` per name; empty → whole
 workspace); `exclude`, `bench` (→ repeated flags); `best-of` (→ `--best-of`, default 1);
 `on-existing` (`error` (default here) | `skip` |
-`overwrite` → neither / `--skip-existing` / `--overwrite`; §4.5). **Output:** `machine-key`
-(this leg's fingerprint, for the analyze handoff).
+`overwrite` → neither / `--skip-existing` / `--overwrite`; §4.5); `collection-snapshot`
+(default false, enabled by combined workflows). **Outputs:** `machine-key` and, in
+snapshot mode, `collection-file` for the exact analysis handoff.
 
-**`analyze-history` inputs:** `machine-keys` (directory of collected per-platform keys →
-repeated `--machine-key`); `cache` (→ `--cache=<path>`; mutually exclusive with `local-path`);
+**`analyze-history` inputs:** `current-collections` (selected snapshots → repeated
+`--current-collection`), or mutually exclusive `machine-keys` for standalone broad
+stored-history queries; `cache` (→ `--cache=<path>`; mutually exclusive with `local-path`);
 `context` (default `HEAD`; the resolved collected commit is passed as both `--context` and
 `--base`); `since` (look-back window; default: the tool's history default).
 
@@ -1436,7 +1441,7 @@ built-in branch name** — the reusable workflow passes the PR event's own base 
 composite layer falls back to the tool's configured default-branch resolution, so a repo whose
 trunk is not `main` works without a branch-name assumption; a hand-assembled caller must
 pass the PR's actual base explicitly when it differs from that default);
-`context` (→ `--context`; default `HEAD`); `machine-keys`; `cache`. Improvements are reported
+`context` (→ `--context`; default `HEAD`); `current-collections` or `machine-keys`; `cache`. Improvements are reported
 unconditionally in branch mode, so there is no direction input.
 
 Both analysis commands also receive nonempty `expected-platforms` and `completed-platforms`
@@ -1525,7 +1530,7 @@ test their tool/action selection; the action does not add a `report-schema` or t
     platforms (each `on-existing: skip`, uploading its successful collection receipt as a
     per-platform artifact), then an `analyze-history` job (`needs: collect`, `fetch-depth: 0`,
     downloading receipts **with an explicit `github-token`**, reconciling them against the
-    latest collection job attempts to produce `machine-keys` and completed platforms (§4.6),
+    latest collection job attempts to produce `current-collections` and completed platforms (§4.6),
     and an `actions/cache` step feeding `cache`), then the workflow's
     report upload and issue publication selecting findings, clean or no-data in that same job.
     `publish-issue-preflight` and `publish-issue-failed` maintain existing issue status;
@@ -1646,9 +1651,9 @@ layer below; neither fake-driven suite substitutes for it.
 so both the install branching and the actual installs are exercised, not just mocked:
 
 1. A tiny checked-in throwaway Rust project with one fast Criterion benchmark.
-2. `command: collect` over `--local`; assert a result set was stored and the `machine-key`
-   output is a valid fingerprint.
-3. `command: analyze-history` over that store, threading the collected `machine-keys`; assert
+2. `command: collect` over `--local` with `collection-snapshot: true`; assert a result set
+   was stored and the snapshot carries its exact fresh values and identities.
+3. `command: analyze-history` with reconciled `current-collections` and that baseline store; assert
    the named `outcome` and that the Markdown/JSON/summary reports exist and parse. A single
    measured commit is a collection smoke test, not evidence of a judged clean baseline.
 4. A **branch fixture** — a throwaway repo whose final commit regresses the benchmark — drives
@@ -1787,7 +1792,7 @@ checkout, so unreleased monorepo changes are exercised without waiting for tool 
 The selected action revision supplies orchestration independently of those tool sources.
 External repos use the default `binstall` install. Folo dogfoods the action's input-driven path
 — config resolution, auth wiring, the `on-existing: skip` write mode and delta-scoped
-`packages`, receipt-based machine-key selection, the `--cache` read-through cache, the analysis
+`packages`, receipt-based exact collection selection, the `--cache` read-through cache, the analysis
 outcome, and both report sinks with their lifecycles.
 
 Folo's history, PR and backfill entry points are reusable-workflow calls rather than parallel
@@ -1884,7 +1889,7 @@ The tool, companion and workflow layer have separate responsibilities:
   Direction follows the analysis mode (§4.3), without an action-supplied direction flag.
 * **PR storage is the ordinary configured store.** PR collection persists measurements
   alongside the trunk baseline with `--skip-existing` (§6). Analysis reads that store with
-  the frozen head/base and validated collection machine keys. The workflow layer supplies
+  the frozen base and exact receipt-scoped current observations. The workflow layer supplies
   the shared identity, receipt handoff and restore-only Actions cache.
 * **The tool supplies reusable Azure provisioning.** `setup-azure` executes or exports the
   package-owned, self-contained deployment bundle. The action never deploys infrastructure;
@@ -1964,12 +1969,12 @@ event's frozen base commit. The reusable workflow owns collection-scope policy a
 the selected scope to the lower action layer.
 
 Successful collection writes a receipt containing repository, instance, run, attempt, frozen
-head, platform and the actual machine key. The artifact contains only the receipt; measurements
-remain in configured storage. Analysis reconciles receipts with each platform's latest GitHub
+head, platform and the exact fresh collection snapshot. The artifact contains only the receipt;
+shared history remains append-only. Analysis reconciles receipts with each platform's latest GitHub
 job attempt: a failed retry cannot reuse an older receipt, while an untouched successful leg
 retains its earlier one. Missing evidence for a successful job is an error; total collection
-failure produces no synthetic report. The selected successful machine keys scope ordinary
-configured-store analysis.
+failure produces no synthetic report. Selected snapshots supply current values and roster;
+ordinary configured-store history supplies matching comparisons.
 
 The companion projects validated reports into workflow outputs selecting findings, clean or
 no-data publication. Failed execution uses the separately owned terminal-status path.

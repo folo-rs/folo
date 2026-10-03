@@ -5,6 +5,8 @@ use cbh_command::{
     AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, UnblessOptions,
 };
 
+use crate::current::CurrentCollections;
+
 /// The data-set selection parameters shared by the query commands: which stored
 /// objects to consider (discriminant filters + `--since`) and how to resolve the git timeline
 /// (`--repo` is resolved by the caller into the [`GitHistory`] adapter;
@@ -17,6 +19,7 @@ use cbh_command::{
 /// [`DiscriminantFilter`]s, applying the current-machine auto-detect default and the
 /// `all` keyword.
 pub(crate) struct Selection<'a> {
+    pub(crate) current: Option<&'a CurrentCollections>,
     pub(crate) context: Option<&'a str>,
     pub(crate) base: Option<&'a str>,
     pub(crate) no_dirty: bool,
@@ -29,6 +32,7 @@ pub(crate) struct Selection<'a> {
 impl<'a> Selection<'a> {
     pub(crate) fn from_analyze(options: &'a AnalyzeOptions) -> Self {
         Self {
+            current: None,
             context: options.context.as_deref(),
             base: options.base.as_deref(),
             no_dirty: options.no_dirty,
@@ -41,6 +45,7 @@ impl<'a> Selection<'a> {
 
     pub(crate) fn from_list(options: &'a ListOptions) -> Self {
         Self {
+            current: None,
             context: options.context.as_deref(),
             base: options.base.as_deref(),
             no_dirty: options.no_dirty,
@@ -53,6 +58,7 @@ impl<'a> Selection<'a> {
 
     pub(crate) fn from_examine(options: &'a ExamineOptions) -> Self {
         Self {
+            current: None,
             context: options.context.as_deref(),
             base: options.base.as_deref(),
             no_dirty: options.no_dirty,
@@ -65,6 +71,7 @@ impl<'a> Selection<'a> {
 
     pub(crate) fn from_prune(options: &'a PruneOptions) -> Self {
         Self {
+            current: None,
             context: options.context.as_deref(),
             base: options.base.as_deref(),
             // `prune` resolves the data set with dirty admission always on; the
@@ -85,6 +92,7 @@ impl<'a> Selection<'a> {
     /// commit, so it has no `context` / `since` / topology selectors.
     pub(crate) fn from_bless(options: &'a BlessOptions) -> Self {
         Self {
+            current: None,
             context: None,
             base: options.base.as_deref(),
             no_dirty: false,
@@ -98,6 +106,7 @@ impl<'a> Selection<'a> {
     /// Discriminant filters for `unbless`. Mirrors [`from_bless`](Self::from_bless).
     pub(crate) fn from_unbless(options: &'a UnblessOptions) -> Self {
         Self {
+            current: None,
             context: None,
             base: options.base.as_deref(),
             no_dirty: false,

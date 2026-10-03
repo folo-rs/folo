@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 
+use cbh_model::CollectionSnapshot;
 use futures::executor::block_on;
 use serde_json::{Value, json};
 
@@ -7,6 +8,107 @@ use crate::action::errors::{InvalidInput, InvalidOutput};
 use crate::action::execute::run_with;
 use crate::action::port::Output;
 use crate::action::tests::fake::{FakeHost, FakePublisher, SHA, analysis};
+
+#[test]
+fn snapshot_collect_captures_fresh_payload_without_a_second_hardware_probe() {
+    let mut host = FakeHost::new(&json!({
+        "command":"collect", "collection-snapshot":"true", "on-existing":"skip",
+    }));
+    let path = host.root.join("temp").join("owned").join("collection.json");
+    let snapshot = CollectionSnapshot::new(
+        "action-test",
+        SHA,
+        "x86_64-unknown-linux-gnu".into(),
+        "0123456789abcdef".into(),
+        Vec::new(),
+    )
+    .unwrap();
+    host.files.insert(path.clone(), snapshot.to_json().unwrap());
+    host.reply(host.root.join("checkout").to_str().unwrap());
+    host.reply("");
+    block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap();
+    let processes = host.processes.borrow();
+    assert_eq!(processes.len(), 2);
+    assert_eq!(processes[0].program, "git");
+    assert!(processes[1].args.contains(&"--skip-existing".into()));
+    assert!(processes[1].args.contains(&"--collection-output".into()));
+    assert!(processes[1].args.contains(&path.clone().into_os_string()));
+    let outputs = &host.outputs.borrow()[0].1;
+    assert!(outputs.contains("machine-key=0123456789abcdef\n"));
+    assert!(outputs.contains(&format!("collection-file={}\n", path.display())));
+}
+
+#[test]
+fn snapshot_collect_failure_or_invalid_evidence_emits_no_success_outputs() {
+    for fail_process in [true, false] {
+        let mut host = FakeHost::new(&json!({"command":"collect", "collection-snapshot":"true"}));
+        host.files.insert(
+            host.root.join("temp").join("owned").join("collection.json"),
+            b"{}".to_vec(),
+        );
+        host.reply(host.root.join("checkout").to_str().unwrap());
+        if fail_process {
+            host.fail();
+        } else {
+            host.reply("");
+        }
+        block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap_err();
+        assert!(host.outputs.borrow().is_empty());
+    }
+}
+
+#[test]
+fn scoped_analysis_passes_only_exact_snapshot_files_not_a_selector_union() {
+    for command in ["analyze-history", "analyze-pr"] {
+        let mut input = analysis(command);
+        input.as_object_mut().unwrap().remove("machine-keys");
+        input["current-collections"] = json!("collections");
+        let mut host = FakeHost::new(&input);
+        let path = host
+            .root
+            .join("checkout")
+            .join("collections")
+            .join("linux")
+            .join("collection.json");
+        host.files.insert(path.clone(), Vec::new());
+        host.reports(
+            if command == "analyze-pr" {
+                "branch"
+            } else {
+                "history"
+            },
+            "clean",
+            "full",
+            1,
+            1,
+        );
+        host.analysis_replies();
+        block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap();
+        let processes = host.processes.borrow();
+        let args = &processes.last().unwrap().args;
+        assert!(args.contains(&format!("--current-collection={}", path.display()).into()));
+        for prefix in ["--machine-key", "--target-triple", "--engine"] {
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg.to_string_lossy().starts_with(prefix))
+            );
+        }
+        assert!(host.key_roots.borrow().is_empty());
+    }
+}
+
+#[test]
+fn scoped_analysis_rejects_an_empty_snapshot_directory() {
+    let mut input = analysis("analyze-history");
+    input.as_object_mut().unwrap().remove("machine-keys");
+    input["current-collections"] = json!("empty");
+    let host = FakeHost::new(&input);
+    host.analysis_replies();
+    block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap_err();
+    assert!(host.outputs.borrow().is_empty());
+    assert_eq!(host.processes.borrow().len(), 3);
+}
 
 #[test]
 fn collect_streams_then_captures_only_machine_key_and_appends_after_success() {
