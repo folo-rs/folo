@@ -25,6 +25,7 @@ allowed_external_types = [
     "clap_builder::derive::FromArgMatches",
     "clap_builder::derive::Parser",
     "crp_versioning::*",
+    "crp_workspace::*",
     "ohno::app::error::AppError",
 ]
 
