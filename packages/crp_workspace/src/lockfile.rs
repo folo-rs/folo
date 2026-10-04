@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::iter;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
 
 use crp_diag::Verbose;
@@ -47,6 +48,11 @@ pub struct InstallationGraph {
     /// Historical configuration errors matter only when resolving a registry name.
     pub registry_error: Option<InstallationError>,
 }
+
+// Deferred errors are immutable diagnostic payloads. Declaration updates require exclusive
+// access and do not guard caller-owned data, so unwinding cannot poison a shared observation.
+impl UnwindSafe for InstallationGraph {}
+impl RefUnwindSafe for InstallationGraph {}
 
 impl InstallationGraph {
     /// Complete successful declarations for a consumer's derived-computation key.
@@ -735,9 +741,13 @@ pub fn closure_changes(anchor: &Closure, work: &Closure) -> Vec<(String, Closure
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use static_assertions::assert_impl_all;
+
     use super::*;
     use crate::ReadFileError;
     use crate::manifest::DependencySource;
+
+    assert_impl_all!(InstallationGraph: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     const LABEL: &str = "Cargo.lock";
 

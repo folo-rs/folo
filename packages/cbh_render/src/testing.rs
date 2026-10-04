@@ -240,3 +240,181 @@ pub fn assert_summary(input: &ReportInput<'_>) {
         assert_eq!(output.contains(&finding.id.qualified()), index < retained);
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+
+    use std::ptr;
+
+    use ::testing::assert_panics;
+
+    use super::*;
+
+    #[test]
+    fn summaries_partition_findings_and_preserve_judged_series() {
+        // The odd count exercises rounding independently of the benchmark scaling cases.
+        for (count, series_per_set) in [
+            (NO_FINDINGS, 1),
+            (LOW_FINDINGS, 1),
+            (3, 2),
+            (HIGH_FINDINGS, 10),
+        ] {
+            let fixture = ReportFixture::new(count);
+            let summaries = fixture.summaries();
+            let input = fixture.input(&summaries);
+
+            assert_eq!(summaries.len(), 2);
+            assert_eq!(fixture.series_per_set(), series_per_set);
+            assert_eq!(input.series, series_per_set * summaries.len());
+            assert_eq!(input.census.judged(), input.series);
+            assert_eq!(input.census.unjudged(), 0);
+            assert_eq!(input.findings.len(), count);
+            assert_eq!(input.runs, CHART_POINTS * summaries.len());
+            for (partition, summary) in summaries.iter().enumerate() {
+                assert_eq!(summary.set, &fixture.sets[partition]);
+                assert_eq!(summary.runs, CHART_POINTS);
+                assert_eq!(summary.series, series_per_set);
+                let expected: Vec<_> = fixture
+                    .findings
+                    .iter()
+                    .skip(partition)
+                    .step_by(summaries.len())
+                    .collect();
+                assert_eq!(summary.findings.len(), expected.len());
+                for (actual, expected) in summary.findings.iter().zip(expected) {
+                    assert!(ptr::eq(*actual, expected));
+                    assert_eq!(&actual.set, summary.set);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "Deterministic fixture arithmetic must match the exact expected floating-point values"
+    )]
+    fn findings_rank_regressions_with_exact_before_and_after_regimes() {
+        let fixture = ReportFixture::new(HIGH_FINDINGS);
+        assert!(
+            fixture
+                .findings
+                .windows(2)
+                .all(|pair| pair[0].relative_delta > pair[1].relative_delta)
+        );
+
+        // Endpoint values independently check the fixture arithmetic, including a nonzero index.
+        for (index, delta, latest, relative_delta) in
+            [(0, 40.0, 140.0, 0.40), (19, 21.0, 121.0, 0.21)]
+        {
+            let finding = &fixture.findings[index];
+            assert_eq!(finding.baseline, 100.0);
+            assert_eq!(finding.delta, delta);
+            assert_eq!(finding.latest, latest);
+            assert_eq!(finding.relative_delta, relative_delta);
+            assert_eq!(finding.direction, Direction::Regression);
+            assert_eq!(finding.kind, MetricKind::InstructionCount);
+            assert_eq!(finding.method, FindingMethod::ChangePoint);
+            assert_eq!(finding.commit.as_deref(), Some(CHANGE_COMMIT));
+            let values: Vec<_> = finding.series.iter().map(|point| point.value).collect();
+            assert_eq!(
+                values,
+                [100.0, 100.0, 100.0, 100.0, latest, latest, latest, latest]
+            );
+            assert_eq!(finding.chart_base_ref, Some(7));
+            for (index, point) in finding.series.iter().enumerate() {
+                assert_eq!(point.topo_index, index);
+                assert_eq!(point.commit, Some(format!("{:040x}", index + 1)));
+                assert!(!point.dirty);
+            }
+            assert_eq!(finding.series[4].commit, finding.commit);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn fixture_rejects_unbounded_workloads() {
+        _ = ReportFixture::new(HIGH_FINDINGS + 1);
+    }
+
+    #[test]
+    fn full_text_assertions_accept_complete_report() {
+        let fixture = ReportFixture::new(LOW_FINDINGS);
+        let summaries = fixture.summaries();
+        assert_full_report(&fixture.input(&summaries), ReportFormat::Text);
+    }
+
+    #[test]
+    fn full_markdown_assertions_accept_complete_report() {
+        let fixture = ReportFixture::new(LOW_FINDINGS);
+        let summaries = fixture.summaries();
+        assert_full_report(&fixture.input(&summaries), ReportFormat::Markdown);
+    }
+
+    #[test]
+    fn full_json_assertions_accept_complete_report() {
+        let fixture = ReportFixture::new(LOW_FINDINGS);
+        let summaries = fixture.summaries();
+        assert_full_report(&fixture.input(&summaries), ReportFormat::Json);
+    }
+
+    #[test]
+    fn full_text_assertions_accept_quiet_report() {
+        let fixture = ReportFixture::new(NO_FINDINGS);
+        let summaries = fixture.summaries();
+        assert_full_report(&fixture.input(&summaries), ReportFormat::Text);
+    }
+
+    #[test]
+    fn full_report_assertions_reject_missing_partition_findings() {
+        let fixture = ReportFixture::new(LOW_FINDINGS);
+        let mut summaries = fixture.summaries();
+        summaries[0].findings.clear();
+        let input = fixture.input(&summaries);
+        _ = render(&input, ReportFormat::Text, false);
+        assert_panics(|| assert_full_report(&input, ReportFormat::Text));
+    }
+
+    #[test]
+    fn full_report_assertions_reject_incomplete_chart_workload() {
+        let mut fixture = ReportFixture::new(LOW_FINDINGS);
+        _ = fixture.findings[0].series.pop();
+        let summaries = fixture.summaries();
+        let input = fixture.input(&summaries);
+        _ = render(&input, ReportFormat::Markdown, false);
+        assert_panics(|| assert_full_report(&input, ReportFormat::Markdown));
+    }
+
+    #[test]
+    fn summary_assertions_accept_retained_findings() {
+        assert!(LOW_FINDINGS <= DEFAULT_SUMMARY_LIMIT.get());
+        let fixture = ReportFixture::new(LOW_FINDINGS);
+        let summaries = fixture.summaries();
+        assert_summary(&fixture.input(&summaries));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Rendering the production summary cap exceeds the Miri workload budget; \
+                  retained summaries cover the same operations with a small fixture"
+    )]
+    fn summary_assertions_accept_truncated_findings() {
+        assert!(HIGH_FINDINGS > DEFAULT_SUMMARY_LIMIT.get());
+        let fixture = ReportFixture::new(HIGH_FINDINGS);
+        let summaries = fixture.summaries();
+        assert_summary(&fixture.input(&summaries));
+    }
+
+    #[test]
+    fn summary_assertions_reject_non_regression_workload() {
+        let mut fixture = ReportFixture::new(LOW_FINDINGS);
+        fixture.findings[0].direction = Direction::Improvement;
+        let summaries = fixture.summaries();
+        let input = fixture.input(&summaries);
+        _ = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert_panics(|| assert_summary(&input));
+    }
+}

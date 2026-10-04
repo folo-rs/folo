@@ -82,7 +82,7 @@ fn require_disjoint_with(
             };
             if !PathCase::Insensitive.same_path(left, right)
                 || !case(&parent)
-                    .map_err(|error| CachePathConflict::caused_by(cache, protected, error))?
+                    .map_err(|error| CachePathCaseUnavailable::caused_by(cache, protected, error))?
                     .same_path(left, right)
             {
                 return Ok(());
@@ -129,7 +129,15 @@ fn creation_case(path: &Path) -> Result<PathCase, AppError> {
 /// Disposable entries must remain disjoint from source and retained evidence.
 #[ohno::error]
 #[display("cache location '{}' overlaps protected source or evidence '{}'", path.display(), protected.display())]
-struct CachePathConflict {
+pub(super) struct CachePathConflict {
+    path: PathBuf,
+    protected: PathBuf,
+}
+
+/// An unavailable case observation cannot establish overlap or admit storage.
+#[ohno::error]
+#[display("cannot determine whether cache location '{}' overlaps '{}'", path.display(), protected.display())]
+struct CachePathCaseUnavailable {
     path: PathBuf,
     protected: PathBuf,
 }
@@ -224,5 +232,9 @@ mod tests {
             error.find_source::<io::Error>().unwrap().kind(),
             io::ErrorKind::PermissionDenied
         );
+        assert!(error.find_source::<CachePathConflict>().is_none());
+        let context = error.find_source::<CachePathCaseUnavailable>().unwrap();
+        assert_eq!(context.path, Path::new("a/cache"));
+        assert_eq!(context.protected, Path::new("a/CACHE"));
     }
 }

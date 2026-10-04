@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ReadFileError;
 use crate::cache::{Cache, CacheEntry};
-use crate::command::run_capture;
-use crate::git::{GitRepo, TreeEntry, strip_terminator};
+use crate::command::{run_capture, run_capture_bytes};
+use crate::git::{GitRepo, TreeEntry, path_text, strip_terminator};
 
 /// A full recorded tree and shared indexes, independent of package selection.
 #[derive(Clone, Debug, Default)]
@@ -129,14 +129,14 @@ impl GitObjectContext {
             ],
             git.root(),
         )?;
-        let graft_path = run_capture(
+        let graft_path = run_capture_bytes(
             "git",
             &["rev-parse", "--git-path", "info/grafts"],
             git.root(),
         )?;
         let graft_path = git
             .root()
-            .join(PathBuf::from(strip_terminator(&graft_path)));
+            .join(PathBuf::from(strip_terminator(path_text(&graft_path)?)));
         let grafts = match fs::read(&graft_path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
