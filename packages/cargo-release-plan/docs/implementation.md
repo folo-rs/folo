@@ -417,6 +417,11 @@ manifest on a sensitive filesystem. Git lookups continue to use recorded spellin
 
 ### Test boundaries
 
+`cargo-release-plan/tests/integration/compatibility_cache/` separates the shared
+process harness from cache-mode, source-admission, checker, provenance and
+cache-recovery scenarios. The topic modules share fixtures and evidence assertions
+without sharing test execution or weakening source verification.
+
 `cargo-release-plan/tests/integration/native_binaries/` owns the unified executable's
 source, build, archive and cancellation contracts. Publication's native boundary
 tests own GitHub asset delivery and recovery; `crp_native/tests/boundaries/` owns
