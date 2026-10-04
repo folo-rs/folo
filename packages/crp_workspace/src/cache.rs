@@ -19,14 +19,15 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
+use toml_edit::{Item, Value};
 
 use self::paths::{protected_paths, require_direct_subject, require_disjoint};
-use crate::ParseMetadataError;
 use crate::artifact_path::{resolve_path, write_new};
 use crate::git::GitRepo;
-use crate::manifest::PathCase;
+use crate::manifest::{PathCase, parse_document};
 use crate::metadata::capture_metadata;
 use crate::source_inputs::SourceInputs;
+use crate::{ParseMetadataError, ReadFileError};
 
 mod paths;
 
@@ -104,7 +105,18 @@ impl Cache {
         sources.files.extend(administration);
         sources.files.extend(dependency_manifests);
         sources.files.insert(manifest.to_owned());
-        reserve_package_paths(&mut sources, case);
+        let reservations = reserve_package_paths(
+            &mut sources,
+            case,
+            |path| {
+                fs::read_to_string(path)
+                    .map_err(|error| ReadFileError::caused_by(path, error).into())
+            },
+            resolve_path,
+        );
+        if storage_inventory(reservations, verbose).is_none() {
+            return Ok(Self::default());
+        }
         let Some(directory) = resolve_directory(&requested, verbose, resolve_path) else {
             return Ok(Self::default());
         };
@@ -207,10 +219,15 @@ fn storage_inventory<T>(sources: Result<T, AppError>, verbose: Verbose<'_>) -> O
     }
 }
 
-fn reserve_package_paths(sources: &mut SourceInputs, case: PathCase) {
-    // Reserve Cargo's autodiscovery locations without interpreting unselected manifests.
+fn reserve_package_paths(
+    sources: &mut SourceInputs,
+    case: PathCase,
+    mut read: impl FnMut(&Path) -> Result<String, AppError>,
+    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+) -> Result<(), AppError> {
+    // Read only source declarations, not package identity or classification policy.
     // These additional reservations belong only to storage admission, not captured evidence.
-    let packages = sources
+    let manifests = sources
         .files
         .iter()
         .filter(|path| {
@@ -218,15 +235,61 @@ fn reserve_package_paths(sources: &mut SourceInputs, case: PathCase) {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| case.is_manifest(name))
         })
-        .filter_map(|manifest| manifest.parent())
-        .map(Path::to_owned)
+        .cloned()
         .collect::<Vec<_>>();
-    for package in packages {
+    for manifest in manifests {
+        let package = manifest.parent().expect("a manifest has a parent");
         sources.files.insert(package.join("build.rs"));
         for directory in ["src", "examples", "tests", "benches"] {
             sources.source_directories.insert(package.join(directory));
         }
+        let document = parse_document(&manifest, &read(&manifest)?)?;
+        let mut reserve = |path: Option<&str>| -> Result<(), AppError> {
+            if let Some(path) = path {
+                let path = package.join(path);
+                let parent = path.parent().ok_or_else(|| InvalidSourcePath::new(&path))?;
+                // A target's directory also owns its modules. Do not recursively reserve a
+                // package ancestor, which would include Cargo's default target/cache location.
+                // Keep the original spelling for link-entry protection after this identity check.
+                if !resolve(package)?.starts_with(resolve(parent)?) {
+                    sources.source_directories.insert(parent.to_owned());
+                }
+                sources.files.insert(path);
+            }
+            Ok(())
+        };
+        reserve(
+            document
+                .get("package")
+                .and_then(Item::as_table_like)
+                .and_then(|package| package.get("build"))
+                .and_then(Item::as_str),
+        )?;
+        reserve(
+            document
+                .get("lib")
+                .and_then(Item::as_table_like)
+                .and_then(|target| target.get("path"))
+                .and_then(Item::as_str),
+        )?;
+        for kind in ["bin", "example", "test", "bench"] {
+            let Some(targets) = document.get(kind) else {
+                continue;
+            };
+            for target in targets.as_array_of_tables().into_iter().flatten() {
+                reserve(target.get("path").and_then(Item::as_str))?;
+            }
+            for target in targets.as_array().into_iter().flatten() {
+                reserve(
+                    target
+                        .as_inline_table()
+                        .and_then(|target| target.get("path"))
+                        .and_then(Value::as_str),
+                )?;
+            }
+        }
     }
+    Ok(())
 }
 
 /// Each acquisition subject names its representation and complete input identity.
@@ -391,6 +454,12 @@ fn resolve_directory(
 }
 
 #[ohno::error]
+#[display("source path '{}' does not name a file", path.display())]
+struct InvalidSourcePath {
+    path: PathBuf,
+}
+
+#[ohno::error]
 #[display("cannot read cache entry '{}'", path.display())]
 struct CacheReadFailed {
     path: PathBuf,
@@ -507,7 +576,13 @@ mod tests {
                 ..SourceInputs::default()
             };
             let original = sources.files.clone();
-            reserve_package_paths(&mut sources, case);
+            reserve_package_paths(
+                &mut sources,
+                case,
+                |_| Ok(String::new()),
+                |path| Ok(path.to_owned()),
+            )
+            .unwrap();
             let mut expected = original;
             let mut directories = Vec::new();
             for package in ["selected", "dependency", "unselected", "lower"] {
@@ -525,6 +600,175 @@ mod tests {
                 directories.into_iter().collect()
             );
         }
+    }
+
+    #[test]
+    fn explicit_source_reservations_preserve_paths_and_ignore_unrelated_fields() {
+        let manifest = PathBuf::from("unselected/Cargo.toml");
+        let mut sources = SourceInputs {
+            files: [manifest.clone()].into(),
+            ..SourceInputs::default()
+        };
+        reserve_package_paths(&mut sources, PathCase::Sensitive, |path| {
+            assert_eq!(path, manifest);
+            Ok("package = { version = 'not-semver', build = '../scripts/build.rs', metadata = { path = 'not-source' } }\n\
+                lib = { path = 'Custom/Library.rs' }\n\
+                bin = [{ path = 'custom/main.rs' }, { name = 'automatic' }]\n\
+                example = [{ name = 'demo', path = 'custom/demo.rs' }]\n\
+                [[test]]\npath = 'custom/test.rs'\n\
+                [[bench]]\npath = 'custom/bench.rs'\n".into())
+        }, |path| Ok(path.to_owned())).unwrap();
+        assert_eq!(
+            sources.files,
+            [
+                "Cargo.toml",
+                "build.rs",
+                "../scripts/build.rs",
+                "Custom/Library.rs",
+                "custom/main.rs",
+                "custom/demo.rs",
+                "custom/test.rs",
+                "custom/bench.rs",
+            ]
+            .map(|path| Path::new("unselected").join(path))
+            .into()
+        );
+        assert!(
+            sources
+                .source_directories
+                .contains(Path::new("unselected/Custom"))
+        );
+        assert!(
+            sources
+                .source_directories
+                .contains(Path::new("unselected/custom"))
+        );
+    }
+
+    #[test]
+    fn explicit_sources_accept_both_target_array_spellings_and_disabled_builds() {
+        for declaration in [
+            "bin = [{ path = 'bin.rs' }]\nexample = [{ path = 'example.rs' }]\n\
+             test = [{ path = 'test.rs' }]\nbench = [{ path = 'bench.rs' }]\n",
+            "[[bin]]\npath = 'bin.rs'\n[[example]]\npath = 'example.rs'\n\
+             [[test]]\npath = 'test.rs'\n[[bench]]\npath = 'bench.rs'\n",
+        ] {
+            let mut sources = SourceInputs {
+                files: [PathBuf::from("package/Cargo.toml")].into(),
+                ..SourceInputs::default()
+            };
+            reserve_package_paths(
+                &mut sources,
+                PathCase::Sensitive,
+                |_| Ok(format!("package = {{ build = false }}\n{declaration}")),
+                |path| Ok(path.to_owned()),
+            )
+            .unwrap();
+            assert_eq!(
+                sources.files,
+                [
+                    "Cargo.toml",
+                    "build.rs",
+                    "bin.rs",
+                    "example.rs",
+                    "test.rs",
+                    "bench.rs"
+                ]
+                .map(|path| Path::new("package").join(path))
+                .into()
+            );
+            assert!(!sources.source_directories.contains(Path::new("package")));
+        }
+    }
+
+    #[test]
+    fn package_reservations_propagate_unavailable_or_invalid_manifests() {
+        for text in [None, Some("[")] {
+            let mut sources = SourceInputs {
+                files: [PathBuf::from("package/Cargo.toml")].into(),
+                ..SourceInputs::default()
+            };
+            let error = reserve_package_paths(
+                &mut sources,
+                PathCase::Sensitive,
+                |path| {
+                    text.map(str::to_owned)
+                        .ok_or_else(|| ReadFileError::new(path).into())
+                },
+                |path| Ok(path.to_owned()),
+            )
+            .unwrap_err();
+            if text.is_none() {
+                assert!(error.find_source::<ReadFileError>().is_some());
+            } else {
+                assert!(error.find_source::<crate::ParseTomlError>().is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_source_roots_use_resolved_identity_without_reserving_ancestors() {
+        let mut sources = SourceInputs {
+            files: [PathBuf::from("package/Cargo.toml")].into(),
+            ..SourceInputs::default()
+        };
+        reserve_package_paths(
+            &mut sources,
+            PathCase::Sensitive,
+            |_| {
+                Ok("package = { build = '../build.rs' }\n\
+                    lib = { path = 'self-alias/lib.rs' }\n\
+                    bin = [{ path = '../shared/main.rs' }]\n"
+                    .into())
+            },
+            |path| {
+                Ok(
+                    if path == Path::new("package") || path == Path::new("package/self-alias") {
+                        PathBuf::from("root/package")
+                    } else if path == Path::new("package/..") {
+                        PathBuf::from("root")
+                    } else {
+                        assert_eq!(path, Path::new("package/../shared"));
+                        PathBuf::from("root/shared")
+                    },
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sources.source_directories,
+            ["src", "examples", "tests", "benches", "../shared"]
+                .map(|path| Path::new("package").join(path))
+                .into()
+        );
+        assert!(
+            sources
+                .files
+                .contains(Path::new("package/self-alias/lib.rs"))
+        );
+        reserve_package_paths(
+            &mut sources,
+            PathCase::Sensitive,
+            |_| Ok("lib = { path = 'custom/lib.rs' }".into()),
+            |_| Err(ReadFileError::new(Path::new("package")).into()),
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn explicit_sources_require_a_file_path_without_panicking() {
+        let mut sources = SourceInputs {
+            files: [PathBuf::from("package/Cargo.toml")].into(),
+            ..SourceInputs::default()
+        };
+        let error = reserve_package_paths(
+            &mut sources,
+            PathCase::Sensitive,
+            |_| Ok("lib = { path = '/' }".into()),
+            |path| Ok(path.to_owned()),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<InvalidSourcePath>().is_some());
     }
 
     #[test]
