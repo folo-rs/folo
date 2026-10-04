@@ -67,6 +67,46 @@ fn cache_protects_intermediate_evidence_link_entries() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "creates untracked source symlinks or junctions")]
+fn cache_protects_redirected_source_descendants_and_their_nested_links() {
+    let fixture = repository();
+    fixture.write(
+        "Cargo.toml",
+        b"[package]\nname='demo'\nversion='0.1.0'\nedition='2021'\n",
+    );
+    fixture.write("src/lib.rs", b"pub mod generated;\n");
+    fixture.command(&["add", "."]);
+    fixture.command(&["commit", "--quiet", "-m", "source"]);
+    let generated = TempDir::new().unwrap();
+    let nested = TempDir::new().unwrap();
+    fs::write(generated.path().join("mod.rs"), "pub mod nested;\n").unwrap();
+    fs::write(nested.path().join("mod.rs"), "pub fn value() {}\n").unwrap();
+    link_directory(generated.path(), &fixture.path().join("src/generated"));
+    link_directory(nested.path(), &generated.path().join("nested"));
+    let verbose = Verbose::new(false, &Discard);
+    for target in [generated.path(), nested.path()] {
+        let result = Cache::resolve(
+            &fixture.path().join("Cargo.toml"),
+            &CacheOptions::Directory(target.to_owned()),
+            verbose,
+        );
+        result.unwrap_err();
+        assert!(!target.join(".gitignore").exists());
+        assert!(target.join("mod.rs").exists());
+    }
+    assert!(
+        Cache::resolve(
+            &fixture.path().join("Cargo.toml"),
+            &CacheOptions::Default,
+            verbose,
+        )
+        .unwrap()
+        .directory()
+        .is_some()
+    );
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "creates redirected native cache subject directories")]
 fn redirected_subject_directories_never_receive_cache_entries() {
     let fixture = repository();

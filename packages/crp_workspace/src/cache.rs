@@ -6,7 +6,7 @@
 )]
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
@@ -22,12 +22,13 @@ use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
 use toml_edit::{DocumentMut, Item, Value};
 
-use self::paths::{protected_paths, require_direct_subject, require_disjoint};
+use self::paths::{protected_paths, redirected_sources, require_direct_subject, require_disjoint};
 use crate::artifact_path::{resolve_path, write_new};
 use crate::git::GitRepo;
 use crate::inherited::is_workspace_inherit;
 use crate::manifest::{
-    DEFAULT_README_FILES, PathCase, RESOURCE_KEYS, WorkspaceInherit, parse_document, resource_paths,
+    DEFAULT_README_FILES, PathCase, RESOURCE_KEYS, WorkspaceInherit, for_each_dependency_table,
+    parse_document, resource_paths,
 };
 use crate::metadata::capture_metadata;
 use crate::source_inputs::SourceInputs;
@@ -126,6 +127,12 @@ impl Cache {
         if storage_inventory(reservations, verbose).is_none() {
             return Ok(Self::default());
         }
+        let Some(links) =
+            storage_inventory(redirected_sources(&sources.source_directories), verbose)
+        else {
+            return Ok(Self::default());
+        };
+        sources.files.extend(links);
         let Some(directory) = resolve_directory(&requested, verbose, resolve_path) else {
             return Ok(Self::default());
         };
@@ -245,7 +252,7 @@ fn reserve_package_paths(
 ) -> Result<(), AppError> {
     // Read only source declarations, not package identity or classification policy.
     // These additional reservations belong only to storage admission, not captured evidence.
-    let manifests = sources
+    let mut manifests = sources
         .files
         .iter()
         .filter(|path| {
@@ -254,8 +261,14 @@ fn reserve_package_paths(
                 .is_some_and(|name| case.is_manifest(name))
         })
         .cloned()
-        .collect::<Vec<_>>();
-    for manifest in manifests {
+        .collect::<BTreeSet<_>>();
+    manifests = reserve_dependencies(sources, &manifests, &mut read, &mut resolve)?;
+    let mut visited = BTreeSet::new();
+    let mut expanded_workspaces = BTreeSet::new();
+    while let Some(manifest) = manifests.pop_first() {
+        if !visited.insert(manifest.clone()) {
+            continue;
+        }
         let package = manifest.parent().expect("a manifest has a parent");
         sources.files.insert(package.join("build.rs"));
         for directory in ["src", "examples", "tests", "benches"] {
@@ -263,6 +276,25 @@ fn reserve_package_paths(
         }
         let document = parse_document(&manifest, &read(&manifest)?)?;
         reserve_resources(sources, &manifest, &document, &mut read)?;
+        let mut inherited_dependencies = false;
+        for_each_dependency_table(document.as_table(), &mut |_, table| {
+            inherited_dependencies |= table.iter().any(|(_, item)| is_workspace_inherit(item));
+        });
+        if inherited_dependencies && !document.contains_key("workspace") {
+            let (root, _) = owning_workspace(&manifest, &document, &mut read)?;
+            sources.files.insert(root.clone());
+            // Keep this broader dependency inventory cache-only. The declaring workspace
+            // supplies dependency bases; captured inputs retain their existing selection.
+            let root = resolve(&root)?;
+            if expanded_workspaces.insert(root.clone()) {
+                manifests.extend(reserve_dependencies(
+                    sources,
+                    [&root],
+                    &mut read,
+                    &mut resolve,
+                )?);
+            }
+        }
         let mut reserve = |path: Option<&str>| -> Result<(), AppError> {
             if let Some(path) = path {
                 let path = package.join(path);
@@ -311,6 +343,31 @@ fn reserve_package_paths(
     Ok(())
 }
 
+fn reserve_dependencies<'a>(
+    sources: &mut SourceInputs,
+    manifests: impl IntoIterator<Item = &'a PathBuf>,
+    read: &mut impl FnMut(&Path) -> Result<String, AppError>,
+    resolve: &mut impl FnMut(&Path) -> Result<PathBuf, AppError>,
+) -> Result<BTreeSet<PathBuf>, AppError> {
+    let additional = SourceInputs::dependencies_with(
+        manifests,
+        |manifest, dependency| {
+            let directory = manifest
+                .parent()
+                .expect("a manifest has a parent")
+                .join(dependency);
+            sources.files.insert(directory.join("Cargo.toml"));
+            resolve(&directory)
+        },
+        read,
+    )?;
+    sources.files.extend(additional.files.iter().cloned());
+    sources
+        .source_directories
+        .extend(additional.source_directories);
+    Ok(additional.files)
+}
+
 fn reserve_resources(
     sources: &mut SourceInputs,
     manifest: &Path,
@@ -346,9 +403,29 @@ fn reserve_resources(
     {
         return Ok(());
     }
+    let (root, document) = owning_workspace(manifest, document, read)?;
+    let (_, inherited, _) = resource_paths(package, &WorkspaceInherit::from_root(&document));
+    let directory = root.parent().expect("a manifest has a parent");
+    sources
+        .files
+        .extend(inherited.iter().map(|path| directory.join(path)));
+    sources.files.insert(root);
+    Ok(())
+}
+
+fn owning_workspace(
+    manifest: &Path,
+    document: &DocumentMut,
+    read: &mut impl FnMut(&Path) -> Result<String, AppError>,
+) -> Result<(PathBuf, DocumentMut), AppError> {
     // Dependencies can inherit from an untracked workspace outside the selected workspace.
     // Follow the explicit root or nearest ancestor rather than using the invocation's root.
-    let explicit = package.get("workspace").and_then(Item::as_str);
+    let directory = manifest.parent().expect("a manifest has a parent");
+    let explicit = document
+        .get("package")
+        .and_then(Item::as_table_like)
+        .and_then(|package| package.get("workspace"))
+        .and_then(Item::as_str);
     let candidates = if let Some(root) = explicit {
         vec![directory.join(root).join("Cargo.toml")]
     } else {
@@ -373,17 +450,10 @@ fn reserve_resources(
         };
         let document = parse_document(&root, &text)?;
         if document.contains_key("workspace") {
-            let (_, inherited, _) =
-                resource_paths(package, &WorkspaceInherit::from_root(&document));
-            let directory = root.parent().expect("a manifest has a parent");
-            sources
-                .files
-                .extend(inherited.iter().map(|path| directory.join(path)));
-            sources.files.insert(root);
-            return Ok(());
+            return Ok((root, document));
         }
     }
-    Err(ResourceWorkspaceUnavailable::new(manifest).into())
+    Err(InheritedWorkspaceUnavailable::new(manifest).into())
 }
 
 /// Each acquisition subject names its representation and complete input identity.
@@ -555,8 +625,8 @@ struct InvalidSourcePath {
 
 /// Missing ownership prevents admission of an inherited packaging resource.
 #[ohno::error]
-#[display("cannot locate the workspace for inherited resources in '{}'", manifest.display())]
-struct ResourceWorkspaceUnavailable {
+#[display("cannot locate the workspace for inherited declarations in '{}'", manifest.display())]
+struct InheritedWorkspaceUnavailable {
     manifest: PathBuf,
 }
 
@@ -788,7 +858,7 @@ mod tests {
             } else {
                 assert!(
                     error
-                        .find_source::<ResourceWorkspaceUnavailable>()
+                        .find_source::<InheritedWorkspaceUnavailable>()
                         .is_some()
                 );
             }
@@ -835,6 +905,97 @@ mod tests {
                 directories.into_iter().collect()
             );
         }
+    }
+
+    #[test]
+    fn inherited_dependency_inventory_revisits_new_manifests_at_their_declaring_base() {
+        let mut sources = SourceInputs {
+            files: [PathBuf::from("root/vendor/a/Cargo.toml")].into(),
+            ..SourceInputs::default()
+        };
+        let mut dependency_reads = 0;
+        reserve_package_paths(
+            &mut sources,
+            PathCase::Sensitive,
+            |path| {
+                if path == Path::new("root/vendor/c/Cargo.toml") {
+                    dependency_reads += 1;
+                }
+                Ok([
+                ("root/vendor/a/Cargo.toml",
+                "[package]\nname='a'\n[dependencies]\nb.workspace=true\n",
+                ),
+                ("root/vendor/Cargo.toml",
+                "[workspace.dependencies]\nb={path='b'}\nc={path='c'}\n",
+                ),
+                ("root/vendor/b/Cargo.toml",
+                "[package]\nname='b'\n[lib]\npath='custom/lib.rs'\n[target.'cfg(unix)'.dev-dependencies]\nc.workspace=true\n",
+                ),
+                ("root/vendor/c/Cargo.toml",
+                "[package]\nname='c'\nreadme='docs/custom.md'\n",
+                ),
+            ].into_iter().find(|(name, _)| path == Path::new(name))
+                    .unwrap_or_else(|| panic!("unexpected manifest {path:?}")).1.into())
+            },
+            |path| Ok(path.to_owned()),
+        ).unwrap();
+        for file in [
+            "Cargo.toml",
+            "b/Cargo.toml",
+            "b/build.rs",
+            "b/custom/lib.rs",
+            "c/Cargo.toml",
+            "c/docs/custom.md",
+        ] {
+            assert!(
+                sources.files.contains(&Path::new("root/vendor").join(file)),
+                "{file}"
+            );
+        }
+        assert!(
+            sources
+                .source_directories
+                .contains(Path::new("root/vendor/b/custom"))
+        );
+        assert!(
+            sources
+                .source_directories
+                .contains(Path::new("root/vendor/c/src"))
+        );
+        // One dependency-closure read and one reservation read, regardless of inheriting members.
+        assert_eq!(dependency_reads, 2);
+    }
+
+    #[test]
+    fn direct_dependency_inventory_expands_unselected_manifest_sources() {
+        let mut sources = SourceInputs {
+            files: [PathBuf::from("unselected/Cargo.toml")].into(),
+            ..SourceInputs::default()
+        };
+        reserve_package_paths(
+            &mut sources,
+            PathCase::Sensitive,
+            |path| {
+                if path == Path::new("unselected/Cargo.toml") {
+                    Ok("[dependencies]\nchild={path='outside'}\n".into())
+                } else {
+                    assert_eq!(path, Path::new("unselected/outside/Cargo.toml"));
+                    Ok("[package]\nreadme='resources/custom.md'\n".into())
+                }
+            },
+            |path| Ok(path.to_owned()),
+        )
+        .unwrap();
+        assert!(
+            sources
+                .files
+                .contains(Path::new("unselected/outside/resources/custom.md"))
+        );
+        assert!(
+            sources
+                .source_directories
+                .contains(Path::new("unselected/outside/src"))
+        );
     }
 
     #[test]

@@ -76,7 +76,7 @@ impl SourceInputs {
         })
     }
 
-    fn dependencies_with<'a>(
+    pub(crate) fn dependencies_with<'a>(
         manifests: impl IntoIterator<Item = &'a PathBuf>,
         mut resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
         mut read: impl FnMut(&Path) -> Result<String, AppError>,
