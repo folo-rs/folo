@@ -23,7 +23,7 @@ use crate::harness::resolved_plan;
 
 // Git/Cargo startup and checker-fixture compilation normally finish in seconds. This deliberately
 // conservative budget protects infrastructure hangs, never determines an expected failure.
-const CHECKER_WATCHDOG: Duration = Duration::from_mins(5);
+pub(crate) const CHECKER_WATCHDOG: Duration = Duration::from_mins(5);
 
 #[test]
 #[cfg_attr(miri, ignore = "Reads real captured source and runs Cargo metadata")]
@@ -969,7 +969,7 @@ fn failed_parent_worktree_add_still_cleans_its_registered_source() {
     });
 }
 
-fn anticipated_parent() -> (Fixture, String, String) {
+pub(crate) fn anticipated_parent() -> (Fixture, String, String) {
     anticipated_parent_in("")
 }
 
@@ -1078,14 +1078,14 @@ fn private_library() -> Fixture {
     fixture
 }
 
-fn read_outcome(output: &Path) -> Value {
+pub(crate) fn read_outcome(output: &Path) -> Value {
     let outcome: Value =
         serde_json::from_slice(&fs::read(output.join("compatibility.json")).unwrap()).unwrap();
     assert_eq!(outcome.get("schema_version").unwrap(), 2);
     outcome
 }
 
-fn configure_git_shim(command: &mut Command, output: &Path) {
+pub(crate) fn configure_git_shim(command: &mut Command, output: &Path) {
     let tools = output.join("git-shim");
     fs::create_dir_all(&tools).unwrap();
     let real_git = env::split_paths(&env::var_os("PATH").unwrap())
@@ -1110,7 +1110,7 @@ fn configure_git_shim(command: &mut Command, output: &Path) {
     command.env("PATH", path).env("CRP_REAL_GIT", real_git);
 }
 
-fn checker_command() -> Command {
+pub(crate) fn checker_command() -> Command {
     let path = env::join_paths(
         iter::once(CHECKER.path().to_path_buf())
             .chain(env::split_paths(&env::var_os("PATH").unwrap())),
@@ -1161,8 +1161,12 @@ fn main() {
                 }
             }
         }
-        if status.success() && env::var_os("CRP_REPORT_DRIFT_MARKER").is_some()
-            && os_args.iter().any(|arg| arg == "ls-tree") {
+        let report_observed = if env::var_os("CRP_REPORT_DRIFT_AFTER_HASH").is_some() {
+            os_args.iter().any(|arg| arg == "hash-object") && os_args.iter().any(|arg| arg == "-w")
+        } else {
+            os_args.iter().any(|arg| arg == "ls-tree")
+        };
+        if status.success() && env::var_os("CRP_REPORT_DRIFT_MARKER").is_some() && report_observed {
             match OpenOptions::new().write(true).create_new(true)
                 .open(env::var_os("CRP_REPORT_DRIFT_MARKER").unwrap()) {
                 Ok(_) => fs::write(env::var_os("CRP_FIXTURE_SOURCE").unwrap(),
@@ -1204,6 +1208,10 @@ fn main() {
     let baseline = value("--baseline-root");
     if args.iter().any(|arg| arg == "-p") {
         writeln!(calls, "comparison").unwrap();
+        if env::var("CRP_FIXTURE_MUTATION_PHASE").as_deref() == Ok("comparison") {
+            fs::write(env::var_os("CRP_FIXTURE_MUTATION_PATH").unwrap(),
+                "pub fn changed_during_comparison() {}\n").unwrap();
+        }
         assert_eq!(value("-p"), "library");
         assert!(!args.iter().any(|arg| arg == "--baseline-version"));
         assert!(args.iter().any(|arg| arg == "--all-features"));
@@ -1256,6 +1264,10 @@ fn main() {
     assert!(Path::new(&baseline).join("lib.rs").is_file());
     assert!(args.iter().any(|arg| arg == "--all-features"));
     writeln!(calls, "canary").unwrap();
+    if env::var("CRP_FIXTURE_MUTATION_PHASE").as_deref() == Ok("canary") {
+        fs::write(env::var_os("CRP_FIXTURE_MUTATION_PATH").unwrap(),
+            "pub fn changed_during_canary() {}\n").unwrap();
+    }
     if scenario == "parent-target-drift" {
         let status = git().args(["-C", &env::var("CRP_FIXTURE_ROOT").unwrap(),
             "update-ref", "refs/heads/anticipated-parent", &env::var("CRP_FIXTURE_HISTORY").unwrap(),

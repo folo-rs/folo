@@ -33,6 +33,11 @@ prepared evidence or resolved plans. Corruption and cache I/O problems are
 reported and observations are reacquired; this does not suppress underlying
 Git or Cargo failures.
 
+Separate preparation, preview and compatibility invocations share this cache
+automatically. Compatibility still admits the selected source and writes a fresh
+report; it does not reuse a previous compatibility verdict or trust an adjacent
+report. No preview-directory knowledge or cached-report argument is needed.
+
 ## Release context and identity
 
 ```text
@@ -130,6 +135,11 @@ decisions. Select exactly one source mode:
 It regenerates a report bound to the selected source and verifies captured inputs
 before and after checking. It never accepts detached `--report` evidence.
 The regenerated report uses report/plan schema `6`.
+
+For a resolved preview, verification covers both the original workspace and the
+retained candidate throughout checking, even on a cache hit. The original
+workspace must match the captured initial state or the completely applied plan;
+the retained candidate must match the captured final state.
 
 The new output directory contains `compatibility.json`, `semver-checks.log` and
 the read-only report. Evidence records the checker identity, comparison versions

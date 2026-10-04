@@ -56,7 +56,15 @@ impl Evidence {
             Self::Source(inputs) => {
                 inputs.verify(manifest, None)?;
             }
-            Self::Preview(resolved) => resolved.verify_candidate(manifest)?,
+            Self::Preview(resolved) => {
+                // The candidate has its own frozen contents, but the original workspace still
+                // owns the plan's admission. Preserve the original-or-fully-applied contract.
+                resolved.inputs.verify(
+                    &resolved.inputs.root.join(&resolved.inputs.manifest),
+                    Some(&resolved.final_digest),
+                )?;
+                resolved.verify_candidate(manifest)?;
+            }
         }
         Ok(())
     }
@@ -421,6 +429,15 @@ fn check_with_output(
     if let Some(path) = prepared.or(plan) {
         observation_cache.protect(path)?;
     }
+    if matches!(evidence, Evidence::Preview(_)) && observation_cache.directory().is_some() {
+        // A cache override must not publish disposable entries into retained source evidence.
+        let candidate = GitRepo::discover(
+            manifest
+                .parent()
+                .expect("the admitted candidate manifest has a parent directory"),
+        )?;
+        observation_cache.protect(candidate.root())?;
+    }
     run_report_with_cache(
         output,
         Some(&evidence.inputs().release_history),
@@ -490,6 +507,7 @@ fn check_with_output(
             let identity = invoke(checker, &manifest, &cache, &["--version"])?;
             outcome.identify(&identity)?;
             canary(checker, &cache, &mut checker_output)?;
+            evidence.verify(&manifest)?;
         }
         let registry = targets
             .iter()

@@ -59,7 +59,7 @@ fn acquisitions(trace: &Path) -> (usize, usize) {
     )
 }
 
-fn entries(directory: &Path, subject: &str) -> Vec<PathBuf> {
+pub(crate) fn entries(directory: &Path, subject: &str) -> Vec<PathBuf> {
     fs::read_dir(directory.join(subject))
         .unwrap()
         .map(|entry| entry.unwrap().path())

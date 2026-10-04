@@ -346,6 +346,9 @@ from source inputs and workflow evidence.
 The cache is expendable acceleration, not evidence or workflow state. Removing
 it, including through `cargo clean`, leaves prepared and resolved plans usable.
 Cached observations never replace live source, candidate or history admission.
+Preparation, preview and later compatibility invocations share matching computation
+without a caller-managed handoff. Each compatibility invocation produces its own
+source-bound report and external comparison evidence.
 Corrupt entries and cache I/O failures produce diagnostics and fresh acquisition;
 underlying Git, Cargo and classification failures remain errors.
 
@@ -488,6 +491,10 @@ before its evidence is relied upon. Findings, a valid empty target set and an
 execution failure remain distinct outcomes. Missing or incomplete comparison
 evidence is never reported as compatibility. When checking a preview, the tool
 verifies that evidence collection left its captured source and resolution intact.
+Both the original workspace and retained candidate remain subject to verification
+throughout preview compatibility checking. The original may contain the complete
+initial state or the complete applied plan; the candidate must contain the captured
+final state.
 The shared workflow uses the result to enforce supported API compatibility;
 the skill uses it as a floor while assessing the complete contract.
 

@@ -181,6 +181,19 @@ report and verify them again after external comparison. Preview checks use the
 retained prospective manifest and share versioning's typed resolved-state
 verification without producing publication-target JSON.
 
+Evidence admission precedes shared report classification. Matching decisions can be
+reused only after fresh classification observations, and the report is rebuilt with
+the current source provenance. An adjacent report never supplies admission or target
+selection. The cache remains rooted in the original selected workspace, independent
+of retained-candidate paths and the checker's build environment.
+
+The retained candidate and original workspace have separate verification obligations.
+Every preview verification boundary checks both: the original must still match the
+captured initial or fully applied state, while the candidate must match its captured
+final state. These checks run after report acquisition, around checker setup, before
+each comparison and at completion, including failed checker execution. Cached
+classification decisions cannot extend either verification's lifetime.
+
 The checker receives all features and one explicit published baseline version per
 consumer contract. A small identical-source library canary validates its ability
 to run. A short workspace-identity-keyed target directory avoids generated Windows path
