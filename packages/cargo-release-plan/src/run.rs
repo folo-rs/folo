@@ -566,7 +566,11 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
                 merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(manifest_path, cache_options)?,
+                Cache::resolve(
+                    manifest_path,
+                    cache_options,
+                    Verbose::new(*verbose, &crp_diag::Stderr),
+                )?,
             )?;
             Ok(RunOutcome::Prepare { message })
         }
@@ -583,7 +587,11 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
                 output,
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(manifest_path, cache_options)?,
+                Cache::resolve(
+                    manifest_path,
+                    cache_options,
+                    Verbose::new(*verbose, &crp_diag::Stderr),
+                )?,
             )?;
             Ok(RunOutcome::Preview { message })
         }
@@ -600,7 +608,11 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
                 merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(manifest_path, cache_options)?,
+                Cache::resolve(
+                    manifest_path,
+                    cache_options,
+                    Verbose::new(*verbose, &crp_diag::Stderr),
+                )?,
             )?;
             Ok(RunOutcome::Report { message })
         }
@@ -629,7 +641,11 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
                 },
                 merge_target.as_deref(),
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(manifest_path, cache_options)?,
+                Cache::resolve(
+                    manifest_path,
+                    cache_options,
+                    Verbose::new(*verbose, &crp_diag::Stderr),
+                )?,
             )?;
             Ok(RunOutcome::Check {
                 passed: outcome.passed,

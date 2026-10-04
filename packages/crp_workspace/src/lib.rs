@@ -26,6 +26,7 @@ pub mod metadata;
 pub mod packaging;
 pub mod snapshot;
 pub mod snapshot_command;
+pub mod source_inputs;
 
 #[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]

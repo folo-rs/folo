@@ -258,57 +258,6 @@ fn source_collection_follows_acquired_directories_and_preserves_actual_paths() {
 }
 
 #[test]
-fn local_capture_follows_transitive_aliases_and_cycles_without_reacquiring_visited_manifests() {
-    let root = Path::new("root");
-    let manifests = [root.join("Cargo.toml")];
-    let mut paths = BTreeSet::new();
-    let mut reads = Vec::new();
-    capture_path_dependencies_with(root, &manifests, &mut paths, |path| {
-        reads.push(path.to_path_buf());
-        assert!(reads.len() <= 3, "the captured cycle must make progress");
-        Ok(if path == root.join("Cargo.toml") {
-            "[dependencies]\nlocal={path='alias'}\n[target.'cfg(unix)'.build-dependencies]\nlocal={path='alias'}\n[workspace.dependencies]\nlocal={path='alias'}\n[patch.crates-io]\nlocal={path='alias'}\n[replace]\n'local:1.0.0'={path='alias'}\n"
-        } else if path == root.join("actual/Cargo.toml") {
-            "[dependencies]\nleaf={path='../leaf'}\n"
-        } else {
-            assert_eq!(path, root.join("leaf/Cargo.toml"));
-            "[dependencies]\nroot={path='..'}\n"
-        }.into())
-    }, |path| {
-        Ok(if path == root.join("alias") { root.join("actual") }
-        else if path == root.join("actual/../leaf") { root.join("leaf") }
-        else { assert_eq!(path, root.join("leaf/..")); root.into() })
-    }, |directory, paths| {
-        paths.insert(relative(root, &directory.join("file.rs"))?);
-        Ok(())
-    }).unwrap();
-    assert_eq!(
-        reads,
-        ["Cargo.toml", "actual/Cargo.toml", "leaf/Cargo.toml"].map(|path| root.join(path))
-    );
-    assert_eq!(
-        paths,
-        [
-            "Cargo.toml",
-            "actual/Cargo.toml",
-            "leaf/Cargo.toml",
-            "src/file.rs",
-            "actual/src/file.rs",
-            "leaf/src/file.rs"
-        ]
-        .map(PathBuf::from)
-        .into()
-    );
-    let table: toml_edit::DocumentMut =
-        "a = { path = 'first' }\nb = '1'\nc = { git = 'url' }\nd = { path = 'second' }\n"
-            .parse()
-            .unwrap();
-    let mut dependencies = Vec::new();
-    dependency_paths(table.as_table(), &mut dependencies);
-    assert_eq!(dependencies, ["first", "second"]);
-}
-
-#[test]
 fn retained_acquisition_pins_history_and_target_and_propagates_both_failures() {
     let inputs = Inputs {
         merge_target: Some("parent-final".to_owned()),

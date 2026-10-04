@@ -82,7 +82,7 @@ pub fn check_with_target(
         request,
         merge_target,
         verbose,
-        Cache::resolve(request.manifest_path, &CacheOptions::Default)?,
+        Cache::resolve(request.manifest_path, &CacheOptions::Default, verbose)?,
     )
 }
 

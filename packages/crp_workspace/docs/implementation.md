@@ -47,7 +47,17 @@ temporary files and atomic replacement keep concurrent readers on complete entri
 The tool-owned directory ignores its untracked contents without excluding tracked source;
 an existing ignore file is never replaced. Storage failure diagnostics are advisory and
 reported once through the shared invocation store, including across prospective passes.
-Source directories and workflow evidence cannot contain the cache.
+Source directories, Git administration and workflow evidence cannot contain the cache.
+Captured evidence and cache admission share source-location discovery, including reserved
+absent files and transitive path dependencies outside Cargo's member list. Versioning
+adds relocatability constraints and fingerprints the selected contents; cache admission
+protects the discovered locations without changing the captured path set.
+Overlap comparisons resolve existing aliases and probe the containing directory's case
+rules for missing components, including empty destinations. Existing directory entries
+provide a read-only case probe when conclusive. Cargo and Git root aliases are resolved
+before discovering ancestor configuration locations while retaining the caller's root
+spelling. Cache-location resolution failures disable storage with an advisory diagnostic,
+independently of source acquisition and evidence verification.
 
 Git's full recorded trees and raw parent-header facts are keyed by resolved object identity
 and effective object interpretation. Their data can be shared across original and prospective

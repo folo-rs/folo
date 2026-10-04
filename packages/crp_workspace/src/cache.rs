@@ -1,5 +1,10 @@
 //! Disposable, typed observations shared by the application's acquisition subjects.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns storage; its child owns filesystem path admission."
+)]
+
 use std::cell::Cell;
 use std::fmt::Write as _;
 use std::fs;
@@ -18,6 +23,11 @@ use crate::artifact_path::{resolve_path, write_new};
 use crate::git::GitRepo;
 use crate::manifest::PathCase;
 use crate::metadata::capture_metadata;
+use crate::source_inputs::SourceInputs;
+
+use self::paths::require_disjoint;
+
+mod paths;
 
 /// The caller's storage selection, resolved before any prospective workspace is created.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -41,53 +51,61 @@ pub struct Cache {
 impl Cache {
     // Cargo and filesystem identity are native boundaries; admission has pure tests below.
     #[cfg_attr(test, mutants::skip)]
-    pub fn resolve(manifest: &Path, options: &CacheOptions) -> Result<Self, AppError> {
+    pub fn resolve(
+        manifest: &Path,
+        options: &CacheOptions,
+        verbose: Verbose<'_>,
+    ) -> Result<Self, AppError> {
         if *options == CacheOptions::Disabled {
             return Ok(Self::default());
         }
         let metadata: CacheMetadata = serde_json::from_slice(&capture_metadata(manifest)?)?;
-        let directory = match options {
-            CacheOptions::Directory(path) => resolve_path(path)?,
-            CacheOptions::Default => resolve_path(
-                &metadata
-                    .target_directory
-                    .join("cargo-release-plan")
-                    .join("cache"),
-            )?,
+        let requested = match options {
+            CacheOptions::Directory(path) => path.clone(),
+            CacheOptions::Default => metadata
+                .target_directory
+                .join("cargo-release-plan")
+                .join("cache"),
             CacheOptions::Disabled => unreachable!("disabled storage returned before acquisition"),
         };
         let git = GitRepo::discover(&metadata.workspace_root)?;
         let case = PathCase::probe(git.root());
         let tracked = git.ls_files("")?;
-        for path in &tracked {
-            let path = resolve_path(&git.root().join(path))?;
-            require_disjoint(&directory, &path)?;
-        }
-        // Captured inputs recurse through src even when its files are untracked or ignored.
-        // Protect all recorded package roots, including path dependencies outside the selected
-        // workspace, without excluding any legitimate tracked source from capture.
+        let manifests = metadata
+            .packages
+            .into_iter()
+            .map(|package| package.manifest_path)
+            .collect::<Vec<_>>();
+        let mut sources = SourceInputs::discover(
+            git.root(),
+            &metadata.workspace_root,
+            &manifests,
+            |manifest, dependency| {
+                resolve_path(
+                    &manifest
+                        .parent()
+                        .expect("a manifest has a parent")
+                        .join(dependency),
+                )
+            },
+        )?;
+        sources
+            .files
+            .extend(tracked.iter().map(|path| git.root().join(path)));
+        sources.files.extend(git.administrative_paths()?);
+        // Unselected tracked manifests are not interpreted, but their source directories
+        // still must not become disposable storage.
         for path in tracked.iter().filter(|path| case.is_manifest(path)) {
             let manifest = git.root().join(path);
             if let Some(parent) = manifest.parent() {
-                require_outside(&directory, &resolve_path(&parent.join("src"))?)?;
+                sources.source_directories.insert(parent.join("src"));
             }
         }
-        for package in metadata.packages {
-            if let Some(parent) = package.manifest_path.parent() {
-                require_outside(&directory, &resolve_path(&parent.join("src"))?)?;
-            }
-        }
-        // An untracked path dependency can also supply captured source.
-        for ancestor in directory.ancestors() {
-            if let Some(parent) = ancestor.parent()
-                && case.same_path(
-                    &ancestor.file_name().unwrap_or_default().to_string_lossy(),
-                    "src",
-                )
-                && parent.join("Cargo.toml").try_exists()?
-            {
-                return Err(CachePathConflict::new(&directory, ancestor).into());
-            }
+        let Some(directory) = resolve_directory(&requested, verbose, resolve_path) else {
+            return Ok(Self::default());
+        };
+        for path in sources.files.iter().chain(&sources.source_directories) {
+            require_disjoint(&directory, &resolve_path(path)?)?;
         }
         Ok(Self {
             directory: Some(directory),
@@ -288,23 +306,23 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     Ok(())
 }
 
-fn require_disjoint(cache: &Path, protected: &Path) -> Result<(), AppError> {
-    require_outside(cache, protected)?;
-    require_outside(protected, cache)
-}
-
-fn require_outside(path: &Path, protected: &Path) -> Result<(), AppError> {
-    if path.starts_with(protected) {
-        return Err(CachePathConflict::new(path, protected).into());
+fn resolve_directory(
+    path: &Path,
+    verbose: Verbose<'_>,
+    resolve: impl FnOnce(&Path) -> Result<PathBuf, AppError>,
+) -> Option<PathBuf> {
+    match resolve(path) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            // Only storage-location resolution is advisory. Source discovery and overlap
+            // admission are performed separately and never converted into cache misses.
+            _ = verbose.sink().write(&format!(
+                "[release-plan] cache location '{}': {error}; continuing with storage disabled\n",
+                path.display()
+            ));
+            None
+        }
     }
-    Ok(())
-}
-
-#[ohno::error]
-#[display("cache location '{}' overlaps protected source or evidence '{}'", path.display(), protected.display())]
-struct CachePathConflict {
-    path: PathBuf,
-    protected: PathBuf,
 }
 
 #[ohno::error]
@@ -327,8 +345,56 @@ struct CacheCorrupt;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
+    use std::sync::Mutex;
+
+    use crp_diag::DiagnosticSink;
 
     use super::*;
+
+    /// Records advisory delivery, including a rejected write, without a process stream.
+    #[derive(Debug, Default)]
+    struct Recording {
+        messages: Mutex<Vec<String>>,
+        closed: bool,
+    }
+
+    impl DiagnosticSink for Recording {
+        fn write(&self, text: &str) -> io::Result<()> {
+            self.messages.lock().unwrap().push(text.to_owned());
+            if self.closed {
+                Err(io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn location_resolution_disables_only_storage_and_diagnoses_without_verbose() {
+        for closed in [false, true] {
+            let recording = Recording {
+                closed,
+                ..Recording::default()
+            };
+            let path = Path::new("cache");
+            let verbose = Verbose::new(false, &recording);
+            assert_eq!(
+                resolve_directory(path, verbose, |input| {
+                    assert_eq!(input, path);
+                    Ok(PathBuf::from("resolved"))
+                }),
+                Some(PathBuf::from("resolved"))
+            );
+            assert!(recording.messages.lock().unwrap().is_empty());
+            assert!(
+                resolve_directory(path, verbose, |_| {
+                    Err(io::Error::from(io::ErrorKind::NotADirectory).into())
+                })
+                .is_none()
+            );
+            assert_eq!(recording.messages.lock().unwrap().len(), 1);
+        }
+    }
 
     #[derive(Debug, Deserialize, PartialEq, Serialize)]
     struct Observation(bool);
@@ -439,14 +505,5 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.find_source::<io::Error>().is_some());
-    }
-
-    #[test]
-    fn protected_paths_cannot_contain_or_be_contained_by_cache() {
-        for (cache, protected) in [("a", "a"), ("a", "a/b"), ("a/b", "a")] {
-            assert!(require_disjoint(Path::new(cache), Path::new(protected)).is_err());
-        }
-        require_disjoint(Path::new("cache"), Path::new("source")).unwrap();
-        require_disjoint(Path::new("cache"), Path::new("cache-other")).unwrap();
     }
 }

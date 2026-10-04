@@ -206,7 +206,13 @@ fn disabled_cache_does_not_create_storage_and_conflicts_do_not_write_source() {
             .exists()
     );
     let original = fixture.read("packages/demo/src/lib.rs");
-    for path in ["packages/demo/src/cache", "packages/demo", "Cargo.toml"] {
+    for path in [
+        "packages/demo/src/cache",
+        "packages/demo",
+        "Cargo.toml",
+        ".git",
+        ".git/unused-cache",
+    ] {
         let output = command(&fixture)
             .args(["check", "--release-history", "HEAD", "--cache", path])
             .output()
@@ -253,6 +259,127 @@ fn disabled_cache_does_not_create_storage_and_conflicts_do_not_write_source() {
         .unwrap();
     assert!(!output.status.success());
     assert!(!evidence.path().join("report").exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes captured-input and cache admission boundaries"
+)]
+fn cache_admission_protects_absent_and_recursive_source_inputs() {
+    let fixture = seeded_package();
+    fixture.write_workspace("exclude = ['vendor/helper', 'vendor/leaf']");
+    fixture.write(".gitignore", "/vendor/\n");
+    fixture.write(
+        "packages/demo/Cargo.toml",
+        &format!(
+            "{}\n[dependencies]\nhelper = {{ path = '../../vendor/helper' }}\n",
+            fixture.read("packages/demo/Cargo.toml")
+        ),
+    );
+    fixture.write(
+        "vendor/helper/Cargo.toml",
+        "[package]\nname='helper'\nversion='0.1.0'\n\
+         [dependencies]\nleaf={path='../leaf'}\n",
+    );
+    fixture.write("vendor/helper/src/lib.rs", "");
+    fixture.write(
+        "vendor/leaf/Cargo.toml",
+        "[package]\nname='leaf'\nversion='0.1.0'\n",
+    );
+    fixture.write("vendor/leaf/src/lib.rs", "");
+    fixture.commit("ignored transitive path dependencies");
+    let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
+    for path in [
+        "packages/demo/build.rs",
+        "Cargo.lock",
+        ".cargo/config",
+        ".cargo/config.toml",
+        "vendor/helper",
+        "vendor/leaf",
+        "vendor/leaf/src/cache",
+    ] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache", path])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{path}");
+        inputs.verify(&fixture.manifest(), None).unwrap();
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "probes native case rules and executes output admission"
+)]
+fn cache_admission_uses_case_rules_for_missing_destination_components() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    // A known ordinary entry makes the fixture's independent read-only case probe decisive.
+    fs::write(evidence.path().join("case-probe"), "").unwrap();
+    let case = PathCase::probe(evidence.path());
+    for (index, (cache, output)) in [
+        ("CACHE", "cache/report"),
+        ("CACHE/nested", "cache"),
+        ("missing/CACHE", "missing/cache/report"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let destination = evidence.path().join(index.to_string());
+        fs::create_dir_all(&destination).unwrap();
+        let output = command(&fixture)
+            .args(["report", "--release-history", "HEAD", "--cache"])
+            .arg(destination.join(cache))
+            .arg("--out-dir")
+            .arg(destination.join(output))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), case == PathCase::Sensitive);
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes commands with obstructed cache locations")]
+fn cache_location_failures_leave_source_and_reports_usable() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    let obstruction = evidence.path().join("obstruction");
+    fs::write(&obstruction, "not a directory").unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let source = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
+    fixture.write("target/cargo-release-plan", "not a directory");
+    for (name, options) in [
+        (
+            "explicit",
+            vec!["--cache".into(), obstruction.join("cache").into_os_string()],
+        ),
+        ("default", Vec::new()),
+    ] {
+        let destination = evidence.path().join(name);
+        let output = success(
+            command(&fixture)
+                .args(["report", "--release-history", "HEAD", "--out-dir"])
+                .arg(&destination)
+                .args(options)
+                .output()
+                .unwrap(),
+        );
+        assert!(!output.stderr.is_empty());
+        assert_eq!(
+            fs::read(baseline.join("report.json")).unwrap(),
+            fs::read(destination.join("report.json")).unwrap()
+        );
+        source.verify(&fixture.manifest(), None).unwrap();
+    }
+    assert_eq!(fs::read_to_string(obstruction).unwrap(), "not a directory");
 }
 
 #[test]
@@ -427,6 +554,25 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .as_str()
             .unwrap(),
     );
+    for (name, cache) in [
+        ("candidate-root", manifest.parent().unwrap().to_path_buf()),
+        (
+            "candidate-child",
+            manifest.parent().unwrap().join("unused-cache"),
+        ),
+    ] {
+        let output = command(&fixture)
+            .args(["check-compatibility", "--plan"])
+            .arg(preview.join("plan.json"))
+            .arg("--cache")
+            .arg(&cache)
+            .arg("--output")
+            .arg(evidence.path().join(name))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!cache.join("git-trees").exists());
+    }
     let compatibility_trace = evidence.path().join("compatibility.trace");
     success(
         command(&fixture)
@@ -470,5 +616,24 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .output()
             .unwrap(),
     );
+    assert!(!storage.exists());
+
+    // Retained evidence still requires valid original inputs, even with storage disabled.
+    fixture.write_workspace("[workspace.dependencies]\nunused = { path = 'unavailable' }\n");
+    for (name, options) in [
+        ("frozen", &[][..]),
+        ("frozen-disabled", &["--no-cache"][..]),
+    ] {
+        let output = command(&fixture)
+            .args(["check-compatibility", "--plan"])
+            .arg(preview.join("plan.json"))
+            .arg("--output")
+            .arg(evidence.path().join(name))
+            .args(options)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("stale"));
+    }
     assert!(!storage.exists());
 }
