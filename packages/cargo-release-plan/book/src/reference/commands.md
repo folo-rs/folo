@@ -24,13 +24,15 @@ build-directory settings do not relocate this cache away from the original works
 
 Use `--cache <directory>` to place it elsewhere; relative paths start at the
 invocation working directory. Use `--no-cache` to bypass reads and writes.
-The options cannot be combined. Keep the cache separate from source and evidence.
+The options cannot be combined. Keep the cache separate from source and evidence,
+including Git administration, retained preview repositories and reserved input locations.
 
 No session identifier or workflow-managed validity check is needed. The tool
 decides which entries match the current inputs and continues to verify source
 and history. You can delete the cache or run `cargo clean` without invalidating
 prepared evidence or resolved plans. Corruption and cache I/O problems are
-reported and observations are reacquired; this does not suppress underlying
+reported and observations are reacquired. An unavailable cache location disables
+storage for the command; this does not suppress underlying
 Git or Cargo failures.
 
 ## Release context and identity

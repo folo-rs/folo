@@ -439,7 +439,11 @@ pub fn classify_with_target(
         release_history,
         merge_target,
         verbose,
-        &mut SnapshotCache::new(Cache::resolve(manifest_path, &CacheOptions::Default)?),
+        &mut SnapshotCache::new(Cache::resolve(
+            manifest_path,
+            &CacheOptions::Default,
+            verbose,
+        )?),
     )
 }
 

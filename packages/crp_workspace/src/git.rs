@@ -176,6 +176,21 @@ impl GitRepo {
         &self.root
     }
 
+    /// Live Git administration that must not become disposable cache storage.
+    #[cfg_attr(test, mutants::skip)] // Native Git path acquisition, including linked worktrees.
+    pub fn administrative_paths(&self) -> Result<Vec<PathBuf>, AppError> {
+        let mut paths = vec![self.root.join(".git")];
+        for option in ["--git-dir", "--git-common-dir"] {
+            let path = run_capture(
+                "git",
+                &["rev-parse", "--path-format=absolute", option],
+                &self.root,
+            )?;
+            paths.push(PathBuf::from(strip_terminator(&path)));
+        }
+        Ok(paths)
+    }
+
     /// The repository-relative directory the repository was discovered from.
     ///
     /// Empty when that directory is the repository root.
