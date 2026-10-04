@@ -798,6 +798,29 @@ fn unavailable_cache_case_probe_disables_storage_without_failing_reports() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "executes classification with Unicode cache paths")]
+fn unsupported_source_case_comparison_disables_storage_without_changing_reports() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let output = report(
+        &fixture,
+        &evidence.path().join("cached"),
+        &evidence.path().join("cached.trace"),
+        &["--cache", ".cargo/\u{03a3}"],
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+    assert!(!fixture.path().join(".cargo/\u{03a3}").exists());
+    assert_reports_equal(&baseline, &evidence.path().join("cached"));
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "executes classification with unselected manifests")]
 fn unselected_manifests_only_require_optional_source_inventory() {
     let fixture = seeded_package();

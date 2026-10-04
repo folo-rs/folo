@@ -147,9 +147,13 @@ fn require_disjoint_with(
     let mut parent = PathBuf::new();
     for (left, right) in cache.components().zip(protected.components()) {
         if left != right {
-            let (Some(left), Some(right)) = (left.as_os_str().to_str(), right.as_os_str().to_str())
-            else {
-                return Ok(());
+            // Unicode case mappings are not filesystem equivalence rules. Unsupported
+            // unequal components cannot establish separation of disposable storage.
+            let (Some(left), Some(right)) = (
+                left.as_os_str().to_str().filter(|name| name.is_ascii()),
+                right.as_os_str().to_str().filter(|name| name.is_ascii()),
+            ) else {
+                return Err(CachePathCaseUnavailable::new(cache, protected).into());
             };
             if !PathCase::Insensitive.same_path(left, right)
                 || !case(&parent)
@@ -223,7 +227,69 @@ struct RedirectedSubject {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt as _;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt as _;
+
     use super::*;
+
+    #[test]
+    fn unsupported_unequal_components_never_prove_separation() {
+        // These mappings differ across filesystems; no Unicode folding rule is assumed.
+        for (left, right) in [
+            ("\u{03a3}", "\u{03c2}"),
+            ("S", "\u{017f}"),
+            ("Stra\u{00df}e", "STRASSE"),
+        ] {
+            for (left, right) in [(left, right), (right, left)] {
+                let cache = Path::new("parent").join(left);
+                let evidence = Path::new("parent").join(right).join("report");
+                let error = require_disjoint_with(&cache, &evidence, |_| {
+                    panic!("an ASCII case probe cannot establish Unicode equivalence")
+                })
+                .unwrap_err();
+                let context = error.find_source::<CachePathCaseUnavailable>().unwrap();
+                assert_eq!(context.path, cache);
+                assert_eq!(context.protected, evidence);
+            }
+        }
+        let shared = Path::new("parent").join("\u{03a3}");
+        require_disjoint_with(&shared.join("cache"), &shared.join("report"), |_| {
+            panic!("identical Unicode components need no case inference")
+        })
+        .unwrap();
+        let error = require_disjoint_with(&shared, &shared.join("report"), |_| {
+            panic!("identical components prove overlap directly")
+        })
+        .unwrap_err();
+        assert!(error.find_source::<CachePathConflict>().is_some());
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn non_unicode_components_are_preserved_without_assuming_separation() {
+        #[cfg(unix)]
+        let name = OsString::from_vec(vec![0xff]);
+        #[cfg(windows)]
+        let name = OsString::from_wide(&[0xd800]);
+        let cache = Path::new("parent").join(&name);
+        let evidence = Path::new("parent").join("report");
+        for (left, right) in [(&cache, &evidence), (&evidence, &cache)] {
+            let error = require_disjoint_with(left, right, |_| {
+                panic!("an undecodable component cannot be compared as text")
+            })
+            .unwrap_err();
+            let context = error.find_source::<CachePathCaseUnavailable>().unwrap();
+            assert_eq!(context.path, *left);
+            assert_eq!(context.protected, *right);
+        }
+        require_disjoint_with(&cache.join("cache"), &cache.join("report"), |_| {
+            panic!("identical encoded components need no case inference")
+        })
+        .unwrap();
+    }
 
     #[test]
     fn redirected_descendants_follow_directory_links_once_and_preserve_file_links() {

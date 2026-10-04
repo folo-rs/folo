@@ -245,6 +245,54 @@ fn evidence_case_admission_uses_existing_entries_in_read_only_directories() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "resolves missing native Unicode evidence paths")]
+fn unsupported_unicode_evidence_aliases_cannot_be_admitted() {
+    let fixture = repository();
+    let directory = TempDir::new().unwrap();
+    let cache = Cache::resolve(
+        &fixture.path().join("Cargo.toml"),
+        &CacheOptions::Directory(directory.path().join("\u{03a3}")),
+        Verbose::new(false, &Discard),
+    )
+    .unwrap();
+    assert!(cache.directory().is_some());
+    // Capital sigma and final sigma can alias without equal lowercase mappings.
+    cache
+        .protect(&directory.path().join("\u{03c2}/report"))
+        .unwrap_err();
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "probes native case rules with Unicode directory entries"
+)]
+fn unicode_entry_does_not_determine_ascii_evidence_case_rules() {
+    let fixture = repository();
+    let directory = TempDir::new().unwrap();
+    // Observe this actual directory rather than assuming its case rules from the OS.
+    let probe = directory.path().join("Probe");
+    fs::write(&probe, "").unwrap();
+    let insensitive = fs::symlink_metadata(directory.path().join("pROBE")).is_ok();
+    fs::remove_file(probe).unwrap();
+    // Sharp s expands when uppercased, which need not produce a filesystem alias.
+    let unicode = directory.path().join("Stra\u{00df}e");
+    fs::write(&unicode, "").unwrap();
+    let cache = Cache::resolve(
+        &fixture.path().join("Cargo.toml"),
+        &CacheOptions::Directory(directory.path().join("cache")),
+        Verbose::new(false, &Discard),
+    )
+    .unwrap();
+    assert!(cache.directory().is_some());
+    let result = cache.protect(&directory.path().join("CACHE/report"));
+    assert_eq!(result.is_err(), insensitive);
+    assert!(unicode.exists());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "acquires native Git replacement and cache observations"

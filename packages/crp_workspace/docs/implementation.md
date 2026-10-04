@@ -76,8 +76,11 @@ If this additional safety inventory
 cannot be acquired, storage is disabled with an advisory; strict prepared-input capture
 still requires its complete inventory. No unchecked storage is admitted.
 Overlap comparisons resolve existing aliases and probe the containing directory's case
-rules for missing components, including empty destinations. Existing directory entries
-provide a read-only case probe when conclusive.
+rules for missing components, including empty destinations. Losslessly decoded ASCII directory
+entries provide a read-only case probe when conclusive; otherwise a temporary ASCII entry
+establishes those rules. Unequal non-ASCII or undecodable components cannot prove separation
+through case folding and are treated as an unavailable comparison. Identical components
+retain their original encoding and need no case inference.
 An unavailable source-admission case probe disables storage with an advisory;
 a proven overlap remains an error. Explicit workflow-evidence protection remains strict.
 Cargo and Git root aliases are resolved
