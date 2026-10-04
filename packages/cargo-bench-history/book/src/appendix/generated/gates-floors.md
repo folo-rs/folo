@@ -6,4 +6,5 @@
 | `conditional_branches` | 5 conditional branches | Code layout can shift these counts by a few units between builds of identical source, so a handful of them says nothing about what the code costs. |
 | `indirect_branches` | 5 indirect branches | Code layout can shift these counts by a few units between builds of identical source, so a handful of them says nothing about what the code costs. |
 | `allocated_bytes` | 1 byte | A fraction of a byte or of an allocation cannot happen; the floor rejects only the sub-unit moves that amortizing across a run's iterations manufactures. |
+| `peak_outstanding_bytes` | 1 byte | A peak counts whole bytes; the floor rejects sub-byte differences introduced by averaging span peaks. |
 | `allocation_count` | 1 allocation | A fraction of a byte or of an allocation cannot happen; the floor rejects only the sub-unit moves that amortizing across a run's iterations manufactures. |

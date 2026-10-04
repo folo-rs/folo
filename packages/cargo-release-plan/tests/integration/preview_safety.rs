@@ -48,6 +48,34 @@ fn preview_output_cannot_destroy_an_input_document() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "invalidates a real preview marker before source acquisition"
+)]
+fn unavailable_source_cannot_preserve_a_previous_preview_completion() {
+    let fixture = seeded_package();
+    let evidence = tempdir().unwrap();
+    for contents in [Some("["), None] {
+        if let Some(contents) = contents {
+            fixture.write("Cargo.toml", contents);
+        } else {
+            fs::remove_file(fixture.manifest()).unwrap();
+        }
+        let marker = evidence.path().join("plan.json");
+        fs::write(&marker, "previous completion").unwrap();
+        run(&RunInput::Preview {
+            plan: fixture.path().join("proposal.json"),
+            prepared: fixture.path().join("prepared.json"),
+            output: evidence.path().to_owned(),
+            manifest_path: fixture.manifest(),
+            verbose: false,
+        })
+        .unwrap_err();
+        assert!(!marker.exists());
+    }
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "uses real offline Cargo with an empty local source")]
 fn offline_resolution_failure_never_becomes_prepared_evidence() {
     let fixture = seeded_package();

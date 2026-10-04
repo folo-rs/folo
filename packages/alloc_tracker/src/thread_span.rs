@@ -89,6 +89,7 @@ pub struct ThreadSpan {
     start_outstanding: i64,
     enclosing_watermark: i64,
     iterations: Option<u64>,
+    record_peak: bool,
 
     _single_threaded: PhantomData<*const ()>,
 }
@@ -111,6 +112,7 @@ impl ThreadSpan {
             start_outstanding,
             enclosing_watermark,
             iterations: None,
+            record_peak: true,
             _single_threaded: PhantomData,
         }
     }
@@ -125,6 +127,56 @@ impl ThreadSpan {
     /// signal that no valid measurement was produced.
     pub fn iterations(mut self, iterations: u64) -> Self {
         self.iterations = Some(iterations);
+        self
+    }
+
+    /// Disables recording peak outstanding bytes for this span.
+    ///
+    /// Use this for benchmarks that accumulate memory between iterations, such as
+    /// collecting outputs or growing a cache across a measured batch. Their peak depends
+    /// on the harness-selected iteration count, making comparisons between runs unreliable.
+    /// Disable peak recording for such benchmarks to avoid false regression alerts.
+    /// Bytes allocated and allocation count remain measured.
+    ///
+    /// Also use this when varying iteration workloads make the batch maximum depend on
+    /// batch size, or when freeing pre-existing allocations or transferring allocations
+    /// between threads makes the peak unsuitable for comparison.
+    ///
+    /// When this span records on drop, the whole operation's peak becomes unavailable,
+    /// including previously recorded spans and subsequent spans sharing its name in the
+    /// session. Reports omit the peak and its confidence interval rather than reporting a
+    /// partial estimate. This unavailability survives report merging; existing snapshots
+    /// are unchanged.
+    ///
+    /// May be called before or after [`iterations`](Self::iterations), at any point before
+    /// drop. It applies to the entire span and repeated calls have the same effect.
+    /// An enclosing span for another operation still measures all nested allocations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::hint::black_box;
+    ///
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
+    /// let operation = session.operation("collect_outputs");
+    /// let mut outputs = Vec::new();
+    /// {
+    ///     let _span = operation.measure_thread().no_peak().iterations(4);
+    ///     for _ in 0..4 {
+    ///         outputs.push(black_box(vec![0_u8; 64]));
+    ///     }
+    /// }
+    /// black_box(outputs);
+    /// ```
+    #[must_use = "the span records when dropped and must enclose the measured work"]
+    pub fn no_peak(mut self) -> Self {
+        self.record_peak = false;
         self
     }
 }
@@ -156,7 +208,7 @@ impl Drop for ThreadSpan {
             iterations,
             bytes: bytes_delta,
             count: count_delta,
-            peak_outstanding_bytes: Some(peak_bytes),
+            peak_outstanding_bytes: self.record_peak.then_some(peak_bytes),
         });
     }
 }
@@ -211,8 +263,8 @@ mod tests {
     use testing::{assert_panics, with_watchdog};
 
     use super::*;
-    use crate::Session;
     use crate::counters::{register_fake_allocation, register_fake_deallocation};
+    use crate::{Report, Session};
 
     /// Representative allocation size for scenarios where the exact number carries no
     /// meaning beyond being distinguishable from the others in the same test.
@@ -311,6 +363,118 @@ mod tests {
         register_fake_deallocation(PRE_EXISTING - FREED_FIRST + SPAN_HELD);
 
         assert_eq!(operation.peak_outstanding_bytes(), Some(0.0));
+    }
+
+    #[test]
+    fn no_peak_preserves_allocation_metrics_and_suppresses_the_whole_operation() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+        {
+            let _span = operation.measure_thread().iterations(1);
+            register_fake_allocation(BLOCK, 1);
+            register_fake_deallocation(BLOCK);
+        }
+        let before = session.to_report();
+
+        let alias = session.operation("test");
+        {
+            let span = alias.measure_thread().iterations(1);
+            register_fake_allocation(BLOCK, 1);
+            register_fake_deallocation(BLOCK);
+            drop(span.no_peak().no_peak());
+        }
+        {
+            let _span = operation.measure_thread().iterations(1);
+            register_fake_allocation(BLOCK, 1);
+            register_fake_deallocation(BLOCK);
+        }
+
+        let after = session.to_report();
+        let (_, recorded) = after.operations().next().unwrap();
+        assert_eq!(recorded.total_iterations(), 3);
+        assert_eq!(recorded.total_bytes_allocated(), 3 * BLOCK);
+        assert_eq!(recorded.total_allocations_count(), 3);
+        assert_eq!(recorded.bytes(), Some(as_reported(BLOCK)));
+        assert_eq!(recorded.allocations(), Some(1.0));
+        assert_eq!(recorded.peak_outstanding_bytes(), None);
+        assert!(
+            recorded
+                .statistics()
+                .unwrap()
+                .peak_outstanding_bytes
+                .is_none()
+        );
+        assert_eq!(
+            before
+                .operations()
+                .next()
+                .unwrap()
+                .1
+                .peak_outstanding_bytes(),
+            Some(as_reported(BLOCK))
+        );
+
+        for merged in [
+            Report::merge(&before, &after),
+            Report::merge(&after, &before),
+        ] {
+            assert_eq!(
+                merged
+                    .operations()
+                    .next()
+                    .unwrap()
+                    .1
+                    .peak_outstanding_bytes(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn zero_iteration_no_peak_span_withholds_existing_peak() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+        drop(operation.measure_thread().iterations(1));
+        assert_eq!(operation.peak_outstanding_bytes(), Some(0.0));
+
+        drop(operation.measure_thread().no_peak().iterations(0));
+
+        assert_eq!(operation.total_iterations(), 1);
+        assert_eq!(operation.peak_outstanding_bytes(), None);
+    }
+
+    #[test]
+    fn unwinding_no_peak_span_does_not_record_or_suppress_previous_peak() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+        drop(operation.measure_thread().iterations(1));
+
+        assert_panics(|| {
+            let _span = operation.measure_thread().no_peak().iterations(1);
+            panic!("abandon measurement");
+        });
+
+        assert_eq!(operation.total_iterations(), 1);
+        assert_eq!(operation.peak_outstanding_bytes(), Some(0.0));
+    }
+
+    #[test]
+    fn no_peak_nested_span_preserves_enclosing_peak() {
+        let session = Session::new().no_stdout().no_file();
+        let outer = session.operation("outer");
+        let inner = session.operation("inner");
+        {
+            let _outer_span = outer.measure_thread().iterations(1);
+            {
+                let _inner_span = inner.measure_thread().no_peak().iterations(1);
+                register_fake_allocation(BLOCK, 1);
+                register_fake_deallocation(BLOCK);
+            }
+        }
+
+        assert_eq!(inner.peak_outstanding_bytes(), None);
+        assert_eq!(inner.total_bytes_allocated(), BLOCK);
+        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(BLOCK)));
     }
 
     #[test]

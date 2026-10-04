@@ -339,7 +339,9 @@ fn noise_cv(kind: MetricKind) -> f64 {
         MetricKind::InstructionCount
         | MetricKind::ConditionalBranches
         | MetricKind::IndirectBranches => CALLGRIND_NOISE_CV,
-        MetricKind::AllocatedBytes | MetricKind::AllocationCount => ALLOCATION_NOISE_CV,
+        MetricKind::AllocatedBytes
+        | MetricKind::PeakOutstandingBytes
+        | MetricKind::AllocationCount => ALLOCATION_NOISE_CV,
     }
 }
 

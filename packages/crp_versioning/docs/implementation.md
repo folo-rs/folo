@@ -103,12 +103,16 @@ Historical member discovery reads recorded paths through the same cache and memb
 logic whether observations come from Git or an in-process fixture.
 Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by
 resolved commit and invalidated by repository, workspace, case-rule or registry-context changes.
-Git object interpretation changes invalidate those snapshots and raw parent-header memory too.
+Git object interpretation changes invalidate those snapshots and retained parent-presence facts too.
 Each snapshot retains its full historical tree and shared path/mode/object indexes, so package
 comparisons select from already acquired facts rather than querying the anchor again.
-Workspace's typed persistent cache supplies immutable trees and raw parent headers across
-invocations. Raw headers never substitute for fresh parent availability or shallow-boundary
-checks, and first-parent traversals are not retained.
+Workspace's typed persistent cache supplies immutable trees and facts indicating whether a
+commit header records a parent. Parent identities and complete header contents are not retained.
+These facts never substitute for fresh parent availability or shallow-boundary checks, and
+first-parent traversals are not retained. Invocation hits borrow the retained snapshot and
+avoid constructing persistent keys or copying acquisition context.
+Miss loaders borrow the owner's storage, Git interpretation and content-keyed documents
+directly; parsed-document ownership is not moved out on either hits or misses.
 The original workspace's resolved cache location is carried through prospective passes;
 it remains outside captured source and evidence and is not part of a plan's validity.
 Candidate metadata and lockfile bytes are reacquired at each pass. Workspace's content-keyed
@@ -157,8 +161,10 @@ statistics, group membership and group outcomes, never source admission or check
 Every result constructs a new classification envelope from this pass's workspace, Git handle,
 HEAD, history provenance, dependency facts and live manifest paths. Untracked advisories accompany
 fresh acquisition; decision evidence diagnostics are replayed from the admitted decisions.
-Verbose-only messages distinguish computation from memory
-and persistent reuse. A moved prospective root can share equal decisions without importing old
+Verbose-only messages distinguish computation from memory and persistent reuse. Bypass notes
+identify disabled storage, nonportable Git interpretation or the deferred-error lock endpoint
+from this pass, without retaining those notes in a decision payload. A moved prospective root
+can share equal decisions without importing old
 paths. Preview still performs every edit/resolution callback, captures actual files, applies
 consequences to the current plan, and checks file/version convergence and cycles. Source,
 candidate and history verification remain independent of decision cache admission.
@@ -178,3 +184,7 @@ arguments, real aliases, atomic file promotion and workspace lifetime.
 Workspace owns the source-location inventory shared with cache admission; versioning
 requires relocatable dependency paths and captures the same reserved files and recursive
 source contents for fingerprints.
+Preview admits its output and invalidates any previous completion marker before acquiring
+cache metadata. Both the default wrapper and the application's options-based entry point
+share that ordering; input aliases are rejected before removal. Storage is still resolved
+from the original workspace before constructing the prospective workspace.

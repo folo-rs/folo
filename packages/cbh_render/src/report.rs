@@ -3347,6 +3347,7 @@ mod tests {
             MetricKind::ConditionalBranches,
             MetricKind::IndirectBranches,
             MetricKind::AllocatedBytes,
+            MetricKind::PeakOutstandingBytes,
             MetricKind::AllocationCount,
         ] {
             assert_eq!(

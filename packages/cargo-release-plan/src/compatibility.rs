@@ -306,6 +306,10 @@ impl DeferredDiagnostics {
 }
 
 impl DiagnosticSink for DeferredDiagnostics {
+    fn write_advisory(&self, text: &str) {
+        self.destination.write_advisory(text);
+    }
+
     fn write(&self, text: &str) -> io::Result<()> {
         if self
             .failure
@@ -1454,6 +1458,21 @@ mod tests {
             assert!(text.contains(marker));
         }
         assert!(deferred.take_failure().is_none());
+    }
+
+    #[test]
+    fn cache_advisories_do_not_latch_supporting_delivery_failures() {
+        let destination = Arc::new(ClosedDiagnostics(AtomicUsize::new(0)));
+        let deferred = DeferredDiagnostics::new(Arc::<ClosedDiagnostics>::clone(&destination));
+        deferred.write_advisory("cache unavailable");
+        assert_eq!(destination.0.load(Ordering::Relaxed), 1);
+        assert!(deferred.take_failure().is_none());
+        finish_delivery(Ok(()), deferred.take_failure()).unwrap();
+        deferred.write("checker diagnostic").unwrap();
+        deferred.write_advisory("another cache advisory");
+        assert_eq!(destination.0.load(Ordering::Relaxed), 3);
+        let error = deferred.take_failure().unwrap();
+        assert!(error.find_source::<CheckerMirrorFailed>().is_some());
     }
 
     /// Counts attempted delivery to an unavailable supporting diagnostic destination.

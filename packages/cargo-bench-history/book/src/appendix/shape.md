@@ -48,15 +48,21 @@ Each adapter picks one value per metric, and the choice matters more than it loo
 - **Criterion** prefers the regression slope over the mean where a slope is available. The
   slope is fitted across iteration counts and is much less sensitive to a slow first iteration.
 - **`alloc_tracker`** and **`all_the_time`** take the per-iteration slope, never the recorded
-  totals.
+  totals. The optional `alloc_tracker` peak uses the producer's weighted span-peak estimate
+  and its own confidence interval.
 - **Callgrind** takes the new side of the pair it reports.
 
 Two consequences worth knowing. The stored record does **not** say which estimator was used, so
 a Criterion benchmark that stops producing a usable slope falls back to the mean silently — and
 because the mean and the slope disagree, that switch can read as a step that no code caused. And
-for `alloc_tracker` and `all_the_time`, a missing or non-finite slope drops that operation from
-the run rather than falling back to anything, so a benchmark can simply disappear from a series,
-with no error to say why.
+for the required allocation totals and processor-time metrics, a missing or non-finite slope
+drops that operation from the run rather than falling back to anything, so a benchmark can simply
+disappear from a series, with no error to say why.
+
+An unavailable allocation peak drops only that metric, preserving the operation's bytes and
+allocation count. Peak recording is default-on; benchmarks with unsuitable memory lifetimes
+disable it in the producer with `ThreadSpan::no_peak()`, as described under
+[Allocation peaks](../concepts/engines.md#allocation-peaks).
 
 ## Dispersion: what the engine tells you about its own precision
 

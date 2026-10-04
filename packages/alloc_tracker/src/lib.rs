@@ -117,14 +117,17 @@
 //! buffers allocate the same total.
 //!
 //! The estimate assumes every iteration within a measured batch reaches the same peak.
-//! An operation that instead accumulates memory across the iterations of a batch
-//! violates that assumption. Nothing detects the violation, so a figure is still
-//! reported, but it grows with the iteration counts the harness chose and is not
-//! comparable between runs.
+//! An operation that accumulates memory between iterations produces a peak that grows
+//! with the iteration counts the harness chose, making comparisons unreliable.
+//! Use [`ThreadSpan::no_peak`] for such benchmarks to avoid false regression alerts.
+//! This preserves bytes and allocation counts while withholding the operation's peak
+//! from both reports and JSON. Varying iteration workloads can also make a batch's
+//! maximum depend on batch size, even when each iteration releases all its allocations.
 //!
 //! Peak bytes requires that every span of the operation could measure it, so an
-//! operation containing even one [`ProcessSpan`] reports no peak rather than one that
-//! describes only part of the work. Spans that measured a peak but covered no
+//! operation containing even one [`ProcessSpan`] or recorded [`ThreadSpan::no_peak`]
+//! span reports no peak rather than one that describes only part of the work.
+//! Spans that measured a peak but covered no
 //! iterations leave the rate undefined, which also leaves nothing to report.
 //!
 //! Span watermarks are averaged, not summed, so an operation measured concurrently on
