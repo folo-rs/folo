@@ -64,6 +64,20 @@ fn entries(directory: &Path, subject: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn assert_reports_equal(expected: &Path, actual: &Path) {
+    assert_eq!(
+        fs::read(expected.join("report.json")).unwrap(),
+        fs::read(actual.join("report.json")).unwrap()
+    );
+    for entry in fs::read_dir(expected.join("diffs")).unwrap() {
+        let entry = entry.unwrap();
+        assert_eq!(
+            fs::read(entry.path()).unwrap(),
+            fs::read(actual.join("diffs").join(entry.file_name())).unwrap()
+        );
+    }
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "executes Git, Cargo and the compiled application")]
 fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing_reports() {
@@ -91,17 +105,7 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
         );
     }
     for output in [&warm, &disabled] {
-        assert_eq!(
-            fs::read(cold.join("report.json")).unwrap(),
-            fs::read(output.join("report.json")).unwrap()
-        );
-        for entry in fs::read_dir(cold.join("diffs")).unwrap() {
-            let entry = entry.unwrap();
-            assert_eq!(
-                fs::read(entry.path()).unwrap(),
-                fs::read(output.join("diffs").join(entry.file_name())).unwrap()
-            );
-        }
+        assert_reports_equal(&cold, output);
     }
     original.verify(&fixture.manifest(), None).unwrap();
     let storage = fixture
@@ -449,6 +453,7 @@ fn cache_admission_uses_case_rules_for_missing_destination_components() {
 #[cfg_attr(miri, ignore = "executes commands with obstructed cache locations")]
 fn cache_location_failures_leave_source_and_reports_usable() {
     let fixture = seeded_package();
+    fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
     let obstruction = evidence.path().join("obstruction");
     fs::write(&obstruction, "not a directory").unwrap();
@@ -478,10 +483,7 @@ fn cache_location_failures_leave_source_and_reports_usable() {
                 .unwrap(),
         );
         assert!(!output.stderr.is_empty());
-        assert_eq!(
-            fs::read(baseline.join("report.json")).unwrap(),
-            fs::read(destination.join("report.json")).unwrap()
-        );
+        assert_reports_equal(&baseline, &destination);
         source.verify(&fixture.manifest(), None).unwrap();
     }
     assert_eq!(fs::read_to_string(obstruction).unwrap(), "not a directory");
@@ -494,7 +496,15 @@ fn cache_location_failures_leave_source_and_reports_usable() {
 )]
 fn storage_failures_are_advisory_and_existing_ignore_rules_are_preserved() {
     let fixture = seeded_package();
+    fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
     let storage = evidence.path().join("cache");
     fs::create_dir_all(&storage).unwrap();
     let ignore = storage.join(".gitignore");
@@ -517,6 +527,7 @@ fn storage_failures_are_advisory_and_existing_ignore_rules_are_preserved() {
         1
     );
     assert!(stderr.contains("continuing with fresh observations"));
+    assert_reports_equal(&baseline, &evidence.path().join("unavailable"));
     fs::remove_file(obstruction).unwrap();
     report(
         &fixture,
@@ -538,9 +549,17 @@ fn malformed_entries_are_diagnosed_and_concurrent_publishers_leave_complete_entr
     // the test never waits for this deadline to assert a failure.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
         let fixture = seeded_package();
+        fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
         let evidence = TempDir::new().unwrap();
         let storage = evidence.path().join("cache");
         let cache_argument = storage.to_str().unwrap();
+        let baseline = evidence.path().join("baseline");
+        report(
+            &fixture,
+            &baseline,
+            &evidence.path().join("baseline.trace"),
+            &["--no-cache"],
+        );
         report(
             &fixture,
             &evidence.path().join("first"),
@@ -559,6 +578,7 @@ fn malformed_entries_are_diagnosed_and_concurrent_publishers_leave_complete_entr
             &["--cache", cache_argument],
         );
         assert!(String::from_utf8_lossy(&output.stderr).contains("corrupt cache"));
+        assert_reports_equal(&baseline, &evidence.path().join("repaired"));
         assert_eq!(
             acquisitions(&evidence.path().join("repaired.trace")),
             (1, 1)

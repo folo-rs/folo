@@ -20,6 +20,7 @@ use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
 
 use self::paths::require_disjoint;
+use crate::ParseMetadataError;
 use crate::artifact_path::{resolve_path, write_new};
 use crate::git::GitRepo;
 use crate::manifest::PathCase;
@@ -58,7 +59,7 @@ impl Cache {
         if *options == CacheOptions::Disabled {
             return Ok(Self::default());
         }
-        let metadata: CacheMetadata = serde_json::from_slice(&capture_metadata(manifest)?)?;
+        let metadata = CacheMetadata::parse(&capture_metadata(manifest)?)?;
         let requested = match options {
             CacheOptions::Directory(path) => path.clone(),
             CacheOptions::Default => metadata
@@ -207,6 +208,7 @@ fn reserve_package_paths(sources: &mut SourceInputs, case: PathCase) {
 }
 
 /// Each acquisition subject names its representation and complete input identity.
+///
 /// Keys must serialize deterministically.
 pub trait CacheEntry: Serialize + DeserializeOwned {
     const SUBJECT: &'static str;
@@ -220,6 +222,12 @@ struct CacheMetadata {
     target_directory: PathBuf,
     workspace_root: PathBuf,
     packages: Vec<CachePackage>,
+}
+
+impl CacheMetadata {
+    fn parse(bytes: &[u8]) -> Result<Self, AppError> {
+        Ok(serde_json::from_slice(bytes).map_err(ParseMetadataError::caused_by)?)
+    }
 }
 
 #[derive(Deserialize)]
@@ -293,7 +301,8 @@ fn get_with<T: CacheEntry>(
 fn checksum(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
-        .fold(String::new(), |mut output, byte| {
+        // Reserve the complete SHA-256 hexadecimal representation.
+        .fold(String::with_capacity(64), |mut output, byte| {
             write!(output, "{byte:02x}").expect("writing to a String cannot fail");
             output
         })
@@ -400,6 +409,33 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn metadata_parsing_preserves_acquisition_context_and_json_cause() {
+        for bytes in [b"[".as_slice(), b"{}", br#"{"target_directory": false}"#] {
+            let error = CacheMetadata::parse(bytes).err().unwrap();
+            assert!(error.find_source::<ParseMetadataError>().is_some());
+            assert!(error.find_source::<serde_json::Error>().is_some());
+        }
+        let metadata = CacheMetadata::parse(
+            br#"{"target_directory":"target","workspace_root":"root","packages":[{"manifest_path":"root/Cargo.toml"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(metadata.target_directory, Path::new("target"));
+        assert_eq!(metadata.workspace_root, Path::new("root"));
+        assert_eq!(
+            metadata.packages.first().unwrap().manifest_path,
+            Path::new("root/Cargo.toml")
+        );
+    }
+
+    #[test]
+    fn checksum_preserves_the_sha256_hexadecimal_representation() {
+        assert_eq!(
+            checksum(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]

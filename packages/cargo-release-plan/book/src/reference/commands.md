@@ -29,8 +29,9 @@ including Git administration, retained preview repositories and reserved input l
 
 No session identifier or workflow-managed validity check is needed. The tool
 decides which entries match the current inputs and continues to verify source
-and history. You can delete the cache or run `cargo clean` without invalidating
-prepared evidence or resolved plans. Corruption and cache I/O problems are
+and history. Deleting only the cache does not invalidate prepared evidence or resolved
+plans. A full `cargo clean` deletes the entire target directory, so keep evidence outside
+that directory if it must survive cleanup. Corruption and cache I/O problems are
 reported as advisories and observations are reacquired. An unavailable cache location
 or incomplete cache-safety inventory disables storage for the command. This does not
 relax the inputs required for classification or prepared evidence.
