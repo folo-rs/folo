@@ -2608,7 +2608,12 @@ mod installation_tests;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::ptr;
+
+    use static_assertions::assert_impl_all;
+
+    assert_impl_all!(SnapshotCache: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn absent_binary_closure_is_not_an_empty_successful_assessment() {

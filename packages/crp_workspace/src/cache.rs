@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -19,12 +20,15 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
-use toml_edit::{Item, Value};
+use toml_edit::{DocumentMut, Item, Value};
 
 use self::paths::{protected_paths, require_direct_subject, require_disjoint};
 use crate::artifact_path::{resolve_path, write_new};
 use crate::git::GitRepo;
-use crate::manifest::{PathCase, parse_document};
+use crate::inherited::is_workspace_inherit;
+use crate::manifest::{
+    DEFAULT_README_FILES, PathCase, RESOURCE_KEYS, WorkspaceInherit, parse_document, resource_paths,
+};
 use crate::metadata::capture_metadata;
 use crate::source_inputs::SourceInputs;
 use crate::{ParseMetadataError, ReadFileError};
@@ -49,6 +53,11 @@ pub struct Cache {
     directory: Option<PathBuf>,
     diagnosed: Rc<Cell<bool>>,
 }
+
+// The only shared mutation is an advisory-suppression latch. It guards no user data
+// or partially updated observation, so a panic cannot leave inconsistent cache state.
+impl UnwindSafe for Cache {}
+impl RefUnwindSafe for Cache {}
 
 impl Cache {
     // Cargo and filesystem identity are native boundaries; admission has pure tests below.
@@ -132,7 +141,9 @@ impl Cache {
             return Ok(Self::default());
         };
         for path in paths.iter().flatten() {
-            require_disjoint(&directory, path)?;
+            if !storage_admission(require_disjoint(&directory, path), verbose)? {
+                return Ok(Self::default());
+            }
         }
         Ok(Self {
             directory: Some(directory),
@@ -219,6 +230,13 @@ fn storage_inventory<T>(sources: Result<T, AppError>, verbose: Verbose<'_>) -> O
     }
 }
 
+fn storage_admission(result: Result<(), AppError>, verbose: Verbose<'_>) -> Result<bool, AppError> {
+    match result {
+        Err(error) if error.find_source::<paths::CachePathConflict>().is_some() => Err(error),
+        result => Ok(storage_inventory(result, verbose).is_some()),
+    }
+}
+
 fn reserve_package_paths(
     sources: &mut SourceInputs,
     case: PathCase,
@@ -244,6 +262,7 @@ fn reserve_package_paths(
             sources.source_directories.insert(package.join(directory));
         }
         let document = parse_document(&manifest, &read(&manifest)?)?;
+        reserve_resources(sources, &manifest, &document, &mut read)?;
         let mut reserve = |path: Option<&str>| -> Result<(), AppError> {
             if let Some(path) = path {
                 let path = package.join(path);
@@ -290,6 +309,81 @@ fn reserve_package_paths(
         }
     }
     Ok(())
+}
+
+fn reserve_resources(
+    sources: &mut SourceInputs,
+    manifest: &Path,
+    document: &DocumentMut,
+    read: &mut impl FnMut(&Path) -> Result<String, AppError>,
+) -> Result<(), AppError> {
+    let directory = manifest.parent().expect("a manifest has a parent");
+    let workspace = WorkspaceInherit::from_root(document);
+    // Reserve declarations at their own base, even when only an unselected package inherits
+    // them. Resource files do not recursively own their directory like Rust modules do.
+    for (table, is_package) in [
+        (document.get("package").and_then(Item::as_table_like), true),
+        (workspace.package, false),
+    ] {
+        let Some(table) = table else { continue };
+        let (local, _, automatic) = resource_paths(table, &WorkspaceInherit::default());
+        sources
+            .files
+            .extend(local.iter().map(|path| directory.join(path)));
+        if automatic && is_package {
+            sources
+                .files
+                .extend(DEFAULT_README_FILES.iter().map(|path| directory.join(path)));
+        }
+    }
+    let Some(package) = document.get("package").and_then(Item::as_table_like) else {
+        return Ok(());
+    };
+    if document.contains_key("workspace")
+        || !RESOURCE_KEYS
+            .iter()
+            .any(|key| package.get(key).is_some_and(is_workspace_inherit))
+    {
+        return Ok(());
+    }
+    // Dependencies can inherit from an untracked workspace outside the selected workspace.
+    // Follow the explicit root or nearest ancestor rather than using the invocation's root.
+    let explicit = package.get("workspace").and_then(Item::as_str);
+    let candidates = if let Some(root) = explicit {
+        vec![directory.join(root).join("Cargo.toml")]
+    } else {
+        directory
+            .ancestors()
+            .skip(1)
+            .map(|parent| parent.join("Cargo.toml"))
+            .collect()
+    };
+    for root in candidates {
+        let text = match read(&root) {
+            Ok(text) => text,
+            Err(error)
+                if explicit.is_none()
+                    && error
+                        .find_source::<io::Error>()
+                        .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let document = parse_document(&root, &text)?;
+        if document.contains_key("workspace") {
+            let (_, inherited, _) =
+                resource_paths(package, &WorkspaceInherit::from_root(&document));
+            let directory = root.parent().expect("a manifest has a parent");
+            sources
+                .files
+                .extend(inherited.iter().map(|path| directory.join(path)));
+            sources.files.insert(root);
+            return Ok(());
+        }
+    }
+    Err(ResourceWorkspaceUnavailable::new(manifest).into())
 }
 
 /// Each acquisition subject names its representation and complete input identity.
@@ -459,6 +553,13 @@ struct InvalidSourcePath {
     path: PathBuf,
 }
 
+/// Missing ownership prevents admission of an inherited packaging resource.
+#[ohno::error]
+#[display("cannot locate the workspace for inherited resources in '{}'", manifest.display())]
+struct ResourceWorkspaceUnavailable {
+    manifest: PathBuf,
+}
+
 #[ohno::error]
 #[display("cannot read cache entry '{}'", path.display())]
 struct CacheReadFailed {
@@ -482,8 +583,12 @@ mod tests {
     use std::sync::Mutex;
 
     use crp_diag::DiagnosticSink;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(Cache: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(CacheOptions: UnwindSafe, RefUnwindSafe);
 
     /// Records advisory delivery, including a rejected write, without a process stream.
     #[derive(Debug, Default)]
@@ -561,6 +666,136 @@ mod tests {
     }
 
     #[test]
+    fn admission_keeps_proven_conflicts_fatal_but_disables_incomplete_checks() {
+        let recording = Recording::default();
+        let verbose = Verbose::new(false, &recording);
+        assert!(storage_admission(Ok(()), verbose).unwrap());
+        let conflict = paths::CachePathConflict::new(Path::new("source"), Path::new("source"));
+        let error = storage_admission(Err(conflict.into()), verbose).unwrap_err();
+        assert!(error.find_source::<paths::CachePathConflict>().is_some());
+        assert!(recording.messages.lock().unwrap().is_empty());
+        assert!(
+            !storage_admission(
+                Err(io::Error::from(io::ErrorKind::PermissionDenied).into()),
+                verbose
+            )
+            .unwrap()
+        );
+        assert_eq!(recording.messages.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn resources_preserve_declaring_bases_and_readme_selection() {
+        for (declaration, expected) in [
+            (
+                "[package]\nversion='uninterpreted'\n",
+                vec!["README.md", "README.txt", "README"],
+            ),
+            ("[package]\nreadme=true\n", vec!["README.md"]),
+            ("[package]\nreadme=false\n", vec![]),
+            (
+                "[package]\nreadme='Docs/guide.md'\nlicense-file='../shared/license'\n",
+                vec!["Docs/guide.md", "../shared/license"],
+            ),
+            (
+                "[workspace.package]\nreadme='guide.md'\nlicense-file='license'\n",
+                vec!["guide.md", "license"],
+            ),
+            ("[workspace.package]\nlicense='MIT'\n", vec![]),
+        ] {
+            let manifest = Path::new("package/Cargo.toml");
+            let document = parse_document(manifest, declaration).unwrap();
+            let mut sources = SourceInputs::default();
+            reserve_resources(&mut sources, manifest, &document, &mut |_| {
+                panic!("local resource")
+            })
+            .unwrap();
+            assert_eq!(
+                sources.files,
+                expected
+                    .iter()
+                    .map(|path| Path::new("package").join(path))
+                    .collect()
+            );
+            assert!(sources.source_directories.is_empty());
+        }
+    }
+
+    #[test]
+    fn inherited_resources_follow_explicit_or_nearest_workspace_without_identity_parsing() {
+        for explicit in [false, true] {
+            let manifest = Path::new("external/nested/package/Cargo.toml");
+            let text = format!(
+                "[package]\nversion='uninterpreted'\nreadme.workspace=true\nlicense-file.workspace=true\n{}",
+                if explicit {
+                    "workspace='../../owner'\n"
+                } else {
+                    ""
+                }
+            );
+            let root = if explicit {
+                PathBuf::from("external/nested/package/../../owner/Cargo.toml")
+            } else {
+                PathBuf::from("external/Cargo.toml")
+            };
+            let document = parse_document(manifest, &text).unwrap();
+            let mut sources = SourceInputs::default();
+            reserve_resources(&mut sources, manifest, &document, &mut |path| {
+                if path == root {
+                    Ok("[workspace.package]\nreadme=true\nlicense-file='Legal/license'\n".into())
+                } else {
+                    assert!(!explicit);
+                    assert_eq!(path, Path::new("external/nested/Cargo.toml"));
+                    Err(io::Error::from(io::ErrorKind::NotFound).into())
+                }
+            })
+            .unwrap();
+            let directory = root.parent().unwrap();
+            assert_eq!(
+                sources.files,
+                [
+                    root.clone(),
+                    directory.join("README.md"),
+                    directory.join("Legal/license")
+                ]
+                .into()
+            );
+        }
+    }
+
+    #[test]
+    fn resource_workspace_failures_cannot_admit_unchecked_storage() {
+        let manifest = Path::new("package/Cargo.toml");
+        let document = parse_document(manifest, "[package]\nreadme.workspace=true\n").unwrap();
+        for text in [None, Some("["), Some("[package]\n")] {
+            let error = reserve_resources(
+                &mut SourceInputs::default(),
+                manifest,
+                &document,
+                &mut |_| {
+                    text.map(str::to_owned)
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied).into())
+                },
+            )
+            .unwrap_err();
+            if text.is_none() {
+                assert_eq!(
+                    error.find_source::<io::Error>().unwrap().kind(),
+                    io::ErrorKind::PermissionDenied
+                );
+            } else if text == Some("[") {
+                assert!(error.find_source::<crate::ParseTomlError>().is_some());
+            } else {
+                assert!(
+                    error
+                        .find_source::<ResourceWorkspaceUnavailable>()
+                        .is_some()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_known_manifest_reserves_package_autodiscovery_paths() {
         for case in [PathCase::Sensitive, PathCase::Insensitive] {
             let mut sources = SourceInputs {
@@ -629,6 +864,9 @@ mod tests {
                 "custom/demo.rs",
                 "custom/test.rs",
                 "custom/bench.rs",
+                "README.md",
+                "README.txt",
+                "README",
             ]
             .map(|path| Path::new("unselected").join(path))
             .into()
@@ -672,7 +910,10 @@ mod tests {
                     "bin.rs",
                     "example.rs",
                     "test.rs",
-                    "bench.rs"
+                    "bench.rs",
+                    "README.md",
+                    "README.txt",
+                    "README",
                 ]
                 .map(|path| Path::new("package").join(path))
                 .into()
