@@ -130,6 +130,49 @@ fn successful_verification_returns_its_own_observations_and_never_reuses_the_ver
 }
 
 #[test]
+fn captured_documents_read_only_paths_absent_from_this_acquisition() {
+    let root = Path::new("root/Cargo.toml");
+    let member = Path::new("root/member/Cargo.toml");
+    let text = "[dependencies]\nexact='= 1.2.3'\n";
+    let documents = [root, member]
+        .map(|path| (path.to_owned(), parse_document(path, text).unwrap()))
+        .into();
+    for path in [root, member] {
+        let shared =
+            capture_document(path, &documents, |_| panic!("document already acquired")).unwrap();
+        assert_eq!(
+            shared
+                .get("dependencies")
+                .unwrap()
+                .get("exact")
+                .unwrap()
+                .as_str(),
+            Some("= 1.2.3")
+        );
+    }
+    let transitive = Path::new("root/transitive/Cargo.toml");
+    for current in ["=1.2.4", "=1.2.5"] {
+        let mut reads = 0;
+        let fresh = capture_document(transitive, &documents, |path| {
+            assert_eq!(path, transitive);
+            reads += 1;
+            Ok(format!("exact='{current}'"))
+        })
+        .unwrap();
+        assert_eq!(reads, 1);
+        assert_eq!(fresh.get("exact").unwrap().as_str(), Some(current));
+    }
+    let fresh = capture_document(root, &BTreeMap::new(), |_| Ok("changed=true".into())).unwrap();
+    assert_eq!(fresh.get("changed").unwrap().as_bool(), Some(true));
+    let error = capture_document(transitive, &documents, |_| {
+        Err(CandidateFailure::new().into())
+    })
+    .unwrap_err();
+    assert!(error.find_source::<CandidateFailure>().is_some());
+    capture_document(transitive, &documents, |_| Ok("[".into())).unwrap_err();
+}
+
+#[test]
 fn final_digest_uses_exact_artifact_bytes_and_propagates_fingerprint_failure() {
     let inputs = inputs();
     let identity = PathIdentity::new(inputs.root(), &|_| PathCase::Sensitive);
@@ -282,57 +325,6 @@ fn source_collection_follows_acquired_directories_and_preserves_actual_paths() {
         .find_source::<CandidateFailure>()
         .is_some()
     );
-}
-
-#[test]
-fn local_capture_follows_transitive_aliases_and_cycles_without_reacquiring_visited_manifests() {
-    let root = Path::new("root");
-    let manifests = [root.join("Cargo.toml")];
-    let mut paths = BTreeSet::new();
-    let mut reads = Vec::new();
-    capture_path_dependencies_with(root, &manifests, &mut paths, |path| {
-        reads.push(path.to_path_buf());
-        assert!(reads.len() <= 3, "the captured cycle must make progress");
-        Ok(if path == root.join("Cargo.toml") {
-            "[dependencies]\nlocal={path='alias'}\n[target.'cfg(unix)'.build-dependencies]\nlocal={path='alias'}\n[workspace.dependencies]\nlocal={path='alias'}\n[patch.crates-io]\nlocal={path='alias'}\n[replace]\n'local:1.0.0'={path='alias'}\n"
-        } else if path == root.join("actual/Cargo.toml") {
-            "[dependencies]\nleaf={path='../leaf'}\n"
-        } else {
-            assert_eq!(path, root.join("leaf/Cargo.toml"));
-            "[dependencies]\nroot={path='..'}\n"
-        }.into())
-    }, |path| {
-        Ok(if path == root.join("alias") { root.join("actual") }
-        else if path == root.join("actual/../leaf") { root.join("leaf") }
-        else { assert_eq!(path, root.join("leaf/..")); root.into() })
-    }, |directory, paths| {
-        paths.insert(relative(root, &directory.join("file.rs"))?);
-        Ok(())
-    }).unwrap();
-    assert_eq!(
-        reads,
-        ["Cargo.toml", "actual/Cargo.toml", "leaf/Cargo.toml"].map(|path| root.join(path))
-    );
-    assert_eq!(
-        paths,
-        [
-            "Cargo.toml",
-            "actual/Cargo.toml",
-            "leaf/Cargo.toml",
-            "src/file.rs",
-            "actual/src/file.rs",
-            "leaf/src/file.rs"
-        ]
-        .map(PathBuf::from)
-        .into()
-    );
-    let table: DocumentMut =
-        "a = { path = 'first' }\nb = '1'\nc = { git = 'url' }\nd = { path = 'second' }\n"
-            .parse()
-            .unwrap();
-    let mut dependencies = Vec::new();
-    dependency_paths(table.as_table(), &mut dependencies);
-    assert_eq!(dependencies, ["first", "second"]);
 }
 
 #[test]

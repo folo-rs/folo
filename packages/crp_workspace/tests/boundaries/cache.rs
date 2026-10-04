@@ -1,5 +1,7 @@
 //! Immutable observation reuse and live Git interpretation at the native boundary.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 use std::{fs, io};
@@ -8,8 +10,10 @@ use crp_diag::{DiagnosticSink, Discard, Verbose};
 use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::git::{CommitHeaders, GitObjectContext, HistoricalTree};
 use crp_workspace::lockfile::Lockfile;
+use crp_workspace::manifest::PathCase;
 use crp_workspace::manifest_document::ManifestDocuments;
 use crp_workspace::metadata::{load_tracked_work_tree, load_tracked_work_tree_with_documents};
+use crp_workspace::source_inputs::SourceInputs;
 use tempfile::TempDir;
 
 use crate::git_fixture::Repository;
@@ -45,6 +49,7 @@ fn parsed_subjects_reuse_across_owners_and_recover_from_corruption() {
     let cache = Cache::resolve(
         &fixture.path().join("Cargo.toml"),
         &CacheOptions::Directory(storage.clone()),
+        Verbose::new(false, &Discard),
     )
     .unwrap();
     let sink = Recording::default();
@@ -161,6 +166,7 @@ fn parsed_members_reinterpret_changed_workspace_context_and_relocate_without_sta
     let cache = Cache::resolve(
         &first.path().join("Cargo.toml"),
         &CacheOptions::Directory(storage.path().join("cache")),
+        Verbose::new(false, &Discard),
     )
     .unwrap();
     for fixture in [first, repository()] {
@@ -222,8 +228,98 @@ fn parsed_members_reinterpret_changed_workspace_context_and_relocate_without_sta
                     .tracked_paths
                     .contains(&format!("{member}/Cargo.toml"))
             );
+            let git = fixture.repo();
+            let shared_sources = SourceInputs::discover_with_documents(
+                git.root(),
+                &observed.workspace_root,
+                &observed.member_manifests,
+                |_, _| panic!("this fixture has no path dependencies"),
+                |path| Ok(observed.manifests.documents.get(path).unwrap().clone()),
+            )
+            .unwrap();
+            let fresh_sources = SourceInputs::discover(
+                git.root(),
+                &fresh.workspace_root,
+                &fresh.member_manifests,
+                |_, _| panic!("this fixture has no path dependencies"),
+            )
+            .unwrap();
+            assert_eq!(shared_sources.files, fresh_sources.files);
+            assert_eq!(
+                shared_sources.source_directories,
+                fresh_sources.source_directories
+            );
+            assert!(
+                shared_sources
+                    .files
+                    .contains(&observed.workspace_root.join(member).join("build.rs"))
+            );
         }
     }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "resolves native Git administration and path aliases")]
+fn administration_and_aliased_reserved_inputs_are_not_disposable_storage() {
+    let fixture = repository();
+    let linked = TempDir::new().unwrap();
+    fixture.command(&[
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        linked.path().to_str().unwrap(),
+        "HEAD",
+    ]);
+    for directory in [
+        linked.path().join(".git"),
+        fixture.path().join(".git"),
+        fixture.path().join(".git/unused-cache"),
+    ] {
+        let error = Cache::resolve(
+            &linked.path().join("Cargo.toml"),
+            &CacheOptions::Directory(directory),
+            Verbose::new(false, &Discard),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("overlaps"));
+    }
+    if PathCase::probe(fixture.path()) == PathCase::Insensitive {
+        let alias = fixture.path().to_string_lossy().to_uppercase();
+        let error = Cache::resolve(
+            &Path::new(&alias).join("Cargo.toml"),
+            &CacheOptions::Directory(fixture.path().join(".cargo/config.toml")),
+            Verbose::new(false, &Discard),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("overlaps"));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[cfg_attr(miri, ignore = "probes native read-only directory case rules")]
+fn evidence_case_admission_uses_existing_entries_in_read_only_directories() {
+    let fixture = repository();
+    let directory = TempDir::new().unwrap();
+    fs::write(directory.path().join("probe.txt"), "").unwrap();
+    let case = PathCase::probe(directory.path());
+    let cache = Cache::resolve(
+        &fixture.path().join("Cargo.toml"),
+        &CacheOptions::Directory(directory.path().join("cache")),
+        Verbose::new(false, &Discard),
+    )
+    .unwrap();
+    let original = fs::metadata(directory.path()).unwrap().permissions();
+    // Remove all write bits while retaining the fixture's existing read/search permissions.
+    fs::set_permissions(
+        directory.path(),
+        fs::Permissions::from_mode(original.mode() & !0o222),
+    )
+    .unwrap();
+    let result = cache.protect(&directory.path().join("CACHE/report"));
+    fs::set_permissions(directory.path(), original).unwrap();
+    assert_eq!(result.is_ok(), case == PathCase::Sensitive);
 }
 
 #[test]
@@ -237,6 +333,7 @@ fn replacements_do_not_reuse_original_object_facts_and_removal_restores_eligibil
     let cache = Cache::resolve(
         &fixture.path().join("Cargo.toml"),
         &CacheOptions::Directory(directory.path().join("cache")),
+        Verbose::new(false, &Discard),
     )
     .unwrap();
     let git = fixture.repo();
@@ -305,6 +402,7 @@ fn graft_context_changes_and_cached_headers_do_not_freeze_shallow_traversal() {
     let cache = Cache::resolve(
         &fixture.path().join("Cargo.toml"),
         &CacheOptions::Directory(directory.path().join("cache")),
+        Verbose::new(false, &Discard),
     )
     .unwrap();
     let git = fixture.repo();

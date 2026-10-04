@@ -138,3 +138,6 @@ injected observations and effects. This keeps transitive membership, original/fi
 fingerprints, retained isolation, foreign-owner rejection and marker invalidation within
 unit mutation coverage. Native adapters retain integration coverage for subprocess
 arguments, real aliases, atomic file promotion and workspace lifetime.
+Workspace owns the source-location inventory shared with cache admission; versioning
+requires relocatable dependency paths and captures the same reserved files and recursive
+source contents for fingerprints.
