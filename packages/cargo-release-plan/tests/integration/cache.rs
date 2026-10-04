@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
-use std::{fs, thread};
+use std::{fs, io, thread};
 
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::resolved::Inputs;
@@ -64,6 +64,20 @@ fn entries(directory: &Path, subject: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn assert_reports_equal(expected: &Path, actual: &Path) {
+    assert_eq!(
+        fs::read(expected.join("report.json")).unwrap(),
+        fs::read(actual.join("report.json")).unwrap()
+    );
+    for entry in fs::read_dir(expected.join("diffs")).unwrap() {
+        let entry = entry.unwrap();
+        assert_eq!(
+            fs::read(entry.path()).unwrap(),
+            fs::read(actual.join("diffs").join(entry.file_name())).unwrap()
+        );
+    }
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "executes Git, Cargo and the compiled application")]
 fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing_reports() {
@@ -102,17 +116,7 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
         );
     }
     for output in [&warm, &disabled] {
-        assert_eq!(
-            fs::read(cold.join("report.json")).unwrap(),
-            fs::read(output.join("report.json")).unwrap()
-        );
-        for entry in fs::read_dir(cold.join("diffs")).unwrap() {
-            let entry = entry.unwrap();
-            assert_eq!(
-                fs::read(entry.path()).unwrap(),
-                fs::read(output.join("diffs").join(entry.file_name())).unwrap()
-            );
-        }
+        assert_reports_equal(&cold, output);
     }
     original.verify(&fixture.manifest(), None).unwrap();
     let storage = fixture
@@ -300,7 +304,19 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
         "[package]\nname='leaf'\nversion='0.1.0'\n",
     );
     fixture.write("vendor/leaf/src/lib.rs", "");
+    fixture.write(
+        "unselected/Cargo.toml",
+        "[package]\nname='unselected'\nversion='0.1.0'\n",
+    );
+    fixture.write("unselected/src/lib.rs", "");
     fixture.commit("ignored transitive path dependencies");
+    let evidence = TempDir::new().unwrap();
+    report(
+        &fixture,
+        &evidence.path().join("baseline"),
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
     let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
     for path in [
         "packages/demo/build.rs",
@@ -310,13 +326,208 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
         "vendor/helper",
         "vendor/leaf",
         "vendor/leaf/src/cache",
+        "vendor/leaf/build.rs",
+        "unselected/build.rs",
     ] {
         let output = command(&fixture)
             .args(["check", "--release-history", "HEAD", "--cache", path])
             .output()
             .unwrap();
         assert!(!output.status.success(), "{path}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("overlaps protected"),
+            "{path}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         inputs.verify(&fixture.manifest(), None).unwrap();
+    }
+    assert!(!fixture.path().join("vendor/leaf/build.rs").exists());
+    assert!(!fixture.path().join("unselected/build.rs").exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "runs classification and strict capture with unused missing paths"
+)]
+fn unavailable_extra_inventory_disables_storage_without_failing_classification() {
+    let fixture = seeded_package();
+    fixture.write_workspace("[workspace.dependencies]\nunused = { path = 'unavailable' }\n");
+    fixture.commit("unused missing path declaration");
+    let evidence = TempDir::new().unwrap();
+    for (name, options) in [("baseline", &["--no-cache"][..]), ("cached", &[][..])] {
+        success(
+            command(&fixture)
+                .args(["check", "--release-history", "HEAD"])
+                .args(options)
+                .output()
+                .unwrap(),
+        );
+        report(
+            &fixture,
+            &evidence.path().join(name),
+            &evidence.path().join(format!("{name}.trace")),
+            options,
+        );
+    }
+    assert_eq!(
+        fs::read(evidence.path().join("baseline/report.json")).unwrap(),
+        fs::read(evidence.path().join("cached/report.json")).unwrap()
+    );
+    assert!(
+        !fixture
+            .path()
+            .join("target/cargo-release-plan/cache")
+            .exists()
+    );
+    Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap_err();
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes classification with an obstructed unrelated tracked path"
+)]
+fn unresolved_extra_inventory_disables_storage_without_failing_classification() {
+    let fixture = seeded_package();
+    fixture.write("docs/page.md", "unrelated documentation");
+    fixture.commit("documentation");
+    let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
+    fs::remove_file(fixture.path().join("docs/page.md")).unwrap();
+    fs::remove_dir(fixture.path().join("docs")).unwrap();
+    fixture.write("docs", "not a directory");
+    let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let cached = evidence.path().join("cached");
+    let output = report(
+        &fixture,
+        &cached,
+        &evidence.path().join("cached.trace"),
+        &[],
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+    assert_reports_equal(&baseline, &cached);
+    assert!(
+        !fixture
+            .path()
+            .join("target/cargo-release-plan/cache")
+            .exists()
+    );
+    inputs.verify(&fixture.manifest(), None).unwrap_err();
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes Git with external object and index locations")]
+fn external_git_object_and_index_locations_are_protected() {
+    let fixture = seeded_package();
+    let external = TempDir::new().unwrap();
+    let objects = external.path().join("objects");
+    let index = external.path().join("index");
+    let hooks = external.path().join("hooks");
+    let alternates = external.path().join("alternate objects");
+    fs::create_dir_all(&alternates).unwrap();
+    fixture.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    fs::rename(fixture.path().join(".git/objects"), &objects).unwrap();
+    fs::rename(fixture.path().join(".git/index"), &index).unwrap();
+    for path in [&objects, &index, &hooks, &alternates] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache"])
+            .arg(path)
+            .env("GIT_OBJECT_DIRECTORY", &objects)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{}", path.display());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+    }
+    assert!(!objects.join(".gitignore").exists());
+    success(
+        command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--no-cache"])
+            .env("GIT_OBJECT_DIRECTORY", &objects)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
+            .output()
+            .unwrap(),
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "checks Cargo autodiscovery and untracked target visibility"
+)]
+fn untracked_autodiscovery_targets_cannot_be_cache_storage() {
+    let fixture = seeded_package();
+    for directory in ["examples", "tests", "benches"] {
+        let target = format!("packages/demo/{directory}/demo.rs");
+        fixture.write(&target, "fn main() {}\n");
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache"])
+            .arg(fixture.path().join("packages/demo").join(directory))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+        assert!(
+            fixture
+                .git(&["status", "--porcelain", "--untracked-files=all"])
+                .contains(&target)
+        );
+        assert_eq!(fixture.read(&target), "fn main() {}\n");
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes compatibility with a closed diagnostic pipe")]
+fn cache_advisories_do_not_fail_compatibility_with_closed_stderr() {
+    let fixture = seeded_package();
+    fixture.write(
+        "packages/demo/Cargo.toml",
+        &format!(
+            "{}\n[package.metadata.release-plan]\nprivate-api = true\n",
+            fixture.read("packages/demo/Cargo.toml")
+        ),
+    );
+    fixture.commit("private application contract");
+    let evidence = TempDir::new().unwrap();
+    let unavailable = evidence.path().join("obstruction");
+    fs::write(&unavailable, "not a directory").unwrap();
+    let corrupt = evidence.path().join("corrupt");
+    report(
+        &fixture,
+        &evidence.path().join("seed"),
+        &evidence.path().join("seed.trace"),
+        &["--cache", corrupt.to_str().unwrap()],
+    );
+    for entry in entries(&corrupt, "git-trees") {
+        fs::write(entry, "{").unwrap();
+    }
+    for (index, storage) in [unavailable.join("cache"), corrupt].into_iter().enumerate() {
+        let (reader, writer) = io::pipe().unwrap();
+        drop(reader);
+        success(
+            command(&fixture)
+                .args([
+                    "check-compatibility",
+                    "--release-history",
+                    "HEAD",
+                    "--cache",
+                ])
+                .arg(storage)
+                .arg("--output")
+                .arg(evidence.path().join(format!("compatibility-{index}")))
+                .stderr(writer)
+                .output()
+                .unwrap(),
+        );
     }
 }
 
@@ -356,6 +567,7 @@ fn cache_admission_uses_case_rules_for_missing_destination_components() {
 #[cfg_attr(miri, ignore = "executes commands with obstructed cache locations")]
 fn cache_location_failures_leave_source_and_reports_usable() {
     let fixture = seeded_package();
+    fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
     let obstruction = evidence.path().join("obstruction");
     fs::write(&obstruction, "not a directory").unwrap();
@@ -385,10 +597,7 @@ fn cache_location_failures_leave_source_and_reports_usable() {
                 .unwrap(),
         );
         assert!(!output.stderr.is_empty());
-        assert_eq!(
-            fs::read(baseline.join("report.json")).unwrap(),
-            fs::read(destination.join("report.json")).unwrap()
-        );
+        assert_reports_equal(&baseline, &destination);
         source.verify(&fixture.manifest(), None).unwrap();
     }
     assert_eq!(fs::read_to_string(obstruction).unwrap(), "not a directory");
@@ -401,7 +610,15 @@ fn cache_location_failures_leave_source_and_reports_usable() {
 )]
 fn storage_failures_are_advisory_and_existing_ignore_rules_are_preserved() {
     let fixture = seeded_package();
+    fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
     let storage = evidence.path().join("cache");
     fs::create_dir_all(&storage).unwrap();
     let ignore = storage.join(".gitignore");
@@ -424,6 +641,7 @@ fn storage_failures_are_advisory_and_existing_ignore_rules_are_preserved() {
         1
     );
     assert!(stderr.contains("continuing with fresh observations"));
+    assert_reports_equal(&baseline, &evidence.path().join("unavailable"));
     fs::remove_file(obstruction).unwrap();
     report(
         &fixture,
@@ -445,9 +663,17 @@ fn malformed_entries_are_diagnosed_and_concurrent_publishers_leave_complete_entr
     // the test never waits for this deadline to assert a failure.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
         let fixture = seeded_package();
+        fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
         let evidence = TempDir::new().unwrap();
         let storage = evidence.path().join("cache");
         let cache_argument = storage.to_str().unwrap();
+        let baseline = evidence.path().join("baseline");
+        report(
+            &fixture,
+            &baseline,
+            &evidence.path().join("baseline.trace"),
+            &["--no-cache"],
+        );
         report(
             &fixture,
             &evidence.path().join("first"),
@@ -466,6 +692,7 @@ fn malformed_entries_are_diagnosed_and_concurrent_publishers_leave_complete_entr
             &["--cache", cache_argument],
         );
         assert!(String::from_utf8_lossy(&output.stderr).contains("corrupt cache"));
+        assert_reports_equal(&baseline, &evidence.path().join("repaired"));
         assert_eq!(
             acquisitions(&evidence.path().join("repaired.trace")),
             (1, 1)

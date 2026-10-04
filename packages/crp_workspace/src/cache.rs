@@ -6,6 +6,7 @@
 )]
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
@@ -19,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
 
-use self::paths::require_disjoint;
+use self::paths::{protected_paths, require_direct_subject, require_disjoint};
+use crate::ParseMetadataError;
 use crate::artifact_path::{resolve_path, write_new};
 use crate::git::GitRepo;
 use crate::manifest::PathCase;
@@ -58,7 +60,7 @@ impl Cache {
         if *options == CacheOptions::Disabled {
             return Ok(Self::default());
         }
-        let metadata: CacheMetadata = serde_json::from_slice(&capture_metadata(manifest)?)?;
+        let metadata = CacheMetadata::parse(&capture_metadata(manifest)?)?;
         let requested = match options {
             CacheOptions::Directory(path) => path.clone(),
             CacheOptions::Default => metadata
@@ -75,36 +77,50 @@ impl Cache {
             .into_iter()
             .map(|package| package.manifest_path)
             .collect::<Vec<_>>();
-        let mut sources = SourceInputs::discover(
+        let mut dependency_manifests = Vec::new();
+        let sources = SourceInputs::discover(
             git.root(),
             &metadata.workspace_root,
             &manifests,
             |manifest, dependency| {
-                resolve_path(
-                    &manifest
-                        .parent()
-                        .expect("a manifest has a parent")
-                        .join(dependency),
-                )
+                let path = manifest
+                    .parent()
+                    .expect("a manifest has a parent")
+                    .join(dependency);
+                // Retain the declaration's spelling so link entries are protected as well.
+                dependency_manifests.push(path.join("Cargo.toml"));
+                resolve_path(&path)
             },
-        )?;
+        );
+        let Some(mut sources) = storage_inventory(sources, verbose) else {
+            return Ok(Self::default());
+        };
         sources
             .files
             .extend(tracked.iter().map(|path| git.root().join(path)));
-        sources.files.extend(git.administrative_paths()?);
-        // Unselected tracked manifests are not interpreted, but their source directories
-        // still must not become disposable storage.
-        for path in tracked.iter().filter(|path| case.is_manifest(path)) {
-            let manifest = git.root().join(path);
-            if let Some(parent) = manifest.parent() {
-                sources.source_directories.insert(parent.join("src"));
-            }
-        }
+        let Some(administration) = storage_inventory(git.administrative_paths(), verbose) else {
+            return Ok(Self::default());
+        };
+        sources.files.extend(administration);
+        sources.files.extend(dependency_manifests);
+        sources.files.insert(manifest.to_owned());
+        reserve_package_paths(&mut sources, case);
         let Some(directory) = resolve_directory(&requested, verbose, resolve_path) else {
             return Ok(Self::default());
         };
-        for path in sources.files.iter().chain(&sources.source_directories) {
-            require_disjoint(&directory, &resolve_path(path)?)?;
+        // The inventory shares many ancestors; acquire each link identity once per admission.
+        let mut redirects = HashMap::new();
+        let paths = sources
+            .files
+            .iter()
+            .chain(&sources.source_directories)
+            .map(|path| protected_paths(path, &mut redirects))
+            .collect::<Result<Vec<_>, _>>();
+        let Some(paths) = storage_inventory(paths, verbose) else {
+            return Ok(Self::default());
+        };
+        for path in paths.iter().flatten() {
+            require_disjoint(&directory, path)?;
         }
         Ok(Self {
             directory: Some(directory),
@@ -121,7 +137,9 @@ impl Cache {
     #[cfg_attr(test, mutants::skip)] // Native path resolution; overlap policy is unit-tested.
     pub fn protect(&self, path: &Path) -> Result<(), AppError> {
         if let Some(directory) = &self.directory {
-            require_disjoint(directory, &resolve_path(path)?)?;
+            for protected in protected_paths(path, &mut HashMap::new())? {
+                require_disjoint(directory, &protected)?;
+            }
         }
         Ok(())
     }
@@ -139,39 +157,80 @@ impl Cache {
         };
         let key = serde_json::to_string(key)?;
         let identity = serde_json::to_vec(&(T::SUBJECT, T::REVISION, &key))?;
-        let path = directory
-            .join(T::SUBJECT)
-            .join(format!("{}.json", checksum(&identity)));
+        let subject = directory.join(T::SUBJECT);
+        let path = subject.join(format!("{}.json", checksum(&identity)));
         get_with::<T>(
             &key,
-            || match fs::read(&path) {
-                Ok(bytes) => Ok(Some(bytes)),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(CacheReadFailed::caused_by(&path, error).into()),
+            || {
+                require_direct_subject(&subject)?;
+                match fs::read(&path) {
+                    Ok(bytes) => Ok(Some(bytes)),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                    Err(error) => Err(CacheReadFailed::caused_by(&path, error).into()),
+                }
             },
             |bytes| publish(directory, &path, bytes),
             |error| {
                 // Cache failures are advisory, including a closed diagnostic sink. Share the
                 // latch through prospective passes to avoid repeating an unavailable-store error.
                 if !self.diagnosed.replace(true) {
-                    _ = verbose.sink().write(&format!(
+                    verbose.sink().write_advisory(&format!(
                         "[release-plan] cache entry '{}': {error}; continuing with fresh observations (further cache diagnostics suppressed)\n",
                         path.display()
                     ));
                 }
             },
             || {
-                verbose.note(|| format!(
-                    "acquiring {} because no compatible cache entry matches its immutable inputs",
-                    T::SUBJECT
-                ));
+                if verbose.enabled() {
+                    verbose.sink().write_advisory(&format!(
+                        "[release-plan] acquiring {} because no compatible cache entry matches its immutable inputs\n",
+                        T::SUBJECT
+                    ));
+                }
                 acquire()
             },
         )
     }
 }
 
+fn storage_inventory<T>(sources: Result<T, AppError>, verbose: Verbose<'_>) -> Option<T> {
+    match sources {
+        Ok(sources) => Some(sources),
+        Err(error) => {
+            // This inventory is broader than classification's inputs. Failure cannot admit
+            // unchecked storage, but must not make unused dependencies required evidence.
+            verbose.sink().write_advisory(&format!(
+                "[release-plan] cache safety inventory: {error}; continuing with storage disabled\n"
+            ));
+            None
+        }
+    }
+}
+
+fn reserve_package_paths(sources: &mut SourceInputs, case: PathCase) {
+    // Reserve Cargo's autodiscovery locations without interpreting unselected manifests.
+    // These additional reservations belong only to storage admission, not captured evidence.
+    let packages = sources
+        .files
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| case.is_manifest(name))
+        })
+        .filter_map(|manifest| manifest.parent())
+        .map(Path::to_owned)
+        .collect::<Vec<_>>();
+    for package in packages {
+        sources.files.insert(package.join("build.rs"));
+        for directory in ["src", "examples", "tests", "benches"] {
+            sources.source_directories.insert(package.join(directory));
+        }
+    }
+}
+
 /// Each acquisition subject names its representation and complete input identity.
+///
 /// Keys must serialize deterministically.
 pub trait CacheEntry: Serialize + DeserializeOwned {
     const SUBJECT: &'static str;
@@ -185,6 +244,12 @@ struct CacheMetadata {
     target_directory: PathBuf,
     workspace_root: PathBuf,
     packages: Vec<CachePackage>,
+}
+
+impl CacheMetadata {
+    fn parse(bytes: &[u8]) -> Result<Self, AppError> {
+        Ok(serde_json::from_slice(bytes).map_err(ParseMetadataError::caused_by)?)
+    }
 }
 
 #[derive(Deserialize)]
@@ -258,7 +323,8 @@ fn get_with<T: CacheEntry>(
 fn checksum(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
-        .fold(String::new(), |mut output, byte| {
+        // Reserve the complete SHA-256 hexadecimal representation.
+        .fold(String::with_capacity(64), |mut output, byte| {
             write!(output, "{byte:02x}").expect("writing to a String cannot fail");
             output
         })
@@ -271,6 +337,7 @@ fn publish(directory: &Path, path: &Path, bytes: &[u8]) -> Result<(), AppError> 
     let parent = path
         .parent()
         .expect("an entry path includes its subject directory");
+    require_direct_subject(parent)?;
     fs::create_dir_all(parent).map_err(|error| CacheWriteFailed::caused_by(path, error))?;
     // Hide only tool-owned untracked entries, not arbitrary tracked source. This also keeps
     // default placement unobtrusive in repositories that do not ignore Cargo's target directory.
@@ -313,9 +380,8 @@ fn resolve_directory(
     match resolve(path) {
         Ok(path) => Some(path),
         Err(error) => {
-            // Only storage-location resolution is advisory. Source discovery and overlap
-            // admission are performed separately and never converted into cache misses.
-            _ = verbose.sink().write(&format!(
+            // No storage is admitted when its location cannot be resolved.
+            verbose.sink().write_advisory(&format!(
                 "[release-plan] cache location '{}': {error}; continuing with storage disabled\n",
                 path.display()
             ));
@@ -365,6 +431,99 @@ mod tests {
             } else {
                 Ok(())
             }
+        }
+    }
+
+    #[test]
+    fn metadata_parsing_preserves_acquisition_context_and_json_cause() {
+        for bytes in [b"[".as_slice(), b"{}", br#"{"target_directory": false}"#] {
+            let error = CacheMetadata::parse(bytes).err().unwrap();
+            assert!(error.find_source::<ParseMetadataError>().is_some());
+            assert!(error.find_source::<serde_json::Error>().is_some());
+        }
+        let metadata = CacheMetadata::parse(
+            br#"{"target_directory":"target","workspace_root":"root","packages":[{"manifest_path":"root/Cargo.toml"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(metadata.target_directory, Path::new("target"));
+        assert_eq!(metadata.workspace_root, Path::new("root"));
+        assert_eq!(
+            metadata.packages.first().unwrap().manifest_path,
+            Path::new("root/Cargo.toml")
+        );
+    }
+
+    #[test]
+    fn checksum_preserves_the_sha256_hexadecimal_representation() {
+        assert_eq!(
+            checksum(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn incomplete_inventory_disables_storage_and_surfaces_its_cause() {
+        for closed in [false, true] {
+            let recording = Recording {
+                closed,
+                ..Recording::default()
+            };
+            let verbose = Verbose::new(false, &recording);
+            let sources = SourceInputs {
+                files: [PathBuf::from("workspace/Cargo.toml")].into(),
+                ..SourceInputs::default()
+            };
+            let admitted = storage_inventory(Ok(sources), verbose).unwrap();
+            assert!(admitted.files.contains(Path::new("workspace/Cargo.toml")));
+            assert!(recording.messages.lock().unwrap().is_empty());
+            assert!(
+                storage_inventory::<SourceInputs>(
+                    Err(io::Error::other("missing dependency").into()),
+                    verbose
+                )
+                .is_none()
+            );
+            let messages = recording.messages.lock().unwrap();
+            assert_eq!(messages.len(), 1);
+            let message = messages.first().unwrap();
+            assert!(message.contains("missing dependency"));
+            assert!(message.contains("storage disabled"));
+        }
+    }
+
+    #[test]
+    fn every_known_manifest_reserves_package_autodiscovery_paths() {
+        for case in [PathCase::Sensitive, PathCase::Insensitive] {
+            let mut sources = SourceInputs {
+                files: [
+                    "selected/Cargo.toml",
+                    "dependency/Cargo.toml",
+                    "unselected/Cargo.toml",
+                    "lower/cargo.toml",
+                    "not-a-package/Other.toml",
+                ]
+                .map(PathBuf::from)
+                .into(),
+                ..SourceInputs::default()
+            };
+            let original = sources.files.clone();
+            reserve_package_paths(&mut sources, case);
+            let mut expected = original;
+            let mut directories = Vec::new();
+            for package in ["selected", "dependency", "unselected", "lower"] {
+                if package == "lower" && case == PathCase::Sensitive {
+                    continue;
+                }
+                expected.insert(Path::new(package).join("build.rs"));
+                for directory in ["src", "examples", "tests", "benches"] {
+                    directories.push(Path::new(package).join(directory));
+                }
+            }
+            assert_eq!(sources.files, expected);
+            assert_eq!(
+                sources.source_directories,
+                directories.into_iter().collect()
+            );
         }
     }
 

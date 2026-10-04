@@ -666,6 +666,10 @@ fn floor_reason(kind: MetricKind) -> &'static str {
             "A fraction of a byte or of an allocation cannot happen; the floor rejects only \
              the sub-unit moves that amortizing across a run's iterations manufactures."
         }
+        MetricKind::PeakOutstandingBytes => {
+            "A peak counts whole bytes; the floor rejects sub-byte differences introduced \
+             by averaging span peaks."
+        }
     }
 }
 
@@ -857,7 +861,7 @@ fn unit_nouns(kind: MetricKind) -> (&'static str, &'static str) {
         MetricKind::InstructionCount => ("instruction", "instructions"),
         MetricKind::ConditionalBranches => ("conditional branch", "conditional branches"),
         MetricKind::IndirectBranches => ("indirect branch", "indirect branches"),
-        MetricKind::AllocatedBytes => ("byte", "bytes"),
+        MetricKind::AllocatedBytes | MetricKind::PeakOutstandingBytes => ("byte", "bytes"),
         MetricKind::AllocationCount => ("allocation", "allocations"),
     }
 }
@@ -1234,9 +1238,9 @@ mod tests {
                 | MetricKind::ConditionalBranches
                 | MetricKind::IndirectBranches => PRACTICAL_ABSOLUTE_COUNT,
                 MetricKind::WallTime | MetricKind::ProcessorTime => PRACTICAL_ABSOLUTE_TIME,
-                MetricKind::AllocatedBytes | MetricKind::AllocationCount => {
-                    PRACTICAL_ABSOLUTE_ALLOC
-                }
+                MetricKind::AllocatedBytes
+                | MetricKind::PeakOutstandingBytes
+                | MetricKind::AllocationCount => PRACTICAL_ABSOLUTE_ALLOC,
             };
 
             assert!(

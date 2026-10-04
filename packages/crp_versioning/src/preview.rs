@@ -126,14 +126,28 @@ pub fn run_preview(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
-    run_preview_with_cache(
+    run_preview_with_options(
         plan,
         prepared,
         output,
         manifest,
         verbose,
-        Cache::resolve(manifest, &CacheOptions::Default, verbose)?,
+        &CacheOptions::Default,
     )
+}
+
+#[cfg_attr(test, mutants::skip)] // Resolves original-workspace storage after preview admission.
+pub fn run_preview_with_options(
+    plan: &Path,
+    prepared: &Path,
+    output: &Path,
+    manifest: &Path,
+    verbose: Verbose<'_>,
+    options: &CacheOptions,
+) -> Result<String, AppError> {
+    run_preview_acquiring_cache(plan, prepared, output, manifest, verbose, || {
+        Cache::resolve(manifest, options, verbose)
+    })
 }
 
 #[cfg_attr(test, mutants::skip)] // Native prospective lifetime and resolution.
@@ -145,13 +159,31 @@ pub fn run_preview_with_cache(
     verbose: Verbose<'_>,
     cache: Cache,
 ) -> Result<String, AppError> {
+    run_preview_acquiring_cache(plan, prepared, output, manifest, verbose, || Ok(cache))
+}
+
+#[cfg_attr(test, mutants::skip)] // Native prospective lifetime and resolution.
+fn run_preview_acquiring_cache(
+    plan: &Path,
+    prepared: &Path,
+    output: &Path,
+    manifest: &Path,
+    verbose: Verbose<'_>,
+    acquire_cache: impl FnOnce() -> Result<Cache, AppError>,
+) -> Result<String, AppError> {
+    let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
+    let (prepared_input, plan_input) =
+        preview_inputs(plan, prepared, &output, manifest, |inputs| {
+            inputs.verify(manifest, None).map(|_| ())
+        })?;
+    // Collision-safe completion invalidation precedes even cache metadata acquisition.
+    // The selected original-workspace location is still fixed before prospective creation.
+    let cache = acquire_cache()?;
     cache.protect(plan)?;
     cache.protect(prepared)?;
-    cache.protect(output)?;
-    let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
-    let (prepared, plan) = preview_inputs(plan, prepared, &output, manifest, |inputs| {
-        inputs.verify(manifest, None).map(|_| ())
-    })?;
+    cache.protect(&output)?;
+    let prepared = prepared_input;
+    let plan = plan_input;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
     let mut cache = SnapshotCache::new(cache);
     let mut classification = classify_with_cache(
