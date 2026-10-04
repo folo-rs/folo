@@ -107,7 +107,9 @@ The shell checks the output destination through the write-once file port before 
 benchmarks and validates the captured identity before writing shared history. Final publication
 still uses create-new semantics to reject a destination occupied after preflight. Snapshot
 publication follows successful collection and cache invalidation, so an incomplete execution
-does not emit usable evidence.
+does not emit usable evidence. Encoding and final write-result handling belong to orchestration
+above the injected file port, keeping successful publication, occupation and I/O-error decisions
+testable in process while native integration tests cover the filesystem adapter and command wiring.
 
 ### Backfill execution
 
