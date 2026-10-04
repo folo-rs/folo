@@ -86,7 +86,7 @@ pub fn run_report_with_target(
         merge_target,
         manifest_path,
         verbose,
-        Cache::resolve(manifest_path, &CacheOptions::Default)?,
+        Cache::resolve(manifest_path, &CacheOptions::Default, verbose)?,
     )
 }
 

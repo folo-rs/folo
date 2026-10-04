@@ -58,7 +58,7 @@ pub fn run_prepare_with_target(
         merge_target,
         manifest,
         verbose,
-        Cache::resolve(manifest, &CacheOptions::Default)?,
+        Cache::resolve(manifest, &CacheOptions::Default, verbose)?,
     )
 }
 
@@ -132,7 +132,7 @@ pub fn run_preview(
         output,
         manifest,
         verbose,
-        Cache::resolve(manifest, &CacheOptions::Default)?,
+        Cache::resolve(manifest, &CacheOptions::Default, verbose)?,
     )
 }
 

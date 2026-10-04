@@ -77,6 +77,8 @@ effective target-directory acquisition and cache path admission. The resolved lo
 is passed explicitly through versioning operations; it is never serialized into
 prepared or resolved evidence. Compatibility resolves it from the admitted evidence's
 original source rather than the retained candidate.
+Compatibility also admits the cache against the retained candidate's entire Git root,
+not merely its possibly nested workspace manifest or the resolved-plan file.
 
 The workspace component publishes typed immutable observations atomically. Versioning
 retains the full historical tree and its lookup indexes with each committed snapshot,
