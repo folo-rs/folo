@@ -1,12 +1,66 @@
 //! Overlap admission for resolved locations, including missing path suffixes.
 
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf, absolute};
 use std::{fs, io};
 
 use ohno::AppError;
 use tempfile::Builder;
 
+use crate::artifact_path::resolve_path;
 use crate::manifest::PathCase;
+
+// Cache removal also removes link entries, not just resolved source/evidence referents.
+#[cfg_attr(test, mutants::skip)] // Native identities are injected into protected_paths_with.
+pub(crate) fn protected_paths(
+    path: &Path,
+    redirects: &mut HashMap<PathBuf, bool>,
+) -> Result<Vec<PathBuf>, AppError> {
+    protected_paths_with(&absolute(path)?, resolve_path, |path| {
+        if let Some(value) = redirects.get(path) {
+            return Ok(*value);
+        }
+        let value = redirected(path)?;
+        redirects.insert(path.to_owned(), value);
+        Ok(value)
+    })
+}
+
+fn protected_paths_with(
+    path: &Path,
+    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    mut redirected: impl FnMut(&Path) -> Result<bool, AppError>,
+) -> Result<Vec<PathBuf>, AppError> {
+    let mut paths = vec![resolve(path)?];
+    for ancestor in path.ancestors() {
+        if redirected(ancestor)?
+            && let (Some(parent), Some(name)) = (ancestor.parent(), ancestor.file_name())
+        {
+            paths.push(resolve(parent)?.join(name));
+        }
+    }
+    Ok(paths)
+}
+
+#[cfg_attr(test, mutants::skip)] // Native symlinks and Windows junctions have boundary coverage.
+fn redirected(path: &Path) -> Result<bool, AppError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    // Rust includes Windows name-surrogate reparse points (including junctions), not
+    // unrelated reparse tags such as cloud placeholders.
+    Ok(metadata.file_type().is_symlink())
+}
+
+#[cfg_attr(test, mutants::skip)] // Subject-directory redirection is a native storage boundary.
+pub(crate) fn require_direct_subject(path: &Path) -> Result<(), AppError> {
+    if redirected(path)? {
+        return Err(RedirectedSubject::new(path).into());
+    }
+    Ok(())
+}
 
 // Native case acquisition is isolated from component-wise overlap policy.
 #[cfg_attr(test, mutants::skip)]
@@ -80,10 +134,65 @@ struct CachePathConflict {
     protected: PathBuf,
 }
 
+/// Subject storage must not redirect disposable publication into unrelated locations.
+#[ohno::error]
+#[display("cache subject directory '{}' is redirected", path.display())]
+struct RedirectedSubject {
+    path: PathBuf,
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protection_retains_only_link_entries_and_resolved_referents() {
+        let path = Path::new("root/linked/entry");
+        let paths = protected_paths_with(
+            path,
+            |input| match input.to_str().unwrap() {
+                "root/linked/entry" => Ok("target/value".into()),
+                "root/linked" => Ok("target".into()),
+                "root" => Ok("root".into()),
+                _ => panic!("ordinary ancestors do not need separate protection"),
+            },
+            |input| Ok(input == path || input == Path::new("root/linked")),
+        )
+        .unwrap();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("target/value"),
+                PathBuf::from("target/entry"),
+                PathBuf::from("root/linked"),
+            ]
+        );
+        let ordinary = protected_paths_with(path, |_| Ok("target".into()), |_| Ok(false)).unwrap();
+        assert_eq!(ordinary, [PathBuf::from("target")]);
+    }
+
+    #[test]
+    fn protection_propagates_failed_identity_acquisition() {
+        for fail_resolve in [false, true] {
+            let error = protected_paths_with(
+                Path::new("root/entry"),
+                |_| {
+                    if fail_resolve {
+                        Err(io::Error::from(io::ErrorKind::NotADirectory).into())
+                    } else {
+                        Ok("target".into())
+                    }
+                },
+                |_| Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.find_source::<io::Error>().unwrap().kind(),
+                io::ErrorKind::NotADirectory
+            );
+        }
+    }
 
     #[test]
     fn prefixes_are_checked_in_both_directions_using_each_parent() {

@@ -687,6 +687,8 @@ struct CheckArgs {
 /// Shared storage controls; Cargo supplies the effective default target directory.
 #[derive(Debug, Parser)]
 struct CacheArgs {
+    /// Override the directory for disposable observations.
+    ///
     /// Store disposable observations here instead of <Cargo target>/cargo-release-plan/cache.
     /// Relative paths are resolved from the invocation working directory.
     #[arg(long, value_name = "DIRECTORY", conflicts_with = "no_cache")]
@@ -757,13 +759,8 @@ mod tests {
     use super::{CacheArgs, Cli, EarlyExit};
     use crate::RunInput;
 
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "repeated full Clap-tree parsing; cache policy mapping has pure interpreter coverage"
-    )]
-    fn classification_commands_share_conflicting_storage_controls() {
-        for arguments in [
+    fn classification_commands() -> impl Iterator<Item = Vec<&'static str>> {
+        let commands = [
             vec!["check"],
             vec!["report", "--out-dir", "report"],
             vec!["prepare", "--output", "prepared"],
@@ -777,7 +774,15 @@ mod tests {
                 "preview",
             ],
             vec!["check-compatibility", "--output", "compatibility"],
-        ] {
+        ];
+        // One representative command retains parsing and conversion coverage in the interpreter.
+        let count = if cfg!(miri) { 1 } else { commands.len() };
+        commands.into_iter().take(count)
+    }
+
+    #[test]
+    fn classification_commands_share_storage_controls() {
+        for arguments in classification_commands() {
             for controls in [vec!["--cache", "chosen"], vec!["--no-cache"]] {
                 let input = Cli::from_args_os(
                     iter::once("cargo-release-plan")
@@ -798,6 +803,12 @@ mod tests {
                     }
                 );
             }
+        }
+    }
+
+    #[test]
+    fn classification_commands_reject_conflicting_storage_controls() {
+        for arguments in classification_commands() {
             Cli::from_args_os(
                 iter::once("cargo-release-plan")
                     .chain(arguments.iter().copied())

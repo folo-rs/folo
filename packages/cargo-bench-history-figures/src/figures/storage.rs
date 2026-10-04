@@ -61,8 +61,12 @@ fn engine_kinds() -> Vec<(Engine, &'static str, Vec<MetricKind>)> {
         ),
         (
             Engine::AllocTracker,
-            "Heap allocation, in bytes and in count",
-            vec![MetricKind::AllocatedBytes, MetricKind::AllocationCount],
+            "Heap allocation, in bytes and in count, plus optional peak outstanding bytes",
+            vec![
+                MetricKind::AllocatedBytes,
+                MetricKind::PeakOutstandingBytes,
+                MetricKind::AllocationCount,
+            ],
         ),
         (
             Engine::AllTheTime,
@@ -81,7 +85,11 @@ fn engine_series() -> String {
         writeln!(
             markdown,
             "| `{engine}` | {} | {} |",
-            count_of(kinds.len(), "series", "series"),
+            if engine == Engine::AllocTracker {
+                format!("Up to {}", count_of(kinds.len(), "series", "series"))
+            } else {
+                count_of(kinds.len(), "series", "series")
+            },
             names
                 .iter()
                 .map(|name| format!("`{name}`"))
@@ -123,7 +131,7 @@ fn unit_of(kind: MetricKind) -> &'static str {
         | MetricKind::ConditionalBranches
         | MetricKind::IndirectBranches
         | MetricKind::AllocationCount => "counts",
-        MetricKind::AllocatedBytes => "bytes",
+        MetricKind::AllocatedBytes | MetricKind::PeakOutstandingBytes => "bytes",
     }
 }
 

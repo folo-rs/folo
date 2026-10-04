@@ -13,6 +13,9 @@ Lazy construction avoids formatting disabled notes. Their tool prefix attributes
 interleaved output, and note delivery is best-effort. Unconditional diagnostics retain
 their explicit failure behavior; child-output streaming reports delivery errors only
 after the pipe has been drained.
+Sinks also expose explicit advisory delivery for expendable acceleration diagnostics.
+Adapters that defer ordinary delivery errors forward advisories directly to the destination
+without recording them as operation failures. This does not relax checker output delivery.
 
 Path quoting, count inflection and abbreviated labels keep diagnostic, error and
 report presentation consistent. They do not validate filesystem identities, select

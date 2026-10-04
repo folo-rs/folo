@@ -9,5 +9,8 @@
   "interval_high_bytes_per_iteration": 200.6533213281746,
   "slope_allocations_per_iteration": 2.0,
   "interval_low_allocations_per_iteration": 2.0,
-  "interval_high_allocations_per_iteration": 2.0
+  "interval_high_allocations_per_iteration": 2.0,
+  "slope_peak_bytes": 128.0,
+  "interval_low_peak_bytes": 120.0,
+  "interval_high_peak_bytes": 136.0
 }

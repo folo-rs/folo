@@ -156,6 +156,14 @@ impl GitObjectContext {
     }
 
     fn key(&self, commit: &str) -> Result<ObjectKey, AppError> {
+        self.validate_identity(commit)?;
+        Ok(ObjectKey {
+            commit: commit.to_owned(),
+            context: self.clone(),
+        })
+    }
+
+    fn validate_identity(&self, commit: &str) -> Result<(), AppError> {
         // Full Git object names are the cache identity, never refs or revision expressions.
         let valid_length = match self.format.trim() {
             "sha1" => commit.len() == 40,
@@ -165,10 +173,7 @@ impl GitObjectContext {
         if !valid_length || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(UnresolvedObjectIdentity::new(commit).into());
         }
-        Ok(ObjectKey {
-            commit: commit.to_owned(),
-            context: self.clone(),
-        })
+        Ok(())
     }
 }
 
@@ -179,7 +184,7 @@ pub struct ObjectKey {
     context: GitObjectContext,
 }
 
-/// Successfully acquired raw headers; parent availability is deliberately not retained.
+/// Retained parent-presence facts, separate from parent identities and availability.
 #[derive(Debug, Default)]
 pub struct CommitHeaders {
     parents: HashMap<String, bool>,
@@ -199,11 +204,11 @@ impl CommitHeaders {
         cache: &Cache,
         verbose: Verbose<'_>,
     ) -> Result<bool, AppError> {
-        let key = context.key(commit)?;
+        context.validate_identity(commit)?;
         self.parent_with(commit, || {
             let acquire = || git.commit_has_parent_header(commit).map(ParentObservation);
             let parent = if context.portable() {
-                cache.get(&key, verbose, acquire)?
+                cache.get(&context.key(commit)?, verbose, acquire)?
             } else {
                 acquire()?
             };
