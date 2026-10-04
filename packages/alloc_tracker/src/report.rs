@@ -330,7 +330,9 @@ impl ReportOperation {
     /// lets spans covering different iteration counts be combined and lets low-iteration
     /// warmup spans be down-weighted. An operation that instead accumulates memory across
     /// the iterations of a batch has no batch-size-independent peak, and reports a figure
-    /// that grows with the iteration counts the benchmark harness chose.
+    /// that grows with the iteration counts the benchmark harness chose. Use
+    /// [`ThreadSpan::no_peak`](crate::ThreadSpan::no_peak) for such benchmarks to avoid
+    /// false regression alerts while retaining their other allocation metrics.
     ///
     /// The figure counts memory requested through the allocator as seen at the boundaries
     /// of allocator calls, and is measured relative to what was already outstanding when
@@ -340,8 +342,8 @@ impl ReportOperation {
     ///
     /// Returns `None` when no finite figure is available — when no spans were recorded, when
     /// the recorded spans covered zero iterations, or when any recorded span was created by
-    /// [`Operation::measure_process`](crate::Operation::measure_process), which has no
-    /// single thread's watermark to read.
+    /// [`Operation::measure_process`](crate::Operation::measure_process) or opted out with
+    /// [`ThreadSpan::no_peak`](crate::ThreadSpan::no_peak).
     #[must_use]
     pub fn peak_outstanding_bytes(&self) -> Option<f64> {
         self.metrics
