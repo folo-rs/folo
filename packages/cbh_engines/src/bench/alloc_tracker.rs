@@ -13,7 +13,9 @@
 //! run. The adapter therefore reads the warmup-robust per-iteration slope. Every
 //! metric carries a slope; multi-span output additionally carries a confidence
 //! interval, so the interval fields are parsed as optional (a single span has no
-//! dispersion). The committed fixtures under `tests/fixtures/alloc_tracker/` are
+//! dispersion). Peak outstanding bytes is consumed whenever present; process scope and
+//! explicit `no_peak()` spans withhold it without removing the other metrics.
+//! The committed fixtures under `tests/fixtures/alloc_tracker/` are
 //! representative samples of the current schema; the authoritative schema-drift
 //! guard is the `super::schema_roundtrip` test, which feeds real producer output
 //! through this parser so a field renamed or dropped on either side of the
@@ -100,8 +102,19 @@ fn output_to_record(output: &OperationOutput) -> Option<BenchmarkResult> {
         output.interval_high_allocations_per_iteration,
     );
 
+    let mut metrics = vec![bytes, allocations];
+    if let Some(value) = super::usable_slope(output.slope_peak_bytes) {
+        metrics.push(
+            Metric::new(MetricKind::PeakOutstandingBytes, value).with_dispersion(
+                None,
+                output.interval_low_peak_bytes,
+                output.interval_high_peak_bytes,
+            ),
+        );
+    }
+
     let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
-    Some(BenchmarkResult::new(id, vec![bytes, allocations]))
+    Some(BenchmarkResult::new(id, metrics))
 }
 
 /// The subset of an `alloc_tracker` operation file the tool reads. The `total_*`
@@ -124,6 +137,12 @@ struct OperationOutput {
     interval_low_allocations_per_iteration: Option<f64>,
     #[serde(default)]
     interval_high_allocations_per_iteration: Option<f64>,
+    #[serde(default)]
+    slope_peak_bytes: Option<f64>,
+    #[serde(default)]
+    interval_low_peak_bytes: Option<f64>,
+    #[serde(default)]
+    interval_high_peak_bytes: Option<f64>,
 }
 
 #[cfg(test)]
@@ -185,15 +204,48 @@ mod tests {
     }
 
     #[test]
-    fn maps_both_allocation_metrics_from_the_slopes() {
+    fn maps_all_allocation_metrics_from_the_slopes() {
         let record = parse_record(ALLOCATE_VEC_FIXTURE);
-        assert_eq!(record.metrics.len(), 2);
+        assert_eq!(record.metrics.len(), 3);
 
         let bytes = metric(&record, MetricKind::AllocatedBytes);
         assert_eq!(bytes.value, 200.0);
 
         let count = metric(&record, MetricKind::AllocationCount);
         assert_eq!(count.value, 2.0);
+
+        // The peak differs from per-iteration bytes so confusing their fields is detected.
+        let peak = metric(&record, MetricKind::PeakOutstandingBytes);
+        assert_eq!(peak.value, 128.0);
+    }
+
+    #[test]
+    fn zero_peak_without_interval_is_a_measurement_not_an_omission() {
+        let json = serde_json::json!({
+            "operation": "peak",
+            "slope_bytes_per_iteration": 200.0,
+            "slope_allocations_per_iteration": 2.0,
+            "slope_peak_bytes": 0.0
+        });
+        let record = parse_record(&json.to_string());
+        let peak = metric(&record, MetricKind::PeakOutstandingBytes);
+        assert_eq!(peak.value, 0.0);
+        assert_eq!(peak.interval_low, None);
+        assert_eq!(peak.interval_high, None);
+    }
+
+    #[test]
+    fn null_peak_preserves_the_other_metrics() {
+        let json = serde_json::json!({
+            "operation": "peak",
+            "slope_bytes_per_iteration": 200.0,
+            "slope_allocations_per_iteration": 2.0,
+            "slope_peak_bytes": null
+        });
+        let record = parse_record(&json.to_string());
+        assert_eq!(record.metrics.len(), 2);
+        assert_eq!(metric(&record, MetricKind::AllocatedBytes).value, 200.0);
+        assert_eq!(metric(&record, MetricKind::AllocationCount).value, 2.0);
     }
 
     #[test]
@@ -212,6 +264,7 @@ mod tests {
     #[test]
     fn records_dispersion_when_present() {
         let record = parse_record(ALLOCATE_VEC_DISPERSION_FIXTURE);
+        assert_eq!(record.metrics.len(), 3);
 
         let bytes = metric(&record, MetricKind::AllocatedBytes);
         // The slope is preferred as the point estimate, and the bytes metric
@@ -230,10 +283,16 @@ mod tests {
         assert_eq!(count.std_dev, None);
         assert_eq!(count.interval_low, Some(2.0));
         assert_eq!(count.interval_high, Some(2.0));
+
+        let peak = metric(&record, MetricKind::PeakOutstandingBytes);
+        assert_eq!(peak.value, 128.0);
+        assert_eq!(peak.std_dev, None);
+        assert_eq!(peak.interval_low, Some(120.0));
+        assert_eq!(peak.interval_high, Some(136.0));
     }
 
     #[test]
-    fn reads_the_slope_as_the_point_estimate() {
+    fn missing_peak_preserves_allocation_slopes() {
         // The slope is the point estimate for each metric, matching the Criterion
         // adapter.
         let json = concat!(
@@ -242,6 +301,7 @@ mod tests {
             "\"slope_allocations_per_iteration\":3.25}"
         );
         let record = parse_record(json);
+        assert_eq!(record.metrics.len(), 2);
         assert_eq!(metric(&record, MetricKind::AllocatedBytes).value, 201.5);
         assert_eq!(metric(&record, MetricKind::AllocationCount).value, 3.25);
     }

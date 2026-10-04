@@ -96,6 +96,8 @@ pub enum MetricKind {
     /// Bytes allocated per iteration (`alloc_tracker`); not deterministic (warmup
     /// and buffer-resize allocations jitter the per-iteration figure).
     AllocatedBytes,
+    /// Peak outstanding allocator-requested bytes (`alloc_tracker`), relative to span entry.
+    PeakOutstandingBytes,
     /// Allocation count per iteration (`alloc_tracker`); not deterministic.
     AllocationCount,
 }
@@ -106,13 +108,14 @@ impl MetricKind {
     /// The single source of truth for enumerating the kinds — used to list the
     /// valid names when a name lookup fails (see [`from_name`](Self::from_name))
     /// and to exercise every kind in tests.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::WallTime,
         Self::ProcessorTime,
         Self::InstructionCount,
         Self::ConditionalBranches,
         Self::IndirectBranches,
         Self::AllocatedBytes,
+        Self::PeakOutstandingBytes,
         Self::AllocationCount,
     ];
 
@@ -127,6 +130,7 @@ impl MetricKind {
             Self::ConditionalBranches => "conditional_branches",
             Self::IndirectBranches => "indirect_branches",
             Self::AllocatedBytes => "allocated_bytes",
+            Self::PeakOutstandingBytes => "peak_outstanding_bytes",
             Self::AllocationCount => "allocation_count",
         }
     }
@@ -144,7 +148,7 @@ impl MetricKind {
     pub fn as_unit(self) -> &'static str {
         match self {
             Self::WallTime | Self::ProcessorTime => "ns",
-            Self::AllocatedBytes => "bytes",
+            Self::AllocatedBytes | Self::PeakOutstandingBytes => "bytes",
             Self::InstructionCount
             | Self::ConditionalBranches
             | Self::IndirectBranches
@@ -193,6 +197,7 @@ mod tests {
         assert_eq!(MetricKind::WallTime.as_unit(), "ns");
         assert_eq!(MetricKind::ProcessorTime.as_unit(), "ns");
         assert_eq!(MetricKind::AllocatedBytes.as_unit(), "bytes");
+        assert_eq!(MetricKind::PeakOutstandingBytes.as_unit(), "bytes");
         assert_eq!(MetricKind::InstructionCount.as_unit(), "count");
         assert_eq!(MetricKind::ConditionalBranches.as_unit(), "count");
         assert_eq!(MetricKind::IndirectBranches.as_unit(), "count");

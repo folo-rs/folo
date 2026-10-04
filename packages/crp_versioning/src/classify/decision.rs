@@ -43,13 +43,17 @@ pub(crate) struct DecisionInputs {
 }
 
 impl DecisionInputs {
-    fn key(&self) -> Result<Option<String>, AppError> {
-        if !self.objects.portable()
-            || self
-                .locks
-                .values()
-                .any(|lock| lock.installation.cache_input().is_none())
+    fn key(&self, verbose: Verbose<'_>) -> Result<Option<String>, AppError> {
+        if !self.objects.portable() {
+            verbose.note(|| "computing classification decisions because the acquired Git object context contains replacement refs or grafts requiring fresh availability checks".to_owned());
+            return Ok(None);
+        }
+        if let Some((endpoint, _)) = self
+            .locks
+            .iter()
+            .find(|(_, lock)| lock.installation.cache_input().is_none())
         {
+            verbose.note(|| format!("computing classification decisions because the acquired installation graph for lock endpoint {endpoint:?} contains deferred errors"));
             return Ok(None);
         }
         Ok(Some(serde_json::to_string(&(
@@ -284,8 +288,9 @@ impl DecisionCache {
         compute: impl FnOnce() -> Result<Decisions, AppError>,
     ) -> Result<Decisions, AppError> {
         let key = if storage.directory().is_some() {
-            input.key()?
+            input.key(verbose)?
         } else {
+            verbose.note(|| "computing classification decisions because no cache storage directory is enabled".to_owned());
             None
         };
         self.get_with(
@@ -307,7 +312,6 @@ impl DecisionCache {
         compute: impl FnOnce() -> Result<Decisions, AppError>,
     ) -> Result<Decisions, AppError> {
         let Some(key) = key else {
-            verbose.note(|| "computing classification decisions because storage is disabled or acquired interpretation is not reusable".to_owned());
             return compute();
         };
         if let Some((previous, decisions)) = &self.last

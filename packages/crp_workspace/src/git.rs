@@ -188,7 +188,39 @@ impl GitRepo {
             )?;
             paths.push(PathBuf::from(strip_terminator(&path)));
         }
+        // Git's effective paths honor object/index environment overrides without duplicating
+        // its configuration rules. These stores can live outside both administrative roots.
+        for name in ["objects", "index", "hooks"] {
+            let path = run_capture(
+                "git",
+                &["rev-parse", "--path-format=absolute", "--git-path", name],
+                &self.root,
+            )?;
+            paths.push(PathBuf::from(strip_terminator(&path)));
+        }
+        // Git enumerates nested alternates and environment/configured object stores itself.
+        paths.extend(Self::alternate_object_paths(&run_capture(
+            "git",
+            &["-c", "core.quotePath=false", "count-objects", "-v"],
+            &self.root,
+        )?)?);
         Ok(paths)
+    }
+
+    fn alternate_object_paths(output: &str) -> Result<Vec<PathBuf>, AppError> {
+        output
+            .lines()
+            .filter_map(|line| line.strip_prefix("alternate: "))
+            .map(|path| {
+                // Git quotes special path characters. Unsupported C escapes fail the optional
+                // safety inventory instead of admitting storage against a guessed destination.
+                if path.starts_with('"') {
+                    Ok(PathBuf::from(serde_json::from_str::<String>(path)?))
+                } else {
+                    Ok(PathBuf::from(path))
+                }
+            })
+            .collect()
     }
 
     /// The repository-relative directory the repository was discovered from.
@@ -972,6 +1004,28 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::*;
+
+    #[test]
+    fn alternate_paths_preserve_git_spelling_and_reject_unknown_escapes() {
+        let paths = GitRepo::alternate_object_paths(
+            "count: 0\nalternate: /ordinary objects\nalternate: \"C:\\\\objects\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/ordinary objects"),
+                PathBuf::from("C:\\objects")
+            ]
+        );
+        assert!(
+            GitRepo::alternate_object_paths("count: 0\n")
+                .unwrap()
+                .is_empty()
+        );
+        let error = GitRepo::alternate_object_paths("alternate: \"path\\007\"\n").unwrap_err();
+        assert!(error.find_source::<serde_json::Error>().is_some());
+    }
 
     #[test]
     fn ancestry_status_distinguishes_both_answers_from_query_failure() {

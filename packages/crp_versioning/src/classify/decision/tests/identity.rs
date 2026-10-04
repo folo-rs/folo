@@ -127,18 +127,19 @@ input_changes! {
 }
 
 fn assert_input_change(change: impl FnOnce(&mut DecisionInputs)) {
+    let quiet = Verbose::new(false, &Discard);
     let base = inputs();
-    let key = base.key().unwrap().unwrap();
+    let key = base.key(quiet).unwrap().unwrap();
     let mut changed = base.clone();
     change(&mut changed);
-    assert_ne!(changed.key().unwrap().as_ref(), Some(&key));
+    assert_ne!(changed.key(quiet).unwrap().as_ref(), Some(&key));
     let mut cache = DecisionCache {
         last: Some((key, compute(&base).unwrap())),
     };
     let called = Cell::new(false);
     let actual = cache
         .get_with(
-            changed.key().unwrap(),
+            changed.key(quiet).unwrap(),
             Verbose::new(false, &Discard),
             |_, compute| compute(),
             || {
@@ -156,9 +157,10 @@ fn assert_input_change(change: impl FnOnce(&mut DecisionInputs)) {
 
 #[test]
 fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computation() {
+    let quiet = Verbose::new(false, &Discard);
     let mut input = inputs();
     work_lock(&mut input);
-    let key = input.key().unwrap();
+    let key = input.key(quiet).unwrap();
     let mut changed = input.clone();
     let lock = work_lock(&mut changed);
     Rc::make_mut(&mut lock.lockfile)
@@ -166,7 +168,7 @@ fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computat
         .get_mut(1)
         .unwrap()
         .version = Version::new(1, 1, 0);
-    assert_ne!(key, changed.key().unwrap());
+    assert_ne!(key, changed.key(quiet).unwrap());
     let result = compute(&changed).unwrap();
     let Verdict::NeedsIncrement { changed, .. } = &result.packages.get("p").unwrap().0 else {
         panic!()
@@ -190,14 +192,14 @@ fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computat
                 source,
             }],
         );
-        assert_ne!(key, changed.key().unwrap());
+        assert_ne!(key, changed.key(quiet).unwrap());
     }
     let mut changed = input.clone();
     let installation = &mut work_lock(&mut changed).installation;
     installation
         .registries
         .insert("custom".into(), "https://index.example".into());
-    assert_ne!(key, changed.key().unwrap());
+    assert_ne!(key, changed.key(quiet).unwrap());
     work_lock(&mut changed)
         .installation
         .patches
@@ -210,16 +212,17 @@ fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computat
                 source: DependencySource::NamedRegistry("custom".into()),
             }),
         });
-    assert_ne!(key, changed.key().unwrap());
+    assert_ne!(key, changed.key(quiet).unwrap());
 }
 
 #[test]
 fn deterministic_key_contains_producer_and_revision_and_keeps_dependency_kinds() {
+    let quiet = Verbose::new(false, &Discard);
     let mut first = inputs();
     work_lock(&mut first);
     let second = first.clone();
-    assert_eq!(first.key().unwrap(), second.key().unwrap());
-    let key: Value = serde_json::from_str(&first.key().unwrap().unwrap()).unwrap();
+    assert_eq!(first.key(quiet).unwrap(), second.key(quiet).unwrap());
+    let key: Value = serde_json::from_str(&first.key(quiet).unwrap().unwrap()).unwrap();
     assert_eq!(key.get(0).unwrap(), env!("CARGO_PKG_VERSION"));
     assert_eq!(key.get(1).unwrap(), Decisions::REVISION);
     assert_eq!(
@@ -236,6 +239,7 @@ fn deterministic_key_contains_producer_and_revision_and_keeps_dependency_kinds()
 
 #[test]
 fn deferred_errors_and_replacement_contexts_bypass_reuse_without_failing_unrelated_work() {
+    let quiet = Verbose::new(false, &Discard);
     let mut input = inputs();
     let graph = &mut work_lock(&mut input).installation;
     graph.members.insert(
@@ -247,11 +251,11 @@ fn deferred_errors_and_replacement_contexts_bypass_reuse_without_failing_unrelat
             )),
         ),
     );
-    assert!(input.key().unwrap().is_none());
+    assert!(input.key(quiet).unwrap().is_none());
     compute(&input).unwrap();
     let mut input = inputs();
     let mut context = serde_json::to_value(&input.objects).unwrap();
     *context.get_mut("replacements").unwrap() = "replacement".into();
     input.objects = serde_json::from_value(context).unwrap();
-    assert!(input.key().unwrap().is_none());
+    assert!(input.key(quiet).unwrap().is_none());
 }

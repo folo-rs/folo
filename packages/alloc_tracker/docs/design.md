@@ -84,15 +84,27 @@ Peak outstanding bytes requires that every span of the operation could measure i
 Process-scope spans cannot, because a process-wide watermark would be perturbed by
 unrelated threads to the point of meaninglessness, so an operation that contains even one
 process-scope span reports no peak at all rather than a figure that silently describes
-only part of the work. Spans that measured a peak but covered no iterations leave the rate
+only part of the work. A thread span can explicitly disable peak recording with
+`measure_thread().no_peak().iterations(n)`, which likewise withholds the entire operation's
+peak when that span records. Bytes allocated and allocation count remain measured. Opt-out
+applies to the whole span regardless of when the modifier is called, and suppression
+survives subsequent measurements and report merges. Existing report snapshots are unchanged.
+An opted-out inner span does not hide its allocations from an enclosing span for a different
+operation; nesting remains inclusive.
+
+Spans that measured a peak but covered no iterations leave the rate
 undefined, which also leaves nothing to report.
 
 #### Limits of the peak figure
 
 An operation that accumulates memory across the iterations of a batch — one whose watermark
 grows with the batch size rather than staying level — violates the assumption the estimate
-rests on. Nothing detects this, so a figure is still reported; it scales with whatever
-iteration counts the harness chose and is not comparable between runs.
+rests on. Use `ThreadSpan::no_peak()` for such benchmarks to avoid false regression alerts:
+the unmodified figure scales with whatever iteration counts the harness chose and is not
+comparable between runs. Varying iteration workloads can also make the maximum depend on
+batch size even when allocations are released every iteration, because larger batches have
+more opportunities to encounter a high-memory iteration. The confidence interval describes
+variation in the estimate, not whether these assumptions hold.
 
 Span watermarks are averaged, not summed. An operation measured concurrently on several
 threads reports what a typical one of them held, not the total held across all of them at

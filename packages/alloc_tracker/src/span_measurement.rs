@@ -23,8 +23,8 @@ pub(crate) struct SpanMeasurement {
     pub(crate) count: u64,
 
     /// The high-water mark of the span's own outstanding bytes, measured from the level
-    /// outstanding when it began, or `None` when the span is of a kind that cannot
-    /// observe it.
+    /// outstanding when it began, or `None` when its scope cannot observe it or the caller
+    /// disabled peak recording.
     ///
     /// Baseline-relative rather than absolute: memory the span released but did not
     /// allocate creates headroom that offsets its own later allocations, so this is not

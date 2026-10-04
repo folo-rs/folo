@@ -17,19 +17,24 @@ fn equal_inputs_skip_actual_computation_in_memory_and_in_a_new_invocation() {
     let mut cache = DecisionCache::default();
     let first = cache
         .get_with(
-            input.key().unwrap(),
+            input.key(quiet).unwrap(),
             quiet,
             |_, call| call(),
             || compute(&input),
         )
         .unwrap();
     let memory = cache
-        .get_with(input.key().unwrap(), quiet, |_, _| panic!(), || panic!())
+        .get_with(
+            input.key(quiet).unwrap(),
+            quiet,
+            |_, _| panic!(),
+            || panic!(),
+        )
         .unwrap();
     let persisted = serde_json::to_vec(&first).unwrap();
     let independent = DecisionCache::default()
         .get_with(
-            input.key().unwrap(),
+            input.key(quiet).unwrap(),
             quiet,
             |_, _| Ok(serde_json::from_slice(&persisted).unwrap()),
             || panic!(),
@@ -49,7 +54,7 @@ fn errors_and_disabled_storage_never_populate_successful_memory() {
     let mut cache = DecisionCache::default();
     let error = cache
         .get_with(
-            input.key().unwrap(),
+            input.key(quiet).unwrap(),
             quiet,
             |_, call| call(),
             || Err(io::Error::other("decision failure").into()),
@@ -65,7 +70,7 @@ fn errors_and_disabled_storage_never_populate_successful_memory() {
     package(&mut regression).version = Version::new(0, 1, 0);
     let error = cache
         .get_with(
-            regression.key().unwrap(),
+            regression.key(quiet).unwrap(),
             quiet,
             |_, call| call(),
             || compute(&regression),
@@ -75,7 +80,7 @@ fn errors_and_disabled_storage_never_populate_successful_memory() {
     assert!(cache.last.is_none());
     cache
         .get_with(
-            input.key().unwrap(),
+            input.key(quiet).unwrap(),
             quiet,
             |_, call| call(),
             || compute(&input),
@@ -91,7 +96,7 @@ fn immutable_rendering_errors_do_not_publish_decisions() {
     let mut cache = DecisionCache::default();
     let error = cache
         .get_with(
-            input.key().unwrap(),
+            input.key(quiet).unwrap(),
             quiet,
             |_, compute| compute(),
             || {

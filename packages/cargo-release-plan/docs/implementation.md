@@ -79,6 +79,10 @@ prepared or resolved evidence. Compatibility resolves it from the admitted evide
 original source rather than the retained candidate.
 Compatibility also admits the cache against the retained candidate's entire Git root,
 not merely its possibly nested workspace manifest or the resolved-plan file.
+Preview dispatch passes cache options to versioning so collision-safe completion-marker
+invalidation precedes metadata acquisition. Cache advisories bypass deferred checker
+diagnostic failures; checker output and supporting publication diagnostics retain their
+strict delivery policy.
 
 The workspace component publishes typed immutable observations atomically. Versioning
 retains the full historical tree and its lookup indexes with each committed snapshot,

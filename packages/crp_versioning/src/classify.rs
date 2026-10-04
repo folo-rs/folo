@@ -1895,29 +1895,29 @@ impl SnapshotCache {
         commit: &str,
         verbose: Verbose<'_>,
     ) -> Result<Rc<CommitSnapshot>, AppError> {
-        let storage = self.storage.clone();
-        let objects = self.objects.clone();
-        let mut documents = mem::take(&mut self.documents);
-        let result = self.snapshot_with(commit, |context| {
-            let tree = HistoricalTree::load(git, commit, &objects, &storage, verbose)?;
+        self.snapshot_with(commit, |context, storage, objects, documents| {
+            let tree = HistoricalTree::load(git, commit, objects, storage, verbose)?;
             load_snapshot(
                 git,
                 commit,
                 context.case,
                 &context.registries,
                 &Rc::new(tree),
-                &mut documents,
+                documents,
                 verbose,
             )
-        });
-        self.documents = documents;
-        result
+        })
     }
 
     fn snapshot_with(
         &mut self,
         commit: &str,
-        load: impl FnOnce(&SnapshotContext) -> Result<CommitSnapshot, AppError>,
+        load: impl FnOnce(
+            &SnapshotContext,
+            &Cache,
+            &GitObjectContext,
+            &mut ManifestDocuments,
+        ) -> Result<CommitSnapshot, AppError>,
     ) -> Result<Rc<CommitSnapshot>, AppError> {
         if let Some(existing) = self.inner.get(commit) {
             return Ok(Rc::clone(existing));
@@ -1926,7 +1926,12 @@ impl SnapshotCache {
             .context
             .as_ref()
             .expect("classification binds its observation context before using snapshots");
-        let built = Rc::new(load(context)?);
+        let built = Rc::new(load(
+            context,
+            &self.storage,
+            &self.objects,
+            &mut self.documents,
+        )?);
         self.inner.insert(commit.to_string(), Rc::clone(&built));
         Ok(built)
     }
@@ -2720,6 +2725,8 @@ mod installation_tests;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::ptr;
+
     #[test]
     fn absent_binary_closure_is_not_an_empty_successful_assessment() {
         let error = required_closure(None, "binary", "missing endpoint").unwrap_err();
@@ -2769,6 +2776,35 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_misses_borrow_the_owners_context_storage_and_documents() {
+        let mut cache = SnapshotCache::default();
+        cache.bind(
+            &unopened(Path::new("repository")),
+            Path::new("workspace"),
+            PathCase::Sensitive,
+            BTreeMap::new(),
+        );
+        let context = ptr::from_ref(cache.context.as_ref().unwrap());
+        let storage = ptr::from_ref(&cache.storage);
+        let objects = ptr::from_ref(&cache.objects);
+        let documents = ptr::from_ref(&cache.documents);
+        for commit in ["first", "second"] {
+            cache
+                .snapshot_with(
+                    commit,
+                    |actual_context, actual_storage, actual_objects, actual_documents| {
+                        assert!(ptr::eq(actual_context, context));
+                        assert!(ptr::eq(actual_storage, storage));
+                        assert!(ptr::eq(actual_objects, objects));
+                        assert!(ptr::eq(actual_documents, documents));
+                        Ok(empty_snapshot())
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
     fn snapshots_reuse_only_successful_observations_of_the_requested_commit() {
         let git = unopened(Path::new("repository"));
         let mut cache = SnapshotCache::default();
@@ -2779,7 +2815,7 @@ mod tests {
             BTreeMap::new(),
         );
         let first = cache
-            .snapshot_with("first", |_| Ok(empty_snapshot()))
+            .snapshot_with("first", |_, _, _, _| Ok(empty_snapshot()))
             .unwrap();
         cache.lockfiles.insert(
             "first".to_string(),
@@ -2791,16 +2827,20 @@ mod tests {
             PathCase::Sensitive,
             BTreeMap::new(),
         );
-        let reused = cache.snapshot_with("first", |_| panic!("cached")).unwrap();
+        let reused = cache
+            .snapshot_with("first", |_, _, _, _| panic!("cached"))
+            .unwrap();
         assert!(Rc::ptr_eq(&first, &reused));
         assert!(cache.lockfiles.contains_key("first"));
         let error = cache
-            .snapshot_with("second", |_| Err(io::Error::other("snapshot").into()))
+            .snapshot_with("second", |_, _, _, _| {
+                Err(io::Error::other("snapshot").into())
+            })
             .unwrap_err();
         assert!(error.find_source::<io::Error>().is_some());
         assert_eq!(cache.inner.len(), 1);
         let second = cache
-            .snapshot_with("second", |_| Ok(empty_snapshot()))
+            .snapshot_with("second", |_, _, _, _| Ok(empty_snapshot()))
             .unwrap();
         assert!(!Rc::ptr_eq(&first, &second));
         assert_eq!(cache.inner.len(), 2);
@@ -2873,7 +2913,7 @@ mod tests {
                 BTreeMap::from([("custom".to_string(), "registry-index".to_string())]),
             );
             let before = cache
-                .snapshot_with("commit", |_| Ok(empty_snapshot()))
+                .snapshot_with("commit", |_, _, _, _| Ok(empty_snapshot()))
                 .unwrap();
             cache.lockfiles.insert(
                 "commit".to_string(),
@@ -2884,7 +2924,7 @@ mod tests {
             assert!(cache.lockfiles.is_empty());
             assert!(cache.headers.parent_with("commit", || Ok(true)).unwrap());
             let after = cache
-                .snapshot_with("commit", |_| Ok(empty_snapshot()))
+                .snapshot_with("commit", |_, _, _, _| Ok(empty_snapshot()))
                 .unwrap();
             assert!(!Rc::ptr_eq(&before, &after));
         }

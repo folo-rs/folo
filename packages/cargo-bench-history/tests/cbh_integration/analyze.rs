@@ -1,4 +1,6 @@
 use cargo_bench_history::AnalysisOutcome;
+use cbh_engines::parse_alloc_tracker_operation;
+use cbh_model::Engine;
 
 use crate::harness::*;
 
@@ -853,6 +855,89 @@ async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
     assert_eq!(parsed["findings"][0]["kind"], "allocated_bytes", "{report}");
     assert!(report.contains("allocate_vec"), "{report}");
+}
+
+/// Peak ingestion, storage and analysis use the ordinary metric pipeline, including gaps.
+#[tokio::test]
+#[cfg_attr(miri, ignore = "uses a real repository and stored run files")]
+async fn analyze_alloc_tracker_peak_is_detected_by_default() {
+    let workspace = Workspace::repo(&storage_only_config());
+    for (index, date) in sequential_dates("2024-03-01", MIN_SERIES_POINTS * 2)
+        .into_iter()
+        .enumerate()
+    {
+        let commit = workspace.commit_dated(&date, &format!("peak{index}"));
+        let mut output = serde_json::json!({
+            "operation": "allocate_vec",
+            "slope_bytes_per_iteration": 200.0,
+            "slope_allocations_per_iteration": 2.0
+        });
+        if index % 2 == 1 {
+            let peak = if index < MIN_REGIME * 2 { 64.0 } else { 128.0 };
+            output["slope_peak_bytes"] = peak.into();
+            output["interval_low_peak_bytes"] = peak.into();
+            output["interval_high_peak_bytes"] = peak.into();
+        }
+        let run = Run::new(
+            RunContext::new(
+                format!("{date}T00:00:00Z").parse().unwrap(),
+                GitInfo {
+                    commit: Some(commit.clone()),
+                    branch: Some("main".to_owned()),
+                    dirty: false,
+                },
+                EnvironmentInfo::default(),
+                ToolchainInfo::default(),
+                TOOL_VERSION.to_owned(),
+            ),
+            vec![
+                parse_alloc_tracker_operation(&output.to_string())
+                    .unwrap()
+                    .unwrap(),
+            ],
+        );
+        workspace.seed(
+            &seed_clean_key(
+                Engine::AllocTracker,
+                HARNESS_AUTO_TRIPLE,
+                HARNESS_AUTO_MACHINE_KEY,
+                &commit,
+            ),
+            &run,
+        );
+    }
+
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["regressions"], 1, "{report}");
+    assert_eq!(
+        parsed["findings"][0]["kind"], "peak_outstanding_bytes",
+        "{report}"
+    );
+    assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
+
+    let examination = workspace
+        .drive(&[
+            "examine",
+            "--benchmark",
+            "allocate_vec",
+            "--metric",
+            "peak_outstanding_bytes",
+        ])
+        .await;
+    assert!(examination.is_ok(), "{examination:?}");
+
+    workspace.checkout_new_branch("without-peak");
+    workspace.commit_dated("2024-03-21", "without-peak");
+    workspace.seed_alloc_tracker("without-peak", "allocate_vec", 200.0, 2.0);
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["regressions"], 0, "{report}");
+    assert_eq!(parsed["improvements"], 0, "{report}");
+    assert_eq!(
+        parsed["census"]["judged"], 2,
+        "only the still-measured byte and count metrics can be judged: {report}"
+    );
 }
 
 /// A gapped `alloc_tracker` history - where some commits measure a different
