@@ -699,7 +699,7 @@ fn is_visible_target_name(name: &str) -> bool {
 ///
 /// Cargo rewrites both to a bare file name when it normalises a manifest for
 /// packaging, and packs the named file regardless of `include` and `exclude`.
-const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
+pub(crate) const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
 
 /// The `[package]` key naming the README.
 ///
@@ -723,7 +723,7 @@ pub const DEFAULT_README_FILES: &[&str] = &[PRIMARY_README, "README.txt", "READM
 /// element reports whether Cargo picks the README by probing the package
 /// directory, which it does only when the key is absent altogether: `readme =
 /// false` deliberately names no file.
-fn resource_paths(
+pub(crate) fn resource_paths(
     package: &dyn TableLike,
     workspace: &WorkspaceInherit<'_>,
 ) -> (Vec<String>, Vec<String>, bool) {

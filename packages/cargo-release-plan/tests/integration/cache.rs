@@ -4,6 +4,8 @@
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt as _;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -293,8 +295,13 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
     fixture.write("vendor/helper/src/lib.rs", "");
     fixture.write(
         "vendor/leaf/Cargo.toml",
-        "[package]\nname='leaf'\nversion='0.1.0'\nbuild='custom/build.rs'\n",
+        "[package]\nname='leaf'\nversion='0.1.0'\nbuild='custom/build.rs'\nreadme.workspace=true\n",
     );
+    fixture.write(
+        "vendor/Cargo.toml",
+        "[workspace]\nmembers=['helper','leaf']\n[workspace.package]\nreadme='docs/guide.md'\n",
+    );
+    fixture.write("vendor/docs/guide.md", "dependency resource\n");
     fixture.write("vendor/leaf/src/lib.rs", "");
     fixture.write("vendor/leaf/custom/build.rs", "fn main() {}\n");
     fixture.write(
@@ -323,6 +330,7 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
         "vendor/leaf/src/cache",
         "vendor/leaf/build.rs",
         "vendor/leaf/custom",
+        "vendor/docs",
         "unselected/build.rs",
         "unselected/custom",
     ] {
@@ -555,6 +563,141 @@ fn explicit_cargo_sources_cannot_be_cache_storage() {
             .join("packages/demo/custom/.gitignore")
             .exists()
     );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "checks untracked Cargo packaging resources at the CLI boundary"
+)]
+fn packaging_resources_cannot_be_cache_storage() {
+    let fixture = Fixture::new(
+        "[workspace.package]\nreadme='shared/guide.md'\nlicense-file='legal/license'\n",
+    );
+    write_package(
+        &fixture,
+        "local",
+        "0.1.0",
+        "readme='docs/guide.md'\nlicense-file='../../external/license'\n",
+    );
+    write_package(
+        &fixture,
+        "inherited",
+        "0.1.0",
+        "readme.workspace=true\nlicense-file.workspace=true\n",
+    );
+    write_package(&fixture, "automatic", "0.1.0", "");
+    fixture.write(
+        "unselected/Cargo.toml",
+        "[package]\nversion='uninterpreted'\nreadme='docs/guide.md'\n",
+    );
+    fixture.commit("resource declarations");
+    let resources = [
+        "packages/local/docs/guide.md",
+        "external/license",
+        "shared/guide.md",
+        "legal/license",
+        "packages/automatic/README.txt",
+        "unselected/docs/guide.md",
+    ];
+    for path in resources {
+        fixture.write(path, "retained resource\n");
+    }
+    let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
+    success(
+        command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--no-cache"])
+            .output()
+            .unwrap(),
+    );
+    for directory in [
+        "packages/local/docs",
+        "external",
+        "shared",
+        "legal",
+        "packages/automatic/README",
+        "packages/automatic/README.txt",
+        "packages/automatic/README.md",
+        "unselected/docs",
+    ] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache", directory])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{directory}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+        assert!(!fixture.path().join(directory).join(".gitignore").exists());
+    }
+    for path in resources {
+        assert_eq!(fixture.read(path), "retained resource\n");
+        assert!(
+            fixture
+                .git(&["status", "--porcelain", "--untracked-files=all"])
+                .contains(path)
+        );
+    }
+    inputs.verify(&fixture.manifest(), None).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "executes classification with native read-only case probes"
+)]
+fn unavailable_cache_case_probe_disables_storage_without_failing_reports() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let configuration = fixture.path().join(".cargo");
+    fs::create_dir_all(&configuration).unwrap();
+    let original = fs::metadata(&configuration).unwrap().permissions();
+    // Retain read/search access but require the empty-directory case probe to create an entry.
+    fs::set_permissions(
+        &configuration,
+        fs::Permissions::from_mode(original.mode() & !0o222),
+    )
+    .unwrap();
+    let probe = tempfile::NamedTempFile::new_in(&configuration);
+    let case = match &probe {
+        Ok(_) => Some(PathCase::probe(&configuration)),
+        Err(error) => {
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            None
+        }
+    };
+    drop(probe);
+    let output = command(&fixture)
+        .args([
+            "report",
+            "--release-history",
+            "HEAD",
+            "--cache",
+            ".cargo/CONFIG",
+            "--out-dir",
+        ])
+        .arg(evidence.path().join("cached"))
+        .output()
+        .unwrap();
+    fs::set_permissions(&configuration, original).unwrap();
+    // Privileged users can still probe; their result must respect the actual case rules.
+    if case == Some(PathCase::Insensitive) {
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+    } else {
+        let output = success(output);
+        if case.is_none() {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+            assert_eq!(fs::read_dir(configuration).unwrap().count(), 0);
+        }
+        assert_reports_equal(&baseline, &evidence.path().join("cached"));
+    }
 }
 
 #[test]
