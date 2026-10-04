@@ -31,6 +31,11 @@ while the high case truncates the ranked list. Untimed assertions verify complet
 identities, partition membership and chart presence, and exact summary retention/omission.
 Fixture assembly and these assertions are outside every measured invocation.
 
+In-process library tests verify fixture partitioning, judged-series counts, ranked changes
+and the exact chart-regime boundary independently of rendered output. They exercise the
+untimed assertions on valid reports and deliberately incomplete workloads, so library-only
+mutation testing covers the benchmark support without running benchmark targets.
+
 `cbh_render_reports_cg` pairs the full-report and quiet-text scenarios with identical fixtures.
 It counts formatting, charting, serialization and allocator instructions, not operating-system
 allocation latency. The summary intentionally has no Callgrind counterpart: its production
