@@ -1,5 +1,9 @@
 //! Executable cache selection, persistence and evidence independence over hermetic repositories.
 
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -289,15 +293,18 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
     fixture.write("vendor/helper/src/lib.rs", "");
     fixture.write(
         "vendor/leaf/Cargo.toml",
-        "[package]\nname='leaf'\nversion='0.1.0'\n",
+        "[package]\nname='leaf'\nversion='0.1.0'\nbuild='custom/build.rs'\n",
     );
     fixture.write("vendor/leaf/src/lib.rs", "");
+    fixture.write("vendor/leaf/custom/build.rs", "fn main() {}\n");
     fixture.write(
         "unselected/Cargo.toml",
-        "[package]\nname='unselected'\nversion='0.1.0'\n",
+        "[package]\nname='unselected'\nversion='0.1.0'\n\
+         [[example]]\nname='demo'\npath='custom/demo.rs'\n",
     );
     fixture.write("unselected/src/lib.rs", "");
     fixture.commit("ignored transitive path dependencies");
+    fixture.write("unselected/custom/demo.rs", "fn main() {}\n");
     let evidence = TempDir::new().unwrap();
     report(
         &fixture,
@@ -315,7 +322,9 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
         "vendor/leaf",
         "vendor/leaf/src/cache",
         "vendor/leaf/build.rs",
+        "vendor/leaf/custom",
         "unselected/build.rs",
+        "unselected/custom",
     ] {
         let output = command(&fixture)
             .args(["check", "--release-history", "HEAD", "--cache", path])
@@ -444,6 +453,161 @@ fn external_git_object_and_index_locations_are_protected() {
             .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
             .output()
             .unwrap(),
+    );
+}
+
+#[test]
+#[cfg(unix)]
+#[cfg_attr(miri, ignore = "executes Git with non-UTF-8 administrative paths")]
+fn non_utf8_git_administration_disables_storage_without_changing_reports() {
+    for variable in ["GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"] {
+        let fixture = seeded_package();
+        let external = TempDir::new().unwrap();
+        let objects = external
+            .path()
+            .join(OsString::from_vec(b"objects-\xff".to_vec()));
+        if variable == "GIT_OBJECT_DIRECTORY" {
+            fs::rename(fixture.path().join(".git/objects"), &objects).unwrap();
+        } else {
+            fs::create_dir_all(&objects).unwrap();
+        }
+        let evidence = TempDir::new().unwrap();
+        for (name, options) in [("baseline", &["--no-cache"][..]), ("cached", &[][..])] {
+            let output = success(
+                command(&fixture)
+                    .args(["report", "--release-history", "HEAD", "--out-dir"])
+                    .arg(evidence.path().join(name))
+                    .args(options)
+                    .env(variable, &objects)
+                    .output()
+                    .unwrap(),
+            );
+            if name == "cached" {
+                assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+            }
+        }
+        assert_reports_equal(
+            &evidence.path().join("baseline"),
+            &evidence.path().join("cached"),
+        );
+        assert!(
+            !fixture
+                .path()
+                .join("target/cargo-release-plan/cache")
+                .exists()
+        );
+        let output = success(
+            command(&fixture)
+                .args(["check", "--release-history", "HEAD", "--cache"])
+                .arg(&objects)
+                .env(variable, &objects)
+                .output()
+                .unwrap(),
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+        assert!(!objects.join(".gitignore").exists());
+        assert!(!objects.join("git-trees").exists());
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "checks explicit Cargo targets and untracked source visibility"
+)]
+fn explicit_cargo_sources_cannot_be_cache_storage() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "\n[lib]\npath='custom/lib.rs'\n");
+    fixture.commit("custom library target");
+    let source = "packages/demo/custom/lib.rs";
+    fixture.write(source, "mod nested;\n");
+    fixture.write(
+        "packages/demo/custom/nested/mod.rs",
+        "pub fn example() {}\n",
+    );
+    success(
+        command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--no-cache"])
+            .output()
+            .unwrap(),
+    );
+    for directory in ["packages/demo/custom", "packages/demo/custom/nested"] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache", directory])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+    }
+    assert!(
+        fixture
+            .git(&["status", "--porcelain", "--untracked-files=all"])
+            .contains(source)
+    );
+    assert_eq!(fixture.read(source), "mod nested;\n");
+    assert_eq!(
+        fixture.read("packages/demo/custom/nested/mod.rs"),
+        "pub fn example() {}\n"
+    );
+    assert!(
+        !fixture
+            .path()
+            .join("packages/demo/custom/.gitignore")
+            .exists()
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes classification with unselected manifests")]
+fn unselected_manifests_only_require_optional_source_inventory() {
+    let fixture = seeded_package();
+    fixture.write("unselected/Cargo.toml", "[package]\nversion='not-semver'\n");
+    fixture.commit("unselected manifest");
+    let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let cached = evidence.path().join("cached");
+    let output = report(
+        &fixture,
+        &cached,
+        &evidence.path().join("cached.trace"),
+        &[],
+    );
+    assert!(output.stderr.is_empty());
+    assert_reports_equal(&baseline, &cached);
+    assert!(
+        fixture
+            .path()
+            .join("target/cargo-release-plan/cache/git-trees")
+            .is_dir()
+    );
+    fixture.write("unselected/Cargo.toml", "[");
+    for (name, options) in [
+        ("invalid-baseline", &["--no-cache"][..]),
+        ("invalid-cached", &[][..]),
+    ] {
+        let output = report(
+            &fixture,
+            &evidence.path().join(name),
+            &evidence.path().join(format!("{name}.trace")),
+            options,
+        );
+        if name == "invalid-cached" {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+            assert_eq!(
+                acquisitions(&evidence.path().join(format!("{name}.trace"))),
+                acquisitions(&evidence.path().join("invalid-baseline.trace")),
+            );
+        }
+    }
+    assert_reports_equal(
+        &evidence.path().join("invalid-baseline"),
+        &evidence.path().join("invalid-cached"),
     );
 }
 
