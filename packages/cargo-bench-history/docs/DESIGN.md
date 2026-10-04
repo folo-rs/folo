@@ -40,7 +40,8 @@ every engine is partitioned by machine key (see §3).
   test, so they cannot be compared across builds (see §8). Its machine-readable summary is the
   one output that must be opted into with an environment variable — the narrow "special need"
   that justifies `collect` existing at all.
-* **`alloc_tracker`** — heap allocations (bytes and counts). Not deterministic: warmup and
+* **`alloc_tracker`** — heap allocations (bytes and counts) and optional peak outstanding
+  bytes. Available peaks are collected and analyzed by default. Not deterministic: warmup and
   buffer-resize allocations are amortized over a Criterion-chosen iteration count, so the
   per-iteration figures jitter, and they too vary with the host's library code paths. It
   prefers a warmup-robust slope and records a bootstrap confidence interval only when the
@@ -55,6 +56,22 @@ identifies the series.
 Despite differing in units and noise, all four reduce to the same
 shape: *a stable benchmark identity → a set of named numeric metrics*. That shared shape
 is the foundation of the model.
+
+### Allocation peaks
+
+Peak outstanding bytes measures allocator-requested memory relative to span entry, not
+process memory usage. The engine withholds it for operations containing process-scoped spans
+or explicit `ThreadSpan::no_peak()` spans. Missing peaks leave the other allocation metrics
+intact and are never replaced with zero. Existing producer output needs no declaration to
+enable peak analysis.
+
+Peak comparison assumes batch-size-independent memory usage. Benchmarks that retain memory
+between iterations must opt out in `alloc_tracker` to avoid false regression alerts. Varying
+iteration workloads, frees of pre-existing allocations, and cross-thread allocation transfers
+can also make a peak unsuitable. Confidence intervals do not establish these assumptions.
+Independent worker spans describe typical per-thread peaks, not a simultaneous process total.
+Peak metrics follow the ordinary byte-magnitude floor and noise gates. Historical gaps and
+`--best-of` metric-set consistency follow the same rules as other metrics.
 
 ## 2. Core concepts and data model
 

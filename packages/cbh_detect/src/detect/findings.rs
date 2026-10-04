@@ -762,9 +762,9 @@ fn absolute_floor(kind: MetricKind) -> f64 {
         | MetricKind::ConditionalBranches
         | MetricKind::IndirectBranches => noise_gates::PRACTICAL_ABSOLUTE_COUNT,
         MetricKind::WallTime | MetricKind::ProcessorTime => noise_gates::PRACTICAL_ABSOLUTE_TIME,
-        MetricKind::AllocatedBytes | MetricKind::AllocationCount => {
-            noise_gates::PRACTICAL_ABSOLUTE_ALLOC
-        }
+        MetricKind::AllocatedBytes
+        | MetricKind::PeakOutstandingBytes
+        | MetricKind::AllocationCount => noise_gates::PRACTICAL_ABSOLUTE_ALLOC,
     }
 }
 

@@ -57,6 +57,12 @@ several threads collaborate on every iteration, accepting that it also picks up
 allocations from unrelated threads, that its totals are approximate, and that it withholds
 peak memory from the whole operation.
 
+Peak comparison requires memory usage that is independent of the iteration count.
+Accumulating live memory between iterations makes the peak unreliable and can cause false
+regression alerts. For such benchmarks, use
+`operation.measure_thread().no_peak().iterations(iters)` to withhold the operation's peak
+while retaining its allocation bytes and counts.
+
 ## See also
 
 More details in the [package documentation](https://docs.rs/alloc_tracker/).

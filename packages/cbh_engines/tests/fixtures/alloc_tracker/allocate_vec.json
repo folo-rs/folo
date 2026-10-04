@@ -5,5 +5,6 @@
   "total_allocations_count": 8,
   "span_count": 1,
   "slope_bytes_per_iteration": 200.0,
-  "slope_allocations_per_iteration": 2.0
+  "slope_allocations_per_iteration": 2.0,
+  "slope_peak_bytes": 128.0
 }
