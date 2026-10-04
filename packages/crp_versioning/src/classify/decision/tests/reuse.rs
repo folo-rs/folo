@@ -14,27 +14,18 @@ use crate::classify::decision::DecisionCache;
 fn equal_inputs_skip_actual_computation_in_memory_and_in_a_new_invocation() {
     let input = inputs();
     let quiet = Verbose::new(false, &Discard);
+    let key = input.key(quiet).unwrap();
     let mut cache = DecisionCache::default();
     let first = cache
-        .get_with(
-            input.key(quiet).unwrap(),
-            quiet,
-            |_, call| call(),
-            || compute(&input),
-        )
+        .get_with(key.clone(), quiet, |_, call| call(), || compute(&input))
         .unwrap();
     let memory = cache
-        .get_with(
-            input.key(quiet).unwrap(),
-            quiet,
-            |_, _| panic!(),
-            || panic!(),
-        )
+        .get_with(key.clone(), quiet, |_, _| panic!(), || panic!())
         .unwrap();
     let persisted = serde_json::to_vec(&first).unwrap();
     let independent = DecisionCache::default()
         .get_with(
-            input.key(quiet).unwrap(),
+            key,
             quiet,
             |_, _| Ok(serde_json::from_slice(&persisted).unwrap()),
             || panic!(),
@@ -51,10 +42,11 @@ fn equal_inputs_skip_actual_computation_in_memory_and_in_a_new_invocation() {
 fn errors_and_disabled_storage_never_populate_successful_memory() {
     let input = inputs();
     let quiet = Verbose::new(false, &Discard);
+    let key = input.key(quiet).unwrap();
     let mut cache = DecisionCache::default();
     let error = cache
         .get_with(
-            input.key(quiet).unwrap(),
+            key.clone(),
             quiet,
             |_, call| call(),
             || Err(io::Error::other("decision failure").into()),
@@ -79,12 +71,7 @@ fn errors_and_disabled_storage_never_populate_successful_memory() {
     assert!(error.find_source::<VersionRegressionError>().is_some());
     assert!(cache.last.is_none());
     cache
-        .get_with(
-            input.key(quiet).unwrap(),
-            quiet,
-            |_, call| call(),
-            || compute(&input),
-        )
+        .get_with(key, quiet, |_, call| call(), || compute(&input))
         .unwrap();
     assert!(cache.last.is_some());
 }

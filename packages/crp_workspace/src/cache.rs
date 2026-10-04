@@ -388,11 +388,16 @@ fn reserve_resources(
 
 /// Each acquisition subject names its representation and complete input identity.
 ///
-/// Keys must serialize deterministically.
+/// Keys must serialize deterministically and contain no confidential configuration.
 pub trait CacheEntry: Serialize + DeserializeOwned {
     const SUBJECT: &'static str;
     const REVISION: u32;
     type Key: Serialize;
+}
+
+/// Digests deterministic identity inputs without retaining their raw representation.
+pub fn key_digest(input: &impl Serialize) -> Result<String, AppError> {
+    Ok(checksum(&serde_json::to_vec(input)?))
 }
 
 /// Only the Cargo-owned location and package source roots needed for storage admission.
@@ -580,6 +585,7 @@ struct CacheCorrupt;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     use crp_diag::DiagnosticSink;
@@ -632,6 +638,26 @@ mod tests {
         assert_eq!(
             checksum(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn key_digest_retains_serialized_identity_and_rejects_serialization_errors() {
+        let input = ["synthetic-secret", "registry"];
+        let digest = key_digest(&input).unwrap();
+        assert_eq!(digest, checksum(&serde_json::to_vec(&input).unwrap()));
+        assert!(!digest.contains("synthetic-secret"));
+        assert_ne!(digest, key_digest(&["synthetic-secret", "other"]).unwrap());
+        assert_ne!(
+            digest,
+            key_digest(&["synthetic-", "secretregistry"]).unwrap()
+        );
+        let invalid = BTreeMap::from([(vec!["not", "a JSON object key"], 1)]);
+        assert!(
+            key_digest(&invalid)
+                .unwrap_err()
+                .find_source::<serde_json::Error>()
+                .is_some()
         );
     }
 

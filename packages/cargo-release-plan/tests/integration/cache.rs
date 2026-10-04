@@ -183,6 +183,75 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "executes Git, Cargo and the compiled application")]
+fn decision_entries_do_not_persist_registry_credentials_and_changes_invalidate_reuse() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "binary", "0.1.0", "");
+    fixture.write("packages/binary/src/main.rs", "fn main() {}\n");
+    fixture.write(
+        "Cargo.lock",
+        "version=4\n[[package]]\nname='binary'\nversion='0.1.0'\n",
+    );
+    fixture.commit("binary anchor");
+    let evidence = TempDir::new().unwrap();
+    let storage = evidence.path().join("cache");
+    // Synthetic credentials remain outside released content; no registry access is needed.
+    for (name, credential, reused, count) in [
+        ("cold", "synthetic-secret-one", false, 1),
+        ("warm", "synthetic-secret-one", true, 1),
+        ("changed", "synthetic-secret-two", false, 2),
+        ("changed-warm", "synthetic-secret-two", true, 2),
+    ] {
+        fixture.write(
+            ".cargo/config.toml",
+            &format!(
+                "[registries.private]\nindex='https://synthetic-user:{credential}@registry.invalid/index'\n"
+            ),
+        );
+        let output = report(
+            &fixture,
+            &evidence.path().join(name),
+            &evidence.path().join(format!("{name}.trace")),
+            &["--cache", storage.to_str().unwrap(), "--verbose"],
+        );
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            diagnostics.contains("reusing classification decisions from storage"),
+            reused
+        );
+        assert_eq!(
+            diagnostics.contains("computed classification decisions"),
+            !reused
+        );
+        assert_eq!(entries(&storage, "classification-decisions").len(), count);
+        assert_reports_equal(&evidence.path().join("cold"), &evidence.path().join(name));
+
+        // Inspect complete envelopes across every subject, not only a decoded decision key.
+        for subject in fs::read_dir(&storage).unwrap() {
+            let subject = subject.unwrap();
+            if subject.file_type().unwrap().is_dir() {
+                for entry in fs::read_dir(subject.path()).unwrap() {
+                    let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+                    assert!(!text.contains("synthetic-user"));
+                    assert!(!text.contains("synthetic-secret"));
+                    assert!(!text.contains("registry.invalid"));
+                }
+            }
+        }
+    }
+    report(
+        &fixture,
+        &evidence.path().join("disabled"),
+        &evidence.path().join("disabled.trace"),
+        &["--no-cache"],
+    );
+    assert_reports_equal(
+        &evidence.path().join("cold"),
+        &evidence.path().join("disabled"),
+    );
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "executes a stateful Git clean filter and the application"

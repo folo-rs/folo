@@ -143,13 +143,16 @@ Decision computation receives a closed, location-independent model, not a worksp
 handle. It derives exact-edge groups, compares released identities/modes and inherited values,
 walks binary installation closures, assigns package/group outcomes and renders evidence.
 Its only acquisition callbacks read sizes and bytes for exact immutable object identities.
-The input key serializes the model deterministically with the producer and computation revision,
-including interpretation context and both endpoint graphs. Dependency kinds remain explicit
+The input key is a SHA-256 digest of the model serialized deterministically with the producer
+and computation revision, including interpretation context and both endpoint graphs.
+Digesting the complete identity preserves configuration-sensitive equality without storing raw
+Cargo configuration or embedded registry credentials in the entry envelope. Configuration
+values remain acquisition inputs, not decision payload fields. Dependency kinds remain explicit
 even though the public dependency JSON omits them. Manifest syntax retains packaging controls
 without including formatting; selected archive endpoints retain unchanged files as well as changes.
 Git-relative paths retain path-sensitive interpretation without prospective absolute roots.
 Packages reference shared worktree and commit lockfile endpoints, so each endpoint's parsed
-lockfile and installation graph occurs once in the closed model and its serialized key.
+lockfile and installation graph occurs once in the closed model and its digest input.
 
 The subject uses the shared storage interface and retains only the preceding key/result in
 operation memory. A matching entry skips decision computation, not acquisition. Replacement

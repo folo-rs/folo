@@ -97,7 +97,10 @@ identities before closure traversal. Installation declarations and registry cont
 separate from the content-only lock graph.
 
 Installation graphs expose a deterministic key projection of successful declarations, resolved
-path identities, source/patch rules and registry interpretation. Deferred errors have no persisted
+path identities, source/patch rules and registry interpretation. The projection can contain
+confidential registry configuration and is only an in-memory identity input. Consumers use
+the storage subject's SHA-256 key digest before persisting configuration-dependent identities.
+Deferred errors have no persisted
 success representation; a derived-computation consumer must bypass reuse while retaining their
 live causes. Parsed lock graph serialization orders root indexes independently of hash-map seeds.
 Versioning consumes these observations for its complete-input decisions; workspace does not own

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 
 use crp_diag::Verbose;
-use crp_workspace::cache::{Cache, CacheEntry};
+use crp_workspace::cache::{Cache, CacheEntry, key_digest};
 use crp_workspace::git::{BLOB_BATCH_BYTES, BlobReader, GitObjectContext};
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
@@ -56,7 +56,9 @@ impl DecisionInputs {
             verbose.note(|| format!("computing classification decisions because the acquired installation graph for lock endpoint {endpoint:?} contains deferred errors"));
             return Ok(None);
         }
-        Ok(Some(serde_json::to_string(&(
+        // Registry interpretation can contain credentials. Digest the complete identity,
+        // not selected fields, so storage retains neither configuration nor weaker equality.
+        Ok(Some(key_digest(&(
             env!("CARGO_PKG_VERSION"),
             Decisions::REVISION,
             self,
@@ -238,8 +240,8 @@ pub(crate) struct Decisions {
 
 impl CacheEntry for Decisions {
     const SUBJECT: &'static str = "classification-decisions";
-    // Bump when acquisition normalization, policy or rendering semantics change within a release.
-    const REVISION: u32 = 1;
+    // Bump when input-key representation, acquisition, policy or rendering semantics change.
+    const REVISION: u32 = 2;
     type Key = String;
 }
 
