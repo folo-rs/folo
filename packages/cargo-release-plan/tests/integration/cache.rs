@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
-use std::{fs, thread};
+use std::{fs, io, thread};
 
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::resolved::Inputs;
@@ -288,7 +288,19 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
         "[package]\nname='leaf'\nversion='0.1.0'\n",
     );
     fixture.write("vendor/leaf/src/lib.rs", "");
+    fixture.write(
+        "unselected/Cargo.toml",
+        "[package]\nname='unselected'\nversion='0.1.0'\n",
+    );
+    fixture.write("unselected/src/lib.rs", "");
     fixture.commit("ignored transitive path dependencies");
+    let evidence = TempDir::new().unwrap();
+    report(
+        &fixture,
+        &evidence.path().join("baseline"),
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
     let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
     for path in [
         "packages/demo/build.rs",
@@ -298,13 +310,106 @@ fn cache_admission_protects_absent_and_recursive_source_inputs() {
         "vendor/helper",
         "vendor/leaf",
         "vendor/leaf/src/cache",
+        "vendor/leaf/build.rs",
+        "unselected/build.rs",
     ] {
         let output = command(&fixture)
             .args(["check", "--release-history", "HEAD", "--cache", path])
             .output()
             .unwrap();
         assert!(!output.status.success(), "{path}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("overlaps protected"),
+            "{path}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         inputs.verify(&fixture.manifest(), None).unwrap();
+    }
+    assert!(!fixture.path().join("vendor/leaf/build.rs").exists());
+    assert!(!fixture.path().join("unselected/build.rs").exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "runs classification and strict capture with unused missing paths"
+)]
+fn unavailable_extra_inventory_disables_storage_without_failing_classification() {
+    let fixture = seeded_package();
+    fixture.write_workspace("[workspace.dependencies]\nunused = { path = 'unavailable' }\n");
+    fixture.commit("unused missing path declaration");
+    let evidence = TempDir::new().unwrap();
+    for (name, options) in [("baseline", &["--no-cache"][..]), ("cached", &[][..])] {
+        success(
+            command(&fixture)
+                .args(["check", "--release-history", "HEAD"])
+                .args(options)
+                .output()
+                .unwrap(),
+        );
+        report(
+            &fixture,
+            &evidence.path().join(name),
+            &evidence.path().join(format!("{name}.trace")),
+            options,
+        );
+    }
+    assert_eq!(
+        fs::read(evidence.path().join("baseline/report.json")).unwrap(),
+        fs::read(evidence.path().join("cached/report.json")).unwrap()
+    );
+    assert!(
+        !fixture
+            .path()
+            .join("target/cargo-release-plan/cache")
+            .exists()
+    );
+    Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap_err();
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes compatibility with a closed diagnostic pipe")]
+fn cache_advisories_do_not_fail_compatibility_with_closed_stderr() {
+    let fixture = seeded_package();
+    fixture.write(
+        "packages/demo/Cargo.toml",
+        &format!(
+            "{}\n[package.metadata.release-plan]\nprivate-api = true\n",
+            fixture.read("packages/demo/Cargo.toml")
+        ),
+    );
+    fixture.commit("private application contract");
+    let evidence = TempDir::new().unwrap();
+    let unavailable = evidence.path().join("obstruction");
+    fs::write(&unavailable, "not a directory").unwrap();
+    let corrupt = evidence.path().join("corrupt");
+    report(
+        &fixture,
+        &evidence.path().join("seed"),
+        &evidence.path().join("seed.trace"),
+        &["--cache", corrupt.to_str().unwrap()],
+    );
+    for entry in entries(&corrupt, "git-trees") {
+        fs::write(entry, "{").unwrap();
+    }
+    for (index, storage) in [unavailable.join("cache"), corrupt].into_iter().enumerate() {
+        let (reader, writer) = io::pipe().unwrap();
+        drop(reader);
+        success(
+            command(&fixture)
+                .args([
+                    "check-compatibility",
+                    "--release-history",
+                    "HEAD",
+                    "--cache",
+                ])
+                .arg(storage)
+                .arg("--output")
+                .arg(evidence.path().join(format!("compatibility-{index}")))
+                .stderr(writer)
+                .output()
+                .unwrap(),
+        );
     }
 }
 

@@ -1,8 +1,7 @@
 //! Overlap admission for resolved locations, including missing path suffixes.
 
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use ohno::AppError;
 use tempfile::Builder;

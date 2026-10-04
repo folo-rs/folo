@@ -18,7 +18,7 @@ use crp_versioning::analysis_order::run_analysis_order;
 use crp_versioning::apply::run_apply;
 use crp_versioning::inspect_plan::run_inspect_plan;
 use crp_versioning::plan::SCHEMA_VERSION;
-use crp_versioning::preview::{run_prepare_with_cache, run_preview_with_cache};
+use crp_versioning::preview::{run_prepare_with_cache, run_preview_with_options};
 use crp_versioning::propose::{DECISION_SCHEMA_VERSION, run_propose};
 use crp_versioning::report::run_report_with_cache;
 use crp_versioning::resolved::run_verify_preview;
@@ -581,17 +581,13 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
             manifest_path,
             verbose,
         } => {
-            let message = run_preview_with_cache(
+            let message = run_preview_with_options(
                 plan,
                 prepared,
                 output,
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(
-                    manifest_path,
-                    cache_options,
-                    Verbose::new(*verbose, &crp_diag::Stderr),
-                )?,
+                cache_options,
             )?;
             Ok(RunOutcome::Preview { message })
         }

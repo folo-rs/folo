@@ -347,9 +347,9 @@ and reserved input locations whose files do not yet exist.
 The cache is expendable acceleration, not evidence or workflow state. Removing
 it, including through `cargo clean`, leaves prepared and resolved plans usable.
 Cached observations never replace live source, candidate or history admission.
-Corrupt entries and cache I/O failures, including unavailable cache locations, produce
-diagnostics and fresh acquisition;
-underlying Git, Cargo and classification failures remain errors.
+Corrupt entries and cache I/O failures produce advisory diagnostics and fresh acquisition.
+Unavailable cache locations or incomplete cache-safety inventories disable storage.
+This does not relax the inputs required for classification or prepared evidence.
 
 ### Standalone planning
 

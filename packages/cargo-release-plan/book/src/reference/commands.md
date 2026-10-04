@@ -31,9 +31,9 @@ No session identifier or workflow-managed validity check is needed. The tool
 decides which entries match the current inputs and continues to verify source
 and history. You can delete the cache or run `cargo clean` without invalidating
 prepared evidence or resolved plans. Corruption and cache I/O problems are
-reported and observations are reacquired. An unavailable cache location disables
-storage for the command; this does not suppress underlying
-Git or Cargo failures.
+reported as advisories and observations are reacquired. An unavailable cache location
+or incomplete cache-safety inventory disables storage for the command. This does not
+relax the inputs required for classification or prepared evidence.
 
 ## Release context and identity
 

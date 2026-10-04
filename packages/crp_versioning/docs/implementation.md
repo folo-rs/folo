@@ -111,3 +111,7 @@ arguments, real aliases, atomic file promotion and workspace lifetime.
 Workspace owns the source-location inventory shared with cache admission; versioning
 requires relocatable dependency paths and captures the same reserved files and recursive
 source contents for fingerprints.
+Preview admits its output and invalidates any previous completion marker before acquiring
+cache metadata. Both the default wrapper and the application's options-based entry point
+share that ordering; input aliases are rejected before removal. Storage is still resolved
+from the original workspace before constructing the prospective workspace.
