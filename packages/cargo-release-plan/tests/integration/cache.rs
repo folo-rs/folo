@@ -372,6 +372,108 @@ fn unavailable_extra_inventory_disables_storage_without_failing_classification()
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes classification with an obstructed unrelated tracked path"
+)]
+fn unresolved_extra_inventory_disables_storage_without_failing_classification() {
+    let fixture = seeded_package();
+    fixture.write("docs/page.md", "unrelated documentation");
+    fixture.commit("documentation");
+    let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
+    fs::remove_file(fixture.path().join("docs/page.md")).unwrap();
+    fs::remove_dir(fixture.path().join("docs")).unwrap();
+    fixture.write("docs", "not a directory");
+    let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let cached = evidence.path().join("cached");
+    let output = report(
+        &fixture,
+        &cached,
+        &evidence.path().join("cached.trace"),
+        &[],
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+    assert_reports_equal(&baseline, &cached);
+    assert!(
+        !fixture
+            .path()
+            .join("target/cargo-release-plan/cache")
+            .exists()
+    );
+    inputs.verify(&fixture.manifest(), None).unwrap_err();
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes Git with external object and index locations")]
+fn external_git_object_and_index_locations_are_protected() {
+    let fixture = seeded_package();
+    let external = TempDir::new().unwrap();
+    let objects = external.path().join("objects");
+    let index = external.path().join("index");
+    let hooks = external.path().join("hooks");
+    let alternates = external.path().join("alternate objects");
+    fs::create_dir_all(&alternates).unwrap();
+    fixture.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    fs::rename(fixture.path().join(".git/objects"), &objects).unwrap();
+    fs::rename(fixture.path().join(".git/index"), &index).unwrap();
+    for path in [&objects, &index, &hooks, &alternates] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache"])
+            .arg(path)
+            .env("GIT_OBJECT_DIRECTORY", &objects)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{}", path.display());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+    }
+    assert!(!objects.join(".gitignore").exists());
+    success(
+        command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--no-cache"])
+            .env("GIT_OBJECT_DIRECTORY", &objects)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
+            .output()
+            .unwrap(),
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "checks Cargo autodiscovery and untracked target visibility"
+)]
+fn untracked_autodiscovery_targets_cannot_be_cache_storage() {
+    let fixture = seeded_package();
+    for directory in ["examples", "tests", "benches"] {
+        let target = format!("packages/demo/{directory}/demo.rs");
+        fixture.write(&target, "fn main() {}\n");
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache"])
+            .arg(fixture.path().join("packages/demo").join(directory))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+        assert!(
+            fixture
+                .git(&["status", "--porcelain", "--untracked-files=all"])
+                .contains(&target)
+        );
+        assert_eq!(fixture.read(&target), "fn main() {}\n");
+    }
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "executes compatibility with a closed diagnostic pipe")]
 fn cache_advisories_do_not_fail_compatibility_with_closed_stderr() {
     let fixture = seeded_package();

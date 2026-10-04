@@ -6,6 +6,7 @@
 )]
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
 
-use self::paths::require_disjoint;
+use self::paths::{protected_paths, require_direct_subject, require_disjoint};
 use crate::ParseMetadataError;
 use crate::artifact_path::{resolve_path, write_new};
 use crate::git::GitRepo;
@@ -76,17 +77,19 @@ impl Cache {
             .into_iter()
             .map(|package| package.manifest_path)
             .collect::<Vec<_>>();
+        let mut dependency_manifests = Vec::new();
         let sources = SourceInputs::discover(
             git.root(),
             &metadata.workspace_root,
             &manifests,
             |manifest, dependency| {
-                resolve_path(
-                    &manifest
-                        .parent()
-                        .expect("a manifest has a parent")
-                        .join(dependency),
-                )
+                let path = manifest
+                    .parent()
+                    .expect("a manifest has a parent")
+                    .join(dependency);
+                // Retain the declaration's spelling so link entries are protected as well.
+                dependency_manifests.push(path.join("Cargo.toml"));
+                resolve_path(&path)
             },
         );
         let Some(mut sources) = storage_inventory(sources, verbose) else {
@@ -95,13 +98,29 @@ impl Cache {
         sources
             .files
             .extend(tracked.iter().map(|path| git.root().join(path)));
-        sources.files.extend(git.administrative_paths()?);
+        let Some(administration) = storage_inventory(git.administrative_paths(), verbose) else {
+            return Ok(Self::default());
+        };
+        sources.files.extend(administration);
+        sources.files.extend(dependency_manifests);
+        sources.files.insert(manifest.to_owned());
         reserve_package_paths(&mut sources, case);
         let Some(directory) = resolve_directory(&requested, verbose, resolve_path) else {
             return Ok(Self::default());
         };
-        for path in sources.files.iter().chain(&sources.source_directories) {
-            require_disjoint(&directory, &resolve_path(path)?)?;
+        // The inventory shares many ancestors; acquire each link identity once per admission.
+        let mut redirects = HashMap::new();
+        let paths = sources
+            .files
+            .iter()
+            .chain(&sources.source_directories)
+            .map(|path| protected_paths(path, &mut redirects))
+            .collect::<Result<Vec<_>, _>>();
+        let Some(paths) = storage_inventory(paths, verbose) else {
+            return Ok(Self::default());
+        };
+        for path in paths.iter().flatten() {
+            require_disjoint(&directory, path)?;
         }
         Ok(Self {
             directory: Some(directory),
@@ -118,7 +137,9 @@ impl Cache {
     #[cfg_attr(test, mutants::skip)] // Native path resolution; overlap policy is unit-tested.
     pub fn protect(&self, path: &Path) -> Result<(), AppError> {
         if let Some(directory) = &self.directory {
-            require_disjoint(directory, &resolve_path(path)?)?;
+            for protected in protected_paths(path, &mut HashMap::new())? {
+                require_disjoint(directory, &protected)?;
+            }
         }
         Ok(())
     }
@@ -136,15 +157,17 @@ impl Cache {
         };
         let key = serde_json::to_string(key)?;
         let identity = serde_json::to_vec(&(T::SUBJECT, T::REVISION, &key))?;
-        let path = directory
-            .join(T::SUBJECT)
-            .join(format!("{}.json", checksum(&identity)));
+        let subject = directory.join(T::SUBJECT);
+        let path = subject.join(format!("{}.json", checksum(&identity)));
         get_with::<T>(
             &key,
-            || match fs::read(&path) {
-                Ok(bytes) => Ok(Some(bytes)),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(CacheReadFailed::caused_by(&path, error).into()),
+            || {
+                require_direct_subject(&subject)?;
+                match fs::read(&path) {
+                    Ok(bytes) => Ok(Some(bytes)),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                    Err(error) => Err(CacheReadFailed::caused_by(&path, error).into()),
+                }
             },
             |bytes| publish(directory, &path, bytes),
             |error| {
@@ -170,10 +193,7 @@ impl Cache {
     }
 }
 
-fn storage_inventory(
-    sources: Result<SourceInputs, AppError>,
-    verbose: Verbose<'_>,
-) -> Option<SourceInputs> {
+fn storage_inventory<T>(sources: Result<T, AppError>, verbose: Verbose<'_>) -> Option<T> {
     match sources {
         Ok(sources) => Some(sources),
         Err(error) => {
@@ -203,7 +223,9 @@ fn reserve_package_paths(sources: &mut SourceInputs, case: PathCase) {
         .collect::<Vec<_>>();
     for package in packages {
         sources.files.insert(package.join("build.rs"));
-        sources.source_directories.insert(package.join("src"));
+        for directory in ["src", "examples", "tests", "benches"] {
+            sources.source_directories.insert(package.join(directory));
+        }
     }
 }
 
@@ -315,6 +337,7 @@ fn publish(directory: &Path, path: &Path, bytes: &[u8]) -> Result<(), AppError> 
     let parent = path
         .parent()
         .expect("an entry path includes its subject directory");
+    require_direct_subject(parent)?;
     fs::create_dir_all(parent).map_err(|error| CacheWriteFailed::caused_by(path, error))?;
     // Hide only tool-owned untracked entries, not arbitrary tracked source. This also keeps
     // default placement unobtrusive in repositories that do not ignore Cargo's target directory.
@@ -454,8 +477,11 @@ mod tests {
             assert!(admitted.files.contains(Path::new("workspace/Cargo.toml")));
             assert!(recording.messages.lock().unwrap().is_empty());
             assert!(
-                storage_inventory(Err(io::Error::other("missing dependency").into()), verbose)
-                    .is_none()
+                storage_inventory::<SourceInputs>(
+                    Err(io::Error::other("missing dependency").into()),
+                    verbose
+                )
+                .is_none()
             );
             let messages = recording.messages.lock().unwrap();
             assert_eq!(messages.len(), 1);
@@ -489,7 +515,9 @@ mod tests {
                     continue;
                 }
                 expected.insert(Path::new(package).join("build.rs"));
-                directories.push(Path::new(package).join("src"));
+                for directory in ["src", "examples", "tests", "benches"] {
+                    directories.push(Path::new(package).join(directory));
+                }
             }
             assert_eq!(sources.files, expected);
             assert_eq!(
