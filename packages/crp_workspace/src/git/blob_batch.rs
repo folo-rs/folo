@@ -41,7 +41,7 @@ fn acquire(
 fn requests(ids: &[&str]) -> Result<Vec<u8>, AppError> {
     let mut input = Vec::new();
     for id in ids {
-        // Requests use object identities from ls-tree, never line-delimited file names.
+        // Requests use object identities, never line-delimited file names.
         // This also prevents an accidental revision/path expression from changing framing.
         if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(InvalidBlobBatch::new().into());
@@ -108,7 +108,7 @@ pub fn decode_blob_batch(ids: &[&str], mut output: &[u8]) -> Result<Vec<Vec<u8>>
 
 /// A recorded blob is unavailable or the Git batch response is inconsistent with its request.
 #[ohno::error]
-#[display("Git could not return the requested historical blobs as a complete batch")]
+#[display("Git could not return the requested blobs as a complete batch")]
 pub(crate) struct InvalidBlobBatch;
 
 #[cfg(test)]
