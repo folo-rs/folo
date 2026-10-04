@@ -424,19 +424,22 @@ fn check_with_output(
     let observation_cache = Cache::resolve(
         &evidence.inputs().root.join(&evidence.inputs().manifest),
         cache_options,
+        verbose,
     )?;
     observation_cache.protect(output)?;
     if let Some(path) = prepared.or(plan) {
         observation_cache.protect(path)?;
     }
-    if matches!(evidence, Evidence::Preview(_)) && observation_cache.directory().is_some() {
-        // A cache override must not publish disposable entries into retained source evidence.
-        let candidate = GitRepo::discover(
-            manifest
-                .parent()
-                .expect("the admitted candidate manifest has a parent directory"),
+    if matches!(&evidence, Evidence::Preview(_)) {
+        // The retained repository is evidence too, including when its manifest is nested.
+        observation_cache.protect(
+            GitRepo::discover(
+                manifest
+                    .parent()
+                    .expect("an evidence manifest has a parent"),
+            )?
+            .root(),
         )?;
-        observation_cache.protect(candidate.root())?;
     }
     run_report_with_cache(
         output,

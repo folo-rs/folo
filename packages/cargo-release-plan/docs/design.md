@@ -341,7 +341,8 @@ and external compatibility checking.
 `--cache <directory>` to choose another location, or `--no-cache` to bypass cache
 reads and writes. These options conflict. Relative override paths are resolved
 from the initial invocation working directory. Cache locations must be separate
-from source inputs and workflow evidence.
+from source inputs and workflow evidence, including Git administration, retained candidate repositories
+and reserved input locations whose files do not yet exist.
 
 The cache is expendable acceleration, not evidence or workflow state. Removing
 it, including through `cargo clean`, leaves prepared and resolved plans usable.
@@ -349,7 +350,8 @@ Cached observations never replace live source, candidate or history admission.
 Preparation, preview and later compatibility invocations share matching computation
 without a caller-managed handoff. Each compatibility invocation produces its own
 source-bound report and external comparison evidence.
-Corrupt entries and cache I/O failures produce diagnostics and fresh acquisition;
+Corrupt entries and cache I/O failures, including unavailable cache locations, produce
+diagnostics and fresh acquisition;
 underlying Git, Cargo and classification failures remain errors.
 
 ### Standalone planning

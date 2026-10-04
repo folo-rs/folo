@@ -234,6 +234,12 @@ fn preview_cache_hit_rechecks_source_and_candidate_around_checker() {
                     .unwrap();
                 reused(&output);
                 assert!(!output.status.success());
+                // Canary drift must stop before baseline assessment, not just checker execution.
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("Comparing library against baseline"),
+                    phase == "comparison"
+                );
                 let outcome = read_outcome(&assessment.path(&name));
                 assert_eq!(outcome.get("completed").unwrap(), false);
                 assert_eq!(outcome.get("findings").unwrap(), phase == "comparison");

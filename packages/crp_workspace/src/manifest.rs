@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::Arc;
-use std::{fmt, fs};
+use std::{fmt, fs, io};
 
 use crp_diag::short_type_name;
 use ignore::overrides::{Override, OverrideBuilder};
@@ -365,18 +365,27 @@ impl PathCase {
     #[cfg_attr(test, mutants::skip)]
     #[must_use]
     pub fn probe(dir: &Path) -> Self {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return Self::Sensitive;
-        };
-        let names: Vec<String> = entries
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        // A dangling link is still a directory entry; its target cannot decide path case.
-        Self::from_directory_entries(&names, |name| fs::symlink_metadata(dir.join(name)).is_ok())
+        Self::probe_known(dir).ok().flatten().unwrap_or_default()
     }
 
-    fn from_directory_entries(names: &[String], mut exists: impl FnMut(&str) -> bool) -> Self {
+    /// Retains an inconclusive probe for callers whose safe fallback is not sensitive matching.
+    #[cfg_attr(test, mutants::skip)] // Native acquisition; from_directory_entries tests decisions.
+    pub(crate) fn probe_known(dir: &Path) -> io::Result<Option<Self>> {
+        let names = fs::read_dir(dir)?
+            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+            .collect::<io::Result<Vec<_>>>()?;
+        // A dangling link is still a directory entry; its target cannot decide path case.
+        Self::from_directory_entries(&names, |name| match fs::symlink_metadata(dir.join(name)) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        })
+    }
+
+    fn from_directory_entries(
+        names: &[String],
+        mut exists: impl FnMut(&str) -> io::Result<bool>,
+    ) -> io::Result<Option<Self>> {
         let present: HashSet<&str> = names.iter().map(String::as_str).collect();
         for name in names {
             let flipped = flip_case(name);
@@ -385,13 +394,13 @@ impl PathCase {
             if present.contains(flipped.as_str()) {
                 continue;
             }
-            return if exists(&flipped) {
+            return Ok(Some(if exists(&flipped)? {
                 Self::Insensitive
             } else {
                 Self::Sensitive
-            };
+            }));
         }
-        Self::Sensitive
+        Ok(None)
     }
 
     /// Resolves a requested path to its recorded spelling.
@@ -1984,8 +1993,9 @@ b = { path = "../b" }
             vec!["a".to_string(), "A".to_string()],
         ] {
             assert_eq!(
-                PathCase::from_directory_entries(&names, |_| panic!("no unambiguous probe entry")),
-                PathCase::Sensitive
+                PathCase::from_directory_entries(&names, |_| panic!("no unambiguous probe entry"))
+                    .unwrap(),
+                None
             );
         }
         let names = ["123", "a", "A", "Probe.txt"].map(str::to_string);
@@ -1993,11 +2003,20 @@ b = { path = "../b" }
             assert_eq!(
                 PathCase::from_directory_entries(&names, |candidate| {
                     assert_eq!(candidate, "pROBE.TXT");
-                    exists
-                }),
-                expected
+                    Ok(exists)
+                })
+                .unwrap(),
+                Some(expected)
             );
         }
+        assert_eq!(
+            PathCase::from_directory_entries(&names, |_| Err(
+                io::ErrorKind::PermissionDenied.into()
+            ))
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]

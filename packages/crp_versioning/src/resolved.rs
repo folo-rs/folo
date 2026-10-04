@@ -15,11 +15,12 @@ use std::path::{Component, Path, PathBuf};
 use crp_diag::Verbose;
 use crp_workspace::command::{hash_bytes, run_capture};
 use crp_workspace::git::GitRepo;
-use crp_workspace::manifest::{PathCase, for_each_dependency_table, parse_document};
+use crp_workspace::manifest::{PathCase, parse_document};
 use crp_workspace::metadata::{WorkTree, load_tracked_work_tree};
+use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
-use toml_edit::{DocumentMut, Item, TableLike};
+use toml_edit::DocumentMut;
 
 use self::paths::PathIdentity;
 use crate::groups::Groups;
@@ -88,44 +89,19 @@ impl Inputs {
         )?;
         let mut paths: BTreeSet<PathBuf> =
             work_tree.tracked_paths.iter().map(PathBuf::from).collect();
-        paths.insert(relative(
+        let sources = SourceInputs::discover_with_documents(
             &root,
-            &work_tree.workspace_root.join("Cargo.lock"),
-        )?);
-        for directory in work_tree
-            .workspace_root
-            .ancestors()
-            .take_while(|directory| directory.starts_with(&root))
-        {
-            paths.insert(relative(&root, &directory.join(".cargo/config"))?);
-            paths.insert(relative(&root, &directory.join(".cargo/config.toml"))?);
-        }
-        for manifest in &work_tree.member_manifests {
-            paths.insert(relative(&root, manifest)?);
-            let directory = manifest
-                .parent()
-                .expect("a manifest has a parent directory");
-            collect_sources(&root, &directory.join("src"), &mut paths)?;
-            paths.insert(relative(&root, &directory.join("build.rs"))?);
-        }
-        capture_path_dependencies_documents(
-            &root,
-            work_tree
-                .member_manifests
-                .iter()
-                .chain([&work_tree.workspace_root.join("Cargo.toml")]),
-            &mut paths,
-            |path| match work_tree.manifests.documents.get(path) {
-                Some(document) => Ok(document.clone()),
-                None => {
-                    let text = fs::read_to_string(path)
-                        .map_err(|error| ReadFileError::caused_by(path, error))?;
-                    parse_document(path, &text)
-                }
+            &work_tree.workspace_root,
+            &work_tree.member_manifests,
+            |manifest, dependency| captured_dependency(&root, manifest, dependency),
+            |path| {
+                capture_document(path, &work_tree.manifests.documents, |path| {
+                    fs::read_to_string(path)
+                        .map_err(|error| ReadFileError::caused_by(path, error).into())
+                })
             },
-            canonical,
-            |directory, paths| collect_sources(&root, directory, paths),
         )?;
+        capture_sources(&root, sources, &mut paths)?;
         let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
         history.verify(&git)?;
         Ok((
@@ -367,107 +343,74 @@ impl Inputs {
     }
 }
 
-// Native file/identity/source acquisition; the graph traversal is tested with captured observations.
+// Native source acquisition; shared workspace discovery owns dependency graph traversal.
 #[cfg_attr(test, mutants::skip)]
 pub fn capture_path_dependencies<'a>(
     root: &Path,
     manifests: impl IntoIterator<Item = &'a PathBuf>,
     paths: &mut BTreeSet<PathBuf>,
 ) -> Result<(), AppError> {
-    capture_path_dependencies_with(
-        root,
-        manifests,
-        paths,
-        |path| {
-            fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error).into())
-        },
-        canonical,
-        |directory, paths| collect_sources(root, directory, paths),
-    )
+    let sources = SourceInputs::dependencies(manifests, |manifest, dependency| {
+        captured_dependency(root, manifest, dependency)
+    })?;
+    capture_sources(root, sources, paths)
 }
 
-fn capture_path_dependencies_with<'a>(
+// Native dependency identity belongs to the original repository before prospective relocation.
+#[cfg_attr(test, mutants::skip)]
+fn captured_dependency(
     root: &Path,
-    manifests: impl IntoIterator<Item = &'a PathBuf>,
-    paths: &mut BTreeSet<PathBuf>,
-    mut read: impl FnMut(&Path) -> Result<String, AppError>,
-    canonicalize: impl FnMut(&Path) -> Result<PathBuf, AppError>,
-    collect: impl FnMut(&Path, &mut BTreeSet<PathBuf>) -> Result<(), AppError>,
-) -> Result<(), AppError> {
-    capture_path_dependencies_documents(
-        root,
-        manifests,
-        paths,
-        |path| parse_document(path, &read(path)?),
-        canonicalize,
-        collect,
-    )
+    manifest: &Path,
+    dependency: &Path,
+) -> Result<PathBuf, AppError> {
+    captured_dependency_with(root, manifest, dependency, canonical)
 }
 
-fn capture_path_dependencies_documents<'a>(
+fn captured_dependency_with(
     root: &Path,
-    manifests: impl IntoIterator<Item = &'a PathBuf>,
+    manifest: &Path,
+    dependency: &Path,
+    canonical: impl FnOnce(&Path) -> Result<PathBuf, AppError>,
+) -> Result<PathBuf, AppError> {
+    // Absolute declarations would keep pointing into the live workspace from a disposable clone.
+    if dependency.is_absolute() {
+        return Err(UnsupportedInput::new(dependency).into());
+    }
+    let directory = canonical(
+        &manifest
+            .parent()
+            .expect("a manifest has a parent")
+            .join(dependency),
+    )?;
+    relative(root, &directory)?;
+    Ok(directory)
+}
+
+fn capture_document(
+    path: &Path,
+    documents: &BTreeMap<PathBuf, DocumentMut>,
+    read: impl FnOnce(&Path) -> Result<String, AppError>,
+) -> Result<DocumentMut, AppError> {
+    match documents.get(path) {
+        Some(document) => Ok(document.clone()),
+        None => parse_document(path, &read(path)?),
+    }
+}
+
+// Source directory contents are acquired by collect_sources; discovery also reserves absent files.
+#[cfg_attr(test, mutants::skip)]
+fn capture_sources(
+    root: &Path,
+    sources: SourceInputs,
     paths: &mut BTreeSet<PathBuf>,
-    mut document: impl FnMut(&Path) -> Result<DocumentMut, AppError>,
-    mut canonicalize: impl FnMut(&Path) -> Result<PathBuf, AppError>,
-    mut collect: impl FnMut(&Path, &mut BTreeSet<PathBuf>) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
-    let mut pending: BTreeSet<PathBuf> = manifests.into_iter().cloned().collect();
-    let mut visited = BTreeSet::new();
-    while let Some(manifest) = pending.pop_first() {
-        if !visited.insert(manifest.clone()) {
-            continue;
-        }
-        paths.insert(relative(root, &manifest)?);
-        let document = document(&manifest)?;
-        let mut dependencies = Vec::new();
-        for_each_dependency_table(document.as_table(), &mut |_, table| {
-            dependency_paths(table, &mut dependencies);
-        });
-        if let Some(workspace) = document.get("workspace").and_then(Item::as_table_like) {
-            for_each_dependency_table(workspace, &mut |_, table| {
-                dependency_paths(table, &mut dependencies);
-            });
-        }
-        if let Some(patches) = document.get("patch").and_then(Item::as_table_like) {
-            for (_, patch) in patches.iter() {
-                if let Some(table) = patch.as_table_like() {
-                    dependency_paths(table, &mut dependencies);
-                }
-            }
-        }
-        if let Some(replacements) = document.get("replace").and_then(Item::as_table_like) {
-            dependency_paths(replacements, &mut dependencies);
-        }
-        for dependency in dependencies {
-            let path = Path::new(&dependency);
-            // Absolute paths would keep pointing into the live workspace from a disposable clone.
-            if path.is_absolute() {
-                return Err(UnsupportedInput::new(path).into());
-            }
-            let directory = manifest
-                .parent()
-                .expect("a manifest has a parent")
-                .join(path);
-            let directory = canonicalize(&directory)?;
-            relative(root, &directory)?;
-            collect(&directory.join("src"), paths)?;
-            pending.insert(directory.join("Cargo.toml"));
-        }
+    for path in sources.files {
+        paths.insert(relative(root, &path)?);
+    }
+    for directory in sources.source_directories {
+        collect_sources(root, &directory, paths)?;
     }
     Ok(())
-}
-
-fn dependency_paths(table: &dyn TableLike, paths: &mut Vec<String>) {
-    for (_, dependency) in table.iter() {
-        if let Some(path) = dependency
-            .as_table_like()
-            .and_then(|dependency| dependency.get("path"))
-            .and_then(Item::as_str)
-        {
-            paths.push(path.to_owned());
-        }
-    }
 }
 
 /// The complete resolved state embedded in the explicit plan for application.
@@ -887,6 +830,37 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn dependency_locations_must_remain_relocatable_and_inside_the_repository() {
+        let root = Path::new("root");
+        let manifest = root.join("member/Cargo.toml");
+        for directory in [root.join("local"), PathBuf::from("outside")] {
+            let result = captured_dependency_with(root, &manifest, Path::new("../local"), |path| {
+                assert_eq!(path, root.join("member/../local"));
+                Ok(directory.clone())
+            });
+            assert_eq!(result.is_ok(), directory.starts_with(root));
+        }
+        let absolute = if cfg!(windows) {
+            Path::new("C:\\absolute")
+        } else {
+            Path::new("/absolute")
+        };
+        assert!(
+            captured_dependency_with(root, &manifest, absolute, |_| {
+                panic!("absolute declarations are rejected before acquisition")
+            })
+            .unwrap_err()
+            .find_source::<UnsupportedInput>()
+            .is_some()
+        );
+        let error = captured_dependency_with(root, &manifest, Path::new("local"), |_| {
+            Err(ReadFileError::new(Path::new("local")).into())
+        })
+        .unwrap_err();
+        assert!(error.find_source::<ReadFileError>().is_some());
+    }
 
     #[test]
     fn candidate_location_requires_recorded_evidence_and_excludes_live_source() {
