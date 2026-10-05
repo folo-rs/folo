@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crp_versioning::classify::{PackageStatus, classify};
+use crp_versioning::classify::{PackageStatus, SnapshotCache, classify_with_cache};
 use crp_workspace::command::run_capture;
 use crp_workspace::git::GitRepo;
 use ohno::AppError;
@@ -52,7 +52,15 @@ impl Candidate {
         }
         let packages = Worktree::observe(repository, &source, diagnostics, |root| {
             let manifest = root.join(&publication.publication.workspace_manifest);
-            let classification = classify(&manifest, Some(original), diagnostics.notes())?;
+            // This disposable publication checkout has no caller-selected observation store.
+            // Keep only invocation memory rather than creating cache files inside the candidate.
+            let classification = classify_with_cache(
+                &manifest,
+                Some(original),
+                None,
+                diagnostics.notes(),
+                &mut SnapshotCache::default(),
+            )?;
             Ok(classification
                 .packages
                 .into_iter()

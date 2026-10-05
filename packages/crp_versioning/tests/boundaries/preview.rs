@@ -3,9 +3,11 @@
 use std::cell::Cell;
 use std::fs;
 
+use crp_diag::{Discard, Verbose};
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::preview::*;
 use crp_versioning::resolved::read_json;
+use crp_workspace::cache::Cache;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -156,4 +158,58 @@ fn occupied_completion_marker_precedes_input_acquisition() {
     .unwrap();
     assert!(error.find_source::<std::io::Error>().is_some());
     assert_eq!(fs::read_to_string(marker).unwrap(), "not a completion file");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "checks default preview admission with missing native inputs"
+)]
+fn default_preview_invalidates_before_cache_resolution_without_deleting_aliases() {
+    let directory = tempdir().unwrap();
+    let marker = directory.path().join("plan.json");
+    let absent = directory.path().join("absent");
+    fs::write(&marker, "previous completion").unwrap();
+    run_preview(
+        &absent,
+        &absent,
+        directory.path(),
+        &absent,
+        Verbose::new(false, &Discard),
+    )
+    .unwrap_err();
+    assert!(!marker.exists());
+
+    fs::write(&marker, "input document").unwrap();
+    run_preview(
+        &marker,
+        &absent,
+        &directory.path().join("missing/.."),
+        &absent,
+        Verbose::new(false, &Discard),
+    )
+    .unwrap_err();
+    assert_eq!(fs::read_to_string(marker).unwrap(), "input document");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "checks injected-cache preview admission with real files"
+)]
+fn injected_cache_preview_also_invalidates_before_reading_inputs() {
+    let directory = tempdir().unwrap();
+    let marker = directory.path().join("plan.json");
+    let absent = directory.path().join("absent");
+    fs::write(&marker, "previous completion").unwrap();
+    run_preview_with_cache(
+        &absent,
+        &absent,
+        directory.path(),
+        &absent,
+        Verbose::new(false, &Discard),
+        Cache::default(),
+    )
+    .unwrap_err();
+    assert!(!marker.exists());
 }

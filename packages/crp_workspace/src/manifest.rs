@@ -3,9 +3,10 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
+use std::ffi::OsString;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::Arc;
-use std::{fmt, fs};
+use std::{fmt, fs, io};
 
 use crp_diag::short_type_name;
 use ignore::overrides::{Override, OverrideBuilder};
@@ -364,19 +365,33 @@ impl PathCase {
     #[cfg_attr(test, mutants::skip)]
     #[must_use]
     pub fn probe(dir: &Path) -> Self {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return Self::Sensitive;
-        };
-        let names: Vec<String> = entries
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        // A dangling link is still a directory entry; its target cannot decide path case.
-        Self::from_directory_entries(&names, |name| fs::symlink_metadata(dir.join(name)).is_ok())
+        Self::probe_known(dir).ok().flatten().unwrap_or_default()
     }
 
-    fn from_directory_entries(names: &[String], mut exists: impl FnMut(&str) -> bool) -> Self {
-        let present: HashSet<&str> = names.iter().map(String::as_str).collect();
+    /// Retains an inconclusive probe for callers whose safe fallback is not sensitive matching.
+    #[cfg_attr(test, mutants::skip)] // Native acquisition; from_directory_entries tests decisions.
+    pub(crate) fn probe_known(dir: &Path) -> io::Result<Option<Self>> {
+        let names = fs::read_dir(dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<io::Result<Vec<_>>>()?;
+        // A dangling link is still a directory entry; its target cannot decide path case.
+        Self::from_directory_entries(&names, |name| match fs::symlink_metadata(dir.join(name)) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        })
+    }
+
+    fn from_directory_entries(
+        names: &[OsString],
+        mut exists: impl FnMut(&str) -> io::Result<bool>,
+    ) -> io::Result<Option<Self>> {
+        // Unicode expansion and lossy decoding can produce names that are not aliases
+        // even on an insensitive filesystem. Only ASCII names can establish this probe.
+        let names = names
+            .iter()
+            .filter_map(|name| name.to_str().filter(|name| name.is_ascii()));
+        let present: HashSet<&str> = names.clone().collect();
         for name in names {
             let flipped = flip_case(name);
             // An entry that is already present under both spellings proves
@@ -384,13 +399,13 @@ impl PathCase {
             if present.contains(flipped.as_str()) {
                 continue;
             }
-            return if exists(&flipped) {
+            return Ok(Some(if exists(&flipped)? {
                 Self::Insensitive
             } else {
                 Self::Sensitive
-            };
+            }));
         }
-        Self::Sensitive
+        Ok(None)
     }
 
     /// Resolves a requested path to its recorded spelling.
@@ -466,11 +481,11 @@ pub fn to_git_separators(relative: &str, native_separator: char) -> Cow<'_, str>
 
 fn flip_case(name: &str) -> String {
     name.chars()
-        .flat_map(|c| {
-            if c.is_uppercase() {
-                c.to_lowercase().collect::<Vec<_>>()
+        .map(|c| {
+            if c.is_ascii_uppercase() {
+                c.to_ascii_lowercase()
             } else {
-                c.to_uppercase().collect()
+                c.to_ascii_uppercase()
             }
         })
         .collect()
@@ -690,7 +705,7 @@ fn is_visible_target_name(name: &str) -> bool {
 ///
 /// Cargo rewrites both to a bare file name when it normalises a manifest for
 /// packaging, and packs the named file regardless of `include` and `exclude`.
-const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
+pub(crate) const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
 
 /// The `[package]` key naming the README.
 ///
@@ -714,7 +729,7 @@ pub const DEFAULT_README_FILES: &[&str] = &[PRIMARY_README, "README.txt", "READM
 /// element reports whether Cargo picks the README by probing the package
 /// directory, which it does only when the key is absent altogether: `readme =
 /// false` deliberately names no file.
-fn resource_paths(
+pub(crate) fn resource_paths(
     package: &dyn TableLike,
     workspace: &WorkspaceInherit<'_>,
 ) -> (Vec<String>, Vec<String>, bool) {
@@ -1511,6 +1526,11 @@ pub(crate) fn workspace_relative_path(workspace_root: &Path, path: &Path) -> Opt
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt as _;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt as _;
+    use std::slice;
 
     use super::*;
 
@@ -1971,24 +1991,59 @@ b = { path = "../b" }
     fn directory_probe_requires_an_unambiguous_case_alias() {
         for names in [
             Vec::new(),
-            vec!["123".to_string()],
-            vec!["a".to_string(), "A".to_string()],
+            vec!["123".into()],
+            vec!["a".into(), "A".into()],
+            vec!["Stra\u{00df}e".into(), "\u{03a3}".into()],
         ] {
             assert_eq!(
-                PathCase::from_directory_entries(&names, |_| panic!("no unambiguous probe entry")),
-                PathCase::Sensitive
+                PathCase::from_directory_entries(&names, |_| panic!("no unambiguous probe entry"))
+                    .unwrap(),
+                None
             );
         }
-        let names = ["123", "a", "A", "Probe.txt"].map(str::to_string);
+        let names = ["Stra\u{00df}e", "123", "a", "A", "Probe.txt"].map(OsString::from);
         for (exists, expected) in [(false, PathCase::Sensitive), (true, PathCase::Insensitive)] {
             assert_eq!(
                 PathCase::from_directory_entries(&names, |candidate| {
                     assert_eq!(candidate, "pROBE.TXT");
-                    exists
-                }),
-                expected
+                    Ok(exists)
+                })
+                .unwrap(),
+                Some(expected)
             );
         }
+        assert_eq!(
+            PathCase::from_directory_entries(&names, |_| Err(
+                io::ErrorKind::PermissionDenied.into()
+            ))
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn directory_probe_ignores_undecodable_names_without_substitution() {
+        #[cfg(unix)]
+        let name = OsString::from_vec(b"Probe-\xff".to_vec());
+        #[cfg(windows)]
+        let name = OsString::from_wide(&[0x50, 0xd800]);
+        assert_eq!(
+            PathCase::from_directory_entries(slice::from_ref(&name), |_| {
+                panic!("an undecodable name cannot supply a case probe")
+            })
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            PathCase::from_directory_entries(&[name, "Probe.txt".into()], |candidate| {
+                assert_eq!(candidate, "pROBE.TXT");
+                Ok(true)
+            })
+            .unwrap(),
+            Some(PathCase::Insensitive)
+        );
     }
 
     #[test]

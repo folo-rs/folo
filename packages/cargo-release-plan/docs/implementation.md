@@ -69,6 +69,26 @@ build the work-tree model, `git` owns repository facts, `anchor` resolves releas
 history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
 
+## Observation caching
+
+Classification command dispatch resolves storage from the selected original workspace
+before prospective cloning or checker environment changes. Workspace owns Cargo's
+effective target-directory acquisition and cache path admission. The resolved location
+is passed explicitly through versioning operations; it is never serialized into
+prepared or resolved evidence. Compatibility resolves it from the admitted evidence's
+original source rather than the retained candidate.
+Compatibility also admits the cache against the retained candidate's entire Git root,
+not merely its possibly nested workspace manifest or the resolved-plan file.
+Preview dispatch passes cache options to versioning so collision-safe completion-marker
+invalidation precedes metadata acquisition. Cache advisories bypass deferred checker
+diagnostic failures; checker output and supporting publication diagnostics retain their
+strict delivery policy.
+
+The workspace component publishes typed immutable observations atomically. Versioning
+retains the full historical tree and its lookup indexes with each committed snapshot,
+and retains raw commit-parent facts separately from fresh history-availability decisions.
+Candidate observations and classification decisions are not persistent cache entries.
+
 ## Executable identity
 
 Executable identity is handled by CLI parsing before workspace acquisition.

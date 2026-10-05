@@ -15,6 +15,7 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Output;
 
 use ohno::AppError;
+use serde::{Deserialize, Serialize};
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes, spawn};
 use crate::manifest::{PathCase, to_git_separators};
@@ -25,6 +26,8 @@ use crate::{
 
 mod blob_batch;
 pub use blob_batch::decode_blob_batch;
+mod observations;
+pub use observations::*;
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
@@ -153,12 +156,12 @@ impl GitRepo {
         // Each answer is read from its own invocation because `git` separates
         // them with a newline, which is a legal character in a path name and so
         // cannot be told apart from one inside an answer.
-        let root = run_capture("git", &["rev-parse", "--show-toplevel"], dir)?;
+        let root = run_capture_bytes("git", &["rev-parse", "--show-toplevel"], dir)?;
         // Empty when the repository root is the directory itself.
-        let prefix = run_capture("git", &["rev-parse", "--show-prefix"], dir)?;
-        let prefix = strip_terminator(&prefix);
+        let prefix = run_capture_bytes("git", &["rev-parse", "--show-prefix"], dir)?;
+        let prefix = strip_terminator(path_text(&prefix)?);
         Ok(Self {
-            root: PathBuf::from(strip_terminator(&root)),
+            root: PathBuf::from(strip_terminator(path_text(&root)?)),
             prefix: prefix.strip_suffix('/').unwrap_or(prefix).to_string(),
         })
     }
@@ -166,6 +169,53 @@ impl GitRepo {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Live Git administration that must not become disposable cache storage.
+    #[cfg_attr(test, mutants::skip)] // Native Git path acquisition, including linked worktrees.
+    pub fn administrative_paths(&self) -> Result<Vec<PathBuf>, AppError> {
+        let mut paths = vec![self.root.join(".git")];
+        for option in ["--git-dir", "--git-common-dir"] {
+            let path = run_capture_bytes(
+                "git",
+                &["rev-parse", "--path-format=absolute", option],
+                &self.root,
+            )?;
+            paths.push(PathBuf::from(strip_terminator(path_text(&path)?)));
+        }
+        // Git's effective paths honor object/index environment overrides without duplicating
+        // its configuration rules. These stores can live outside both administrative roots.
+        for name in ["objects", "index", "hooks"] {
+            let path = run_capture_bytes(
+                "git",
+                &["rev-parse", "--path-format=absolute", "--git-path", name],
+                &self.root,
+            )?;
+            paths.push(PathBuf::from(strip_terminator(path_text(&path)?)));
+        }
+        // Git enumerates nested alternates and environment/configured object stores itself.
+        paths.extend(Self::alternate_object_paths(&run_capture_bytes(
+            "git",
+            &["-c", "core.quotePath=false", "count-objects", "-v"],
+            &self.root,
+        )?)?);
+        Ok(paths)
+    }
+
+    fn alternate_object_paths(output: &[u8]) -> Result<Vec<PathBuf>, AppError> {
+        path_text(output)?
+            .lines()
+            .filter_map(|line| line.strip_prefix("alternate: "))
+            .map(|path| {
+                // Git quotes special path characters. Unsupported C escapes fail the optional
+                // safety inventory instead of admitting storage against a guessed destination.
+                if path.starts_with('"') {
+                    Ok(PathBuf::from(serde_json::from_str::<String>(path)?))
+                } else {
+                    Ok(PathBuf::from(path))
+                }
+            })
+            .collect()
     }
 
     /// The repository-relative directory the repository was discovered from.
@@ -240,8 +290,18 @@ impl GitRepo {
     // Acquires native history observations; parent_boundary retains the lazy decision protocol.
     #[cfg_attr(test, mutants::skip)]
     pub fn has_parent_or_is_shallow_boundary(&self, commit: &str) -> Result<bool, AppError> {
+        self.parent_boundary_with_header(commit, self.commit_has_parent_header(commit)?)
+    }
+
+    /// Rechecks parent availability and shallow state around a previously acquired raw header.
+    #[cfg_attr(test, mutants::skip)] // Native facts stay fresh; parent_boundary owns pure policy.
+    pub fn parent_boundary_with_header(
+        &self,
+        commit: &str,
+        has_parent: bool,
+    ) -> Result<bool, AppError> {
         parent_boundary(
-            self.commit_has_parent_header(commit)?,
+            has_parent,
             || {
                 let spec = format!("{commit}^");
                 Ok(run_capture_ok("git", &["rev-parse", "--verify", &spec], &self.root)?.is_some())
@@ -687,7 +747,7 @@ fn rendered_arg_cost(path: &str) -> usize {
 /// Classification needs more of a tree record than the path: the mode says
 /// whether the entry is a symbolic link, and the object id is the content
 /// identity a work-tree file is compared against.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TreeEntry {
     pub path: String,
     pub id: String,
@@ -893,14 +953,14 @@ fn split_z(stdout: &[u8]) -> Result<Vec<String>, AppError> {
     stdout
         .split(|byte| *byte == 0)
         .filter(|part| !part.is_empty())
-        .map(|part| {
-            str::from_utf8(part)
-                .map(ToOwned::to_owned)
-                .map_err(|_ignored| {
-                    NonUtf8PathError::new(String::from_utf8_lossy(part).into_owned()).into()
-                })
-        })
+        .map(|part| path_text(part).map(ToOwned::to_owned))
         .collect()
+}
+
+fn path_text(bytes: &[u8]) -> Result<&str, AppError> {
+    str::from_utf8(bytes).map_err(|_ignored| {
+        NonUtf8PathError::new(String::from_utf8_lossy(bytes).into_owned()).into()
+    })
 }
 
 #[cfg(test)]
@@ -914,6 +974,40 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::*;
+
+    #[test]
+    fn alternate_paths_preserve_git_spelling_and_reject_unknown_escapes() {
+        let paths = GitRepo::alternate_object_paths(
+            b"count: 0\nalternate: /ordinary objects\nalternate: \"C:\\\\objects\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/ordinary objects"),
+                PathBuf::from("C:\\objects")
+            ]
+        );
+        assert!(
+            GitRepo::alternate_object_paths(b"count: 0\n")
+                .unwrap()
+                .is_empty()
+        );
+        let error = GitRepo::alternate_object_paths(b"alternate: \"path\\007\"\n").unwrap_err();
+        assert!(error.find_source::<serde_json::Error>().is_some());
+    }
+
+    #[test]
+    fn administrative_paths_reject_lossy_decoding() {
+        let error = path_text(b"objects-\xff\n").unwrap_err();
+        assert!(error.find_source::<NonUtf8PathError>().is_some());
+        let error = GitRepo::alternate_object_paths(b"alternate: objects-\xff\n").unwrap_err();
+        assert!(error.find_source::<NonUtf8PathError>().is_some());
+        assert_eq!(
+            path_text("objects-\u{fffd}\n".as_bytes()).unwrap(),
+            "objects-\u{fffd}\n"
+        );
+    }
 
     #[test]
     fn ancestry_status_distinguishes_both_answers_from_query_failure() {
