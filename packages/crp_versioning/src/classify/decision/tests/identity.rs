@@ -5,14 +5,14 @@ use std::io;
 use std::rc::Rc;
 
 use crp_diag::{Discard, Verbose};
-use crp_workspace::cache::CacheEntry;
+use crp_workspace::cache::{CacheEntry, key_digest};
+use crp_workspace::lockfile::InstallationGraph;
 use crp_workspace::manifest::{
     DependencyPatch, DependencySource, InstallationDependencies, InstallationDependency, PathCase,
     installation_error,
 };
 use crp_workspace::metadata::DepKind;
 use semver::Version;
-use serde_json::{Value, json};
 
 use super::fixture::{anchor, compute, file, inherited, inputs, lock, package, syntax, work_lock};
 use crate::classify::decision::{DecisionCache, DecisionInputs, Decisions};
@@ -132,14 +132,15 @@ fn assert_input_change(change: impl FnOnce(&mut DecisionInputs)) {
     let key = base.key(quiet).unwrap().unwrap();
     let mut changed = base.clone();
     change(&mut changed);
-    assert_ne!(changed.key(quiet).unwrap().as_ref(), Some(&key));
+    let changed_key = changed.key(quiet).unwrap();
+    assert_ne!(changed_key.as_ref(), Some(&key));
     let mut cache = DecisionCache {
         last: Some((key, compute(&base).unwrap())),
     };
     let called = Cell::new(false);
     let actual = cache
         .get_with(
-            changed.key(quiet).unwrap(),
+            changed_key,
             Verbose::new(false, &Discard),
             |_, compute| compute(),
             || {
@@ -156,7 +157,7 @@ fn assert_input_change(change: impl FnOnce(&mut DecisionInputs)) {
 }
 
 #[test]
-fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computation() {
+fn lock_graph_is_an_input_before_closure_computation() {
     let quiet = Verbose::new(false, &Discard);
     let mut input = inputs();
     work_lock(&mut input);
@@ -176,13 +177,19 @@ fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computat
     assert!(changed.iter().any(|change| {
         matches!(change, ChangedItem::Lockfile { dependency, .. } if dependency == "d")
     }));
+}
 
-    for source in [
-        DependencySource::NamedRegistry("custom".into()),
-        DependencySource::Registry("https://registry.example/index".into()),
-    ] {
-        let mut changed = input.clone();
-        let installation = &mut work_lock(&mut changed).installation;
+fn assert_installation_input_change(change: impl FnOnce(&mut InstallationGraph)) {
+    let quiet = Verbose::new(false, &Discard);
+    let mut input = inputs();
+    work_lock(&mut input);
+    let key = input.key(quiet).unwrap();
+    change(&mut work_lock(&mut input).installation);
+    assert_ne!(key, input.key(quiet).unwrap());
+}
+
+fn assert_installation_source_input(source: DependencySource) {
+    assert_installation_input_change(|installation| {
         installation.insert(
             "p".into(),
             Version::new(1, 0, 0),
@@ -192,18 +199,34 @@ fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computat
                 source,
             }],
         );
-        assert_ne!(key, changed.key(quiet).unwrap());
-    }
-    let mut changed = input.clone();
-    let installation = &mut work_lock(&mut changed).installation;
-    installation
-        .registries
-        .insert("custom".into(), "https://index.example".into());
-    assert_ne!(key, changed.key(quiet).unwrap());
-    work_lock(&mut changed)
-        .installation
-        .patches
-        .push(DependencyPatch {
+    });
+}
+
+#[test]
+fn installation_registry_name_is_an_input() {
+    assert_installation_source_input(DependencySource::NamedRegistry("custom".into()));
+}
+
+#[test]
+fn installation_registry_index_is_an_input() {
+    assert_installation_source_input(DependencySource::Registry(
+        "https://registry.example/index".into(),
+    ));
+}
+
+#[test]
+fn installation_registry_configuration_is_an_input() {
+    assert_installation_input_change(|installation| {
+        installation
+            .registries
+            .insert("custom".into(), "https://index.example".into());
+    });
+}
+
+#[test]
+fn installation_patch_is_an_input() {
+    assert_installation_input_change(|installation| {
+        installation.patches.push(DependencyPatch {
             origin: "crates-io".into(),
             name: "d".into(),
             replacement: Ok(InstallationDependency {
@@ -212,28 +235,51 @@ fn lock_graph_and_installation_interpretation_are_inputs_before_closure_computat
                 source: DependencySource::NamedRegistry("custom".into()),
             }),
         });
-    assert_ne!(key, changed.key(quiet).unwrap());
+    });
 }
 
 #[test]
-fn deterministic_key_contains_producer_and_revision_and_keeps_dependency_kinds() {
+fn deterministic_digest_keeps_dependency_kinds() {
     let quiet = Verbose::new(false, &Discard);
-    let mut first = inputs();
-    work_lock(&mut first);
+    let first = inputs();
     let second = first.clone();
     assert_eq!(first.key(quiet).unwrap(), second.key(quiet).unwrap());
-    let key: Value = serde_json::from_str(&first.key(quiet).unwrap().unwrap()).unwrap();
-    assert_eq!(key.get(0).unwrap(), env!("CARGO_PKG_VERSION"));
-    assert_eq!(key.get(1).unwrap(), Decisions::REVISION);
     assert_eq!(
-        key.pointer("/2/packages/0/dependencies/0/1").unwrap(),
+        serde_json::to_value(&first)
+            .unwrap()
+            .pointer("/packages/0/dependencies/0/1")
+            .unwrap(),
         "Build"
     );
-    let mut incompatible = key.clone();
-    *incompatible.get_mut(1).unwrap() = json!(Decisions::REVISION + 1);
+}
+
+#[test]
+fn digest_covers_the_complete_serialized_model() {
+    let quiet = Verbose::new(false, &Discard);
+    let input = inputs();
+    assert_eq!(
+        input.key(quiet).unwrap().unwrap(),
+        key_digest(&(env!("CARGO_PKG_VERSION"), Decisions::REVISION, &input)).unwrap()
+    );
+}
+
+#[test]
+fn digest_covers_the_computation_revision() {
+    let quiet = Verbose::new(false, &Discard);
+    let input = inputs();
     assert_ne!(
-        serde_json::to_string(&key).unwrap(),
-        serde_json::to_string(&incompatible).unwrap()
+        input.key(quiet).unwrap().unwrap(),
+        key_digest(&(env!("CARGO_PKG_VERSION"), Decisions::REVISION + 1, &input)).unwrap()
+    );
+}
+
+#[test]
+fn digest_covers_the_producer() {
+    let quiet = Verbose::new(false, &Discard);
+    let input = inputs();
+    assert_ne!(
+        input.key(quiet).unwrap().unwrap(),
+        key_digest(&("different-producer", Decisions::REVISION, &input)).unwrap()
     );
 }
 

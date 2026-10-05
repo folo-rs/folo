@@ -88,14 +88,10 @@ fn diagnostics_distinguish_computation_from_memory_and_storage_reuse() {
     let input = inputs();
     let recording = Recording::default();
     let verbose = Verbose::new(true, &recording);
+    let key = input.key(verbose).unwrap();
     let mut cache = DecisionCache::default();
     let value = cache
-        .get_with(
-            input.key(verbose).unwrap(),
-            verbose,
-            |_, call| call(),
-            || compute(&input),
-        )
+        .get_with(key.clone(), verbose, |_, call| call(), || compute(&input))
         .unwrap();
     assert!(
         recording
@@ -106,22 +102,12 @@ fn diagnostics_distinguish_computation_from_memory_and_storage_reuse() {
     );
     recording.0.lock().unwrap().clear();
     cache
-        .get_with(
-            input.key(verbose).unwrap(),
-            verbose,
-            |_, _| panic!(),
-            || panic!(),
-        )
+        .get_with(key.clone(), verbose, |_, _| panic!(), || panic!())
         .unwrap();
     assert!(recording.0.lock().unwrap().contains("from memory"));
     recording.0.lock().unwrap().clear();
     DecisionCache::default()
-        .get_with(
-            input.key(verbose).unwrap(),
-            verbose,
-            |_, _| Ok(value),
-            || panic!(),
-        )
+        .get_with(key, verbose, |_, _| Ok(value), || panic!())
         .unwrap();
     assert!(recording.0.lock().unwrap().contains("from storage"));
 

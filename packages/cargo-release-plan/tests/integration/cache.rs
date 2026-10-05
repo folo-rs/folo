@@ -183,6 +183,75 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "executes Git, Cargo and the compiled application")]
+fn decision_entries_do_not_persist_registry_credentials_and_changes_invalidate_reuse() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "binary", "0.1.0", "");
+    fixture.write("packages/binary/src/main.rs", "fn main() {}\n");
+    fixture.write(
+        "Cargo.lock",
+        "version=4\n[[package]]\nname='binary'\nversion='0.1.0'\n",
+    );
+    fixture.commit("binary anchor");
+    let evidence = TempDir::new().unwrap();
+    let storage = evidence.path().join("cache");
+    // Synthetic credentials remain outside released content; no registry access is needed.
+    for (name, credential, reused, count) in [
+        ("cold", "synthetic-secret-one", false, 1),
+        ("warm", "synthetic-secret-one", true, 1),
+        ("changed", "synthetic-secret-two", false, 2),
+        ("changed-warm", "synthetic-secret-two", true, 2),
+    ] {
+        fixture.write(
+            ".cargo/config.toml",
+            &format!(
+                "[registries.private]\nindex='https://synthetic-user:{credential}@registry.invalid/index'\n"
+            ),
+        );
+        let output = report(
+            &fixture,
+            &evidence.path().join(name),
+            &evidence.path().join(format!("{name}.trace")),
+            &["--cache", storage.to_str().unwrap(), "--verbose"],
+        );
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            diagnostics.contains("reusing classification decisions from storage"),
+            reused
+        );
+        assert_eq!(
+            diagnostics.contains("computed classification decisions"),
+            !reused
+        );
+        assert_eq!(entries(&storage, "classification-decisions").len(), count);
+        assert_reports_equal(&evidence.path().join("cold"), &evidence.path().join(name));
+
+        // Inspect complete envelopes across every subject, not only a decoded decision key.
+        for subject in fs::read_dir(&storage).unwrap() {
+            let subject = subject.unwrap();
+            if subject.file_type().unwrap().is_dir() {
+                for entry in fs::read_dir(subject.path()).unwrap() {
+                    let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+                    assert!(!text.contains("synthetic-user"));
+                    assert!(!text.contains("synthetic-secret"));
+                    assert!(!text.contains("registry.invalid"));
+                }
+            }
+        }
+    }
+    report(
+        &fixture,
+        &evidence.path().join("disabled"),
+        &evidence.path().join("disabled.trace"),
+        &["--no-cache"],
+    );
+    assert_reports_equal(
+        &evidence.path().join("cold"),
+        &evidence.path().join("disabled"),
+    );
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "executes a stateful Git clean filter and the application"
@@ -534,6 +603,103 @@ fn unavailable_extra_inventory_disables_storage_without_failing_classification()
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "executes Cargo with untracked dependency workspaces")]
+fn cache_protects_inherited_dependencies_in_untracked_workspaces() {
+    let fixture = Fixture::new("exclude=['vendor/a','vendor/b','vendor/c']\n");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "[dependencies]\na={path='../../vendor/a'}\n",
+    );
+    fixture.write(".gitignore", "/vendor/\n");
+    fixture.write(
+        "vendor/Cargo.toml",
+        "[workspace]\nmembers=['a','b','c']\n[workspace.dependencies]\nb={path='b'}\nc={path='c'}\n",
+    );
+    fixture.write(
+        "vendor/a/Cargo.toml",
+        "[package]\nname='a'\nversion='0.1.0'\n[dependencies]\nb.workspace=true\n",
+    );
+    fixture.write(
+        "vendor/b/Cargo.toml",
+        "[package]\nname='b'\nversion='0.1.0'\n[target.'cfg(unix)'.dev-dependencies]\nc.workspace=true\n",
+    );
+    fixture.write(
+        "vendor/c/Cargo.toml",
+        "[package]\nname='c'\nversion='0.1.0'\n",
+    );
+    for package in ["a", "b", "c"] {
+        fixture.write(
+            &format!("vendor/{package}/src/lib.rs"),
+            "pub fn dependency() {}\n",
+        );
+    }
+    fixture.commit("external inherited dependency");
+    let evidence = TempDir::new().unwrap();
+    let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let cached = evidence.path().join("cached");
+    report(
+        &fixture,
+        &cached,
+        &evidence.path().join("cached.trace"),
+        &[],
+    );
+    assert_reports_equal(&baseline, &cached);
+    assert!(
+        fixture
+            .path()
+            .join("target/cargo-release-plan/cache/git-trees")
+            .exists()
+    );
+    for directory in ["vendor/b", "vendor/c", "vendor/b/src/cache"] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache", directory])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{directory}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+        assert!(!fixture.path().join(directory).join(".gitignore").exists());
+    }
+    inputs.verify(&fixture.manifest(), None).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "executes Git with an unrepresentable replacement namespace"
+)]
+fn non_utf8_replacement_namespace_is_not_an_unset_variable() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    report(
+        &fixture,
+        &evidence.path().join("baseline"),
+        &evidence.path().join("baseline.trace"),
+        &[],
+    );
+    let namespace = OsString::from_vec(b"refs/replacements-\xff/".to_vec());
+    for options in [&[][..], &["--no-cache"][..]] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD"])
+            .args(options)
+            .env("GIT_REPLACE_REF_BASE", &namespace)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("GIT_REPLACE_REF_BASE"));
+    }
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "executes classification with an obstructed unrelated tracked path"
@@ -843,6 +1009,29 @@ fn unavailable_cache_case_probe_disables_storage_without_failing_reports() {
         }
         assert_reports_equal(&baseline, &evidence.path().join("cached"));
     }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes classification with Unicode cache paths")]
+fn unsupported_source_case_comparison_disables_storage_without_changing_reports() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let output = report(
+        &fixture,
+        &evidence.path().join("cached"),
+        &evidence.path().join("cached.trace"),
+        &["--cache", ".cargo/\u{03a3}"],
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+    assert!(!fixture.path().join(".cargo/\u{03a3}").exists());
+    assert_reports_equal(&baseline, &evidence.path().join("cached"));
 }
 
 #[test]

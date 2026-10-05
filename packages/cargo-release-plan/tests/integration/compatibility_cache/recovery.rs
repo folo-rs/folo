@@ -39,7 +39,7 @@ fn no_target_checks_admit_source_with_missing_disabled_or_invalid_cache() {
             "corrupt",
             "format",
             "revision",
-            "producer",
+            "key",
             "deleted",
             "unavailable",
             "disabled",
@@ -50,7 +50,7 @@ fn no_target_checks_admit_source_with_missing_disabled_or_invalid_cache() {
                     fs::create_dir_all(&storage).unwrap();
                     fs::write(storage.join("classification-decisions"), "not a directory").unwrap();
                 }
-            } else if ["corrupt", "format", "revision", "producer"].contains(&state) {
+            } else if ["corrupt", "format", "revision", "key"].contains(&state) {
                 for path in entries(&storage, "classification-decisions") {
                     let mut entry: Value =
                         serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -59,14 +59,10 @@ fn no_target_checks_admit_source_with_missing_disabled_or_invalid_cache() {
                             *entry.get_mut("checksum").unwrap() = json!("invalid integrity");
                         }
                         "format" | "revision" => *entry.get_mut(state).unwrap() = json!(u32::MAX),
-                        "producer" => {
-                            let key: String =
-                                serde_json::from_str(entry.get("key").unwrap().as_str().unwrap())
-                                    .unwrap();
-                            let mut key: Value = serde_json::from_str(&key).unwrap();
-                            *key.get_mut(0).unwrap() = json!("incompatible-producer");
+                        "key" => {
+                            // Producer and input details stay opaque at this integration boundary.
                             *entry.get_mut("key").unwrap() =
-                                json!(serde_json::to_string(&key.to_string()).unwrap());
+                                json!(serde_json::to_string("incompatible-decision-key").unwrap());
                         }
                         _ => unreachable!(),
                     }

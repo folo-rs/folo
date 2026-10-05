@@ -59,6 +59,7 @@ impl InstallationGraph {
     ///
     /// Deferred errors cannot be persisted as successful observations. Their original causes
     /// stay live and the consumer must compute without reuse, preserving demand-driven errors.
+    /// The projection includes confidential registry configuration; digest it before storage.
     #[must_use]
     pub fn cache_input(&self) -> Option<InstallationInput<'_>> {
         if !self.path_errors.is_empty() || self.registry_error.is_some() {
