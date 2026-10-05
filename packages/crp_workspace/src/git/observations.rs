@@ -110,6 +110,12 @@ impl GitObjectContext {
         if !reusable {
             return acquire().map(|value| value.0);
         }
+        if cache.directory().is_none() {
+            for id in ids {
+                self.validate_identity(id)?;
+            }
+            return acquire().map(|value| value.0);
+        }
         let key = ids
             .iter()
             .map(|id| self.key(id))
@@ -288,7 +294,12 @@ struct UnresolvedObjectIdentity {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::path::Path;
+
+    use crp_diag::Discard;
+
     use super::*;
+    use crate::git::testing::unopened;
 
     #[test]
     fn replacement_namespace_preserves_empty_and_custom_values_and_rejects_invalid_text() {
@@ -394,6 +405,22 @@ mod tests {
         sha256.key(&commit).unwrap_err();
         sha256.key(&"a".repeat(64)).unwrap();
         GitObjectContext::default().key(&commit).unwrap_err();
+    }
+
+    #[test]
+    fn disabled_blob_storage_still_requires_full_object_identities() {
+        let context = GitObjectContext {
+            format: "sha1".into(),
+            ..GitObjectContext::default()
+        };
+        let git = unopened(Path::new("unopened"));
+        let valid = "a".repeat(40);
+        for ids in [[valid.as_str(), "HEAD"], ["HEAD", valid.as_str()]] {
+            let error = context
+                .blobs(&git, &ids, &Cache::default(), Verbose::new(false, &Discard))
+                .unwrap_err();
+            assert!(error.find_source::<UnresolvedObjectIdentity>().is_some());
+        }
     }
 
     #[test]

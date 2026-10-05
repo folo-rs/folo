@@ -53,7 +53,7 @@ fn requests(ids: &[&str]) -> Result<Vec<u8>, AppError> {
 }
 
 /// Interprets ordered blob sizes using the content reader's header admission.
-pub fn decode_blob_sizes(ids: &[&str], mut output: &[u8]) -> Result<Vec<usize>, AppError> {
+fn decode_blob_sizes(ids: &[&str], mut output: &[u8]) -> Result<Vec<usize>, AppError> {
     let mut sizes = Vec::with_capacity(ids.len());
     for id in ids {
         sizes.push(header(id, &mut output)?);

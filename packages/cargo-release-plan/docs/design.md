@@ -329,6 +329,27 @@ Changed inputs require fresh preparation and assessment.
 
 ## Commands
 
+### Stable inputs within a command
+
+Callers and tools invoked for read-only work must leave assessed source,
+configuration and history unchanged during each command, except for the tool's
+explicit editing and dependency-resolution operations. Build output outside those
+inputs is permitted. Git object additions and index stat refreshes do not change
+semantic source or staged identities.
+
+Each independent command admits current inputs. Within a command, admitted
+observations may be reused until an explicit mutation. Preparation installs a
+resolved lockfile, preview edits and resolves each candidate, and application
+installs captured bytes; each operation acquires the resulting state before
+using it. Newly created or relocated workspaces are admitted at their actual
+location. Separate commands and intervening semantic assessment do not share a
+live-input admission.
+
+Concurrent readers may share disposable cache storage while respecting this
+requirement. Source-mutating commands on the same assessed workspace must run
+separately. Local input stability does not replace current registry and
+publication observations.
+
 ### Disposable observation cache
 
 Classification commands use a tool-owned cache by default under Cargo's effective
@@ -348,7 +369,8 @@ The cache is expendable acceleration, not evidence or workflow state. Removing
 only the cache leaves prepared evidence and resolved plans usable. A full `cargo clean`
 removes Cargo's entire target directory; evidence intended to survive that cleanup
 belongs outside the target directory.
-Cached observations never replace live source, candidate or history admission.
+Cached observations never replace command-entry or post-mutation source,
+candidate or history admission.
 Preparation, preview and later compatibility invocations share matching computation
 without a caller-managed handoff. Each compatibility invocation produces its own
 source-bound report and external comparison evidence.
@@ -481,24 +503,24 @@ the supported API compatibility checker. The operation records comparison inputs
 checker identity, findings and diagnostics; it does not replace the author's
 semantic impacts.
 
-Prepared execution explicitly selects a workspace and verifies its captured
-source, selected history, merge target and resolution. Fresh execution captures those inputs around
-its own report generation. A matching HEAD
-alone is insufficient for a dirty work tree. The tool verifies those inputs before
-and after the comparison, as it does for a retained preview. Artifact-only target
+Prepared execution explicitly selects a workspace and admits its captured
+source, selected history, merge target and resolution. Fresh execution acquires those
+inputs for its own report generation. A matching HEAD alone is insufficient for
+a dirty work tree. A retained preview is admitted at its retained location.
+Read-only comparison uses those same admitted observations. Artifact-only target
 selection does not by itself establish that the selected checkout matches a report.
+An assessed workspace with selected consumer contracts must have a lockfile accepted
+by Cargo's default metadata resolution without changes.
 The comparison versions and any anticipated-parent source are recorded with the
 result; an unavailable comparison is not silently replaced with a different one.
 
 A self-comparison canary checks that the installed checker can perform a comparison
 before its evidence is relied upon. Findings, a valid empty target set and an
 execution failure remain distinct outcomes. Missing or incomplete comparison
-evidence is never reported as compatibility. When checking a preview, the tool
-verifies that evidence collection left its captured source and resolution intact.
-Both the original workspace and retained candidate remain subject to verification
-throughout preview compatibility checking. The original may contain the complete
-initial state or the complete applied plan; the candidate must contain the captured
-final state.
+evidence is never reported as compatibility. Compatibility tooling must preserve
+the assessed source and resolution throughout the comparison.
+Preview admission accepts an original workspace matching the captured initial state
+or the completely applied plan; the retained candidate must match the captured final state.
 The shared workflow uses the result to enforce supported API compatibility;
 the skill uses it as a floor while assessing the complete contract.
 

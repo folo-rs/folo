@@ -418,7 +418,7 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
                 .chain(env::split_paths(&env::var_os("PATH").unwrap())),
         )
         .unwrap();
-        for scenario in ["identity-failure", "canary-failure", "source-drift"] {
+        for scenario in ["identity-failure", "canary-failure"] {
             let evidence = output.path().join(scenario);
             let invocations = output.path().join(format!("{scenario}.calls"));
             let original = fixture.read("packages/library/src/lib.rs");
@@ -491,15 +491,7 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
                     "canary stdout\ncanary stderr\n"
                 );
             }
-            if scenario == "source-drift" {
-                let diagnostic = String::from_utf8_lossy(&result.stderr);
-                assert!(diagnostic.contains("identical-source canary"));
-                assert!(diagnostic.contains("source verification also failed"));
-                assert_ne!(fixture.read("packages/library/src/lib.rs"), original);
-                fixture.write("packages/library/src/lib.rs", &original);
-            } else {
-                assert_eq!(fixture.read("packages/library/src/lib.rs"), original);
-            }
+            assert_eq!(fixture.read("packages/library/src/lib.rs"), original);
         }
     });
 }
@@ -573,44 +565,63 @@ fn checker_start_failure_retains_selected_but_unidentified_state() {
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Mutates tracked source during real report history acquisition"
+    ignore = "Observes independent source acquisitions and Git subprocess counts"
 )]
-fn fresh_source_drift_during_report_prevents_checker_invocation_and_evidence_acceptance() {
+fn compatibility_reuses_admitted_source_and_reacquires_on_the_next_command() {
     testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let fixture = Fixture::new("");
-        write_package(&fixture, "library", "1.0.0", "");
+        write_package(
+            &fixture,
+            "library",
+            "1.0.0",
+            "[package.metadata.release-plan]\nprivate-api=true\n",
+        );
         fixture.commit("captured source");
         let output = TempDir::new().unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
-        configure_git_shim(&mut command, output.path());
-        let calls = output.path().join("checker-calls");
-        let marker = output.path().join("report-drift");
-        let evidence = output.path().join("evidence");
-        let result = command
-            .args(["check-compatibility", "--manifest-path"])
-            .arg(fixture.manifest())
-            .args(["--release-history", &fixture.sha("HEAD"), "--output"])
-            .arg(&evidence)
-            .env("CRP_REPORT_DRIFT_MARKER", &marker)
-            .env(
-                "CRP_FIXTURE_SOURCE",
-                fixture.path().join("packages/library/src/lib.rs"),
-            )
-            .env("CRP_FIXTURE_SCENARIO", "canary-failure")
-            .env("CRP_FIXTURE_CALLS", &calls)
-            .output()
-            .unwrap();
-        assert!(!result.status.success());
-        assert!(marker.is_file());
-        assert!(evidence.join("report.json").is_file());
-        assert!(String::from_utf8_lossy(&result.stderr).contains("inputs are stale"));
-        assert!(!calls.exists());
-        assert!(!evidence.join("compatibility.json").exists());
-        assert!(
-            fixture
-                .read("packages/library/src/lib.rs")
-                .contains("report_drift")
-        );
+        for changed in [false, true] {
+            if changed {
+                fixture.write("packages/library/src/lib.rs", "pub fn next_command() {}\n");
+                fixture.write(
+                    ".cargo/config.toml",
+                    "[build]\ntarget-dir='another-target'\n",
+                );
+                fixture.git(&["add", "."]);
+            }
+            let evidence = output.path().join(changed.to_string());
+            let trace = output.path().join(format!("{changed}.trace"));
+            let result = checker_command()
+                .args(["check-compatibility", "--no-cache", "--manifest-path"])
+                .arg(fixture.manifest())
+                .args(["--release-history", "HEAD", "--output"])
+                .arg(&evidence)
+                .env("GIT_TRACE", &trace)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(read_outcome(&evidence).get("completed").unwrap(), true);
+            let report: Value =
+                serde_json::from_slice(&fs::read(evidence.join("report.json")).unwrap()).unwrap();
+            assert_eq!(
+                report.pointer("/packages/0/status").unwrap(),
+                if changed {
+                    "needs-increment"
+                } else {
+                    "unchanged"
+                }
+            );
+            let trace = fs::read_to_string(trace).unwrap();
+            assert_eq!(
+                trace
+                    .lines()
+                    .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+                    .count(),
+                1
+            );
+        }
     });
 }
 
@@ -645,6 +656,7 @@ fn anticipated_parent_final_api_is_the_child_baseline_without_registry_access() 
         // comparing against the published history alone would miss the parent's new contract.
         write_package(&fixture, "library", "1.1.1", "");
         fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
+        resolve_lock(&fixture);
         fixture.commit("child removes anticipated parent API");
         let evidence = output.path().join("removed");
         let calls = output.path().join("removed.calls");
@@ -801,53 +813,75 @@ fn moved_anticipated_parent_invalidates_captured_compatibility_before_checker() 
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Mutates parent comparison inputs through a real checker fixture"
+    ignore = "Checks Cargo's lock assertion with a real workspace and checker fixture"
 )]
-fn anticipated_parent_source_and_target_drift_invalidate_comparison_evidence() {
+fn compatibility_admits_lock_resolution_without_installing_changes() {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+        let (fixture, history, parent) = anticipated_parent();
+        fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
+        let output = TempDir::new().unwrap();
+        let lock = fixture.read("Cargo.lock");
+        for missing in [false, true] {
+            if missing {
+                fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
+            } else {
+                fixture.write("Cargo.lock", &lock.replace("1.1.0", "1.0.0"));
+            }
+            let original = fs::read(fixture.path().join("Cargo.lock")).ok();
+            let evidence = output.path().join(missing.to_string());
+            let calls = output.path().join(format!("{missing}.calls"));
+            let result = parent_check(&fixture, &history, &evidence, &calls)
+                .env("CRP_FIXTURE_SCENARIO", "anticipated-parent")
+                .env("CRP_EXPECTED_PARENT", &parent)
+                .output()
+                .unwrap();
+            assert!(!result.status.success());
+            assert_eq!(fs::read(fixture.path().join("Cargo.lock")).ok(), original);
+            assert_eq!(read_outcome(&evidence).get("completed").unwrap(), false);
+            assert_eq!(fs::read_to_string(&calls).unwrap(), "version\ncanary\n");
+        }
+    });
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Acquires successive named parent revisions through independent commands"
+)]
+fn independent_compatibility_commands_admit_the_current_anticipated_parent() {
     testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let (fixture, history, parent) = anticipated_parent();
         fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
         fixture.commit("child removes anticipated API");
         let output = TempDir::new().unwrap();
-        for scenario in [
-            "parent-source-drift",
-            "parent-head-drift",
-            "parent-target-drift",
-        ] {
-            let evidence = output.path().join(scenario);
-            let calls = output.path().join(format!("{scenario}.calls"));
+        let mut parent = parent;
+        for changed in [false, true] {
+            if changed {
+                fixture.write(
+                    "packages/library/src/lib.rs",
+                    "pub fn existing() {}\npub fn parent_added() {}\npub fn more() {}\n",
+                );
+                fixture.commit("next anticipated source");
+                parent = fixture.sha("HEAD");
+                fixture.git(&["update-ref", "refs/heads/anticipated-parent", &parent]);
+                fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
+            }
+            let evidence = output.path().join(changed.to_string());
+            let calls = output.path().join(format!("{changed}.calls"));
             let result = parent_check(&fixture, &history, &evidence, &calls)
-                .env("CRP_FIXTURE_SCENARIO", scenario)
+                .env("CRP_FIXTURE_SCENARIO", "anticipated-parent")
                 .env("CRP_EXPECTED_PARENT", &parent)
-                .env("CRP_FIXTURE_HISTORY", &history)
-                .env("CRP_FIXTURE_ROOT", fixture.path())
                 .output()
                 .unwrap();
             assert!(!result.status.success());
             let outcome = read_outcome(&evidence);
-            assert_eq!(outcome.get("completed").unwrap(), false);
+            assert_eq!(outcome.get("completed").unwrap(), true);
             let invocations = fs::read_to_string(&calls).unwrap();
-            if scenario != "parent-target-drift" {
-                assert_eq!(invocations, "version\ncanary\ncomparison\n");
-                assert_eq!(outcome.get("findings").unwrap(), true);
-                let diagnostic = if scenario == "parent-head-drift" {
-                    "immutable source HEAD"
-                } else {
-                    "unchanged source"
-                };
-                assert!(String::from_utf8_lossy(&result.stderr).contains(diagnostic));
-                assert_eq!(fixture.sha("anticipated-parent"), parent);
-            } else {
-                assert_eq!(invocations, "version\ncanary\n");
-                assert_eq!(outcome.get("packages").unwrap(), &json!([]));
-                assert_eq!(fixture.sha("anticipated-parent"), history);
-                fixture.git(&[
-                    "update-ref",
-                    "refs/heads/anticipated-parent",
-                    &parent,
-                    &history,
-                ]);
-            }
+            assert_eq!(invocations, "version\ncanary\ncomparison\n");
+            assert_eq!(outcome.get("findings").unwrap(), true);
+            let report: Value =
+                serde_json::from_slice(&fs::read(evidence.join("report.json")).unwrap()).unwrap();
+            assert_eq!(report.get("merge_target").unwrap(), &parent);
             assert_eq!(
                 fixture
                     .git(&["worktree", "list", "--porcelain"])
@@ -994,10 +1028,24 @@ fn anticipated_parent_in(prefix: &str) -> (Fixture, String, String) {
     );
     fixture.commit("parent version edit");
     fixture.write(&source, "pub fn existing() {}\npub fn parent_added() {}\n");
+    resolve_lock(&fixture);
     fixture.commit("parent final API");
     let parent = fixture.sha("HEAD");
     fixture.git(&["checkout", "-b", "child"]);
     (fixture, history, parent)
+}
+
+fn resolve_lock(fixture: &Fixture) {
+    let resolved = Command::new("cargo")
+        .args(["generate-lockfile", "--offline", "--manifest-path"])
+        .arg(fixture.manifest())
+        .output()
+        .unwrap();
+    assert!(
+        resolved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resolved.stderr)
+    );
 }
 
 fn parent_check(fixture: &Fixture, history: &str, evidence: &Path, calls: &Path) -> Command {
@@ -1085,7 +1133,7 @@ pub(crate) fn read_outcome(output: &Path) -> Value {
     outcome
 }
 
-pub(crate) fn configure_git_shim(command: &mut Command, output: &Path) {
+fn configure_git_shim(command: &mut Command, output: &Path) {
     let tools = output.join("git-shim");
     fs::create_dir_all(&tools).unwrap();
     let real_git = env::split_paths(&env::var_os("PATH").unwrap())
@@ -1145,8 +1193,7 @@ fn git() -> process::Command {
 fn main() {
     let os_args: Vec<_> = env::args_os().collect();
     if Path::new(&os_args[0]).file_stem().is_some_and(|name| name == "git") {
-        // Forward actual Git output unchanged. Historical tree acquisition belongs to report,
-        // not Inputs::capture; this event injects drift without invocation counts or clocks.
+        // Forward actual Git output while exposing partial worktree-creation failures.
         let status = process::Command::new(env::var_os("CRP_REAL_GIT").unwrap())
             .args(&os_args[1..]).status().unwrap();
         if status.success() {
@@ -1159,20 +1206,6 @@ fn main() {
                 if os_args.windows(2).any(|pair| pair[0] == "worktree" && pair[1] == "remove") {
                     fs::write(Path::new(&marker).with_extension("removed"), "removed").unwrap();
                 }
-            }
-        }
-        let report_observed = if env::var_os("CRP_REPORT_DRIFT_AFTER_HASH").is_some() {
-            os_args.iter().any(|arg| arg == "hash-object") && os_args.iter().any(|arg| arg == "-w")
-        } else {
-            os_args.iter().any(|arg| arg == "ls-tree")
-        };
-        if status.success() && env::var_os("CRP_REPORT_DRIFT_MARKER").is_some() && report_observed {
-            match OpenOptions::new().write(true).create_new(true)
-                .open(env::var_os("CRP_REPORT_DRIFT_MARKER").unwrap()) {
-                Ok(_) => fs::write(env::var_os("CRP_FIXTURE_SOURCE").unwrap(),
-                    "pub fn report_drift() {}\n").unwrap(),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(error) => panic!("{error}"),
             }
         }
         process::exit(status.code().unwrap_or(1));
@@ -1208,10 +1241,6 @@ fn main() {
     let baseline = value("--baseline-root");
     if args.iter().any(|arg| arg == "-p") {
         writeln!(calls, "comparison").unwrap();
-        if env::var("CRP_FIXTURE_MUTATION_PHASE").as_deref() == Ok("comparison") {
-            fs::write(env::var_os("CRP_FIXTURE_MUTATION_PATH").unwrap(),
-                "pub fn changed_during_comparison() {}\n").unwrap();
-        }
         assert_eq!(value("-p"), "library");
         assert!(!args.iter().any(|arg| arg == "--baseline-version"));
         assert!(args.iter().any(|arg| arg == "--all-features"));
@@ -1237,24 +1266,13 @@ fn main() {
                 .status().unwrap();
             assert!(status.success());
         }
-        if scenario == "parent-source-drift" {
-            fs::write(Path::new(&baseline).join("packages/library/src/lib.rs"),
-                "pub fn altered_parent_source() {}\n").unwrap();
-        }
-        if scenario == "parent-head-drift" {
-            // Move only the owned detached worktree's HEAD, leaving the original parent ref
-            // and source files unchanged so immutable-HEAD verification is the failing boundary.
-            let symbolic = git().args(["-C", &baseline, "symbolic-ref", "--quiet", "HEAD"])
-                .output().unwrap();
-            assert!(!symbolic.status.success());
-            let status = git().args(["-C", &baseline, "update-ref", "--no-deref", "HEAD",
-                &env::var("CRP_FIXTURE_HISTORY").unwrap(), &env::var("CRP_EXPECTED_PARENT").unwrap()])
-                .status().unwrap();
-            assert!(status.success());
-        }
         if scenario.starts_with("parent-comparison-") {
             eprintln!("comparison failure canary");
             process::exit(1);
+        }
+        if scenario == "parent-compatible" {
+            println!("Summary no semver update required");
+            return;
         }
         println!("Summary semver requires new major version");
         process::exit(100);
@@ -1264,22 +1282,9 @@ fn main() {
     assert!(Path::new(&baseline).join("lib.rs").is_file());
     assert!(args.iter().any(|arg| arg == "--all-features"));
     writeln!(calls, "canary").unwrap();
-    if env::var("CRP_FIXTURE_MUTATION_PHASE").as_deref() == Ok("canary") {
-        fs::write(env::var_os("CRP_FIXTURE_MUTATION_PATH").unwrap(),
-            "pub fn changed_during_canary() {}\n").unwrap();
-    }
-    if scenario == "parent-target-drift" {
-        let status = git().args(["-C", &env::var("CRP_FIXTURE_ROOT").unwrap(),
-            "update-ref", "refs/heads/anticipated-parent", &env::var("CRP_FIXTURE_HISTORY").unwrap(),
-            &env::var("CRP_EXPECTED_PARENT").unwrap()]).status().unwrap();
-        assert!(status.success());
-    }
     if scenario == "anticipated-parent" || scenario.starts_with("parent-") {
         println!("Summary no semver update required");
         return;
-    }
-    if scenario == "source-drift" {
-        fs::write(env::var_os("CRP_FIXTURE_SOURCE").unwrap(), "pub fn unexpected_drift() {}\n").unwrap();
     }
     println!("canary stdout");
     eprintln!("canary stderr");

@@ -187,11 +187,20 @@ pub(crate) fn same_evidence(expected: &Path, actual: &Path) {
         fs::read(expected.join("semver-checks.log")).unwrap(),
         fs::read(actual.join("semver-checks.log")).unwrap()
     );
-    for entry in fs::read_dir(expected.join("diffs")).unwrap() {
-        let entry = entry.unwrap();
+    let names = |root: &Path| {
+        let mut names: Vec<_> = fs::read_dir(root.join("diffs"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let expected_names = names(expected);
+    assert_eq!(expected_names, names(actual));
+    for name in expected_names {
         assert_eq!(
-            fs::read(entry.path()).unwrap(),
-            fs::read(actual.join("diffs").join(entry.file_name())).unwrap()
+            fs::read(expected.join("diffs").join(&name)).unwrap(),
+            fs::read(actual.join("diffs").join(name)).unwrap()
         );
     }
 }

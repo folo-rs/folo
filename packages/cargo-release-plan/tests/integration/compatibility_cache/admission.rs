@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::compatibility::{CHECKER_WATCHDOG, configure_git_shim};
+use crate::compatibility::CHECKER_WATCHDOG;
 use crate::compatibility_cache::{Assessment, candidate, reused, same_evidence, success};
 
 #[test]
@@ -48,9 +48,22 @@ fn cached_preview_rejects_source_candidate_and_named_history_drift_before_report
                 "candidate",
                 candidate(&assessment).join("packages/library/src/lib.rs"),
             ),
+            (
+                "configuration",
+                assessment.fixture.path().join(".cargo/config.toml"),
+            ),
+            (
+                "candidate-configuration",
+                candidate(&assessment).join(".cargo/config.toml"),
+            ),
         ] {
             let original = fs::read(&path).unwrap();
-            fs::write(&path, "pub fn drift() {}\n").unwrap();
+            let changed = if name.contains("configuration") {
+                "[build]\ntarget-dir = 'different-target'\n"
+            } else {
+                "pub fn drift() {}\n"
+            };
+            fs::write(&path, changed).unwrap();
             rejected_before_report(&assessment, name);
             fs::write(path, original).unwrap();
         }
@@ -87,23 +100,27 @@ fn rejected_before_report(assessment: &Assessment, name: &str) {
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Injects source drift immediately after fresh classification hashing"
+    ignore = "Changes the index between independent prepared and preview commands"
 )]
-fn cache_hit_does_not_skip_verification_after_source_acquisition() {
+fn cached_evidence_rejects_index_drift_before_entry_classification() {
     testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new("default");
-        let mut command = assessment.check("drift");
-        configure_git_shim(&mut command, assessment.evidence.path());
-        let result = command
-            .env("CRP_REPORT_DRIFT_AFTER_HASH", "1")
-            .env("CRP_REPORT_DRIFT_MARKER", assessment.path("mutated"))
+        let path = "packages/library/src/lib.rs";
+        let original = assessment.fixture.read(path);
+        assessment.fixture.write(path, "pub fn staged() {}\n");
+        assessment.fixture.git(&["add", "--", path]);
+        assessment.fixture.write(path, &original);
+        rejected_before_report(&assessment, "index");
+        let result = assessment
+            .check_mode("prepared-index", "--prepared", "prepared/prepared.json")
             .output()
             .unwrap();
-        reused(&result);
         assert!(!result.status.success());
-        assert!(assessment.path("mutated").is_file());
-        assert!(assessment.path("drift/report.json").is_file());
-        assert!(!assessment.path("drift/compatibility.json").exists());
-        assert!(!assessment.path("drift.calls").exists());
+        assert!(!assessment.path("prepared-index/report.json").exists());
+        assert!(!assessment.path("prepared-index.calls").exists());
+        assessment.fixture.git(&["add", "--", path]);
+        reused(&success(
+            assessment.check("restored-index").output().unwrap(),
+        ));
     });
 }

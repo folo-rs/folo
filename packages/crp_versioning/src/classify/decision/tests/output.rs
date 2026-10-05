@@ -27,7 +27,7 @@ fn payload_rebuilds_all_live_envelope_fields_and_dependency_kinds() {
     current.head = "fresh-head".into();
     current.git = unopened(Path::new("moved-workspace"));
     current.work_tree.workspace_root = "moved-workspace".into();
-    current.work_tree.tracked_paths = vec!["fresh-listing".into()];
+    current.work_tree.tracked_paths = vec!["fresh-listing".into()].into();
     current.work_tree.packages.push(WorkPackage {
         manifest: parse_package_manifest(
             "[package]\nname='p'\nversion='1.0.0'\n",
@@ -56,7 +56,7 @@ fn payload_rebuilds_all_live_envelope_fields_and_dependency_kinds() {
     decisions.apply(&input, &mut current);
     assert_eq!(current.head, "fresh-head");
     assert_eq!(current.git.root(), Path::new("moved-workspace"));
-    assert_eq!(current.work_tree.tracked_paths, ["fresh-listing"]);
+    assert_eq!(current.work_tree.tracked_paths.as_ref(), ["fresh-listing"]);
     assert_eq!(
         current.packages.first().unwrap().manifest_path,
         Path::new("moved-workspace").join("p/Cargo.toml")

@@ -24,7 +24,7 @@ use crate::classify::{
 use crate::groups::{GroupVerdict, Groups};
 use crate::inherited::InheritedInputs;
 
-/// The complete acquired model consumed by decision computation.
+/// The complete admitted input model consumed by decision computation.
 ///
 /// No workspace, repository handle or path to a live file crosses this boundary. Object reads
 /// for rendering are the sole effect, constrained to exact IDs already present in these inputs.
@@ -275,7 +275,7 @@ impl Decisions {
     }
 }
 
-/// At most the preceding complete input and decision, shared across explicit fresh passes.
+/// At most the preceding complete key and decision, never the mutable acquisition.
 #[derive(Debug, Default)]
 pub(crate) struct DecisionCache {
     last: Option<(String, Decisions)>,
@@ -319,7 +319,7 @@ impl DecisionCache {
         if let Some((previous, decisions)) = &self.last
             && previous == &key
         {
-            verbose.note(|| "reusing classification decisions from memory because complete freshly acquired inputs are equal".to_owned());
+            verbose.note(|| "reusing classification decisions from memory because complete admitted inputs are equal".to_owned());
             return Ok(decisions.clone());
         }
         let mut compute = Some(compute);
@@ -331,9 +331,9 @@ impl DecisionCache {
                 .expect("the cache invokes computation at most once")()
         })?;
         verbose.note(|| if computed {
-            "computed classification decisions because no compatible entry matches complete freshly acquired inputs".to_owned()
+            "computed classification decisions because no compatible entry matches complete admitted inputs".to_owned()
         } else {
-            "reusing classification decisions from storage because complete freshly acquired inputs and computation revision match".to_owned()
+            "reusing classification decisions from storage because complete admitted inputs and computation revision match".to_owned()
         });
         self.last = Some((key, value.clone()));
         Ok(value)

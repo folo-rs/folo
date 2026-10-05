@@ -1,21 +1,23 @@
-//! Fresh classification-pass listings, independent of committed observation storage.
+//! Listings owned by an unchanged input interval, separate from committed storage.
 
 use std::collections::BTreeSet;
 use std::env;
+use std::rc::Rc;
 
 use ohno::AppError;
 
 use crate::git::{GitRepo, WorkTreeModes};
 use crate::manifest::PathCase;
 
-/// One pass's tracked paths, effective index/worktree modes and scoped untracked paths.
+/// An admitted interval's tracked paths, effective modes and scoped untracked paths.
 ///
 /// The tracked listing belongs to the same metadata acquisition. Package selection overlaps:
 /// resources and nested directories may be consumed by more than one package. This value must
-/// not survive edits, resolution or another classification boundary.
+/// not survive edits, resolution, relocation or an independent command. Read-only
+/// consumers share the same value without repeating its acquisition.
 #[derive(Debug)]
-pub struct LiveObservations<'a> {
-    tracked: &'a [String],
+pub struct LiveObservations {
+    tracked: Rc<[String]>,
     modes: WorkTreeModes,
     untracked: Vec<String>,
     mode_scopes: Vec<String>,
@@ -24,14 +26,45 @@ pub struct LiveObservations<'a> {
     standard_pathspecs: bool,
 }
 
-impl<'a> LiveObservations<'a> {
+/// An unadmitted value delegates every selection to its native query.
+impl Default for LiveObservations {
+    fn default() -> Self {
+        Self {
+            tracked: Rc::default(),
+            modes: WorkTreeModes::default(),
+            untracked: Vec::new(),
+            mode_scopes: Vec::new(),
+            untracked_scopes: Vec::new(),
+            // No case assumption authorizes reuse while standard_pathspecs is false.
+            case: PathCase::Sensitive,
+            standard_pathspecs: false,
+        }
+    }
+}
+
+impl LiveObservations {
     #[cfg_attr(test, mutants::skip)] // Native acquisition; acquire_with and selection are pure.
     pub fn acquire(
         git: &GitRepo,
-        tracked: &'a [String],
+        tracked: Rc<[String]>,
         directories: &[&str],
         resources: &[&str],
         case: PathCase,
+    ) -> Result<Self, AppError> {
+        Self::acquire_with_index(git, tracked, directories, resources, case, None)
+    }
+
+    /// Reuses captured index modes only when mode-query sharing is filter-safe.
+    ///
+    /// All observations must belong to the same unchanged input interval.
+    #[cfg_attr(test, mutants::skip)] // Native queries; filter admission and selection are pure.
+    pub fn acquire_with_index(
+        git: &GitRepo,
+        tracked: Rc<[String]>,
+        directories: &[&str],
+        resources: &[&str],
+        case: PathCase,
+        index: Option<WorkTreeModes>,
     ) -> Result<Self, AppError> {
         // These variables can reinterpret even explicit magic. Preserve narrow Git queries
         // rather than claiming that local prefix matching models an overridden pathspec parser.
@@ -43,6 +76,7 @@ impl<'a> LiveObservations<'a> {
         ]
         .iter()
         .all(|name| env::var_os(name).is_none());
+        let relevant_tracked = Rc::clone(&tracked);
         Self::acquire_with(
             tracked,
             directories,
@@ -51,17 +85,23 @@ impl<'a> LiveObservations<'a> {
             standard_pathspecs,
             |paths| {
                 let scopes: Vec<_> = directories.iter().chain(resources).copied().collect();
-                let relevant =
-                    Self::select_paths(tracked, &scopes, case, standard_pathspecs, || {
-                        git.tracked_paths(&scopes, case)
-                    })?;
+                let relevant = Self::select_paths(
+                    &relevant_tracked,
+                    &scopes,
+                    case,
+                    standard_pathspecs,
+                    || git.tracked_paths(&scopes, case),
+                )?;
                 let relevant: Vec<_> = relevant.iter().map(String::as_str).collect();
                 // Even a raw diff can execute a clean driver for a racily clean index entry.
                 // Preserve per-package mode-query ordering if any relevant driver is selected.
                 // Ref: docs/implementation.md, "Fresh classification listings".
                 Self::filter_safe_modes(
                     || git.may_have_filter_drivers(&relevant),
-                    || git.work_tree_modes(paths, case),
+                    || match index {
+                        Some(index) => git.work_tree_modes_from_index(index, paths, case),
+                        None => git.work_tree_modes(paths, case),
+                    },
                 )
             },
             |paths| git.untracked_paths(paths, case),
@@ -80,7 +120,7 @@ impl<'a> LiveObservations<'a> {
     }
 
     fn acquire_with(
-        tracked: &'a [String],
+        tracked: Rc<[String]>,
         directories: &[&str],
         resources: &[&str],
         case: PathCase,
@@ -137,7 +177,7 @@ impl<'a> LiveObservations<'a> {
         paths: &[&str],
         narrow: impl FnOnce() -> Result<Vec<String>, AppError>,
     ) -> Result<Vec<String>, AppError> {
-        self.select(self.tracked, paths, narrow)
+        self.select(&self.tracked, paths, narrow)
     }
 
     /// Selects untracked candidates; packaging, presence and nested boundaries remain caller-owned.
@@ -267,18 +307,19 @@ mod tests {
 
     #[test]
     fn overlapping_packages_share_acquisitions_and_preserve_literal_boundaries() {
-        let tracked = [
+        let tracked: Rc<[String]> = [
             "a/src/lib.rs",
             "a/nested/lib.rs",
             "ab/lib.rs",
             "b/lib.rs",
             "shared/LICENSE",
         ]
-        .map(str::to_owned);
+        .map(str::to_owned)
+        .into();
         let modes_count = Cell::new(0);
         let untracked_count = Cell::new(0);
         let observed = LiveObservations::acquire_with(
-            &tracked,
+            Rc::clone(&tracked),
             &["b", "a", "a/nested"],
             &["shared/LICENSE", "shared/LICENSE"],
             PathCase::Sensitive,
@@ -301,6 +342,7 @@ mod tests {
             },
         )
         .unwrap();
+        assert!(Rc::ptr_eq(&tracked, &observed.tracked));
         for directory in ["a", "b"] {
             let paths = [directory, "shared/LICENSE"];
             assert!(
@@ -340,7 +382,7 @@ mod tests {
             (PathCase::Sensitive, true, "a/../b"),
         ] {
             let observed = LiveObservations::acquire_with(
-                &[],
+                Rc::default(),
                 &[scope],
                 &[],
                 case,
@@ -363,7 +405,7 @@ mod tests {
                 .unwrap_err();
         }
         LiveObservations::acquire_with(
-            &[],
+            Rc::default(),
             &["a"],
             &[],
             PathCase::Sensitive,
@@ -373,7 +415,7 @@ mod tests {
         )
         .unwrap_err();
         LiveObservations::acquire_with(
-            &[],
+            Rc::default(),
             &["a"],
             &[],
             PathCase::Sensitive,
@@ -387,9 +429,9 @@ mod tests {
     #[test]
     fn safe_case_scopes_share_but_modes_and_untracked_require_coverage() {
         for (case, scope) in [(PathCase::Sensitive, "ä"), (PathCase::Insensitive, "a")] {
-            let tracked = [format!("{scope}/file")];
+            let tracked: Rc<[String]> = [format!("{scope}/file")].into();
             let observed = LiveObservations::acquire_with(
-                &tracked,
+                Rc::clone(&tracked),
                 &[scope],
                 &[],
                 case,
@@ -397,7 +439,7 @@ mod tests {
                 |paths| {
                     assert_eq!(paths, [scope]);
                     let mut modes = WorkTreeModes::default();
-                    modes.set(&tracked[0], "100755");
+                    modes.set(tracked.first().unwrap(), "100755");
                     Ok(Some(modes))
                 },
                 |paths| {
@@ -410,13 +452,13 @@ mod tests {
                 observed
                     .tracked_paths(&[scope], || panic!("shared"))
                     .unwrap(),
-                tracked
+                tracked.as_ref()
             );
             assert!(
                 observed
                     .modes(&[scope], || panic!("shared"))
                     .unwrap()
-                    .is_executable(&tracked[0])
+                    .is_executable(tracked.first().unwrap())
             );
             for outside in ["", "outside"] {
                 observed
@@ -438,7 +480,7 @@ mod tests {
     #[test]
     fn declined_mode_sharing_keeps_each_packages_narrow_query() {
         let observed = LiveObservations::acquire_with(
-            &[],
+            Rc::default(),
             &["a", "b"],
             &[],
             PathCase::Sensitive,
@@ -482,6 +524,31 @@ mod tests {
         .unwrap_err();
         LiveObservations::filter_safe_modes(|| Ok(false), || Err(io::Error::other("index").into()))
             .unwrap_err();
+    }
+
+    #[test]
+    fn unadmitted_observations_use_native_queries() {
+        let observed = LiveObservations::default();
+        assert_eq!(
+            observed
+                .tracked_paths(&["pkg"], || Ok(vec!["pkg/file".into()]))
+                .unwrap(),
+            ["pkg/file"]
+        );
+        assert_eq!(
+            observed
+                .untracked_paths("pkg", || Ok(vec!["pkg/new".into()]))
+                .unwrap(),
+            ["pkg/new"]
+        );
+        let modes = observed
+            .modes(&["pkg"], || {
+                let mut modes = WorkTreeModes::default();
+                modes.set("pkg/file", "100755");
+                Ok(modes)
+            })
+            .unwrap();
+        assert!(modes.is_executable("pkg/file"));
     }
 
     #[test]

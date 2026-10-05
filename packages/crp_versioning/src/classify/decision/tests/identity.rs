@@ -140,7 +140,7 @@ fn assert_input_change(change: impl FnOnce(&mut DecisionInputs)) {
     let called = Cell::new(false);
     let actual = cache
         .get_with(
-            changed_key,
+            changed_key.clone(),
             Verbose::new(false, &Discard),
             |_, compute| compute(),
             || {
@@ -151,8 +151,15 @@ fn assert_input_change(change: impl FnOnce(&mut DecisionInputs)) {
         .unwrap();
     assert!(called.get());
     assert_eq!(
-        serde_json::to_value(actual).unwrap(),
+        serde_json::to_value(&actual).unwrap(),
         serde_json::to_value(compute(&changed).unwrap()).unwrap()
+    );
+    let repeated = cache
+        .get_with(changed_key, quiet, |_, _| panic!(), || panic!())
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(repeated).unwrap(),
+        serde_json::to_value(actual).unwrap()
     );
 }
 

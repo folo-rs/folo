@@ -150,6 +150,7 @@ fn relocated_preview_and_fully_applied_source_keep_original_cache_ownership() {
             checker_command()
                 .current_dir(assessment.fixture.path())
                 .args(["apply", "--plan"])
+                .env_remove("CARGO_TARGET_DIR")
                 .arg(assessment.path("relocated/plan.json"))
                 .output()
                 .unwrap(),

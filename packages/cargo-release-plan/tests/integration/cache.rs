@@ -100,6 +100,62 @@ fn assert_reports_equal(expected: &Path, actual: &Path) {
     }
 }
 
+fn assert_preparation_observations(trace: &str) {
+    // Storage isolation inventory, original entry, resolved temporary workspace, and
+    // original post-install capture. Classification consumes that capture without reacquiring.
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+            .count(),
+        4
+    );
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|line| line.contains("git ls-files --stage -z"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|line| line.contains("git ls-files -s -z -- "))
+            .count(),
+        0
+    );
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|line| line.contains("git diff-files --raw"))
+            .count(),
+        1
+    );
+}
+
+fn assert_preview_outputs_equal(expected: &Path, actual: &Path) {
+    assert_eq!(
+        fs::read(expected.join("report.json")).unwrap(),
+        fs::read(actual.join("report.json")).unwrap()
+    );
+    let expected: serde_json::Value =
+        serde_json::from_slice(&fs::read(expected.join("plan.json")).unwrap()).unwrap();
+    let actual: serde_json::Value =
+        serde_json::from_slice(&fs::read(actual.join("plan.json")).unwrap()).unwrap();
+    for path in ["/increments", "/resolved/files", "/resolved/final_digest"] {
+        assert_eq!(
+            expected.pointer(path).unwrap(),
+            actual.pointer(path).unwrap()
+        );
+    }
+    assert_ne!(
+        expected
+            .pointer("/resolved/evidence_manifest_path")
+            .unwrap(),
+        actual.pointer("/resolved/evidence_manifest_path").unwrap()
+    );
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "executes Git, Cargo and the compiled application")]
 fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing_reports() {
@@ -138,6 +194,15 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
                 1
             );
         }
+        // A decision hit skips rendering, including its batch-size acquisition. Current
+        // identities above still come from this independent command's admission.
+        assert_eq!(
+            trace_text
+                .lines()
+                .filter(|line| line.contains("git cat-file --batch-check"))
+                .count(),
+            usize::from(name != "warm")
+        );
         // Disabled storage has only the metadata pass's tracked listing. Enabled storage
         // also admits its directory against tracked source before that classification pass.
         assert_eq!(
@@ -147,8 +212,8 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
                 .count(),
             if name == "disabled" { 1 } else { 2 }
         );
-        // Historical manifests use one separate batch. A warm cache removes the patch's
-        // content batch, while size queries remain fresh availability observations.
+        // Historical manifests use one separate batch. A decision hit removes the patch's
+        // content batch along with its size query.
         assert_eq!(
             trace_text
                 .lines()
@@ -249,6 +314,69 @@ fn decision_entries_do_not_persist_registry_credentials_and_changes_invalidate_r
         &evidence.path().join("cold"),
         &evidence.path().join("disabled"),
     );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes independent checks and real Cargo packaging probes"
+)]
+fn packaging_probes_reuse_their_classification_listing_but_commands_reacquire() {
+    let fixture = Fixture::new("[workspace.package]\nreadme='README.md'\n");
+    for name in ["first", "second"] {
+        write_package(&fixture, name, "0.1.0", "readme.workspace=true\n");
+    }
+    fixture.write("README.md", "shared\n");
+    fixture.cargo(&["generate-lockfile", "--offline"]);
+    fixture.commit("packaging baseline");
+    let evidence = TempDir::new().unwrap();
+    for pass in 0..2 {
+        let trace = evidence.path().join(format!("check-{pass}.trace"));
+        let output = success(
+            command(&fixture)
+                .args([
+                    "check",
+                    "--release-history",
+                    "HEAD",
+                    "--verify-packaging",
+                    "--no-cache",
+                ])
+                .env("GIT_TRACE", &trace)
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace = fs::read_to_string(trace).unwrap();
+        for operation in [
+            "git ls-files -z -- ",
+            "git ls-files -s -z -- ",
+            "git diff-files --raw -z --no-renames -- ",
+        ] {
+            assert_eq!(
+                trace
+                    .lines()
+                    .filter(|line| line.contains(operation))
+                    .count(),
+                1,
+                "{trace}"
+            );
+        }
+        // Each independent command must see the staged addition; Cargo's real package list
+        // includes it, so retaining the preceding command's listing would produce a mismatch.
+        fixture.write("packages/first/src/new.rs", "pub fn added() {}\n");
+        fixture.write(
+            "packages/first/Cargo.toml",
+            &fixture
+                .read("packages/first/Cargo.toml")
+                .replace("0.1.0", "0.1.1"),
+        );
+        fixture.git(&["add", "packages/first"]);
+        fixture.cargo(&["generate-lockfile", "--offline"]);
+    }
 }
 
 #[test]
@@ -1379,13 +1507,16 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
     fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
     let prepared = evidence.path().join("prepared");
+    let prepare_trace = evidence.path().join("prepare.trace");
     success(
         command(&fixture)
             .args(["prepare", "--release-history", "HEAD", "--output"])
             .arg(&prepared)
+            .env("GIT_TRACE", &prepare_trace)
             .output()
             .unwrap(),
     );
+    assert_preparation_observations(&fs::read_to_string(prepare_trace).unwrap());
     let plan = evidence.path().join("proposal.json");
     fs::write(
         &plan,
@@ -1414,7 +1545,25 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
         String::from_utf8_lossy(&result.stderr)
             .contains("reusing classification decisions from memory")
     );
+    // Only the post-edit state needs new decisions: the original state is already stored,
+    // and the final unchanged convergence pass reuses the post-edit decision in memory.
+    assert_eq!(
+        String::from_utf8_lossy(&result.stderr)
+            .matches("computed classification decisions")
+            .count(),
+        1
+    );
     assert_eq!(acquisitions(&trace), (0, 0));
+    // Storage isolation inventory, original admission, candidate creation, each convergence
+    // pass, and final relocation.
+    assert_eq!(
+        fs::read_to_string(&trace)
+            .unwrap()
+            .lines()
+            .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+            .count(),
+        6,
+    );
     let resolved: serde_json::Value =
         serde_json::from_slice(&fs::read(preview.join("plan.json")).unwrap()).unwrap();
     let manifest = PathBuf::from(
@@ -1447,26 +1596,7 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
         !diagnostics.contains("computed classification decisions"),
         "{diagnostics}"
     );
-    assert_eq!(
-        fs::read(preview.join("report.json")).unwrap(),
-        fs::read(relocated.join("report.json")).unwrap()
-    );
-    let relocated_plan: serde_json::Value =
-        serde_json::from_slice(&fs::read(relocated.join("plan.json")).unwrap()).unwrap();
-    for path in ["/increments", "/resolved/files", "/resolved/final_digest"] {
-        assert_eq!(
-            resolved.pointer(path).unwrap(),
-            relocated_plan.pointer(path).unwrap()
-        );
-    }
-    assert_ne!(
-        resolved
-            .pointer("/resolved/evidence_manifest_path")
-            .unwrap(),
-        relocated_plan
-            .pointer("/resolved/evidence_manifest_path")
-            .unwrap()
-    );
+    assert_preview_outputs_equal(&preview, &relocated);
     let uncached = evidence.path().join("uncached-preview");
     success(
         command(&fixture)
@@ -1479,18 +1609,14 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .output()
             .unwrap(),
     );
+    assert_preview_outputs_equal(&preview, &uncached);
+    let candidate_manifest =
+        fs::read_to_string(manifest.parent().unwrap().join("packages/demo/Cargo.toml")).unwrap();
+    assert!(candidate_manifest.contains("0.1.1"), "{candidate_manifest}");
     assert_eq!(
-        fs::read(preview.join("report.json")).unwrap(),
-        fs::read(uncached.join("report.json")).unwrap()
+        fs::read_to_string(manifest.parent().unwrap().join("packages/demo/src/lib.rs")).unwrap(),
+        "pub fn changed() {}\n"
     );
-    let uncached_plan: serde_json::Value =
-        serde_json::from_slice(&fs::read(uncached.join("plan.json")).unwrap()).unwrap();
-    for path in ["/resolved/files", "/resolved/final_digest"] {
-        assert_eq!(
-            resolved.pointer(path).unwrap(),
-            uncached_plan.pointer(path).unwrap()
-        );
-    }
     for (name, cache) in [
         ("candidate-root", manifest.parent().unwrap().to_path_buf()),
         (
@@ -1509,6 +1635,7 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .unwrap();
         assert!(!output.status.success());
         assert!(!cache.join("git-trees").exists());
+        assert!(!cache.join("manifest-document").exists());
     }
     let compatibility_trace = evidence.path().join("compatibility.trace");
     success(

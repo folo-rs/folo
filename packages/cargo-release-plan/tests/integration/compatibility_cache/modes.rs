@@ -104,6 +104,8 @@ fn prepared_and_preview_checks(mode: &'static str) {
                 .current_dir(assessment.evidence.path())
                 .args(["check-compatibility", "--no-cache", "--manifest-path"])
                 .arg(assessment.fixture.manifest())
+                .arg("--verbose")
+                .env_remove("CARGO_TARGET_DIR")
                 .arg(option)
                 .arg(assessment.path(artifact))
                 .arg("--output")

@@ -1,104 +1,99 @@
 use std::fs;
 
 use crate::compatibility::{CHECKER_WATCHDOG, read_outcome};
-use crate::compatibility_cache::{Assessment, candidate, reused, success};
+use crate::compatibility_cache::{Assessment, reused, same_evidence, success};
 
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Runs cached preview admission and a native checker mutation"
+    ignore = "Traces admitted Cargo/Git workspaces through actual checker processes"
 )]
-fn preview_cache_hit_rechecks_source_and_candidate_around_checker() {
+fn compatibility_shares_entry_admission_through_read_only_checker_stages() {
     testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new("default");
-        for (subject, source) in [
-            (
-                "original",
-                assessment
-                    .fixture
-                    .path()
-                    .join("packages/library/src/lib.rs"),
-            ),
-            (
-                "candidate",
-                candidate(&assessment).join("packages/library/src/lib.rs"),
-            ),
+        for (mode, option, artifact) in [
+            ("prepared", "--prepared", "prepared/prepared.json"),
+            ("preview", "--plan", "preview/plan.json"),
         ] {
-            let original = fs::read(&source).unwrap();
-            for phase in ["canary", "comparison"] {
-                let name = format!("{subject}-{phase}");
-                let output = assessment
-                    .check(&name)
-                    .env("CRP_FIXTURE_MUTATION_PHASE", phase)
-                    .env("CRP_FIXTURE_MUTATION_PATH", &source)
-                    .output()
-                    .unwrap();
-                reused(&output);
-                assert!(!output.status.success());
-                // Canary drift must stop before baseline assessment, not just checker execution.
+            fs::remove_dir_all(&assessment.storage).unwrap();
+            for state in ["cold", "warm", "disabled"] {
+                let name = format!("{mode}-{state}");
+                let trace = assessment.path(&format!("{name}.trace"));
+                let mut command = assessment.check_mode(&name, option, artifact);
+                command.env("GIT_TRACE", &trace);
+                if state == "disabled" {
+                    command.arg("--no-cache");
+                }
+                let output = success(command.output().unwrap());
+                if state == "warm" {
+                    reused(&output);
+                } else if state == "cold" {
+                    assert!(
+                        String::from_utf8_lossy(&output.stderr)
+                            .contains("computed classification decisions")
+                    );
+                }
+                // Original admission, separate preview-candidate admission, and optional
+                // storage isolation each need a listing; checker stages need no recapture.
+                let expected =
+                    1 + usize::from(mode == "preview") + usize::from(state != "disabled");
                 assert_eq!(
-                    String::from_utf8_lossy(&output.stderr)
-                        .contains("Comparing library against baseline"),
-                    phase == "comparison"
+                    fs::read_to_string(trace)
+                        .unwrap()
+                        .lines()
+                        .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+                        .count(),
+                    expected
                 );
-                let outcome = read_outcome(&assessment.path(&name));
-                assert_eq!(outcome.get("completed").unwrap(), false);
-                assert_eq!(outcome.get("findings").unwrap(), phase == "comparison");
                 assert_eq!(
                     fs::read_to_string(assessment.path(&format!("{name}.calls"))).unwrap(),
-                    if phase == "canary" {
-                        "version\ncanary\n"
-                    } else {
-                        "version\ncanary\ncomparison\n"
-                    }
+                    "version\ncanary\ncomparison\n"
                 );
-                assert!(
-                    fs::read_to_string(&source)
-                        .unwrap()
-                        .contains("changed_during")
-                );
-                fs::write(&source, &original).unwrap();
+                if state != "cold" {
+                    same_evidence(
+                        &assessment.path(&format!("{mode}-cold")),
+                        &assessment.path(&name),
+                    );
+                }
             }
         }
-        assert!(candidate(&assessment).join("Cargo.toml").is_file());
     });
 }
 
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Runs checker failures and parent mutations after persisted cache hits"
+    ignore = "Runs genuine checker successes and failures after persisted decision hits"
 )]
-fn cache_hits_do_not_cache_checker_success_or_parent_verification() {
+fn cache_hits_do_not_cache_checker_outcomes() {
     testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new("absolute");
         reused(&success(assessment.check("warm").output().unwrap()));
-        let history = assessment.fixture.sha("release-history");
         for scenario in [
             "identity-failure",
             "canary-failure",
             "parent-comparison-failure",
-            "parent-source-drift",
-            "parent-head-drift",
-            "parent-target-drift",
+            "parent-compatible",
         ] {
             let result = assessment
                 .check(scenario)
                 .env("CRP_FIXTURE_SCENARIO", scenario)
-                .env("CRP_FIXTURE_HISTORY", &history)
-                .env("CRP_FIXTURE_ROOT", assessment.fixture.path())
                 .output()
                 .unwrap();
             reused(&result);
-            assert!(!result.status.success());
+            assert_eq!(result.status.success(), scenario == "parent-compatible");
             let outcome = read_outcome(&assessment.path(scenario));
-            assert_eq!(outcome.get("completed").unwrap(), false);
+            assert_eq!(
+                outcome.get("completed").unwrap(),
+                scenario == "parent-compatible"
+            );
+            assert_eq!(outcome.get("findings").unwrap(), false);
             let calls = fs::read_to_string(assessment.path(&format!("{scenario}.calls"))).unwrap();
             assert_eq!(
                 calls,
                 match scenario {
                     "identity-failure" => "version\n",
-                    "canary-failure" | "parent-target-drift" => "version\ncanary\n",
+                    "canary-failure" => "version\ncanary\n",
                     _ => "version\ncanary\ncomparison\n",
                 }
             );
@@ -110,14 +105,6 @@ fn cache_hits_do_not_cache_checker_success_or_parent_verification() {
                     .count(),
                 1
             );
-            if scenario == "parent-target-drift" {
-                assessment.fixture.git(&[
-                    "update-ref",
-                    "refs/heads/anticipated-parent",
-                    &assessment.parent,
-                    &history,
-                ]);
-            }
         }
         let result = assessment
             .check("deny")

@@ -14,16 +14,16 @@ use std::{env, fs, io};
 use crp_diag::{DiagnosticSink, Quotable as _, Stderr, Verbose, quote_path};
 use crp_publication::PublicationOutput;
 use crp_publication::publication::registry::RegistryClient;
-use crp_versioning::inspect_plan::read_resolved_preview;
+use crp_versioning::classify::{SnapshotCache, classify_acquired};
+use crp_versioning::inspect_plan::read_resolved_preview_with_cache;
 use crp_versioning::preview::Prepared;
-use crp_versioning::report::{read_report, run_report_with_cache};
+use crp_versioning::report::{read_report, write_report};
 use crp_versioning::resolved::{Inputs, ResolvedState, read_json};
 use crp_versioning::semver_targets::semver_targets;
 use crp_workspace::artifact_path::write_new;
 use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::command::{BUILD_CREDENTIAL_VARIABLES, run_capture};
 use crp_workspace::git::GitRepo;
-use crp_workspace::metadata::{MetadataJson, capture_metadata};
 use ohno::AppError;
 use semver::Version;
 use serde::Serialize;
@@ -38,35 +38,13 @@ enum Evidence {
 
 impl Evidence {
     fn root(&self) -> &Path {
-        match self {
-            Self::Source(inputs) => &inputs.root,
-            Self::Preview(resolved) => &resolved.inputs.root,
-        }
+        self.inputs().root()
     }
     fn inputs(&self) -> &Inputs {
         match self {
             Self::Source(inputs) => inputs,
             Self::Preview(resolved) => &resolved.inputs,
         }
-    }
-    // Both variants acquire live Git/filesystem identity; drift cases run in integration tests.
-    #[cfg_attr(test, mutants::skip)]
-    fn verify(&self, manifest: &Path) -> Result<(), AppError> {
-        match self {
-            Self::Source(inputs) => {
-                inputs.verify(manifest, None)?;
-            }
-            Self::Preview(resolved) => {
-                // The candidate has its own frozen contents, but the original workspace still
-                // owns the plan's admission. Preserve the original-or-fully-applied contract.
-                resolved.inputs.verify(
-                    &resolved.inputs.root.join(&resolved.inputs.manifest),
-                    Some(&resolved.final_digest),
-                )?;
-                resolved.verify_candidate(manifest)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -193,25 +171,12 @@ impl CompatibilityOutcome {
     }
 
     fn finish(
-        &mut self,
+        &self,
         comparison: Result<(), AppError>,
-        unchanged: Result<(), AppError>,
         persist: impl FnOnce(&Self) -> Result<(), AppError>,
     ) -> Result<(), AppError> {
-        // Failed comparisons still need source verification and persisted incomplete evidence.
-        // A source change invalidates completed evidence, but must not hide the comparison error.
-        if unchanged.is_err() {
-            self.completed = false;
-        }
         let persistence = persist(self);
-        let operation = match (comparison, unchanged) {
-            (Err(comparison), Err(verification)) => {
-                Err(ComparisonAndSourceFailed::caused_by(verification, comparison).into())
-            }
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Ok(()), Ok(())) => Ok(()),
-        };
-        match (operation, persistence) {
+        match (comparison, persistence) {
             (Err(operation), Err(persistence)) => {
                 Err(EvidencePersistenceAlsoFailed::caused_by(persistence, operation).into())
             }
@@ -409,51 +374,40 @@ fn check_with_output(
         return Err(CompatibilityDestinationExists::new(output).into());
     }
     fs::create_dir_all(output)?;
-    let (evidence, manifest) = if let Some(path) = prepared {
-        let prepared: Prepared = read_json(path)?;
-        let manifest = manifest.canonicalize()?;
-        prepared.inputs.verify(&manifest, None)?;
-        (Evidence::Source(prepared.inputs), manifest)
-    } else if let Some(path) = plan {
-        let resolved = read_resolved_preview(path, manifest, verbose)?;
-        let manifest = resolved.evidence_manifest_path.clone();
-        (Evidence::Preview(resolved), manifest)
-    } else {
-        let manifest = manifest.canonicalize()?;
-        let inputs = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
-        (Evidence::Source(inputs), manifest)
-    };
-    // Derive target selection from the bound source rather than trusting an adjacent report
-    // that could have been replaced independently of the prepared/preview artifact.
-    let observation_cache = Cache::resolve(
-        &evidence.inputs().root.join(&evidence.inputs().manifest),
-        cache_options,
-        verbose,
-    )?;
+    let observation_cache = Cache::resolve(manifest, cache_options, verbose)?;
     observation_cache.protect(output)?;
     if let Some(path) = prepared.or(plan) {
         observation_cache.protect(path)?;
     }
-    if matches!(&evidence, Evidence::Preview(_)) {
-        // The retained repository is evidence too, including when its manifest is nested.
-        observation_cache.protect(
-            GitRepo::discover(
-                manifest
-                    .parent()
-                    .expect("an evidence manifest has a parent"),
-            )?
-            .root(),
+    let mut snapshots = SnapshotCache::new(observation_cache);
+    let (evidence, manifest, acquired) = if let Some(path) = prepared {
+        let prepared: Prepared = read_json(path)?;
+        let manifest = manifest.canonicalize()?;
+        let (_, acquired) =
+            prepared
+                .inputs
+                .verify_with_cache(&manifest, None, verbose, &mut snapshots)?;
+        (Evidence::Source(prepared.inputs), manifest, acquired)
+    } else if let Some(path) = plan {
+        let (resolved, acquired) =
+            read_resolved_preview_with_cache(path, manifest, verbose, &mut snapshots)?;
+        let manifest = resolved.evidence_manifest_path.clone();
+        (Evidence::Preview(resolved), manifest, acquired)
+    } else {
+        let manifest = manifest.canonicalize()?;
+        let (inputs, acquired) = Inputs::capture_with_cache(
+            &manifest,
+            release_history,
+            merge_target,
+            verbose,
+            &mut snapshots,
         )?;
-    }
-    run_report_with_cache(
-        output,
-        Some(&evidence.inputs().release_history),
-        evidence.inputs().merge_target.as_deref(),
-        &manifest,
-        verbose,
-        observation_cache,
-    )?;
-    evidence.verify(&manifest)?;
+        (Evidence::Source(inputs), manifest, acquired)
+    };
+    let classification = classify_acquired(acquired, verbose, &mut snapshots)?;
+    write_report(output, &classification)?;
+    let workspace_prefix = classification.git.prefix().to_owned();
+    drop(classification);
     let report = output.join("report.json");
     let source_report = read_report(&report)?;
     let targets = semver_targets(&source_report, verbose);
@@ -483,11 +437,10 @@ fn check_with_output(
         {
             // A caller can name a moved member. Use Cargo's workspace root, as classification
             // does, and share the single captured parent snapshot across selected contracts.
-            let metadata: MetadataJson = serde_json::from_slice(&capture_metadata(&manifest)?)?;
-            let workspace = GitRepo::discover(Path::new(&metadata.workspace_root))?;
             let source =
                 parent_source.insert(ParentSource::create(evidence.root(), &anchor.commit)?);
-            Some(source.root.join(workspace.prefix()))
+            source.verify()?;
+            Some(source.root.join(&workspace_prefix))
         } else {
             None
         };
@@ -501,8 +454,6 @@ fn check_with_output(
                 )
             })
         };
-        // Source acquisition must not turn a moved named target into accepted comparison input.
-        evidence.verify(&manifest)?;
         // Resolve once outside the assessed Cargo configuration. An alias in that configuration
         // must not select a different checker for identity, canary or comparison.
         let checker = if targets.is_empty() {
@@ -514,7 +465,7 @@ fn check_with_output(
             let identity = invoke(checker, &manifest, &cache, &["--version"])?;
             outcome.identify(&identity)?;
             canary(checker, &cache, &mut checker_output)?;
-            evidence.verify(&manifest)?;
+            admit_checker_resolution(&manifest, &cache, &mut checker_output)?;
         }
         let registry = targets
             .iter()
@@ -537,18 +488,11 @@ fn check_with_output(
                 )
             },
             |name, baseline| {
-                evidence.verify(&manifest)?;
                 let checker = checker
                     .as_deref()
                     .expect("nonempty targets resolved the checker");
                 let command = match parent_baseline(name) {
-                    Some((_, root)) => {
-                        parent_source
-                            .as_ref()
-                            .expect("anticipated comparison acquired its source")
-                            .verify()?;
-                        source_comparison_command(checker, &manifest, name, root)
-                    }
+                    Some((_, root)) => source_comparison_command(checker, &manifest, name, root),
                     None => comparison_command(checker, &manifest, name, baseline),
                 };
                 execute_checker(command, &cache)
@@ -557,25 +501,13 @@ fn check_with_output(
             verbose,
         )
     })();
-    let parent_unchanged = parent_source.as_ref().map_or(Ok(()), ParentSource::verify);
-    if parent_unchanged.is_err() {
-        outcome.completed = false;
-    }
-    let result = match (result, parent_unchanged) {
-        (Err(comparison), Err(verification)) => {
-            Err(ComparisonAndSourceFailed::caused_by(verification, comparison).into())
-        }
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    };
     let cleanup = parent_source.as_mut().map_or(Ok(()), ParentSource::finish);
     if cleanup.is_err() {
         outcome.completed = false;
     }
     let result = finish_parent_source(result, cleanup);
-    let unchanged = evidence.verify(&manifest);
     let destination = output.join("compatibility.json");
-    outcome.finish(checker_output.finish(result), unchanged, |outcome| {
+    outcome.finish(checker_output.finish(result), |outcome| {
         write_new(&destination, |file| {
             serde_json::to_writer_pretty(file, outcome)
                 .map_err(|error| CompatibilityWriteError::caused_by(&destination, error).into())
@@ -867,6 +799,40 @@ fn execute_checker(mut command: Command, cache: &Path) -> Result<Output, AppErro
         .map_err(|error| CheckerStartFailed::caused_by(error).into())
 }
 
+// The supported checker runs default full metadata on the assessed workspace, then builds
+// its own placeholder projects. Admit that exact resolution with Cargo's supported lock
+// assertion before comparison; target redirection alone does not prevent lockfile writes.
+// Ref: cargo-semver-checks v0.50.0 src/lib.rs::manifest_metadata and
+// src/data_generation/generate.rs::generate_rustdoc.
+#[cfg_attr(test, mutants::skip)]
+fn admit_checker_resolution(
+    manifest: &Path,
+    cache: &Path,
+    output: &mut CheckerOutput<impl Write, impl Write>,
+) -> Result<(), AppError> {
+    let mut command = Command::new("cargo");
+    command
+        .args([
+            "metadata",
+            "--locked",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(manifest)
+        .current_dir(
+            manifest
+                .parent()
+                .expect("an acquired manifest has a parent"),
+        );
+    let result = execute_checker(command, cache)?;
+    if !result.status.success() {
+        output.record(&result)?;
+        return Err(CheckerResolutionRequired::new(manifest).into());
+    }
+    Ok(())
+}
+
 // The native fixture and checker invocation are integration-tested; validate_canary owns admission.
 #[cfg_attr(test, mutants::skip)]
 fn canary(
@@ -999,14 +965,14 @@ struct CheckerDeliveryAlsoFailed {
 #[display("compatibility checker reported a change in its identical-source canary")]
 struct CanaryComparisonChanged;
 
-/// Keeps source-invalidity diagnostics alongside the original comparison failure.
+/// Read-only comparisons require the assessed lockfile to match default Cargo resolution.
 #[ohno::error]
-#[display("source verification also failed: {verification}")]
-struct ComparisonAndSourceFailed {
-    verification: AppError,
+#[display("compatibility requires unchanged Cargo resolution for {}; run prepare before checking", manifest.quoted())]
+struct CheckerResolutionRequired {
+    manifest: PathBuf,
 }
 
-/// Preserves an artifact-write failure alongside prior comparison or source failures.
+/// Preserves an artifact-write failure alongside a prior comparison failure.
 #[ohno::error]
 #[display("compatibility evidence persistence also failed: {persistence}")]
 struct EvidencePersistenceAlsoFailed {
@@ -1438,20 +1404,15 @@ mod tests {
         diagnostics.notes().note(|| "later comparison".to_owned());
         assert_eq!(destination.0.load(Ordering::Relaxed), 1);
         let persisted = Cell::new(false);
-        let result = outcome().finish(
-            Err(ComparisonFailure::new().into()),
-            Err(SourceFailure::new().into()),
-            |_| {
-                persisted.set(true);
-                Err(PersistenceFailure::new().into())
-            },
-        );
+        let result = outcome().finish(Err(ComparisonFailure::new().into()), |_| {
+            persisted.set(true);
+            Err(PersistenceFailure::new().into())
+        });
         let error = finish_delivery(result, deferred.take_failure()).unwrap_err();
         assert!(persisted.get());
         let text = error.to_string();
         for marker in [
             "comparison canary",
-            "source canary",
             "persistence canary",
             "supporting mirror canary",
         ] {
@@ -1512,7 +1473,7 @@ mod tests {
         assert_eq!(output.mirror.writes, 1);
         let persisted = Cell::new(false);
         let error = outcome
-            .finish(output.finish(result), Ok(()), |outcome| {
+            .finish(output.finish(result), |outcome| {
                 assert!(outcome.completed);
                 assert_eq!(outcome.packages.len(), 2);
                 persisted.set(true);
@@ -1524,69 +1485,58 @@ mod tests {
     }
 
     #[test]
-    fn finalization_retains_log_or_checker_mirror_source_and_persistence_failures() {
+    fn finalization_retains_log_or_checker_mirror_and_persistence_failures() {
         for log_fails in [false, true] {
-            for source_fails in [false, true] {
-                for persistence_fails in [false, true] {
-                    let mut outcome = outcome();
-                    let mut output = CheckerOutput::new(
-                        TestWriter {
-                            fails: log_fails,
-                            ..TestWriter::failing("log canary")
-                        },
-                        TestWriter::failing("mirror canary"),
-                    );
-                    let result = outcome.compare(
-                        "library",
-                        Some(Version::new(1, 0, 0)),
-                        |_| {
-                            Ok(checker_output(
-                                1,
-                                b"captured stdout\n",
-                                b"captured stderr\n",
-                            ))
-                        },
-                        &mut output,
-                        Verbose::new(false, &crp_diag::Discard),
-                    );
-                    result.as_ref().unwrap_err();
-                    assert!(outcome.packages.is_empty());
-                    let persisted = Cell::new(false);
-                    let error = outcome
-                        .finish(
-                            output.finish(result),
-                            if source_fails {
-                                Err(SourceFailure::new().into())
-                            } else {
-                                Ok(())
-                            },
-                            |outcome| {
-                                assert!(!outcome.completed);
-                                persisted.set(true);
-                                if persistence_fails {
-                                    Err(PersistenceFailure::new().into())
-                                } else {
-                                    Ok(())
-                                }
-                            },
-                        )
-                        .unwrap_err();
-                    assert!(persisted.get());
-                    assert_eq!(error.find_source::<CheckerLogFailed>().is_some(), log_fails);
-                    assert_eq!(error.find_source::<CheckerFailed>().is_some(), !log_fails);
-                    let delivery = error.find_source::<CheckerDeliveryAlsoFailed>().unwrap();
-                    assert!(
-                        delivery
-                            .delivery
-                            .find_source::<CheckerMirrorFailed>()
-                            .is_some()
-                    );
-                    let diagnostic = error.to_string();
-                    assert!(diagnostic.contains("mirror canary"));
-                    assert_eq!(diagnostic.contains("log canary"), log_fails);
-                    assert_eq!(diagnostic.contains("source canary"), source_fails);
-                    assert_eq!(diagnostic.contains("persistence canary"), persistence_fails);
-                }
+            for persistence_fails in [false, true] {
+                let mut outcome = outcome();
+                let mut output = CheckerOutput::new(
+                    TestWriter {
+                        fails: log_fails,
+                        ..TestWriter::failing("log canary")
+                    },
+                    TestWriter::failing("mirror canary"),
+                );
+                let result = outcome.compare(
+                    "library",
+                    Some(Version::new(1, 0, 0)),
+                    |_| {
+                        Ok(checker_output(
+                            1,
+                            b"captured stdout\n",
+                            b"captured stderr\n",
+                        ))
+                    },
+                    &mut output,
+                    Verbose::new(false, &crp_diag::Discard),
+                );
+                result.as_ref().unwrap_err();
+                assert!(outcome.packages.is_empty());
+                let persisted = Cell::new(false);
+                let error = outcome
+                    .finish(output.finish(result), |outcome| {
+                        assert!(!outcome.completed);
+                        persisted.set(true);
+                        if persistence_fails {
+                            Err(PersistenceFailure::new().into())
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .unwrap_err();
+                assert!(persisted.get());
+                assert_eq!(error.find_source::<CheckerLogFailed>().is_some(), log_fails);
+                assert_eq!(error.find_source::<CheckerFailed>().is_some(), !log_fails);
+                let delivery = error.find_source::<CheckerDeliveryAlsoFailed>().unwrap();
+                assert!(
+                    delivery
+                        .delivery
+                        .find_source::<CheckerMirrorFailed>()
+                        .is_some()
+                );
+                let diagnostic = error.to_string();
+                assert!(diagnostic.contains("mirror canary"));
+                assert_eq!(diagnostic.contains("log canary"), log_fails);
+                assert_eq!(diagnostic.contains("persistence canary"), persistence_fails);
             }
         }
     }
@@ -1627,93 +1577,67 @@ mod tests {
     }
 
     #[test]
-    fn finish_preserves_comparison_source_and_persistence_failures() {
+    fn finish_preserves_comparison_and_persistence_failures() {
         for comparison_fails in [false, true] {
-            for source_fails in [false, true] {
-                for persistence_fails in [false, true] {
-                    let mut outcome = outcome();
-                    outcome.completed = !comparison_fails;
-                    let persisted = Cell::new(false);
-                    let result = outcome.finish(
-                        if comparison_fails {
-                            Err(ComparisonFailure::new().into())
-                        } else {
-                            Ok(())
-                        },
-                        if source_fails {
-                            Err(SourceFailure::new().into())
-                        } else {
-                            Ok(())
-                        },
-                        |outcome| {
-                            assert_eq!(outcome.completed, !comparison_fails && !source_fails);
-                            assert_eq!(
-                                serde_json::to_value(outcome)
-                                    .unwrap()
-                                    .get("schema_version")
-                                    .unwrap(),
-                                COMPATIBILITY_SCHEMA_VERSION
-                            );
-                            persisted.set(true);
-                            if persistence_fails {
-                                Err(PersistenceFailure::new().into())
-                            } else {
-                                Ok(())
-                            }
-                        },
-                    );
-                    assert!(persisted.get());
-                    if comparison_fails || source_fails || persistence_fails {
-                        let error = result.unwrap_err();
-                        let diagnostic = error.to_string();
-                        for (failed, marker) in [
-                            (comparison_fails, "comparison canary"),
-                            (source_fails, "source canary"),
-                            (persistence_fails, "persistence canary"),
-                        ] {
-                            assert_eq!(diagnostic.contains(marker), failed);
-                        }
-                        if persistence_fails && (comparison_fails || source_fails) {
-                            let combined = error
-                                .find_source::<EvidencePersistenceAlsoFailed>()
-                                .unwrap();
-                            assert!(
-                                combined
-                                    .persistence
-                                    .find_source::<PersistenceFailure>()
-                                    .is_some()
-                            );
-                        } else {
-                            assert_eq!(
-                                error.find_source::<PersistenceFailure>().is_some(),
-                                persistence_fails
-                            );
-                        }
-                        assert_eq!(
-                            error.find_source::<ComparisonFailure>().is_some(),
-                            comparison_fails
-                        );
-                        if comparison_fails && source_fails {
-                            let combined =
-                                error.find_source::<ComparisonAndSourceFailed>().unwrap();
-                            assert!(
-                                combined
-                                    .verification
-                                    .find_source::<SourceFailure>()
-                                    .is_some()
-                            );
-                            let diagnostic = error.to_string();
-                            assert!(diagnostic.contains("comparison canary"));
-                            assert!(diagnostic.contains("source canary"));
-                        } else {
-                            assert_eq!(
-                                error.find_source::<SourceFailure>().is_some(),
-                                source_fails
-                            );
-                        }
+            for persistence_fails in [false, true] {
+                let mut outcome = outcome();
+                outcome.completed = !comparison_fails;
+                let persisted = Cell::new(false);
+                let result = outcome.finish(
+                    if comparison_fails {
+                        Err(ComparisonFailure::new().into())
                     } else {
-                        result.unwrap();
+                        Ok(())
+                    },
+                    |outcome| {
+                        assert_eq!(outcome.completed, !comparison_fails);
+                        assert_eq!(
+                            serde_json::to_value(outcome)
+                                .unwrap()
+                                .get("schema_version")
+                                .unwrap(),
+                            COMPATIBILITY_SCHEMA_VERSION
+                        );
+                        persisted.set(true);
+                        if persistence_fails {
+                            Err(PersistenceFailure::new().into())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                );
+                assert!(persisted.get());
+                if comparison_fails || persistence_fails {
+                    let error = result.unwrap_err();
+                    let diagnostic = error.to_string();
+                    for (failed, marker) in [
+                        (comparison_fails, "comparison canary"),
+                        (persistence_fails, "persistence canary"),
+                    ] {
+                        assert_eq!(diagnostic.contains(marker), failed);
                     }
+                    if persistence_fails && comparison_fails {
+                        let combined = error
+                            .find_source::<EvidencePersistenceAlsoFailed>()
+                            .unwrap();
+                        assert!(
+                            combined
+                                .persistence
+                                .find_source::<PersistenceFailure>()
+                                .is_some()
+                        );
+                    } else {
+                        assert_eq!(
+                            error.find_source::<PersistenceFailure>().is_some(),
+                            persistence_fails
+                        );
+                    }
+                    assert_eq!(
+                        error.find_source::<ComparisonFailure>().is_some(),
+                        comparison_fails
+                    );
+                } else {
+                    result.unwrap();
                 }
             }
         }
@@ -1738,11 +1662,6 @@ mod tests {
     #[ohno::error]
     #[display("comparison canary")]
     struct ComparisonFailure;
-
-    /// Source invalidation remains an error even when the comparison also failed.
-    #[ohno::error]
-    #[display("source canary")]
-    struct SourceFailure;
 
     /// A separate write failure must not erase the operation that required the evidence.
     #[ohno::error]
