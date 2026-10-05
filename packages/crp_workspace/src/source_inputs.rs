@@ -1,5 +1,6 @@
-//! Source locations shared by captured evidence and disposable-cache admission.
+//! Source locations included in captured evidence.
 
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use crate::manifest::{for_each_dependency_table, parse_document};
 /// Discovers reserved files and recursively acquired source directories.
 ///
 /// Paths retain their acquired spelling. Callers add Git-tracked files and decide whether
-/// dependency locations are relocatable; cache admission also protects nonrelocatable sources.
+/// dependency locations are relocatable.
 #[derive(Debug, Default)]
 pub struct SourceInputs {
     pub files: BTreeSet<PathBuf>,
@@ -41,12 +42,12 @@ impl SourceInputs {
     /// Shares freshly acquired documents without retaining mutable workspace observations.
     // Native root alias resolution is shared with ordinary discovery.
     #[cfg_attr(test, mutants::skip)]
-    pub fn discover_with_documents(
+    pub fn discover_with_documents<D: Borrow<DocumentMut>>(
         root: &Path,
         workspace_root: &Path,
         manifests: &[PathBuf],
         resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
-        document: impl FnMut(&Path) -> Result<DocumentMut, AppError>,
+        document: impl FnMut(&Path) -> Result<D, AppError>,
     ) -> Result<Self, AppError> {
         let inputs = Self::dependencies_with(
             manifests.iter().chain([&workspace_root.join("Cargo.toml")]),
@@ -94,10 +95,10 @@ impl SourceInputs {
         Self::dependencies_with(manifests, resolve_dependency, read_document)
     }
 
-    pub(crate) fn dependencies_with<'a>(
+    fn dependencies_with<'a, D: Borrow<DocumentMut>>(
         manifests: impl IntoIterator<Item = &'a PathBuf>,
         mut resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
-        mut document: impl FnMut(&Path) -> Result<DocumentMut, AppError>,
+        mut document: impl FnMut(&Path) -> Result<D, AppError>,
     ) -> Result<Self, AppError> {
         let mut inputs = Self::default();
         let mut pending: BTreeSet<PathBuf> = manifests.into_iter().cloned().collect();
@@ -106,6 +107,7 @@ impl SourceInputs {
                 continue;
             }
             let document = document(&manifest)?;
+            let document = document.borrow();
             let mut dependencies = Vec::new();
             for_each_dependency_table(document.as_table(), &mut |_, table| {
                 dependency_paths(table, &mut dependencies);
@@ -157,6 +159,7 @@ fn dependency_paths(table: &dyn TableLike, paths: &mut Vec<String>) {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::borrow::Cow;
     use std::iter;
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
@@ -257,15 +260,16 @@ mod tests {
                 |path| {
                     if path == root {
                         shared += 1;
-                        return Ok(captured.clone());
+                        return Ok(Cow::Borrowed(&captured));
                     }
                     assert!(!reads.contains(&path.to_path_buf()));
                     reads.push(path.to_path_buf());
                     if path == Path::new("root/external/Cargo.toml") {
                         parse_document(path, &format!("[dependencies]\nleaf={{path='{leaf}'}}\n"))
+                            .map(Cow::Owned)
                     } else {
                         assert_eq!(path, Path::new("root").join(leaf).join("Cargo.toml"));
-                        Ok(DocumentMut::new())
+                        Ok(Cow::Owned(DocumentMut::new()))
                     }
                 },
             )

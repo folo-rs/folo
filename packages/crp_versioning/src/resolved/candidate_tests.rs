@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::ptr;
 
 use super::*;
 
@@ -140,6 +141,8 @@ fn captured_documents_read_only_paths_absent_from_this_acquisition() {
     for path in [root, member] {
         let shared =
             capture_document(path, &documents, |_| panic!("document already acquired")).unwrap();
+        let original = documents.get(path).unwrap();
+        assert!(matches!(&shared, Cow::Borrowed(document) if ptr::eq(*document, original)));
         assert_eq!(
             shared
                 .get("dependencies")
@@ -159,10 +162,12 @@ fn captured_documents_read_only_paths_absent_from_this_acquisition() {
             Ok(format!("exact='{current}'"))
         })
         .unwrap();
+        assert!(matches!(fresh, Cow::Owned(_)));
         assert_eq!(reads, 1);
         assert_eq!(fresh.get("exact").unwrap().as_str(), Some(current));
     }
-    let fresh = capture_document(root, &BTreeMap::new(), |_| Ok("changed=true".into())).unwrap();
+    let empty = BTreeMap::new();
+    let fresh = capture_document(root, &empty, |_| Ok("changed=true".into())).unwrap();
     assert_eq!(fresh.get("changed").unwrap().as_bool(), Some(true));
     let error = capture_document(transitive, &documents, |_| {
         Err(CandidateFailure::new().into())

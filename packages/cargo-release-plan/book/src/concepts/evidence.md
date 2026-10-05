@@ -17,7 +17,7 @@ leave semantic source and staged identities unchanged.
 Each command acquires current inputs. It can reuse those observations during
 read-only work, but acquires new ones after its own writes or resolution and for
 new or relocated workspaces. Run source-mutating commands against the same
-workspace separately; concurrent readers can share the disposable cache.
+workspace separately.
 This requirement does not freeze remote registry or publication state.
 
 ### Assess the acquired facts

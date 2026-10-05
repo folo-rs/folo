@@ -5,6 +5,7 @@
     reason = "The subject module owns captured state; child modules own path logic and test matrices."
 )]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
 use self::paths::PathIdentity;
-use crate::classify::{AcquiredWorkspace, SnapshotCache};
+use crate::classify::{AcquiredWorkspace, Snapshots};
 use crate::groups::Groups;
 use crate::history::AssessmentHistory;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
@@ -75,12 +76,12 @@ impl Inputs {
         release_history: Option<&str>,
         merge_target: Option<&str>,
     ) -> Result<(Self, AcquiredWorkspace), AppError> {
-        Self::capture_with_cache(
+        Self::capture_with_snapshots(
             manifest,
             release_history,
             merge_target,
             Verbose::new(false, &crp_diag::Discard),
-            &mut SnapshotCache::default(),
+            &mut Snapshots::default(),
         )
     }
 
@@ -88,12 +89,12 @@ impl Inputs {
     ///
     /// Assessed source, configuration and history must remain unchanged during capture
     /// and while using the returned observation.
-    pub fn capture_with_cache(
+    pub fn capture_with_snapshots(
         manifest: &Path,
         release_history: Option<&str>,
         merge_target: Option<&str>,
         verbose: Verbose<'_>,
-        cache: &mut SnapshotCache,
+        cache: &mut Snapshots,
     ) -> Result<(Self, AcquiredWorkspace), AppError> {
         // Cargo preserves the supplied path spelling, including Windows short names.
         // Normalize the entry point before discovering any paths that will be rebased.
@@ -161,7 +162,7 @@ impl Inputs {
             manifest,
             final_digest,
             Verbose::new(false, &crp_diag::Discard),
-            &mut SnapshotCache::default(),
+            &mut Snapshots::default(),
         )
         .map(|_| ())
     }
@@ -171,13 +172,13 @@ impl Inputs {
         manifest: &Path,
         final_digest: &str,
         verbose: Verbose<'_>,
-        cache: &mut SnapshotCache,
+        cache: &mut Snapshots,
     ) -> Result<AcquiredWorkspace, AppError> {
         self.verify_candidate_with(
             manifest,
             final_digest,
             |manifest, history, target| {
-                Self::capture_with_cache(manifest, history, target, verbose, cache)
+                Self::capture_with_snapshots(manifest, history, target, verbose, cache)
             },
             |current, digest| self.compare_candidate(current, digest),
         )
@@ -278,15 +279,15 @@ impl Inputs {
     ///
     /// The returned observation belongs only to the current unchanged command interval.
     #[cfg_attr(test, mutants::skip)] // Native capture; verification policy remains in verify_observed.
-    pub fn verify_with_cache(
+    pub fn verify_with_snapshots(
         &self,
         manifest: &Path,
         final_digest: Option<&str>,
         verbose: Verbose<'_>,
-        cache: &mut SnapshotCache,
+        cache: &mut Snapshots,
     ) -> Result<(bool, AcquiredWorkspace), AppError> {
         self.verify_observed(manifest, final_digest, |manifest, history, target| {
-            Self::capture_with_cache(manifest, history, target, verbose, cache)
+            Self::capture_with_snapshots(manifest, history, target, verbose, cache)
         })
     }
 
@@ -432,14 +433,14 @@ fn captured_dependency_with(
     Ok(directory)
 }
 
-fn capture_document(
+fn capture_document<'a>(
     path: &Path,
-    documents: &BTreeMap<PathBuf, DocumentMut>,
+    documents: &'a BTreeMap<PathBuf, DocumentMut>,
     read: impl FnOnce(&Path) -> Result<String, AppError>,
-) -> Result<DocumentMut, AppError> {
+) -> Result<Cow<'a, DocumentMut>, AppError> {
     match documents.get(path) {
-        Some(document) => Ok(document.clone()),
-        None => parse_document(path, &read(path)?),
+        Some(document) => Ok(Cow::Borrowed(document)),
+        None => parse_document(path, &read(path)?).map(Cow::Owned),
     }
 }
 
@@ -480,7 +481,7 @@ impl ResolvedState {
                 &manifest,
                 &self.final_digest,
                 Verbose::new(false, &crp_diag::Discard),
-                &mut SnapshotCache::default(),
+                &mut Snapshots::default(),
             )
             .map(|_| ())
     }
@@ -489,7 +490,7 @@ impl ResolvedState {
         &self,
         manifest: &Path,
         verbose: Verbose<'_>,
-        cache: &mut SnapshotCache,
+        cache: &mut Snapshots,
     ) -> Result<AcquiredWorkspace, AppError> {
         let manifest = self.candidate_manifest(manifest)?;
         self.inputs
@@ -591,7 +592,7 @@ pub fn run_verify_preview(
         },
         |state| {
             state
-                .acquire_candidate(manifest, verbose, &mut SnapshotCache::default())
+                .acquire_candidate(manifest, verbose, &mut Snapshots::default())
                 .map(|_| ())
         },
     )
@@ -615,7 +616,7 @@ pub(crate) fn apply_resolved(
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
     let (already_applied, acquired) =
-        validate_application(plan, manifest, verbose, &mut SnapshotCache::default())?;
+        validate_application(plan, manifest, verbose, &mut Snapshots::default())?;
     let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
     drop(acquired);
     if already_applied {
@@ -643,7 +644,7 @@ pub(crate) fn validate_application(
     plan: &PlanFile,
     manifest: &Path,
     verbose: Verbose<'_>,
-    cache: &mut SnapshotCache,
+    cache: &mut Snapshots,
 ) -> Result<(bool, AcquiredWorkspace), AppError> {
     let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
     if plan.schema_version != SCHEMA_VERSION || plan.stage() != PlanStage::Expanded {
@@ -654,7 +655,7 @@ pub(crate) fn validate_application(
     let (already_applied, acquired) =
         state
             .inputs
-            .verify_with_cache(&manifest, Some(&state.final_digest), verbose, cache)?;
+            .verify_with_snapshots(&manifest, Some(&state.final_digest), verbose, cache)?;
     let work_tree = &acquired.work_tree;
     let resolved = resolve_plan(
         plan,

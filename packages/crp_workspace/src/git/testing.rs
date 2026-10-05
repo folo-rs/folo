@@ -2,7 +2,13 @@
 
 use std::path::Path;
 
-use crate::git::{GitRepo, TreeEntry};
+use crate::git::{GitObjectContext, GitRepo, TreeEntry};
+
+/// Creates an inert interpretation context without querying a repository.
+#[must_use]
+pub fn object_context(format: &str) -> GitObjectContext {
+    GitObjectContext::for_test(format)
+}
 
 /// An inert handle that acquires no repository state.
 #[must_use]

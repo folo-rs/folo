@@ -11,9 +11,9 @@
 
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
+mod acquisitions;
 mod artifact_commands;
 mod baseline;
-mod cache;
 mod captured;
 mod cli_binary;
 mod compatibility;

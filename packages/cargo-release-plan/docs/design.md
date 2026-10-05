@@ -345,35 +345,18 @@ using it. Newly created or relocated workspaces are admitted at their actual
 location. Separate commands and intervening semantic assessment do not share a
 live-input admission.
 
-Concurrent readers may share disposable cache storage while respecting this
-requirement. Source-mutating commands on the same assessed workspace must run
-separately. Local input stability does not replace current registry and
-publication observations.
+Source-mutating commands on the same assessed workspace must run separately.
+Local input stability does not replace current registry and publication observations.
 
-### Disposable observation cache
+### Operation-local reuse
 
-Classification commands use a tool-owned cache by default under Cargo's effective
-target directory, in `cargo-release-plan/cache`. Cargo configuration and
-`CARGO_TARGET_DIR` determine that target directory. The location belongs to the
-selected original workspace and remains the same during prospective resolution
-and external compatibility checking.
+Commands reuse admitted observations within their unchanged input intervals and share
+immutable historical observations within the operation. There is no optional persistent
+observation cache. Commands do not read or remove previously stored observation files.
+Ordinary Cargo/compiler caches and compatibility checker build-directory settings remain
+independent of release evidence.
 
-`report`, `check`, `prepare`, `preview` and `check-compatibility` accept
-`--cache <directory>` to choose another location, or `--no-cache` to bypass cache
-reads and writes. These options conflict. Relative override paths are resolved
-from the initial invocation working directory. Cache locations must be separate
-from source inputs and workflow evidence, including Git administration, retained candidate repositories
-and reserved input locations whose files do not yet exist.
-
-The cache is expendable acceleration, not evidence or workflow state. Removing
-only the cache leaves prepared evidence and resolved plans usable. A full `cargo clean`
-removes Cargo's entire target directory; evidence intended to survive that cleanup
-belongs outside the target directory.
-Cached observations never replace command-entry or post-mutation source,
-candidate or history admission.
-Corrupt entries and cache I/O failures produce advisory diagnostics and fresh acquisition.
-Unavailable cache locations or incomplete cache-safety inventories disable storage.
-This does not relax the inputs required for classification or prepared evidence.
+Evidence intended to survive a full `cargo clean` belongs outside Cargo's target directory.
 
 ### Standalone planning
 

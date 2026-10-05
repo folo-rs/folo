@@ -14,12 +14,13 @@ use std::rc::Rc;
 use std::{fs, io, mem, str};
 
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
-use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::git::{
     BLOB_BATCH_BYTES, BlobReader, CommitHeaders, GitObjectContext, GitRepo, HistoricalTree,
     LiveObservations, TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode,
 };
-use crp_workspace::lockfile::{Closure, ClosureChange, InstallationGraph, Lockfile};
+use crp_workspace::lockfile::{
+    Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
+};
 use crp_workspace::manifest::{
     DEFAULT_README_FILES, PackageIdentity, PackageManifest, PathCase, WorkspaceInherit,
     WorkspaceMembers, cargo_config_paths, collect_registry_indices, installation_error,
@@ -29,9 +30,9 @@ use crp_workspace::manifest::{
 };
 #[cfg(test)]
 use crp_workspace::manifest::{parse_package_manifest, parse_workspace_members};
-use crp_workspace::manifest_document::{ManifestDocument, ManifestDocuments};
+use crp_workspace::manifest_document::ManifestDocuments;
 use crp_workspace::metadata::{
-    ReportedDep, WorkPackage, WorkTree, load_tracked_work_tree_with_documents,
+    ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree_with_documents,
 };
 use crp_workspace::packaging::{PackagingRules, relativize};
 use ohno::AppError;
@@ -41,19 +42,15 @@ use serde::{Deserialize, Serialize, Serializer};
 use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, Presence, TimelineEntry, anticipated_anchor, resolve_anchor};
-use crate::classify::decision::{
-    AnchorInputs, DecisionCache, DecisionInputs, LockInputs, PackageInputs, lock_changes,
-};
 use crate::diff::{FileVersion, file_diff, mode_change_diff};
 use crate::groups::{GroupVerdict, Groups};
 use crate::history::AssessmentHistory;
-use crate::inherited::InheritedInputs;
+use crate::inherited::{InheritedChange, inherited_changes};
 use crate::{
     LockfileClosureUnavailableError, MalformedLockfileError, ReadFileError, SymlinkReleasedError,
     VersionRegressionError,
 };
 
-mod decision;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod fixture;
@@ -136,10 +133,10 @@ impl AcquiredWorkspace {
         release_history: Option<&str>,
         merge_target: Option<&str>,
         verbose: Verbose<'_>,
-        cache: &mut SnapshotCache,
+        cache: &mut Snapshots,
     ) -> Result<Self, AppError> {
         let (work_tree, git) =
-            load_tracked_work_tree_with_documents(manifest_path, &mut cache.documents, verbose)?;
+            load_tracked_work_tree_with_documents(manifest_path, &mut cache.documents)?;
         let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
         let head = git.head()?;
         Ok(Self {
@@ -327,7 +324,7 @@ impl PackageClass {
 /// Each alternative carries exactly what that outcome can be justified by, so
 /// there is no way to express an anchorless failure or an unchanged package that
 /// still holds a patch. Ref: `packages/cargo-release-plan/docs/design.md`, "Package status".
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub enum Verdict {
     /// The package was created on this branch.
     ///
@@ -495,28 +492,24 @@ pub fn classify_with_target(
     merge_target: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<Classification, AppError> {
-    classify_with_cache(
+    classify_with_snapshots(
         manifest_path,
         release_history,
         merge_target,
         verbose,
-        &mut SnapshotCache::new(Cache::resolve(
-            manifest_path,
-            &CacheOptions::Default,
-            verbose,
-        )?),
+        &mut Snapshots::default(),
     )
 }
 
-/// Acquires current inputs and classifies them using content-bound caches.
+/// Acquires current inputs and classifies them with operation-owned committed observations.
 ///
 /// Assessed source, configuration and history must remain unchanged during the call.
-pub fn classify_with_cache(
+pub fn classify_with_snapshots(
     manifest_path: &Path,
     release_history: Option<&str>,
     merge_target: Option<&str>,
     verbose: Verbose<'_>,
-    cache: &mut SnapshotCache,
+    cache: &mut Snapshots,
 ) -> Result<Classification, AppError> {
     classify_acquired(
         AcquiredWorkspace::acquire(manifest_path, release_history, merge_target, verbose, cache)?,
@@ -532,7 +525,7 @@ pub fn classify_with_cache(
 pub fn classify_acquired(
     acquired: AcquiredWorkspace,
     verbose: Verbose<'_>,
-    cache: &mut SnapshotCache,
+    cache: &mut Snapshots,
 ) -> Result<Classification, AppError> {
     let AcquiredWorkspace {
         mut work_tree,
@@ -565,10 +558,10 @@ pub fn classify_acquired(
         PathCase::probe(&work_tree.workspace_root),
         work_tree.installation.registries.clone(),
     );
-    let history_snapshot = cache.snapshot(&git, history_commit, verbose)?;
+    let history_snapshot = cache.snapshot(&git, history_commit)?;
     let target_snapshot = history
         .effective_target()
-        .map(|target| cache.snapshot(&git, target, verbose))
+        .map(|target| cache.snapshot(&git, target))
         .transpose()?;
     let projected = target_snapshot.as_ref().map(|snapshot| {
         let target = history
@@ -585,8 +578,10 @@ pub fn classify_acquired(
     let work_root_doc = work_tree.manifests.root(&work_tree.workspace_root);
 
     let commits = git.first_parent_manifest_commits(history_commit, cache.case())?;
+    let mut classes = Vec::new();
+    let groups = Groups::from_workspace(&work_tree);
     let versions = work_tree.target_versions();
-    let exempt: BTreeSet<String> = work_tree
+    let exempt: HashSet<String> = work_tree
         .version_targets
         .iter()
         .filter(|target| {
@@ -598,9 +593,7 @@ pub fn classify_acquired(
         })
         .map(|target| target.name.clone())
         .collect();
-    let mut lockfiles = LockfileCache {
-        storage: cache.storage.clone(),
-        verbose,
+    let mut lockfiles = Lockfiles {
         case: cache.case(),
         work: None,
         anchors: mem::take(&mut cache.lockfiles),
@@ -622,12 +615,11 @@ pub fn classify_acquired(
         cache.case(),
         index_modes,
     )?;
-    let mut packages = Vec::new();
-    let mut locks = BTreeMap::new();
     for package in &work_tree.packages {
-        packages.push(acquire_package(
+        let class = classify_one(
             package,
             &work_tree,
+            &groups,
             &git,
             &observations,
             history_commit,
@@ -637,69 +629,14 @@ pub fn classify_acquired(
             work_root_doc,
             cache,
             &mut lockfiles,
-            &mut locks,
             verbose,
-        )?);
+        )?;
+        classes.push(class);
     }
     cache.lockfiles = lockfiles.anchors;
 
-    let inputs = DecisionInputs {
-        objects: cache.objects.clone(),
-        case: cache.case(),
-        prefix: git.prefix().to_owned(),
-        release_history: history.release_history.clone(),
-        merge_target: history.merge_target.clone(),
-        versions,
-        exact_dependencies: work_tree
-            .exact_dependencies
-            .iter()
-            .map(|edge| {
-                (
-                    edge.source.clone(),
-                    edge.target.clone(),
-                    edge.requirement.clone(),
-                    to_git_separators(
-                        &edge
-                            .manifest_path
-                            .strip_prefix(&work_tree.workspace_root)
-                            .unwrap_or(&edge.manifest_path)
-                            .to_string_lossy(),
-                        MAIN_SEPARATOR,
-                    )
-                    .into_owned(),
-                    edge.location.clone(),
-                )
-            })
-            .collect(),
-        exempt,
-        locks,
-        packages,
-    };
-    let decisions = cache.decisions.get(&inputs, &cache.storage, verbose, || {
-        inputs.compute(
-            |ids| git.blob_sizes(ids),
-            |ids| cache.objects.blobs(&git, ids, &cache.storage, verbose),
-        )
-    })?;
-
-    let mut classification = Classification {
-        head,
-        release_history_revision,
-        release_history: history.release_history.clone(),
-        merge_target: history.merge_target.clone(),
-        packages: Vec::new(),
-        groups: BTreeMap::new(),
-        membership: Groups::default(),
-        work_tree,
-        git,
-        case: cache.case(),
-        observations,
-    };
-    decisions.apply(&inputs, &mut classification);
-    for class in &classification.packages {
-        log_evidence(&verbose, class);
-    }
-    for (name, verdict) in &classification.groups {
+    let group_verdicts = groups.verdicts(&versions, &exempt);
+    for (name, verdict) in &group_verdicts {
         let members: Vec<Cow<'_, str>> = verdict
             .members()
             .iter()
@@ -718,16 +655,29 @@ pub fn classify_acquired(
         });
     }
 
-    Ok(classification)
+    Ok(Classification {
+        head,
+        release_history_revision,
+        release_history: history.release_history.clone(),
+        merge_target: history.merge_target.clone(),
+        packages: classes,
+        groups: group_verdicts,
+        membership: groups,
+        work_tree,
+        git,
+        case: cache.case(),
+        observations,
+    })
 }
 
 #[expect(
     clippy::too_many_arguments,
     reason = "classification needs the work-tree package, both trees, the first-parent walk, and both snapshot caches together"
 )]
-fn acquire_package(
+fn classify_one(
     package: &WorkPackage,
     work_tree: &WorkTree,
+    groups: &Groups,
     git: &GitRepo,
     observations: &LiveObservations,
     history_commit: &str,
@@ -735,37 +685,16 @@ fn acquire_package(
     history_snapshot: &CommitSnapshot,
     projected: Option<(&str, &CommitSnapshot)>,
     work_root_doc: &DocumentMut,
-    cache: &mut SnapshotCache,
-    lockfiles: &mut LockfileCache<'_>,
-    locks: &mut BTreeMap<String, LockInputs>,
+    cache: &mut Snapshots,
+    lockfiles: &mut Lockfiles,
     verbose: Verbose<'_>,
-) -> Result<PackageInputs, AppError> {
+) -> Result<PackageClass, AppError> {
     let name = &package.manifest.name;
     // Diagnostics never render a repository-controlled name raw.
     // Ref: packages/cargo-release-plan/docs/implementation.md, "Diagnostics".
     let shown = quote_path(name);
-    let inputs = |untracked, anchor| PackageInputs {
-        name: name.clone(),
-        version: package.manifest.version.clone(),
-        directory: package.manifest.directory.clone(),
-        manifest: ManifestDocument::from_document(
-            work_tree
-                .manifests
-                .documents
-                .get(&package.manifest_path)
-                .expect("every selected package manifest belongs to this acquisition"),
-        ),
-        dependencies: package
-            .dependencies
-            .iter()
-            .map(|dep| (dep.clone(), dep.kind))
-            .collect(),
-        consumer_contract: package.consumer_contract,
-        resources: package.resources.clone(),
-        auto_readme: package.manifest.auto_readme,
-        untracked,
-        anchor,
-    };
+    let group = groups.group_of(name).map(ToOwned::to_owned);
+    let dependents = dependents_of(&work_tree.packages, name);
 
     let anticipated = projected.and_then(|(target, snapshot)| {
         anticipated_anchor(
@@ -780,7 +709,7 @@ fn acquire_package(
     let anchor = if let Some(anchor) = anticipated {
         anchor
     } else if history_snapshot.packages.contains_key(name) {
-        let timeline = build_timeline(git, name, commits, cache, verbose)?;
+        let timeline = build_timeline(git, name, commits, cache)?;
         resolve_anchor(name, &timeline)?
     } else {
         // A package the baseline does not publish has no released version to
@@ -815,7 +744,22 @@ fn acquire_package(
             Some(observations),
         )?;
         log_untracked(&verbose, name, untracked.len());
-        return Ok(inputs(untracked, None));
+        return Ok(PackageClass {
+            name: name.clone(),
+            declared_version: package.manifest.version.clone(),
+            group,
+            verdict: Verdict::New,
+            stat: DiffStat {
+                files: 0,
+                insertions: 0,
+                deletions: 0,
+            },
+            untracked,
+            dependencies: package.dependencies.clone(),
+            dependents,
+            consumer_contract: package.consumer_contract,
+            manifest_path: package.manifest_path.clone(),
+        });
     };
     let short_anchor = short_commit(&anchor.commit);
     verbose.note(|| format!(
@@ -826,13 +770,13 @@ fn acquire_package(
         package.manifest.version
     ));
 
-    let anchor_snapshot = cache.snapshot(git, &anchor.commit, verbose)?;
+    let anchor_snapshot = cache.snapshot(git, &anchor.commit)?;
     let anchor_pkg = anchor_snapshot
         .packages
         .get(name)
         .expect("the anchor commit is the newest commit at which the anchor version was observed, and both the timeline and this snapshot read that version from the same cache, so the package is present here");
 
-    let (files, untracked) = acquire_package_files(
+    let (changed_files, patch, stat, untracked) = diff_package_with_tree(
         git,
         name,
         &PackageSide {
@@ -847,15 +791,27 @@ fn acquire_package(
         Some(observations),
     )?;
 
-    let inherited = InheritedInputs::acquire(
+    let mut changed = changed_files;
+    let inherited: Vec<InheritedChange> = inherited_changes(
         &package.manifest.inherited,
         &anchor_snapshot.root_doc,
         work_root_doc,
     );
+    for item in inherited {
+        verbose.note(|| {
+            format!(
+                "{shown}: inherited {} changed between the anchor and the work tree, so the root \
+             manifest is in scope for this package",
+                quote_path(&item.field)
+            )
+        });
+        changed.push(ChangedItem::Inherited { field: item.field });
+    }
+
     log_untracked(&verbose, name, untracked.len());
-    let (old_lock, new_lock) = acquire_lockfiles(
+
+    for (dependency, change) in lockfile_closure_changes(
         lockfiles,
-        locks,
         git,
         work_tree,
         name,
@@ -863,47 +819,38 @@ fn acquire_package(
         package,
         &anchor.commit,
         &anchor_snapshot.installation,
-    )?;
-    Ok(inputs(
-        untracked,
-        Some(AnchorInputs {
-            anchor,
-            files,
-            inherited,
-            old_lock,
-            new_lock,
-        }),
-    ))
-}
-
-/// Replays evidence diagnostics from the admitted decision, including on a cache hit.
-fn log_evidence(notes: &impl NoteSink, class: &PackageClass) {
-    for changed in class.changed() {
-        match changed {
-            ChangedItem::Inherited { field } => notes.note(|| {
-                format!(
-                    "{}: inherited {} changed between the anchor and the work tree, so the root \
-                 manifest is in scope for this package",
-                    quote_path(&class.name),
-                    quote_path(field)
-                )
-            }),
-            ChangedItem::Lockfile { dependency, change } => notes.note(|| {
-                format!(
-                    "{}: the locked identity of {} is {} between the anchor and the work \
+    )? {
+        verbose.note(|| {
+            format!(
+                "{shown}: the locked identity of {} is {} between the anchor and the work \
                  tree, and this package has an installable binary target at one or both \
                  endpoints, so the dependency is released content",
-                    quote_path(&class.name),
-                    quote_path(dependency),
-                    change
-                )
-            }),
-            ChangedItem::Package { .. } => {}
-        }
+                quote_path(&dependency),
+                change.as_str()
+            )
+        });
+        changed.push(ChangedItem::Lockfile {
+            dependency,
+            change: change.as_str().to_owned(),
+        });
     }
-    if class.anchor().is_some() {
-        log_status(notes, class);
-    }
+
+    let verdict = Verdict::anchored(name, &package.manifest.version, anchor, changed, patch)?;
+    let class = PackageClass {
+        name: name.clone(),
+        declared_version: package.manifest.version.clone(),
+        group,
+        verdict,
+        stat,
+        untracked,
+        dependencies: package.dependencies.clone(),
+        dependents,
+        consumer_contract: package.consumer_contract,
+        manifest_path: package.manifest_path.clone(),
+    };
+    log_status(&verbose, &class);
+
+    Ok(class)
 }
 
 /// Explains an anchored classification without recomputing its verdict.
@@ -929,22 +876,20 @@ fn build_timeline(
     git: &GitRepo,
     name: &str,
     commits: &[String],
-    cache: &mut SnapshotCache,
-    verbose: Verbose<'_>,
+    cache: &mut Snapshots,
 ) -> Result<Vec<TimelineEntry>, AppError> {
     // Header memory has a separate lifetime from live boundary verdicts. Split ownership
     // for the callbacks and restore it even when snapshot or history acquisition fails.
     let mut headers = mem::take(&mut cache.headers);
-    let storage = cache.storage.clone();
     let objects = cache.objects.clone();
     let result = build_timeline_with(
         commits,
         |commit| {
-            let snapshot = cache.snapshot(git, commit, verbose)?;
+            let snapshot = cache.snapshot(git, commit)?;
             Ok(snapshot_presence(&snapshot, name))
         },
         |commit| {
-            let parent = headers.has_parent(git, commit, &objects, &storage, verbose)?;
+            let parent = headers.has_parent(git, commit, &objects)?;
             git.parent_boundary_with_header(commit, parent)
         },
     );
@@ -1083,9 +1028,7 @@ pub fn diff_package(
     work_side: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     let tree = HistoricalTree::new(git.ls_tree(anchor_commit, &[])?);
-    diff_package_with_tree(git, name, anchor, work_side, &tree, None, |ids| {
-        read_patch_blobs(git, ids)
-    })
+    diff_package_with_tree(git, name, anchor, work_side, &tree, None)
 }
 
 #[cfg_attr(test, mutants::skip)] // Native current-input acquisition and blob reads.
@@ -1096,26 +1039,7 @@ fn diff_package_with_tree(
     work_side: &PackageSide<'_>,
     anchor_tree: &HistoricalTree,
     observations: Option<&LiveObservations>,
-    mut read_blobs: impl FnMut(&[&str]) -> Result<Vec<Vec<u8>>, AppError>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
-    let (files, untracked) =
-        acquire_package_files(git, name, anchor, work_side, anchor_tree, observations)?;
-    let identified = files.identify();
-    let ids = identified.blob_ids();
-    let mut reader = BlobReader::new(&ids, BLOB_BATCH_BYTES, |ids| git.blob_sizes(ids))?;
-    let (changed, patch, stat) = identified.render(|id| reader.read(id, &mut read_blobs))?;
-    Ok((changed, patch, stat, untracked))
-}
-
-#[cfg_attr(test, mutants::skip)] // Native selection, symlink admission and clean conversion.
-fn acquire_package_files(
-    git: &GitRepo,
-    name: &str,
-    anchor: &PackageSide<'_>,
-    work_side: &PackageSide<'_>,
-    anchor_tree: &HistoricalTree,
-    observations: Option<&LiveObservations>,
-) -> Result<(ReleasedFiles, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
     // resource may sit outside the package directory or outside its packaging
     // rules, so the directory listing does not cover it. Querying Git for those
@@ -1144,14 +1068,18 @@ fn acquire_package_files(
     let work_modes = observed_work_tree_modes(git, work_side, &tracked_resources, observations)?;
     let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
 
-    let files = PackageDiff {
+    let identified = PackageDiff {
         anchor_files: &anchor_files,
         work_files,
         anchor_tree,
         work_modes: &work_modes,
         work_ids: &work_ids,
     }
-    .capture();
+    .identify();
+    let ids = identified.blob_ids();
+    let mut reader = BlobReader::new(&ids, BLOB_BATCH_BYTES, |ids| git.blob_sizes(ids))?;
+    let (changed, patch, stat) =
+        identified.render(|id| reader.read(id, |ids| read_patch_blobs(git, ids)))?;
     let untracked = observed_untracked_released(
         git,
         work_side,
@@ -1159,7 +1087,7 @@ fn acquire_package_files(
         &work.present_tracked,
         observations,
     )?;
-    Ok((files, untracked))
+    Ok((changed, patch, stat, untracked))
 }
 
 fn read_patch_blobs(git: &GitRepo, ids: &[&str]) -> Result<Vec<Vec<u8>>, AppError> {
@@ -1181,8 +1109,8 @@ struct PackageDiff<'a> {
     work_ids: &'a HashMap<String, String>,
 }
 
-impl PackageDiff<'_> {
-    fn capture(&self) -> ReleasedFiles {
+impl<'a> PackageDiff<'a> {
+    fn identify(&self) -> IdentifiedDiff<'a> {
         let Self {
             anchor_files,
             work_files,
@@ -1219,10 +1147,13 @@ impl PackageDiff<'_> {
                 }
                 _ => None,
             };
+            if old_id == new_id && mode_change.is_none() {
+                continue;
+            }
             entries.push(ChangedFile {
-                path: rel.to_owned(),
-                old_id: old_id.map(str::to_owned),
-                new_id: new_id.map(str::to_owned),
+                path: rel,
+                old_id,
+                new_id,
                 old_mode: tree_mode(anchor_files.get(rel).is_some_and(|path| {
                     anchor_tree
                         .entry(path)
@@ -1236,31 +1167,13 @@ impl PackageDiff<'_> {
                 mode_change,
             });
         }
-        ReleasedFiles { entries }
-    }
-}
-
-/// All selected endpoints, including equal files, acquired before policy or rendering.
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct ReleasedFiles {
-    entries: Vec<ChangedFile>,
-}
-
-impl ReleasedFiles {
-    fn identify(&self) -> IdentifiedDiff<'_> {
-        IdentifiedDiff {
-            entries: self
-                .entries
-                .iter()
-                .filter(|entry| entry.old_id != entry.new_id || entry.mode_change.is_some())
-                .collect(),
-        }
+        IdentifiedDiff { entries }
     }
 }
 
 /// Deterministically ordered changes; no content acquisition or live path lookup remains.
 struct IdentifiedDiff<'a> {
-    entries: Vec<&'a ChangedFile>,
+    entries: Vec<ChangedFile<'a>>,
 }
 
 impl IdentifiedDiff<'_> {
@@ -1268,11 +1181,7 @@ impl IdentifiedDiff<'_> {
         self.entries
             .iter()
             .filter(|entry| entry.old_id != entry.new_id)
-            .flat_map(|entry| {
-                [entry.old_id.as_deref(), entry.new_id.as_deref()]
-                    .into_iter()
-                    .flatten()
-            })
+            .flat_map(|entry| [entry.old_id, entry.new_id].into_iter().flatten())
             .collect()
     }
 
@@ -1291,11 +1200,11 @@ impl IdentifiedDiff<'_> {
                 _ => "modified",
             };
             changed.push(ChangedItem::Package {
-                path: entry.path.clone(),
+                path: entry.path.to_string(),
                 change: kind.to_string(),
             });
             if let Some((old_mode, new_mode)) = entry.mode_change {
-                patch.push_str(&mode_change_diff(&entry.path, old_mode, new_mode).text);
+                patch.push_str(&mode_change_diff(entry.path, old_mode, new_mode).text);
             }
             // Equal object ids prove the bytes are unchanged. This check comes after
             // mode rendering so a mode-only binary change cannot gain a false
@@ -1304,8 +1213,8 @@ impl IdentifiedDiff<'_> {
                 continue;
             }
             // The content itself is only needed to render an identity change.
-            let old = entry.old_id.as_deref().map(&mut bytes).transpose()?;
-            let new = entry.new_id.as_deref().map(&mut bytes).transpose()?;
+            let old = entry.old_id.map(&mut bytes).transpose()?;
+            let new = entry.new_id.map(&mut bytes).transpose()?;
             let old_side = old.as_deref().map(|content| FileVersion {
                 content,
                 mode: entry.old_mode,
@@ -1314,7 +1223,7 @@ impl IdentifiedDiff<'_> {
                 content,
                 mode: entry.new_mode,
             });
-            let file_diff = file_diff(&entry.path, old_side, new_side);
+            let file_diff = file_diff(entry.path, old_side, new_side);
             insertions = insertions.saturating_add(file_diff.insertions);
             deletions = deletions.saturating_add(file_diff.deletions);
             patch.push_str(&file_diff.text);
@@ -1330,11 +1239,10 @@ impl IdentifiedDiff<'_> {
 }
 
 /// Presence, immutable content identities and archive modes for one changed path.
-#[derive(Clone, Debug, Serialize)]
-struct ChangedFile {
-    path: String,
-    old_id: Option<String>,
-    new_id: Option<String>,
+struct ChangedFile<'a> {
+    path: &'a str,
+    old_id: Option<&'a str>,
+    new_id: Option<&'a str>,
     old_mode: &'static str,
     new_mode: &'static str,
     mode_change: Option<(&'static str, &'static str)>,
@@ -1908,20 +1816,18 @@ struct CommitSnapshot {
     installation: InstallationGraph,
 }
 
-/// Committed observations and complete-input decision reuse for one operation.
+/// Operation-scoped committed snapshots, never candidate observations or verdicts.
 ///
 /// Ref: docs/implementation.md, "Shared operation and tests".
 #[derive(Debug, Default)]
-pub struct SnapshotCache {
+pub struct Snapshots {
     inner: HashMap<String, Rc<CommitSnapshot>>,
     // Only committed identities survive a pass; candidate bytes must be reacquired.
-    lockfiles: HashMap<String, Rc<Lockfile>>,
+    lockfiles: HashMap<String, Lockfile>,
     context: Option<SnapshotContext>,
-    storage: Cache,
     objects: GitObjectContext,
     headers: CommitHeaders,
     documents: ManifestDocuments,
-    decisions: DecisionCache,
 }
 
 /// Repository and interpretation inputs under which a commit snapshot is reusable.
@@ -1934,20 +1840,7 @@ struct SnapshotContext {
     registries: BTreeMap<String, String>,
 }
 
-impl SnapshotCache {
-    #[must_use]
-    pub fn new(storage: Cache) -> Self {
-        Self {
-            documents: ManifestDocuments::new(storage.clone()),
-            storage,
-            ..Self::default()
-        }
-    }
-
-    pub(crate) fn protect(&self, path: &Path) -> Result<(), AppError> {
-        self.storage.protect(path)
-    }
-
+impl Snapshots {
     fn clear(&mut self) {
         self.inner.clear();
         self.lockfiles.clear();
@@ -1993,14 +1886,9 @@ impl SnapshotCache {
 
     // Native acquisition only on a cache miss; snapshot_with owns reuse and error handling.
     #[cfg_attr(test, mutants::skip)]
-    fn snapshot(
-        &mut self,
-        git: &GitRepo,
-        commit: &str,
-        verbose: Verbose<'_>,
-    ) -> Result<Rc<CommitSnapshot>, AppError> {
-        self.snapshot_with(commit, |context, storage, objects, documents| {
-            let tree = HistoricalTree::load(git, commit, objects, storage, verbose)?;
+    fn snapshot(&mut self, git: &GitRepo, commit: &str) -> Result<Rc<CommitSnapshot>, AppError> {
+        self.snapshot_with(commit, |context, objects, documents| {
+            let tree = HistoricalTree::load(git, commit, objects)?;
             load_snapshot(
                 git,
                 commit,
@@ -2008,7 +1896,6 @@ impl SnapshotCache {
                 &context.registries,
                 &Rc::new(tree),
                 documents,
-                verbose,
             )
         })
     }
@@ -2018,7 +1905,6 @@ impl SnapshotCache {
         commit: &str,
         load: impl FnOnce(
             &SnapshotContext,
-            &Cache,
             &GitObjectContext,
             &mut ManifestDocuments,
         ) -> Result<CommitSnapshot, AppError>,
@@ -2030,18 +1916,13 @@ impl SnapshotCache {
             .context
             .as_ref()
             .expect("classification binds its observation context before using snapshots");
-        let built = Rc::new(load(
-            context,
-            &self.storage,
-            &self.objects,
-            &mut self.documents,
-        )?);
+        let built = Rc::new(load(context, &self.objects, &mut self.documents)?);
         self.inner.insert(commit.to_string(), Rc::clone(&built));
         Ok(built)
     }
 }
 
-// Git acquisitions are native; load_snapshot_with reconstructs members from captured observations.
+// Git acquisitions are native; load_snapshot_documents reconstructs captured observations.
 #[cfg_attr(test, mutants::skip)]
 fn load_snapshot(
     git: &GitRepo,
@@ -2050,7 +1931,6 @@ fn load_snapshot(
     registries: &BTreeMap<String, String>,
     tree: &Rc<HistoricalTree>,
     documents: &mut ManifestDocuments,
-    verbose: Verbose<'_>,
 ) -> Result<CommitSnapshot, AppError> {
     let manifests: Vec<_> = tree
         .entries()
@@ -2076,7 +1956,7 @@ fn load_snapshot(
         content
             .map(|content| {
                 if case.is_manifest(path) {
-                    documents.parse(Path::new(path), &content, verbose)
+                    documents.parse(Path::new(path), &content)
                 } else {
                     // Cargo configuration can contain credentials; it is interpreted freshly.
                     parse_document(Path::new(path), &content)
@@ -2087,6 +1967,7 @@ fn load_snapshot(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn load_snapshot_with(
     git: &GitRepo,
     case: PathCase,
@@ -2487,15 +2368,13 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
 /// reparsing workspace-sized lockfiles for every binary package.
 /// Ref: packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
 #[derive(Debug)]
-pub struct LockfileCache<'a> {
-    pub work: Option<Rc<Lockfile>>,
-    pub anchors: HashMap<String, Rc<Lockfile>>,
+pub struct Lockfiles {
+    pub work: Option<Lockfile>,
+    pub anchors: HashMap<String, Lockfile>,
     pub case: PathCase,
-    pub storage: Cache,
-    pub verbose: Verbose<'a>,
 }
 
-impl LockfileCache<'_> {
+impl Lockfiles {
     // Acquires tracked bytes only on a cache miss; anchor_with tests cache identity and parsing.
     #[cfg_attr(test, mutants::skip)]
     pub fn anchor<'a>(
@@ -2504,7 +2383,7 @@ impl LockfileCache<'_> {
         name: &str,
         commit: &str,
         path: &str,
-    ) -> Result<&'a Rc<Lockfile>, AppError> {
+    ) -> Result<&'a Lockfile, AppError> {
         let case = self.case;
         self.anchor_with(name, commit, path, || {
             let paths = git.ls_tree_paths(commit)?;
@@ -2521,7 +2400,7 @@ impl LockfileCache<'_> {
         commit: &str,
         path: &str,
         read: impl FnOnce() -> Result<Option<Vec<u8>>, AppError>,
-    ) -> Result<&Rc<Lockfile>, AppError> {
+    ) -> Result<&Lockfile, AppError> {
         if !self.anchors.contains_key(commit) {
             let Some(bytes) = read()? else {
                 return Err(LockfileClosureUnavailableError::new(
@@ -2530,13 +2409,8 @@ impl LockfileCache<'_> {
                 )
                 .into());
             };
-            let lockfile = Lockfile::parse_cached(
-                &decode_lockfile(bytes, path)?,
-                path,
-                &self.storage,
-                self.verbose,
-            )?;
-            self.anchors.insert(commit.to_owned(), Rc::new(lockfile));
+            let lockfile = Lockfile::parse(&decode_lockfile(bytes, path)?, path)?;
+            self.anchors.insert(commit.to_owned(), lockfile);
         }
         Ok(self
             .anchors
@@ -2549,7 +2423,7 @@ impl LockfileCache<'_> {
         work_tree: &WorkTree,
         name: &str,
         git_path: &str,
-    ) -> Result<&'a Rc<Lockfile>, AppError> {
+    ) -> Result<&'a Lockfile, AppError> {
         if self.work.is_none() {
             let work_path = work_tree.workspace_root.join(LOCKFILE_FILE_NAME);
             let Some(bytes) = read_optional_bytes(&work_path, name, git_path)? else {
@@ -2559,12 +2433,10 @@ impl LockfileCache<'_> {
                 )
                 .into());
             };
-            self.work = Some(Rc::new(Lockfile::parse_cached(
+            self.work = Some(Lockfile::parse(
                 &decode_lockfile(bytes, git_path)?,
                 git_path,
-                &self.storage,
-                self.verbose,
-            )?));
+            )?);
         }
         Ok(self
             .work
@@ -2584,7 +2456,7 @@ impl LockfileCache<'_> {
     reason = "each endpoint supplies its target, lockfile and installation declarations"
 )]
 pub fn lockfile_closure_changes(
-    cache: &mut LockfileCache<'_>,
+    cache: &mut Lockfiles,
     git: &GitRepo,
     work_tree: &WorkTree,
     name: &str,
@@ -2593,76 +2465,36 @@ pub fn lockfile_closure_changes(
     anchor_commit: &str,
     anchor_installation: &InstallationGraph,
 ) -> Result<Vec<(String, ClosureChange)>, AppError> {
-    let mut locks = BTreeMap::new();
-    let (anchor, work) = acquire_lockfiles(
-        cache,
-        &mut locks,
-        git,
-        work_tree,
-        name,
-        anchor_package,
-        work_package,
-        anchor_commit,
-        anchor_installation,
-    )?;
-    lock_changes(
-        &locks,
-        anchor.as_deref(),
-        work.as_deref(),
-        name,
-        &anchor_package.version,
-        &work_package.manifest.version,
-    )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Each endpoint supplies its target and graph; the pass owns shared lock observations."
-)]
-#[cfg_attr(test, mutants::skip)] // Native lock acquisition; endpoint selection has boundary coverage.
-fn acquire_lockfiles(
-    cache: &mut LockfileCache<'_>,
-    locks: &mut BTreeMap<String, LockInputs>,
-    git: &GitRepo,
-    work_tree: &WorkTree,
-    name: &str,
-    anchor_package: &HistoricalPackage,
-    work_package: &WorkPackage,
-    anchor_commit: &str,
-    anchor_installation: &InstallationGraph,
-) -> Result<(Option<String>, Option<String>), AppError> {
-    // Non-object spelling distinguishes the shared worktree graph from exact commit keys.
-    const WORK: &str = "work";
     let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
     let anchor = if anchor_package.has_lockfile_target {
-        if !locks.contains_key(anchor_commit) {
-            locks.insert(
-                anchor_commit.to_owned(),
-                LockInputs {
-                    lockfile: Rc::clone(cache.anchor(git, name, anchor_commit, &git_path)?),
-                    installation: anchor_installation.clone(),
-                },
-            );
-        }
-        Some(anchor_commit.to_owned())
+        let lockfile = cache.anchor(git, name, anchor_commit, &git_path)?;
+        required_closure(
+            lockfile.closure(
+                name,
+                &anchor_package.version.to_string(),
+                anchor_installation,
+            )?,
+            name,
+            "the anchor Cargo.lock does not identify an installation closure at the declared version and configured sources",
+        )?
     } else {
-        None
+        Closure::new()
     };
     let work = if work_package.has_lockfile_target {
-        if !locks.contains_key(WORK) {
-            locks.insert(
-                WORK.to_owned(),
-                LockInputs {
-                    lockfile: Rc::clone(cache.work(work_tree, name, &git_path)?),
-                    installation: work_tree.installation.clone(),
-                },
-            );
-        }
-        Some(WORK.to_owned())
+        let lockfile = cache.work(work_tree, name, &git_path)?;
+        required_closure(
+            lockfile.closure(
+                name,
+                &work_package.manifest.version.to_string(),
+                &work_tree.installation,
+            )?,
+            name,
+            "the work-tree Cargo.lock does not identify an installation closure at the declared version and configured sources; refresh Cargo.lock",
+        )?
     } else {
-        None
+        Closure::new()
     };
-    Ok((anchor, work))
+    Ok(closure_changes(&anchor, &work))
 }
 
 fn required_closure(
@@ -2834,7 +2666,7 @@ mod tests {
 
     use static_assertions::assert_impl_all;
 
-    assert_impl_all!(SnapshotCache: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Snapshots: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(AcquiredWorkspace: UnwindSafe, RefUnwindSafe);
 
     #[test]
@@ -2852,7 +2684,7 @@ mod tests {
         );
     }
 
-    use crp_workspace::git::testing::unopened;
+    use crp_workspace::git::testing::{object_context, unopened};
     use crp_workspace::inherited::InheritedKeys;
     use crp_workspace::manifest::{InstallationDependencies, TargetDiscovery};
 
@@ -2861,7 +2693,7 @@ mod tests {
     #[test]
     fn snapshot_case_controls_path_identity() {
         for case in [PathCase::Sensitive, PathCase::Insensitive] {
-            let mut cache = SnapshotCache::default();
+            let mut cache = Snapshots::default();
             cache.bind(
                 &unopened(Path::new("repository")),
                 Path::new("workspace"),
@@ -2886,8 +2718,8 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_misses_borrow_the_owners_context_storage_and_documents() {
-        let mut cache = SnapshotCache::default();
+    fn snapshot_misses_borrow_the_owners_context_and_documents() {
+        let mut cache = Snapshots::default();
         cache.bind(
             &unopened(Path::new("repository")),
             Path::new("workspace"),
@@ -2895,16 +2727,14 @@ mod tests {
             BTreeMap::new(),
         );
         let context = ptr::from_ref(cache.context.as_ref().unwrap());
-        let storage = ptr::from_ref(&cache.storage);
         let objects = ptr::from_ref(&cache.objects);
         let documents = ptr::from_ref(&cache.documents);
         for commit in ["first", "second"] {
             cache
                 .snapshot_with(
                     commit,
-                    |actual_context, actual_storage, actual_objects, actual_documents| {
+                    |actual_context, actual_objects, actual_documents| {
                         assert!(ptr::eq(actual_context, context));
-                        assert!(ptr::eq(actual_storage, storage));
                         assert!(ptr::eq(actual_objects, objects));
                         assert!(ptr::eq(actual_documents, documents));
                         Ok(empty_snapshot())
@@ -2917,7 +2747,7 @@ mod tests {
     #[test]
     fn snapshots_reuse_only_successful_observations_of_the_requested_commit() {
         let git = unopened(Path::new("repository"));
-        let mut cache = SnapshotCache::default();
+        let mut cache = Snapshots::default();
         cache.bind(
             &git,
             Path::new("workspace"),
@@ -2925,11 +2755,11 @@ mod tests {
             BTreeMap::new(),
         );
         let first = cache
-            .snapshot_with("first", |_, _, _, _| Ok(empty_snapshot()))
+            .snapshot_with("first", |_, _, _| Ok(empty_snapshot()))
             .unwrap();
         cache.lockfiles.insert(
             "first".to_string(),
-            Rc::new(Lockfile::parse("version = 4", "lock").unwrap()),
+            Lockfile::parse("version = 4", "lock").unwrap(),
         );
         cache.bind(
             &git,
@@ -2938,19 +2768,17 @@ mod tests {
             BTreeMap::new(),
         );
         let reused = cache
-            .snapshot_with("first", |_, _, _, _| panic!("cached"))
+            .snapshot_with("first", |_, _, _| panic!("cached"))
             .unwrap();
         assert!(Rc::ptr_eq(&first, &reused));
         assert!(cache.lockfiles.contains_key("first"));
         let error = cache
-            .snapshot_with("second", |_, _, _, _| {
-                Err(io::Error::other("snapshot").into())
-            })
+            .snapshot_with("second", |_, _, _| Err(io::Error::other("snapshot").into()))
             .unwrap_err();
         assert!(error.find_source::<io::Error>().is_some());
         assert_eq!(cache.inner.len(), 1);
         let second = cache
-            .snapshot_with("second", |_, _, _, _| Ok(empty_snapshot()))
+            .snapshot_with("second", |_, _, _| Ok(empty_snapshot()))
             .unwrap();
         assert!(!Rc::ptr_eq(&first, &second));
         assert_eq!(cache.inner.len(), 2);
@@ -2958,30 +2786,46 @@ mod tests {
 
     #[test]
     fn git_interpretation_changes_invalidate_every_retained_observation() {
-        let mut context = serde_json::to_value(GitObjectContext::default()).unwrap();
-        *context.get_mut("format").unwrap() = "sha1".into();
-        let context: GitObjectContext = serde_json::from_value(context).unwrap();
-        let mut cache = SnapshotCache::default();
-        cache
+        let context = object_context("sha1");
+        let mut snapshots = Snapshots::default();
+        snapshots
             .inner
             .insert("commit".into(), Rc::new(empty_snapshot()));
-        cache.lockfiles.insert(
+        snapshots.lockfiles.insert(
             "commit".into(),
-            Rc::new(Lockfile::parse("version = 4", "lock").unwrap()),
+            Lockfile::parse("version = 4", "lock").unwrap(),
         );
-        cache.headers.parent_with("commit", || Ok(false)).unwrap();
-        cache.bind_objects(context.clone());
-        assert_eq!(cache.objects, context);
-        assert!(cache.inner.is_empty());
-        assert!(cache.lockfiles.is_empty());
-        assert!(cache.headers.parent_with("commit", || Ok(true)).unwrap());
+        snapshots
+            .headers
+            .parent_with("commit", || Ok(false))
+            .unwrap();
+        snapshots.bind_objects(context.clone());
+        assert_eq!(snapshots.objects, context);
+        assert!(snapshots.inner.is_empty());
+        assert!(snapshots.lockfiles.is_empty());
+        assert!(
+            snapshots
+                .headers
+                .parent_with("commit", || Ok(true))
+                .unwrap()
+        );
 
-        cache
+        snapshots
             .inner
             .insert("commit".into(), Rc::new(empty_snapshot()));
-        cache.bind_objects(context);
-        assert_eq!(cache.inner.len(), 1);
-        assert!(cache.headers.parent_with("commit", || panic!()).unwrap());
+        snapshots.lockfiles.insert(
+            "commit".into(),
+            Lockfile::parse("version = 4", "lock").unwrap(),
+        );
+        snapshots.bind_objects(context);
+        assert_eq!(snapshots.inner.len(), 1);
+        assert!(snapshots.lockfiles.contains_key("commit"));
+        assert!(
+            snapshots
+                .headers
+                .parent_with("commit", || panic!())
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3015,7 +2859,7 @@ mod tests {
             (git.clone(), workspace, PathCase::Insensitive, registries),
             (git, workspace, PathCase::Sensitive, BTreeMap::new()),
         ] {
-            let mut cache = SnapshotCache::default();
+            let mut cache = Snapshots::default();
             cache.bind(
                 &unopened(Path::new("repository")),
                 Path::new("workspace"),
@@ -3023,18 +2867,18 @@ mod tests {
                 BTreeMap::from([("custom".to_string(), "registry-index".to_string())]),
             );
             let before = cache
-                .snapshot_with("commit", |_, _, _, _| Ok(empty_snapshot()))
+                .snapshot_with("commit", |_, _, _| Ok(empty_snapshot()))
                 .unwrap();
             cache.lockfiles.insert(
                 "commit".to_string(),
-                Rc::new(Lockfile::parse("version = 4", "lock").unwrap()),
+                Lockfile::parse("version = 4", "lock").unwrap(),
             );
             assert!(!cache.headers.parent_with("commit", || Ok(false)).unwrap());
             cache.bind(&git, workspace, case, registries);
             assert!(cache.lockfiles.is_empty());
             assert!(cache.headers.parent_with("commit", || Ok(true)).unwrap());
             let after = cache
-                .snapshot_with("commit", |_, _, _, _| Ok(empty_snapshot()))
+                .snapshot_with("commit", |_, _, _| Ok(empty_snapshot()))
                 .unwrap();
             assert!(!Rc::ptr_eq(&before, &after));
         }

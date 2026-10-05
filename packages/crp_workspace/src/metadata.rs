@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf, absolute};
 use std::rc::Rc;
 use std::{fs, io};
 
-use crp_diag::{Quotable as _, Verbose};
+use crp_diag::Quotable as _;
 use ohno::AppError;
 use semver::{Op, Version, VersionReq};
 use serde::Deserialize;
@@ -167,7 +167,7 @@ pub struct ReportedDep {
 /// Only a normal dependency can supply types to a library's public API. A
 /// development dependency additionally does not survive packaging when it is
 /// declared without a version, so it reaches no published manifest at all.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DepKind {
     #[default]
     Normal,
@@ -450,18 +450,13 @@ impl TrackedMetadata<'_> {
 
 /// Loads the current workspace while restricting release inputs to tracked files.
 pub fn load_tracked_work_tree(manifest_path: &Path) -> Result<(WorkTree, GitRepo), AppError> {
-    load_tracked_work_tree_with_documents(
-        manifest_path,
-        &mut ManifestDocuments::default(),
-        Verbose::new(false, &crp_diag::Discard),
-    )
+    load_tracked_work_tree_with_documents(manifest_path, &mut ManifestDocuments::default())
 }
 
 /// Acquires current metadata and bytes before consulting content-keyed parsed syntax.
 pub fn load_tracked_work_tree_with_documents(
     manifest_path: &Path,
     documents: &mut ManifestDocuments,
-    verbose: Verbose<'_>,
 ) -> Result<(WorkTree, GitRepo), AppError> {
     let metadata = query_metadata(manifest_path)?;
     let workspace_root = PathBuf::from(&metadata.workspace_root);
@@ -474,11 +469,11 @@ pub fn load_tracked_work_tree_with_documents(
     };
     let work_tree = work_tree_from_metadata_parsed_with(
         &metadata,
-        &tracked,
+        tracked,
         |path| fs::read_to_string(path),
         |path| fs::canonicalize(path),
         |path| fs::symlink_metadata(path).map(|metadata| metadata.is_file()),
-        |path, text| documents.parse(path, text, verbose),
+        |path, text| documents.parse(path, text),
     )?;
     Ok((work_tree, git))
 }
@@ -569,7 +564,12 @@ fn work_tree_from_metadata_with(
 ) -> Result<WorkTree, AppError> {
     work_tree_from_metadata_parsed_with(
         metadata,
-        tracked,
+        TrackedMetadata {
+            git: tracked.git,
+            workspace_root: tracked.workspace_root,
+            paths: tracked.paths.clone(),
+            case: tracked.case,
+        },
         read,
         canonicalize,
         regular,
@@ -579,7 +579,7 @@ fn work_tree_from_metadata_with(
 
 fn work_tree_from_metadata_parsed_with(
     metadata: &MetadataJson,
-    tracked: &TrackedMetadata<'_>,
+    tracked: TrackedMetadata<'_>,
     mut read: impl FnMut(&Path) -> io::Result<String>,
     mut canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
     mut regular: impl FnMut(&Path) -> io::Result<bool>,
@@ -768,7 +768,7 @@ fn work_tree_from_metadata_parsed_with(
 
     packages.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
 
-    installation.registries = work_tree_registry_indices_with(tracked, &mut read)?;
+    installation.registries = work_tree_registry_indices_with(&tracked, &mut read)?;
     installation.registries.extend(registry_indices(
         metadata,
         &selected_member_ids,
@@ -778,7 +778,7 @@ fn work_tree_from_metadata_parsed_with(
     ));
     if packages.iter().any(|package| package.has_lockfile_target) {
         installation.patches = installation_patches(root_manifest);
-        resolve_installation_paths_with(&mut installation, &manifests, tracked, &mut read);
+        resolve_installation_paths_with(&mut installation, &manifests, &tracked, &mut read);
     }
 
     let mut member_manifests: Vec<PathBuf> = members_by_dir
@@ -796,7 +796,7 @@ fn work_tree_from_metadata_parsed_with(
     Ok(WorkTree {
         workspace_root,
         manifests,
-        tracked_paths: tracked.paths.clone().into(),
+        tracked_paths: tracked.paths.into(),
         packages,
         version_targets,
         exact_dependencies,

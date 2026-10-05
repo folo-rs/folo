@@ -18,13 +18,12 @@ use crp_versioning::analysis_order::run_analysis_order;
 use crp_versioning::apply::run_apply;
 use crp_versioning::inspect_plan::run_inspect_plan;
 use crp_versioning::plan::SCHEMA_VERSION;
-use crp_versioning::preview::{run_prepare_with_cache, run_preview_with_options};
+use crp_versioning::preview::{run_prepare_with_target, run_preview};
 use crp_versioning::propose::{DECISION_SCHEMA_VERSION, run_propose};
-use crp_versioning::report::run_report_with_cache;
+use crp_versioning::report::run_report_with_target;
 use crp_versioning::resolved::run_verify_preview;
 use crp_versioning::semver_targets::run_semver_targets;
-use crp_versioning::{CheckFormat, CheckRequest, check_with_cache};
-use crp_workspace::cache::{Cache, CacheOptions};
+use crp_versioning::{CheckFormat, CheckRequest, check_with_target};
 use ohno::AppError;
 
 use crate::compatibility::{
@@ -38,11 +37,6 @@ use crate::compatibility::{
     reason = "Application code and maintainer tests exhaustively match internal command inputs"
 )]
 pub enum RunInput {
-    /// Applies an explicit storage policy to a classification command.
-    Cached {
-        command: Box<Self>,
-        cache: CacheOptions,
-    },
     /// Report the installed executable and its artifact contracts without a workspace.
     Version,
     /// Check crates.io publication identities without uploading or changing source.
@@ -323,12 +317,7 @@ pub enum RunOutcome {
 /// completed. A failing check is a [`RunOutcome::Check`] with
 /// `passed: false`, not an error.
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
-    run_with_cache(input, &CacheOptions::Default)
-}
-
-fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunOutcome, AppError> {
     match input {
-        RunInput::Cached { command, cache } => run_with_cache(command, cache),
         RunInput::Version => Ok(RunOutcome::ArtifactQuery {
             message: serde_json::to_string(&serde_json::json!({
                 "tool_version": env!("CARGO_PKG_VERSION"),
@@ -377,7 +366,6 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
                 output,
                 *deny_findings,
                 *verbose,
-                cache_options,
             )?;
             Ok(RunOutcome::Check {
                 passed,
@@ -560,17 +548,12 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
             manifest_path,
             verbose,
         } => {
-            let message = run_prepare_with_cache(
+            let message = run_prepare_with_target(
                 output,
                 release_history.as_deref(),
                 merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(
-                    manifest_path,
-                    cache_options,
-                    Verbose::new(*verbose, &crp_diag::Stderr),
-                )?,
             )?;
             Ok(RunOutcome::Prepare { message })
         }
@@ -581,13 +564,12 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
             manifest_path,
             verbose,
         } => {
-            let message = run_preview_with_options(
+            let message = run_preview(
                 plan,
                 prepared,
                 output,
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                cache_options,
             )?;
             Ok(RunOutcome::Preview { message })
         }
@@ -598,17 +580,12 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
             manifest_path,
             verbose,
         } => {
-            let message = run_report_with_cache(
+            let message = run_report_with_target(
                 out_dir,
                 release_history.as_deref(),
                 merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(
-                    manifest_path,
-                    cache_options,
-                    Verbose::new(*verbose, &crp_diag::Stderr),
-                )?,
             )?;
             Ok(RunOutcome::Report { message })
         }
@@ -628,7 +605,7 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
                     Verbose::new(*verbose, &crp_diag::Stderr),
                 )?;
             }
-            let outcome = check_with_cache(
+            let outcome = check_with_target(
                 &CheckRequest {
                     release_history: release_history.as_deref(),
                     manifest_path,
@@ -637,11 +614,6 @@ fn run_with_cache(input: &RunInput, cache_options: &CacheOptions) -> Result<RunO
                 },
                 merge_target.as_deref(),
                 Verbose::new(*verbose, &crp_diag::Stderr),
-                Cache::resolve(
-                    manifest_path,
-                    cache_options,
-                    Verbose::new(*verbose, &crp_diag::Stderr),
-                )?,
             )?;
             Ok(RunOutcome::Check {
                 passed: outcome.passed,

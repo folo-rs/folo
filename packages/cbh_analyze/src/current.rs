@@ -516,6 +516,92 @@ mod tests {
     }
 
     #[test]
+    fn current_snapshots_reject_each_explicit_discriminant_selector() {
+        let tip = "b".repeat(40);
+        let git = crate::testing::two_commit_history(&"a".repeat(40), &tip);
+        let current =
+            CurrentCollections::new("project", &[snapshot(&tip, LINUX, KEY, 20.0)]).unwrap();
+        // A selector conflicts even when its value agrees with the captured execution.
+        for (engine, target_triple, machine_key) in [
+            (vec!["callgrind".to_owned()], Vec::new(), Vec::new()),
+            (vec!["criterion".to_owned()], Vec::new(), Vec::new()),
+            (Vec::new(), vec![LINUX.to_owned()], Vec::new()),
+            (Vec::new(), vec![WINDOWS.to_owned()], Vec::new()),
+            (Vec::new(), Vec::new(), vec![KEY.to_owned()]),
+            (Vec::new(), Vec::new(), vec![OTHER_KEY.to_owned()]),
+        ] {
+            let options = AnalyzeOptions {
+                engine,
+                target_triple,
+                machine_key,
+                ..AnalyzeOptions::default()
+            };
+            let error = block_on(analyze_with_current(
+                &git,
+                &MemoryStorage::new(),
+                "project",
+                &Config::default(),
+                &options,
+                &AutoDiscriminants {
+                    triple: LINUX.to_owned(),
+                    machine_key: KEY.to_owned(),
+                },
+                "2026-01-02T00:00:00Z".parse().unwrap(),
+                &RecordingReporter::quiet(),
+                false,
+                &synchronous_spawner(),
+                NonZero::<usize>::MIN,
+                Some(&current),
+            ))
+            .unwrap_err();
+            assert!(error.find_source::<InvalidCurrentCollection>().is_some());
+        }
+    }
+
+    #[test]
+    fn ordinary_analysis_accepts_explicit_discriminant_selectors() {
+        let tip = "b".repeat(40);
+        let git = crate::testing::two_commit_history(&"a".repeat(40), &tip);
+        let storage = MemoryStorage::new();
+        let (set, run) = measured(&tip, LINUX, KEY, 20.0);
+        block_on(storage.put_overwrite(
+            &set.clean_key("project", &tip),
+            run.to_json().unwrap().as_bytes(),
+        ))
+        .unwrap();
+        let options = AnalyzeOptions {
+            engine: vec!["callgrind".to_owned()],
+            target_triple: vec![LINUX.to_owned()],
+            machine_key: vec![KEY.to_owned()],
+            json: Some("report.json".into()),
+            no_text: true,
+            ..AnalyzeOptions::default()
+        };
+        let (reports, _) = block_on(analyze_with_current(
+            &git,
+            &storage,
+            "project",
+            &Config::default(),
+            &options,
+            &AutoDiscriminants {
+                triple: WINDOWS.to_owned(),
+                machine_key: OTHER_KEY.to_owned(),
+            },
+            "2026-01-02T00:00:00Z".parse().unwrap(),
+            &RecordingReporter::quiet(),
+            false,
+            &synchronous_spawner(),
+            NonZero::<usize>::MIN,
+            None,
+        ))
+        .unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(reports.json.as_ref().unwrap()).unwrap();
+        assert_eq!(report["census"]["in_scope"], 1);
+        assert_eq!(report["outcome"], "insufficient_baseline");
+    }
+
+    #[test]
     #[cfg_attr(
         miri,
         ignore = "Full minimum-length stored baseline through detection and rendering; small scoped selection tests retain interpreter coverage."

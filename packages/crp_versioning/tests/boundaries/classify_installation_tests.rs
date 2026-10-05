@@ -5,7 +5,6 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crp_versioning::classify::*;
-use crp_workspace::cache::Cache;
 use crp_workspace::git::GitRepo;
 use crp_workspace::lockfile::{ClosureChange, InstallationGraph};
 use crp_workspace::manifest::{
@@ -268,10 +267,8 @@ fn anchor_lockfiles_are_selected_by_commit_not_current_work_tree() {
     }
 }
 
-fn lockfile_cache() -> LockfileCache<'static> {
-    LockfileCache {
-        storage: Cache::default(),
-        verbose: crp_diag::Verbose::new(false, &crp_diag::Discard),
+fn lockfile_cache() -> Lockfiles {
+    Lockfiles {
         work: None,
         anchors: HashMap::new(),
         case: PathCase::Sensitive,

@@ -4,10 +4,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crp_workspace::metadata::WorkTree;
 use semver::Version;
-use serde::{Deserialize, Serialize};
 
 /// Derived version groups keyed by their smallest member and by package name.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Groups {
     pub by_name: BTreeMap<String, Vec<String>>,
     pub by_package: BTreeMap<String, String>,
@@ -136,7 +135,7 @@ impl Groups {
 /// consistency while `report` and `apply` use the group version as the
 /// increment base, so a verdict that reported one without the other would let
 /// the two disagree. Ref: `packages/cargo-release-plan/docs/design.md`, "Version groups".
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroupVerdict {
     pub members: Vec<String>,
     pub state: GroupState,
@@ -209,7 +208,7 @@ impl GroupVerdict {
 ///
 /// Every derived group contains complete version targets, so both outcomes carry
 /// the version base planning needs.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GroupState {
     /// Every non-exempt member declares the same version.
     Consistent { version: Version },
