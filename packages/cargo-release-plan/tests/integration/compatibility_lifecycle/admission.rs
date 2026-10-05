@@ -1,5 +1,7 @@
 use std::fs;
 
+use testing::with_watchdog_timeout;
+
 use crate::compatibility::CHECKER_WATCHDOG;
 use crate::compatibility_lifecycle::{Assessment, candidate, same_evidence, success};
 
@@ -9,7 +11,7 @@ use crate::compatibility_lifecycle::{Assessment, candidate, same_evidence, succe
     ignore = "Changes captured configuration and live history refs between CLI invocations"
 )]
 fn preview_rejects_configuration_and_named_history_drift_before_report() {
-    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+    with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new();
         success(assessment.check("original").output().unwrap());
         let path = candidate(&assessment).join(".cargo/config.toml");
@@ -50,7 +52,7 @@ fn rejected_before_report(assessment: &Assessment, name: &str) {
     ignore = "Changes the index between independent prepared and preview commands"
 )]
 fn captured_evidence_rejects_index_drift_before_entry_classification() {
-    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+    with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new();
         let path = "packages/library/src/lib.rs";
         let original = assessment.fixture.read(path);

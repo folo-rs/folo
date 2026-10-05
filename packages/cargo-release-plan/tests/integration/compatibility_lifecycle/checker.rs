@@ -1,5 +1,7 @@
 use std::fs;
 
+use testing::with_watchdog_timeout;
+
 use crate::compatibility::{CHECKER_WATCHDOG, read_outcome};
 use crate::compatibility_lifecycle::{Assessment, same_evidence, success};
 
@@ -9,7 +11,7 @@ use crate::compatibility_lifecycle::{Assessment, same_evidence, success};
     ignore = "Traces admitted Cargo/Git workspaces through actual checker processes"
 )]
 fn compatibility_shares_entry_admission_through_read_only_checker_stages() {
-    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+    with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new();
         for (mode, option, artifact) in [
             ("prepared", "--prepared", "prepared/prepared.json"),
@@ -53,7 +55,7 @@ fn compatibility_shares_entry_admission_through_read_only_checker_stages() {
     ignore = "Runs genuine checker successes and failures against retained preview evidence"
 )]
 fn retained_preview_records_comparison_results_and_findings_policy() {
-    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+    with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new();
         for scenario in ["parent-comparison-failure", "parent-compatible"] {
             let result = assessment

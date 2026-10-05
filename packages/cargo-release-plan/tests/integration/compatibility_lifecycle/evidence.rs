@@ -1,6 +1,7 @@
 use std::fs;
 
-use serde_json::Value;
+use serde_json::{Value, from_slice};
+use testing::with_watchdog_timeout;
 
 use crate::compatibility::{CHECKER_WATCHDOG, checker_command};
 use crate::compatibility_lifecycle::{Assessment, same_evidence, success};
@@ -11,7 +12,7 @@ use crate::compatibility_lifecycle::{Assessment, same_evidence, success};
     ignore = "Uses captured native source with unrelated and absent adjacent reports"
 )]
 fn captured_evidence_selects_real_targets_independently_of_adjacent_reports() {
-    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+    with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let assessment = Assessment::new();
         // This valid report has no targets. Both evidence modes must select the actual
         // captured comparison instead, and remain usable without any adjacent report.
@@ -25,7 +26,7 @@ fn captured_evidence_selects_real_targets_independently_of_adjacent_reports() {
                 .unwrap(),
         );
         let unrelated = fs::read(assessment.path("unrelated/report.json")).unwrap();
-        let report: Value = serde_json::from_slice(&unrelated).unwrap();
+        let report: Value = from_slice(&unrelated).unwrap();
         assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
         for (mode, option, artifact) in [
             ("prepared", "--prepared", "prepared/prepared.json"),

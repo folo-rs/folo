@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crp_versioning::plan::SCHEMA_VERSION;
-use serde_json::{Value, json};
+use serde_json::{Value, from_slice, json, to_vec};
 use tempfile::TempDir;
 
 use crate::compatibility::{anticipated_parent, checker_command, read_outcome};
@@ -52,7 +52,7 @@ impl Assessment {
         let proposal = assessment.path("proposal.json");
         fs::write(
             &proposal,
-            serde_json::to_vec(&json!({
+            to_vec(&json!({
                 "schema_version": SCHEMA_VERSION,
                 "increments": []
             }))
@@ -120,8 +120,7 @@ pub(crate) fn success(output: Output) -> Output {
 }
 
 pub(crate) fn candidate(assessment: &Assessment) -> PathBuf {
-    let plan: Value =
-        serde_json::from_slice(&fs::read(assessment.path("preview/plan.json")).unwrap()).unwrap();
+    let plan: Value = from_slice(&fs::read(assessment.path("preview/plan.json")).unwrap()).unwrap();
     Path::new(
         plan.pointer("/resolved/evidence_manifest_path")
             .unwrap()
