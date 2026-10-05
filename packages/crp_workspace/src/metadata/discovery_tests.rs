@@ -29,7 +29,7 @@ fn projection_moves_the_acquired_listing_into_the_work_tree() {
         paths: vec!["Cargo.toml".to_owned()],
         case: PathCase::Sensitive,
     };
-    let allocation = tracked.paths[0].as_ptr();
+    let allocation = tracked.paths.first().unwrap().as_ptr();
     let metadata = MetadataJson {
         packages: Vec::new(),
         workspace_members: Vec::new(),
@@ -52,7 +52,10 @@ fn projection_moves_the_acquired_listing_into_the_work_tree() {
     )
     .unwrap();
     assert_eq!(work_tree.tracked_paths.as_ref(), ["Cargo.toml"]);
-    assert_eq!(work_tree.tracked_paths[0].as_ptr(), allocation);
+    assert_eq!(
+        work_tree.tracked_paths.first().unwrap().as_ptr(),
+        allocation
+    );
 }
 
 #[test]
