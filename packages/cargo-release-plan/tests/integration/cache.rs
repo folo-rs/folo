@@ -603,6 +603,103 @@ fn unavailable_extra_inventory_disables_storage_without_failing_classification()
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "executes Cargo with untracked dependency workspaces")]
+fn cache_protects_inherited_dependencies_in_untracked_workspaces() {
+    let fixture = Fixture::new("exclude=['vendor/a','vendor/b','vendor/c']\n");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "[dependencies]\na={path='../../vendor/a'}\n",
+    );
+    fixture.write(".gitignore", "/vendor/\n");
+    fixture.write(
+        "vendor/Cargo.toml",
+        "[workspace]\nmembers=['a','b','c']\n[workspace.dependencies]\nb={path='b'}\nc={path='c'}\n",
+    );
+    fixture.write(
+        "vendor/a/Cargo.toml",
+        "[package]\nname='a'\nversion='0.1.0'\n[dependencies]\nb.workspace=true\n",
+    );
+    fixture.write(
+        "vendor/b/Cargo.toml",
+        "[package]\nname='b'\nversion='0.1.0'\n[target.'cfg(unix)'.dev-dependencies]\nc.workspace=true\n",
+    );
+    fixture.write(
+        "vendor/c/Cargo.toml",
+        "[package]\nname='c'\nversion='0.1.0'\n",
+    );
+    for package in ["a", "b", "c"] {
+        fixture.write(
+            &format!("vendor/{package}/src/lib.rs"),
+            "pub fn dependency() {}\n",
+        );
+    }
+    fixture.commit("external inherited dependency");
+    let evidence = TempDir::new().unwrap();
+    let inputs = Inputs::capture(&fixture.manifest(), Some("HEAD")).unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let cached = evidence.path().join("cached");
+    report(
+        &fixture,
+        &cached,
+        &evidence.path().join("cached.trace"),
+        &[],
+    );
+    assert_reports_equal(&baseline, &cached);
+    assert!(
+        fixture
+            .path()
+            .join("target/cargo-release-plan/cache/git-trees")
+            .exists()
+    );
+    for directory in ["vendor/b", "vendor/c", "vendor/b/src/cache"] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD", "--cache", directory])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{directory}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("overlaps protected"));
+        assert!(!fixture.path().join(directory).join(".gitignore").exists());
+    }
+    inputs.verify(&fixture.manifest(), None).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "executes Git with an unrepresentable replacement namespace"
+)]
+fn non_utf8_replacement_namespace_is_not_an_unset_variable() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    report(
+        &fixture,
+        &evidence.path().join("baseline"),
+        &evidence.path().join("baseline.trace"),
+        &[],
+    );
+    let namespace = OsString::from_vec(b"refs/replacements-\xff/".to_vec());
+    for options in [&[][..], &["--no-cache"][..]] {
+        let output = command(&fixture)
+            .args(["check", "--release-history", "HEAD"])
+            .args(options)
+            .env("GIT_REPLACE_REF_BASE", &namespace)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("GIT_REPLACE_REF_BASE"));
+    }
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "executes classification with an obstructed unrelated tracked path"
@@ -912,6 +1009,29 @@ fn unavailable_cache_case_probe_disables_storage_without_failing_reports() {
         }
         assert_reports_equal(&baseline, &evidence.path().join("cached"));
     }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "executes classification with Unicode cache paths")]
+fn unsupported_source_case_comparison_disables_storage_without_changing_reports() {
+    let fixture = seeded_package();
+    let evidence = TempDir::new().unwrap();
+    let baseline = evidence.path().join("baseline");
+    report(
+        &fixture,
+        &baseline,
+        &evidence.path().join("baseline.trace"),
+        &["--no-cache"],
+    );
+    let output = report(
+        &fixture,
+        &evidence.path().join("cached"),
+        &evidence.path().join("cached.trace"),
+        &["--cache", ".cargo/\u{03a3}"],
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("storage disabled"));
+    assert!(!fixture.path().join(".cargo/\u{03a3}").exists());
+    assert_reports_equal(&baseline, &evidence.path().join("cached"));
 }
 
 #[test]

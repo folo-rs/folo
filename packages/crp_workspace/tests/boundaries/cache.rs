@@ -304,6 +304,46 @@ fn cache_protects_intermediate_evidence_link_entries() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "creates untracked source symlinks or junctions")]
+fn cache_protects_redirected_source_descendants_and_their_nested_links() {
+    let fixture = repository();
+    fixture.write(
+        "Cargo.toml",
+        b"[package]\nname='demo'\nversion='0.1.0'\nedition='2021'\n",
+    );
+    fixture.write("src/lib.rs", b"pub mod generated;\n");
+    fixture.command(&["add", "."]);
+    fixture.command(&["commit", "--quiet", "-m", "source"]);
+    let generated = TempDir::new().unwrap();
+    let nested = TempDir::new().unwrap();
+    fs::write(generated.path().join("mod.rs"), "pub mod nested;\n").unwrap();
+    fs::write(nested.path().join("mod.rs"), "pub fn value() {}\n").unwrap();
+    link_directory(generated.path(), &fixture.path().join("src/generated"));
+    link_directory(nested.path(), &generated.path().join("nested"));
+    let verbose = Verbose::new(false, &Discard);
+    for target in [generated.path(), nested.path()] {
+        let result = Cache::resolve(
+            &fixture.path().join("Cargo.toml"),
+            &CacheOptions::Directory(target.to_owned()),
+            verbose,
+        );
+        result.unwrap_err();
+        assert!(!target.join(".gitignore").exists());
+        assert!(target.join("mod.rs").exists());
+    }
+    assert!(
+        Cache::resolve(
+            &fixture.path().join("Cargo.toml"),
+            &CacheOptions::Default,
+            verbose,
+        )
+        .unwrap()
+        .directory()
+        .is_some()
+    );
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "creates redirected native cache subject directories")]
 fn redirected_subject_directories_never_receive_cache_entries() {
     let fixture = repository();
@@ -439,6 +479,54 @@ fn evidence_case_admission_uses_existing_entries_in_read_only_directories() {
     let result = cache.protect(&directory.path().join("CACHE/report"));
     fs::set_permissions(directory.path(), original).unwrap();
     assert_eq!(result.is_ok(), case == PathCase::Sensitive);
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "resolves missing native Unicode evidence paths")]
+fn unsupported_unicode_evidence_aliases_cannot_be_admitted() {
+    let fixture = repository();
+    let directory = TempDir::new().unwrap();
+    let cache = Cache::resolve(
+        &fixture.path().join("Cargo.toml"),
+        &CacheOptions::Directory(directory.path().join("\u{03a3}")),
+        Verbose::new(false, &Discard),
+    )
+    .unwrap();
+    assert!(cache.directory().is_some());
+    // Capital sigma and final sigma can alias without equal lowercase mappings.
+    cache
+        .protect(&directory.path().join("\u{03c2}/report"))
+        .unwrap_err();
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "probes native case rules with Unicode directory entries"
+)]
+fn unicode_entry_does_not_determine_ascii_evidence_case_rules() {
+    let fixture = repository();
+    let directory = TempDir::new().unwrap();
+    // Observe this actual directory rather than assuming its case rules from the OS.
+    let probe = directory.path().join("Probe");
+    fs::write(&probe, "").unwrap();
+    let insensitive = fs::symlink_metadata(directory.path().join("pROBE")).is_ok();
+    fs::remove_file(probe).unwrap();
+    // Sharp s expands when uppercased, which need not produce a filesystem alias.
+    let unicode = directory.path().join("Stra\u{00df}e");
+    fs::write(&unicode, "").unwrap();
+    let cache = Cache::resolve(
+        &fixture.path().join("Cargo.toml"),
+        &CacheOptions::Directory(directory.path().join("cache")),
+        Verbose::new(false, &Discard),
+    )
+    .unwrap();
+    assert!(cache.directory().is_some());
+    let result = cache.protect(&directory.path().join("CACHE/report"));
+    assert_eq!(result.is_err(), insensitive);
+    assert!(unicode.exists());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
 #[test]

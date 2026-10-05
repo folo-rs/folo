@@ -1,6 +1,6 @@
 //! Overlap admission for resolved locations, including missing path suffixes.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf, absolute};
 use std::{fs, io};
 
@@ -9,6 +9,77 @@ use tempfile::Builder;
 
 use crate::artifact_path::resolve_path;
 use crate::manifest::PathCase;
+
+// Untracked redirects under module-owning directories are source inputs, too.
+#[cfg_attr(test, mutants::skip)] // Native listing adapter; traversal is tested with acquired entries.
+pub(crate) fn redirected_sources(roots: &BTreeSet<PathBuf>) -> Result<BTreeSet<PathBuf>, AppError> {
+    redirected_sources_with(roots, resolve_path, |path| {
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        entries
+            .map(|entry| {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                let path = entry.path();
+                let directory = if kind.is_symlink() {
+                    fs::metadata(&path)?.is_dir()
+                } else {
+                    kind.is_dir()
+                };
+                Ok(SourceEntry {
+                    path,
+                    directory,
+                    redirected: kind.is_symlink(),
+                })
+            })
+            .collect()
+    })
+}
+
+/// Acquired directory facts for discovering redirects without following a cycle indefinitely.
+struct SourceEntry {
+    path: PathBuf,
+    directory: bool,
+    redirected: bool,
+}
+
+fn redirected_sources_with(
+    roots: &BTreeSet<PathBuf>,
+    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    mut children: impl FnMut(&Path) -> Result<Vec<SourceEntry>, AppError>,
+) -> Result<BTreeSet<PathBuf>, AppError> {
+    let mut pending = roots.clone();
+    let mut visited = BTreeSet::new();
+    let mut redirects = BTreeSet::new();
+    while let Some(path) = pending.pop_first() {
+        let identity =
+            resolve(&path).map_err(|error| SourceInventoryUnavailable::caused_by(&path, error))?;
+        if !visited.insert(identity) {
+            continue;
+        }
+        for entry in
+            children(&path).map_err(|error| SourceInventoryUnavailable::caused_by(&path, error))?
+        {
+            if entry.redirected {
+                redirects.insert(entry.path.clone());
+            }
+            if entry.directory {
+                pending.insert(entry.path);
+            }
+        }
+    }
+    Ok(redirects)
+}
+
+/// Incomplete descendant observations must disable optional storage, not admit unchecked paths.
+#[ohno::error]
+#[display("cannot inventory source directory '{}'", path.display())]
+struct SourceInventoryUnavailable {
+    path: PathBuf,
+}
 
 // Cache removal also removes link entries, not just resolved source/evidence referents.
 #[cfg_attr(test, mutants::skip)] // Native identities are injected into protected_paths_with.
@@ -76,9 +147,13 @@ fn require_disjoint_with(
     let mut parent = PathBuf::new();
     for (left, right) in cache.components().zip(protected.components()) {
         if left != right {
-            let (Some(left), Some(right)) = (left.as_os_str().to_str(), right.as_os_str().to_str())
-            else {
-                return Ok(());
+            // Unicode case mappings are not filesystem equivalence rules. Unsupported
+            // unequal components cannot establish separation of disposable storage.
+            let (Some(left), Some(right)) = (
+                left.as_os_str().to_str().filter(|name| name.is_ascii()),
+                right.as_os_str().to_str().filter(|name| name.is_ascii()),
+            ) else {
+                return Err(CachePathCaseUnavailable::new(cache, protected).into());
             };
             if !PathCase::Insensitive.same_path(left, right)
                 || !case(&parent)
@@ -152,7 +227,151 @@ struct RedirectedSubject {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt as _;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt as _;
+
     use super::*;
+
+    #[test]
+    fn unsupported_unequal_components_never_prove_separation() {
+        // These mappings differ across filesystems; no Unicode folding rule is assumed.
+        for (left, right) in [
+            ("\u{03a3}", "\u{03c2}"),
+            ("S", "\u{017f}"),
+            ("Stra\u{00df}e", "STRASSE"),
+        ] {
+            for (left, right) in [(left, right), (right, left)] {
+                let cache = Path::new("parent").join(left);
+                let evidence = Path::new("parent").join(right).join("report");
+                let error = require_disjoint_with(&cache, &evidence, |_| {
+                    panic!("an ASCII case probe cannot establish Unicode equivalence")
+                })
+                .unwrap_err();
+                let context = error.find_source::<CachePathCaseUnavailable>().unwrap();
+                assert_eq!(context.path, cache);
+                assert_eq!(context.protected, evidence);
+            }
+        }
+        let shared = Path::new("parent").join("\u{03a3}");
+        require_disjoint_with(&shared.join("cache"), &shared.join("report"), |_| {
+            panic!("identical Unicode components need no case inference")
+        })
+        .unwrap();
+        let error = require_disjoint_with(&shared, &shared.join("report"), |_| {
+            panic!("identical components prove overlap directly")
+        })
+        .unwrap_err();
+        assert!(error.find_source::<CachePathConflict>().is_some());
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn non_unicode_components_are_preserved_without_assuming_separation() {
+        #[cfg(unix)]
+        let name = OsString::from_vec(vec![0xff]);
+        #[cfg(windows)]
+        let name = OsString::from_wide(&[0xd800]);
+        let cache = Path::new("parent").join(&name);
+        let evidence = Path::new("parent").join("report");
+        for (left, right) in [(&cache, &evidence), (&evidence, &cache)] {
+            let error = require_disjoint_with(left, right, |_| {
+                panic!("an undecodable component cannot be compared as text")
+            })
+            .unwrap_err();
+            let context = error.find_source::<CachePathCaseUnavailable>().unwrap();
+            assert_eq!(context.path, *left);
+            assert_eq!(context.protected, *right);
+        }
+        require_disjoint_with(&cache.join("cache"), &cache.join("report"), |_| {
+            panic!("identical encoded components need no case inference")
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn redirected_descendants_follow_directory_links_once_and_preserve_file_links() {
+        let mut acquisitions = BTreeSet::new();
+        let found = redirected_sources_with(
+            &["source", "absent"].map(PathBuf::from).into(),
+            |path| {
+                Ok(match path.to_str().unwrap() {
+                    "source/linked" => PathBuf::from("external"),
+                    "source/linked/cycle" => PathBuf::from("source"),
+                    _ => path.to_owned(),
+                })
+            },
+            |path| {
+                assert!(
+                    acquisitions.insert(path.to_owned()),
+                    "repeated directory acquisition"
+                );
+                Ok(match path.to_str().unwrap() {
+                    "source" => [
+                        ("source/ordinary", true, false),
+                        ("source/file", false, true),
+                        ("source/linked", true, true),
+                        ("source/lib.rs", false, false),
+                    ]
+                    .as_slice(),
+                    "source/linked" => [("source/linked/cycle", true, true)].as_slice(),
+                    "source/ordinary" | "absent" => &[],
+                    _ => panic!("unexpected directory {path:?}"),
+                }
+                .iter()
+                .map(|(path, directory, redirected)| SourceEntry {
+                    path: PathBuf::from(path),
+                    directory: *directory,
+                    redirected: *redirected,
+                })
+                .collect())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            found,
+            ["source/file", "source/linked", "source/linked/cycle"]
+                .map(PathBuf::from)
+                .into()
+        );
+        assert_eq!(
+            acquisitions,
+            ["source", "source/ordinary", "source/linked", "absent"]
+                .map(PathBuf::from)
+                .into()
+        );
+    }
+
+    #[test]
+    fn incomplete_descendant_inventory_preserves_the_failed_source_path() {
+        for fail_identity in [false, true] {
+            let error = redirected_sources_with(
+                &[PathBuf::from("source")].into(),
+                |path| {
+                    if fail_identity {
+                        Err(io::Error::from(io::ErrorKind::PermissionDenied).into())
+                    } else {
+                        Ok(path.to_owned())
+                    }
+                },
+                |_| Err(io::Error::from(io::ErrorKind::PermissionDenied).into()),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error
+                    .find_source::<SourceInventoryUnavailable>()
+                    .unwrap()
+                    .path,
+                Path::new("source")
+            );
+            assert_eq!(
+                error.find_source::<io::Error>().unwrap().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+    }
 
     #[test]
     fn protection_retains_only_link_entries_and_resolved_referents() {

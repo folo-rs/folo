@@ -666,7 +666,11 @@ fn acquire_package(
         version: package.manifest.version.clone(),
         directory: package.manifest.directory.clone(),
         manifest: ManifestDocument::from_document(
-            work_tree.manifests.document(&package.manifest_path),
+            work_tree
+                .manifests
+                .documents
+                .get(&package.manifest_path)
+                .expect("every selected package manifest belongs to this acquisition"),
         ),
         dependencies: package
             .dependencies
