@@ -117,10 +117,7 @@ pub fn run_report_with_cache(
 
 // Preview already has a classification; this adapter supplies the real publication operations.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn write_report(
-    out_dir: &Path,
-    classification: &Classification,
-) -> Result<String, AppError> {
+pub fn write_report(out_dir: &Path, classification: &Classification) -> Result<String, AppError> {
     emit_report(
         out_dir,
         classification,

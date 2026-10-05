@@ -125,7 +125,7 @@ Compatibility evidence uses schema `2`:
 | `schema_version` | Compatibility-evidence format revision. |
 | `checker` | Identified checker version, or an explanation when no identity was established. |
 | `report` | Location of the source-bound report generated for this comparison. |
-| `completed` | Whether the required comparisons and source verification completed. |
+| `completed` | Whether the required source admission and comparisons completed. |
 | `findings` | Whether completed comparisons found an insufficient increment. |
 | `packages` | Comparison records containing the fields below. |
 

@@ -8,6 +8,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
 use std::{fs, io, mem, str};
@@ -87,6 +88,45 @@ pub struct Classification {
     /// Carried so a later packaging probe resolves paths exactly as
     /// classification did.
     pub case: PathCase,
+}
+
+/// Workspace and history observations belonging to one unchanged input interval.
+///
+/// Assessed source, configuration and history must remain unchanged until the
+/// observation is consumed. Acquire another observation after edits, resolution
+/// or relocation, and on every independent command.
+#[derive(Debug)]
+pub struct AcquiredWorkspace {
+    pub(crate) work_tree: WorkTree,
+    pub(crate) git: GitRepo,
+    pub(crate) history: AssessmentHistory,
+    pub(crate) head: String,
+}
+
+// The observation owns complete values, not guarded caller data. Deferred manifest errors
+// are immutable diagnostic trait objects; unwinding cannot expose a partial acquisition.
+impl UnwindSafe for AcquiredWorkspace {}
+impl RefUnwindSafe for AcquiredWorkspace {}
+
+impl AcquiredWorkspace {
+    pub(crate) fn acquire(
+        manifest_path: &Path,
+        release_history: Option<&str>,
+        merge_target: Option<&str>,
+        verbose: Verbose<'_>,
+        cache: &mut SnapshotCache,
+    ) -> Result<Self, AppError> {
+        let (work_tree, git) =
+            load_tracked_work_tree_with_documents(manifest_path, &mut cache.documents, verbose)?;
+        let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
+        let head = git.head()?;
+        Ok(Self {
+            work_tree,
+            git,
+            history,
+            head,
+        })
+    }
 }
 
 /// Per-package classification: its status and the evidence behind it.
@@ -445,7 +485,9 @@ pub fn classify_with_target(
     )
 }
 
-/// Reacquires candidate observations while reusing only context-bound committed snapshots.
+/// Acquires current inputs and classifies them using content-bound caches.
+///
+/// Assessed source, configuration and history must remain unchanged during the call.
 pub fn classify_with_cache(
     manifest_path: &Path,
     release_history: Option<&str>,
@@ -453,16 +495,34 @@ pub fn classify_with_cache(
     verbose: Verbose<'_>,
     cache: &mut SnapshotCache,
 ) -> Result<Classification, AppError> {
-    let (mut work_tree, git) =
-        load_tracked_work_tree_with_documents(manifest_path, &mut cache.documents, verbose)?;
-    let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
+    classify_acquired(
+        AcquiredWorkspace::acquire(manifest_path, release_history, merge_target, verbose, cache)?,
+        verbose,
+        cache,
+    )
+}
+
+/// Consumes observations admitted earlier in the same unchanged input interval.
+///
+/// Assessed source, configuration and history must remain unchanged from acquisition
+/// through this call.
+pub fn classify_acquired(
+    acquired: AcquiredWorkspace,
+    verbose: Verbose<'_>,
+    cache: &mut SnapshotCache,
+) -> Result<Classification, AppError> {
+    let AcquiredWorkspace {
+        mut work_tree,
+        git,
+        history,
+        head,
+    } = acquired;
     let release_history_revision = history.release_history_revision.clone();
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
         package.resources =
             resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
-    let head = git.head()?;
     let history_commit = &history.release_history;
     verbose.note(|| {
         format!(
@@ -563,7 +623,6 @@ pub fn classify_with_cache(
         });
     }
 
-    history.verify(&git)?;
     Ok(Classification {
         head,
         release_history_revision,
@@ -1654,6 +1713,10 @@ impl SnapshotCache {
         }
     }
 
+    pub(crate) fn protect(&self, path: &Path) -> Result<(), AppError> {
+        self.storage.protect(path)
+    }
+
     fn clear(&mut self) {
         self.inner.clear();
         self.lockfiles.clear();
@@ -2501,6 +2564,7 @@ mod tests {
     use static_assertions::assert_impl_all;
 
     assert_impl_all!(SnapshotCache: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(AcquiredWorkspace: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn absent_binary_closure_is_not_an_empty_successful_assessment() {

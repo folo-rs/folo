@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::apply::{ManifestEdit, compute_edits};
 use crate::check::{check_classification, releases_breaking_change};
 use crate::classify::{
-    ChangedItem, PackageClass, PackageStatus, SnapshotCache, classify_with_cache,
+    ChangedItem, PackageClass, PackageStatus, SnapshotCache, classify_acquired, classify_with_cache,
 };
 use crate::groups::{GroupVerdict, Groups};
 use crate::plan::{
@@ -74,13 +74,20 @@ pub fn run_prepare_with_cache(
     cache.protect(output)?;
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
     let manifest = canonical(manifest)?;
-    let inputs = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
+    let mut cache = SnapshotCache::new(cache);
+    let (inputs, acquired) = Inputs::capture_with_cache(
+        &manifest,
+        release_history,
+        merge_target,
+        verbose,
+        &mut cache,
+    )?;
+    let lockfile = acquired.work_tree.workspace_root.join("Cargo.lock");
+    drop(acquired);
     let prospective = Prospective::new(&output, &inputs)?;
     remove_marker(&output.join("prepared.json"))?;
     prospective.resolve(verbose)?;
     let files = prospective.artifacts(&inputs)?;
-    let (_, work_tree) = inputs.verify_workspace(&manifest, None)?;
-    let lockfile = work_tree.workspace_root.join("Cargo.lock");
     validate_preparation_files(inputs.root(), &lockfile, &files)?;
     // Preparation is the explicit mutation boundary. Install only the successfully resolved
     // lockfile before capturing evidence so semantic checks run against this same live state.
@@ -88,19 +95,18 @@ pub fn run_prepare_with_cache(
         fs::write(&lockfile, file.contents)
             .map_err(|error| WriteFileError::caused_by(&lockfile, error))?;
     }
-    let refreshed = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
+    let (refreshed, acquired) = Inputs::capture_with_cache(
+        &manifest,
+        release_history,
+        merge_target,
+        verbose,
+        &mut cache,
+    )?;
     if !inputs.same_history(&refreshed) {
         return Err(StaleInputs::new().into());
     }
     let inputs = refreshed;
-    let classification = classify_with_cache(
-        &manifest,
-        Some(&inputs.release_history),
-        inputs.merge_target.as_deref(),
-        verbose,
-        &mut SnapshotCache::new(cache),
-    )?;
-    inputs.verify(&manifest, None)?;
+    let classification = classify_acquired(acquired, verbose, &mut cache)?;
     write_report(&output, &classification)?;
     write_json(
         &output.join("prepared.json"),
@@ -186,7 +192,7 @@ fn run_preview_acquiring_cache(
     let plan = plan_input;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
     let mut cache = SnapshotCache::new(cache);
-    let mut classification = classify_with_cache(
+    let classification = classify_with_cache(
         &prospective.manifest,
         Some(&prepared.inputs.release_history),
         prepared.inputs.merge_target.as_deref(),
@@ -200,18 +206,23 @@ fn run_preview_acquiring_cache(
         verbose,
     )?;
     require_semantic_decisions(&classification.packages, &resolved)?;
+    let mut classification = Some(classification);
 
     let (resolved, files) = resolve_until_stable(
         resolved,
         |bytes| hash_bytes(bytes, &prospective.root),
         |resolved| {
-            let work_tree = &classification.work_tree;
-            install_preview_edits(compute_edits(work_tree, resolved, verbose)?, |edit| {
+            let preceding = classification
+                .take()
+                .expect("each successful pass supplies a classification");
+            let edits = compute_edits(&preceding.work_tree, resolved, verbose)?;
+            drop(preceding);
+            install_preview_edits(edits, |edit| {
                 fs::write(&edit.path, &edit.updated)
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
             })?;
             prospective.resolve(verbose)?;
-            classification = classify_with_cache(
+            let current = classify_with_cache(
                 &prospective.manifest,
                 Some(&prepared.inputs.release_history),
                 prepared.inputs.merge_target.as_deref(),
@@ -220,31 +231,37 @@ fn run_preview_acquiring_cache(
             )?;
             let files = prospective.artifacts_from_workspace(
                 &prepared.inputs,
-                &classification.work_tree.workspace_root,
-                &classification.work_tree.member_manifests,
+                &current.work_tree.workspace_root,
+                &current.work_tree.member_manifests,
             )?;
             let mut expanded = resolved.clone();
             add_consequences(
-                &classification.packages,
-                &classification.groups,
-                &classification.membership,
-                &classification.work_tree,
+                &current.packages,
+                &current.groups,
+                &current.membership,
+                &current.work_tree,
                 &mut expanded,
             )?;
+            classification = Some(current);
             Ok((expanded, files))
         },
     )?;
     // Convergence leaves the candidate unchanged after this classification. Keep the readiness
-    // verdict and report on those same observations; source/history verification still follows.
+    // verdict and report on those same observations before relocation requires new admission.
     // Ref: packages/cargo-release-plan/docs/implementation.md, "Prepared and prospective resolution".
+    let classification = classification.expect("convergence follows a successful classification");
     let (passed, message) = check_classification(&classification, CheckFormat::Text);
     require_complete_preview(passed, message)?;
-    prepared.inputs.verify(manifest, None)?;
     let final_digest = prepared.inputs.final_digest(&files)?;
+    write_report(&output, &classification)?;
+    drop(classification);
     let evidence_manifest_path = prospective.retain(&output, prepared.inputs.root())?;
-    prepared
-        .inputs
-        .verify_candidate(&evidence_manifest_path, &final_digest)?;
+    prepared.inputs.capture_candidate(
+        &evidence_manifest_path,
+        &final_digest,
+        verbose,
+        &mut cache,
+    )?;
     let mut plan = explicit_plan(&resolved);
     plan.release_history = Some(prepared.inputs.release_history.clone());
     plan.merge_target.clone_from(&prepared.inputs.merge_target);
@@ -259,7 +276,6 @@ fn run_preview_acquiring_cache(
         files,
         evidence_manifest_path,
     });
-    write_report(&output, &classification)?;
     write_json(&output.join("plan.json"), &plan)?;
     Ok(format!(
         "Wrote complete resolved plan to {}",

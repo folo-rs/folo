@@ -110,7 +110,11 @@ context. Unrelated manifests are neither decoded nor parsed. Cargo configuration
 Current metadata acquisition reads manifest bytes before consulting parsed syntax; neither
 file timestamps nor cached metadata establish freshness. An acquisition retains its parsed
 root/member documents and tracked listing for adjacent consumers, without extending their
-lifetime across a new observation boundary. Content-keyed syntax can outlive repository
+lifetime across a new observation boundary. Callers keep assessed source, configuration
+and history stable during read-only work; a command entry, deliberate mutation or
+workspace relocation requires a fresh acquisition. Unresolved metadata uses `--no-deps`
+and `--locked`, without turning classification into dependency resolution.
+Content-keyed syntax can outlive repository
 rebinding because it has no repository interpretation.
 Source-location discovery accepts the same acquisition's documents and reads any newly reached
 manifests. Both supplied-document and native-read entry points share recursive discovery and

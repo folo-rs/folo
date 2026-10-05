@@ -1177,12 +1177,25 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
     fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
     let prepared = evidence.path().join("prepared");
+    let prepare_trace = evidence.path().join("prepare.trace");
     success(
         command(&fixture)
             .args(["prepare", "--release-history", "HEAD", "--output"])
             .arg(&prepared)
+            .env("GIT_TRACE", &prepare_trace)
             .output()
             .unwrap(),
+    );
+    // Storage isolation inventory, original entry, resolved temporary workspace, and
+    // original post-install capture.
+    // The post-install classification consumes that capture rather than acquiring again.
+    assert_eq!(
+        fs::read_to_string(prepare_trace)
+            .unwrap()
+            .lines()
+            .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+            .count(),
+        4,
     );
     let plan = evidence.path().join("proposal.json");
     fs::write(
@@ -1209,6 +1222,16 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .unwrap(),
     );
     assert_eq!(acquisitions(&trace), (0, 0));
+    // Storage isolation inventory, original admission, candidate creation, each convergence
+    // pass, and final relocation.
+    assert_eq!(
+        fs::read_to_string(&trace)
+            .unwrap()
+            .lines()
+            .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+            .count(),
+        6,
+    );
     let resolved: serde_json::Value =
         serde_json::from_slice(&fs::read(preview.join("plan.json")).unwrap()).unwrap();
     let manifest = PathBuf::from(
@@ -1238,6 +1261,7 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .unwrap();
         assert!(!output.status.success());
         assert!(!cache.join("git-trees").exists());
+        assert!(!cache.join("manifest-document").exists());
     }
     let compatibility_trace = evidence.path().join("compatibility.trace");
     success(

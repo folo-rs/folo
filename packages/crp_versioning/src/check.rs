@@ -589,6 +589,7 @@ fn cargo_package_list(workspace_root: &Path, package: &str) -> Result<Vec<String
             "package",
             "--list",
             "--offline",
+            "--locked",
             "--allow-dirty",
             "-p",
             package,

@@ -501,8 +501,8 @@ pub fn capture_metadata(manifest_path: &Path) -> Result<Vec<u8>, AppError> {
         .parent()
         .expect("an absolute manifest filename has a parent directory");
     // `--no-deps` is the classification Cargo invocation: no graph resolve and
-    // no crates.io. `--offline` is omitted so a workspace without a lockfile
-    // can still be classified; no registry packages are consulted.
+    // no crates.io. `--locked` asserts the read-only command contract; no graph
+    // resolution is requested, so a workspace without a lockfile is still supported.
     // The requested schema version is pinned because the `Metadata*`
     // projections in this module deserialize exactly that documented contract.
     run_capture_bytes(
@@ -510,6 +510,7 @@ pub fn capture_metadata(manifest_path: &Path) -> Result<Vec<u8>, AppError> {
         &[
             "metadata",
             "--no-deps",
+            "--locked",
             "--format-version",
             "1",
             "--manifest-path",
