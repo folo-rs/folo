@@ -468,7 +468,7 @@ pub fn load_tracked_work_tree_with_documents(
     };
     let work_tree = work_tree_from_metadata_parsed_with(
         &metadata,
-        &tracked,
+        tracked,
         |path| fs::read_to_string(path),
         |path| fs::canonicalize(path),
         |path| fs::symlink_metadata(path).map(|metadata| metadata.is_file()),
@@ -563,7 +563,12 @@ fn work_tree_from_metadata_with(
 ) -> Result<WorkTree, AppError> {
     work_tree_from_metadata_parsed_with(
         metadata,
-        tracked,
+        TrackedMetadata {
+            git: tracked.git,
+            workspace_root: tracked.workspace_root,
+            paths: tracked.paths.clone(),
+            case: tracked.case,
+        },
         read,
         canonicalize,
         regular,
@@ -573,7 +578,7 @@ fn work_tree_from_metadata_with(
 
 fn work_tree_from_metadata_parsed_with(
     metadata: &MetadataJson,
-    tracked: &TrackedMetadata<'_>,
+    tracked: TrackedMetadata<'_>,
     mut read: impl FnMut(&Path) -> io::Result<String>,
     mut canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
     mut regular: impl FnMut(&Path) -> io::Result<bool>,
@@ -762,7 +767,7 @@ fn work_tree_from_metadata_parsed_with(
 
     packages.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
 
-    installation.registries = work_tree_registry_indices_with(tracked, &mut read)?;
+    installation.registries = work_tree_registry_indices_with(&tracked, &mut read)?;
     installation.registries.extend(registry_indices(
         metadata,
         &selected_member_ids,
@@ -772,7 +777,7 @@ fn work_tree_from_metadata_parsed_with(
     ));
     if packages.iter().any(|package| package.has_lockfile_target) {
         installation.patches = installation_patches(root_manifest);
-        resolve_installation_paths_with(&mut installation, &manifests, tracked, &mut read);
+        resolve_installation_paths_with(&mut installation, &manifests, &tracked, &mut read);
     }
 
     let mut member_manifests: Vec<PathBuf> = members_by_dir
@@ -790,7 +795,7 @@ fn work_tree_from_metadata_parsed_with(
     Ok(WorkTree {
         workspace_root,
         manifests,
-        tracked_paths: tracked.paths.clone(),
+        tracked_paths: tracked.paths,
         packages,
         version_targets,
         exact_dependencies,

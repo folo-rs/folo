@@ -1775,7 +1775,7 @@ impl Snapshots {
     }
 }
 
-// Git acquisitions are native; load_snapshot_with reconstructs members from captured observations.
+// Git acquisitions are native; load_snapshot_documents reconstructs captured observations.
 #[cfg_attr(test, mutants::skip)]
 fn load_snapshot(
     git: &GitRepo,
@@ -1820,6 +1820,7 @@ fn load_snapshot(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn load_snapshot_with(
     git: &GitRepo,
     case: PathCase,

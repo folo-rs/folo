@@ -115,7 +115,7 @@ post-resolution classification's workspace/member paths while reading artifact c
 Preparation has no preceding prospective classification and acquires its own prospective
 metadata; original-workspace observations never stand in for the candidate.
 
-Source capture reuses the tracked listing and parsed root/member documents acquired by its own
+Source capture reuses the tracked listing and borrows parsed root/member documents acquired by its own
 metadata projection, including during path-dependency traversal. Files reached outside those
 documents are still acquired, and ignored/untracked build-source traversal and index capture
 remain independent. Successful admission returns the acquired workspace, Git identity and

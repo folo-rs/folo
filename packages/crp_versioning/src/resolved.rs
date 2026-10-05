@@ -5,6 +5,7 @@
     reason = "The subject module owns captured state; child modules own path logic and test matrices."
 )]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -428,14 +429,14 @@ fn captured_dependency_with(
     Ok(directory)
 }
 
-fn capture_document(
+fn capture_document<'a>(
     path: &Path,
-    documents: &BTreeMap<PathBuf, DocumentMut>,
+    documents: &'a BTreeMap<PathBuf, DocumentMut>,
     read: impl FnOnce(&Path) -> Result<String, AppError>,
-) -> Result<DocumentMut, AppError> {
+) -> Result<Cow<'a, DocumentMut>, AppError> {
     match documents.get(path) {
-        Some(document) => Ok(document.clone()),
-        None => parse_document(path, &read(path)?),
+        Some(document) => Ok(Cow::Borrowed(document)),
+        None => parse_document(path, &read(path)?).map(Cow::Owned),
     }
 }
 

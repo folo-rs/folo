@@ -51,10 +51,12 @@ in the bound context. Unrelated manifests are neither decoded nor parsed.
 Parsed lockfile graphs serve several binary closures within a classification; committed
 graphs can survive prospective passes under the owning snapshot's context.
 
-An acquisition retains its parsed root/member documents and tracked listing for adjacent
-consumers. Callers keep assessed source, configuration and history stable during read-only
-work; an independent command entry, deliberate mutation or workspace relocation requires
-fresh acquisition. Unresolved metadata uses `--no-deps --locked`, without turning
+An acquisition moves its tracked listing into the returned work tree and retains parsed
+root/member documents for adjacent consumers. Read-only source traversal borrows acquired
+documents and owns documents acquired on a miss. Callers keep assessed source, configuration
+and history stable during read-only work; an independent command entry, deliberate mutation
+or workspace relocation requires fresh acquisition. Unresolved metadata uses
+`--no-deps --locked`, without turning
 classification into dependency resolution. Content-keyed syntax can outlive repository
 rebinding because it has no repository interpretation.
 
