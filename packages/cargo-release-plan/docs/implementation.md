@@ -69,41 +69,28 @@ build the work-tree model, `git` owns repository facts, `anchor` resolves releas
 history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
 
-## Observation caching
+## Operation-owned acquisition reuse
 
-Classification command dispatch resolves storage from the selected original workspace
-before prospective cloning or checker environment changes. Workspace owns Cargo's
-effective target-directory acquisition and cache path admission. The resolved location
-is passed explicitly through versioning operations; it is never serialized into
-prepared or resolved evidence. Compatibility resolves it from the admitted evidence's
-original source rather than the retained candidate.
-Compatibility also admits the cache against the retained candidate's entire Git root,
-not merely its possibly nested workspace manifest or the resolved-plan file.
-Preview dispatch passes cache options to versioning so collision-safe completion-marker
-invalidation precedes metadata acquisition. Cache advisories bypass deferred checker
-diagnostic failures; checker output and supporting publication diagnostics retain their
-strict delivery policy.
+Adjacent consumers explicitly share an acquisition's workspace, selected history,
+root/member documents and tracked listing. Capture hands these observations to
+classification without repeating metadata or ref resolution. Each independent entry
+acquires new observations. The owning call site consumes or drops observations before
+edits, resolution or relocation. Preview reads artifact contents freshly; preparation
+retains its separate prospective acquisition.
 
-The workspace component publishes typed immutable observations atomically. Versioning
-retains the full historical tree and its lookup indexes with each committed snapshot,
-and retains raw commit-parent facts separately from fresh history-availability decisions.
-Complete manifest text and lockfile text also identify reusable parsed syntax and dependency
-graphs. Workspace owns these subjects; historical workspace reconstruction remains lazy and
-context-bound. Current bytes are acquired before parse reuse. Versioning owns a separate
-complete-input decision entry: admitted observations identify reusable package/group policy
-and rendered evidence. Mutable Cargo metadata and successful verification verdicts are not entries.
-Every classification envelope retains the current pass's workspace, Git handle, HEAD and paths,
-including when decisions are reused. See the
-[decision boundary](../../crp_versioning/docs/implementation.md#complete-input-classification-decisions).
-Adjacent consumers explicitly share the same acquisition's workspace, selected history,
-root/member documents and tracked listing. Capture hands these observations to classification
-without repeating metadata or ref resolution. Each independent entry acquires new observations.
-The owning call site consumes or drops observations before edits, resolution or relocation.
-Preview reads artifact contents freshly; preparation retains its separate prospective
-acquisition. See the component guides for these lifetimes.
+Versioning retains the full historical tree and lookup indexes with each committed
+snapshot, and raw commit-parent facts separately from fresh history-availability
+decisions. Complete manifest text identifies operation-owned parsed syntax. Current bytes
+are acquired before syntax reuse, and historical workspace reconstruction remains lazy
+and context-bound. Parsed lockfiles serve multiple binary closures within a pass;
+committed graphs can be shared across passes under the same interpretation.
+No observation storage backend or command-line cache controls participate in dispatch.
+Compatibility's Cargo build-directory configuration remains independent of these
+acquisition lifetimes. See the component guides for ownership and invalidation.
+
 Patch generation requests only differing objects, resolving both endpoints to exact identities
-before rendering. Workspace supplies byte-bounded batches and immutable content reuse; the
-renderer retains only its current comparison in addition to that bounded lookahead.
+before rendering. Workspace supplies byte-bounded batches and shares duplicate payloads within
+each batch; the renderer retains only its current comparison in addition to that lookahead.
 The admitted interval owns the shared tracked listing and scoped mode/untracked observations.
 Classification retains this handle for adjacent read-only consumers, including packaging probes.
 Each package applies the existing resource and packaging rules independently; sharing never
@@ -190,11 +177,8 @@ report and share that acquisition with classification and checker selection. Pre
 retained prospective manifest and share versioning's typed resolved-state
 verification without producing publication-target JSON.
 
-Evidence admission precedes shared report classification. Matching decisions can be
-reused only after fresh classification observations, and the report is rebuilt with
-the current source provenance. An adjacent report never supplies admission or target
-selection. The cache remains rooted in the original selected workspace, independent
-of retained-candidate paths and the checker's build environment.
+Each compatibility invocation builds its report and target selection from admitted
+source with current provenance. An adjacent report never supplies admission or targets.
 
 The supported checker performs default full Cargo metadata on its current workspace,
 then resolves and builds separate placeholder projects. Compatibility first admits that
@@ -423,10 +407,10 @@ manifest on a sensitive filesystem. Git lookups continue to use recorded spellin
 
 ### Test boundaries
 
-`cargo-release-plan/tests/integration/compatibility_cache/` separates the shared
-process harness from cache-mode, source-admission, checker, provenance and
-cache-recovery scenarios. The topic modules share fixtures and evidence assertions
-without sharing test execution or weakening source verification.
+`cargo-release-plan/tests/integration/compatibility_lifecycle/` separates the shared
+process harness from captured-input admission, checker execution, independent target selection
+and mutation/relocation scenarios. The topic modules share fixtures and evidence
+assertions without sharing test execution or weakening source verification.
 
 `cargo-release-plan/tests/integration/native_binaries/` owns the unified executable's
 source, build, archive and cancellation contracts. Publication's native boundary
@@ -484,7 +468,7 @@ Captured-input decisions use acquired metadata and a read-only per-directory cas
 probe. Unit tests supply regular-file, missing-file and error observations, mixed
 directory case rules, and exact candidate/replacement bytes. They verify the
 persisted fingerprint framing, Unix execute-bit interpretation, alias collapse
-without new input admission, and command-entry and mutation-boundary admission independently of
+without new input admission, and retained verification ordering independently of
 the host filesystem. Windows path-prefix conversion and Unix mode interpretation
 are compiled for all test hosts because those transformations are pure.
 
@@ -621,7 +605,7 @@ release assessment. Each tracked current member manifest is loaded and parsed
 once per work-tree snapshot; its parsed document and derived package facts are
 shared by version-target construction, exact-dependency discovery, and the
 publishable projection. Historical workspaces cannot use Cargo without checking
-out each commit, so `SnapshotCache` reconstructs them from tracked manifests.
+out each commit, so `Snapshots` reconstructs them from tracked manifests.
 
 The reconstruction starts from the root package and declared member patterns,
 then follows in-workspace path dependencies to a fixed point while honoring

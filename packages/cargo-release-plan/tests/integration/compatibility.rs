@@ -590,7 +590,7 @@ fn compatibility_reuses_admitted_source_and_reacquires_on_the_next_command() {
             let evidence = output.path().join(changed.to_string());
             let trace = output.path().join(format!("{changed}.trace"));
             let result = checker_command()
-                .args(["check-compatibility", "--no-cache", "--manifest-path"])
+                .args(["check-compatibility", "--manifest-path"])
                 .arg(fixture.manifest())
                 .args(["--release-history", "HEAD", "--output"])
                 .arg(&evidence)

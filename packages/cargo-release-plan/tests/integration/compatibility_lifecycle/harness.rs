@@ -16,12 +16,10 @@ pub(crate) struct Assessment {
     pub(crate) fixture: Fixture,
     pub(crate) evidence: TempDir,
     pub(crate) parent: String,
-    mode: &'static str,
-    pub(crate) storage: PathBuf,
 }
 
 impl Assessment {
-    pub(crate) fn new(mode: &'static str) -> Self {
+    pub(crate) fn new() -> Self {
         let (fixture, history, parent) = anticipated_parent();
         write_package(&fixture, "library", "1.1.1", "");
         fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
@@ -32,21 +30,10 @@ impl Assessment {
         fixture.commit("child removes parent API");
         fixture.git(&["branch", "release-history", &history]);
         let evidence = TempDir::new().unwrap();
-        let storage = match mode {
-            "default" | "disabled" => fixture
-                .path()
-                .join("configured-target/cargo-release-plan/cache"),
-            "environment" => evidence.path().join("build/cargo-release-plan/cache"),
-            "relative" => evidence.path().join("relative-cache"),
-            "absolute" => evidence.path().join("absolute-cache"),
-            _ => panic!("unknown cache fixture mode"),
-        };
         let assessment = Self {
             fixture,
             evidence,
             parent,
-            mode,
-            storage,
         };
         success(
             assessment
@@ -98,22 +85,6 @@ impl Assessment {
             .env_remove("CARGO_TARGET_DIR")
             .args([operation, "--verbose", "--manifest-path"])
             .arg(self.fixture.manifest());
-        match self.mode {
-            "environment" => {
-                command.env("CARGO_TARGET_DIR", self.path("build"));
-            }
-            "relative" => {
-                command.args(["--cache", "relative-cache"]);
-            }
-            "absolute" => {
-                command.arg("--cache").arg(&self.storage);
-            }
-            "disabled" => {
-                command.arg("--no-cache");
-            }
-            "default" => {}
-            _ => panic!("unknown cache fixture mode"),
-        }
         command
     }
 
@@ -146,15 +117,6 @@ pub(crate) fn success(output: Output) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
-}
-
-pub(crate) fn reused(output: &Output) {
-    let diagnostics = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        diagnostics.contains("reusing classification decisions from storage"),
-        "{diagnostics}"
-    );
-    assert!(!diagnostics.contains("computed classification decisions"));
 }
 
 pub(crate) fn candidate(assessment: &Assessment) -> PathBuf {

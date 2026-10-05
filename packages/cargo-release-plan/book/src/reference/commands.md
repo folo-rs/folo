@@ -14,33 +14,17 @@ Angle-bracket values below describe arguments to supply, not literal shell
 input. The [integration walkthrough](../integration/local-planning.md) provides
 concrete PowerShell command sequences.
 
-## Disposable cache
+## Input acquisition
 
-`report`, `check`, `prepare`, `preview` and `check-compatibility` cache reusable
-observations automatically in `<Cargo target directory>/cargo-release-plan/cache`.
-Cargo supplies the effective target directory, including `.cargo/config.toml`
-and `CARGO_TARGET_DIR` settings. Prospective workspaces and compatibility checker
-build-directory settings do not relocate this cache away from the original workspace.
+Each command acquires current inputs and may reuse admitted observations during read-only
+work. Keep inputs stable during
+[read-only command stages](../concepts/evidence.md#keep-command-inputs-stable).
+Commands acquire new inputs after their own edits or resolution and for new or relocated
+workspaces. No workflow-managed cache identifier or observation-storage configuration is
+needed. Ordinary Cargo/compiler caches and checker build-directory configuration remain
+independent of release evidence.
 
-Use `--cache <directory>` to place it elsewhere; relative paths start at the
-invocation working directory. Use `--no-cache` to bypass reads and writes.
-The options cannot be combined. Keep the cache separate from source and evidence,
-including Git administration, retained preview repositories and reserved input locations.
-
-No session identifier or workflow-managed validity check is needed. The tool
-decides which entries match current inputs, acquired on command entry and after deliberate
-mutations. Keep inputs stable during [read-only command stages](../concepts/evidence.md#keep-command-inputs-stable).
-Deleting only the cache does not invalidate prepared evidence or resolved
-plans. A full `cargo clean` deletes the entire target directory, so keep evidence outside
-that directory if it must survive cleanup. Corruption and cache I/O problems are
-reported as advisories and observations are reacquired. An unavailable cache location
-or incomplete cache-safety inventory disables storage for the command. This does not
-relax the inputs required for classification or prepared evidence.
-
-Separate preparation, preview and compatibility invocations share this cache
-automatically. Compatibility still admits the selected source and writes a fresh
-report; it does not reuse a previous compatibility verdict or trust an adjacent
-report. No preview-directory knowledge or cached-report argument is needed.
+Keep evidence outside Cargo's target directory if it must survive `cargo clean`.
 
 ## Release context and identity
 
@@ -143,7 +127,7 @@ default metadata resolution without changes. It never accepts detached `--report
 The regenerated report uses report/plan schema `6`.
 
 For a resolved preview, command-entry admission covers both the original workspace
-and the retained candidate, even on a cache hit. The original
+and the retained candidate. The original
 workspace must match the captured initial state or the completely applied plan;
 the retained candidate must match the captured final state.
 

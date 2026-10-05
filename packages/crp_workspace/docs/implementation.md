@@ -35,108 +35,42 @@ Repository-controlled display strings use the diagnostic component's presentatio
 The command boundary also supplies the fixed orchestration credential names shared by
 native, compatibility and registry compilation; each adapter owns environment mutation.
 
-## Disposable immutable observations
+## Operation-owned observations
 
-The cache storage subject owns location resolution through Cargo metadata, source/evidence
-path admission, typed entry envelopes and atomic publication. Entry subjects own complete
-keys and computation revisions. Exact keys are checked in addition to hashed filenames;
-payload checksums detect accidental corruption, not hostile same-account modification.
-An incompatible entry is a miss. Corruption and storage failures are diagnosed independently
-of acquisition failures, and only successful acquisitions are published. Same-directory
-temporary files and atomic replacement keep concurrent readers on complete entries.
-The tool-owned directory ignores its untracked contents without excluding tracked source;
-an existing ignore file is never replaced. Storage failure diagnostics are advisory and
-reported once through the shared invocation store, including across prospective passes.
-Source directories, Git administration and workflow evidence cannot contain the cache.
-Git administration includes Git's effective object, alternate object, index and hook locations
-even when overrides place them outside the Git/common directories. Administrative path output
-is decoded strictly; an unrepresentable path disables the optional storage inventory rather
-than protecting a substituted name. Path admission retains symlink and
-junction entries along source/evidence paths as well as resolved referents. Module-owning
-source directories are traversed for untracked descendant redirects, following redirected
-directories by resolved identity to bound cycles and shared subtrees. Tool-owned subject
-directories cannot redirect entry reads or publication outside the admitted store.
-Captured evidence and cache admission share source-location discovery, including reserved
-absent files and transitive path dependencies outside Cargo's member list. Versioning
-adds relocatability constraints and fingerprints the selected contents; cache admission
-protects the discovered locations without changing the captured path set.
-Cache-only reservations cover Cargo's `src`, `examples`, `tests`, `benches` and `build.rs`
-locations beside every discovered or tracked manifest, plus explicit target and build-script
-paths read from those manifests. This narrow source inventory does not validate unselected
-package identities or classify their contents. Packaging resource declarations (`readme` and
-`license-file`) and default README candidates are reserved as files. Inherited resources retain
-their declaring workspace's base, including roots outside the selected workspace.
-Cache-only dependency discovery follows inherited dependencies through their declaring
-workspace and direct path dependencies in unselected manifests. Each declaring workspace's
-dependency closure is expanded once, and newly discovered manifests receive the same reservations.
-Explicit targets also reserve their containing
-source directory and its modules unless that directory resolves to a package ancestor; ancestor
-reservations remain file-scoped so Cargo's default target directory stays available.
-If this additional safety inventory
-cannot be acquired, storage is disabled with an advisory; strict prepared-input capture
-still requires its complete inventory. No unchecked storage is admitted.
-Overlap comparisons resolve existing aliases and probe the containing directory's case
-rules for missing components, including empty destinations. Losslessly decoded ASCII directory
-entries provide a read-only case probe when conclusive; otherwise a temporary ASCII entry
-establishes those rules. Unequal non-ASCII or undecodable components cannot prove separation
-through case folding and are treated as an unavailable comparison. Identical components
-retain their original encoding and need no case inference.
-An unavailable source-admission case probe disables storage with an advisory;
-a proven overlap remains an error. Explicit workflow-evidence protection remains strict.
-Cargo and Git root aliases are resolved
-before discovering ancestor configuration locations while retaining the caller's root
-spelling. Cache-location resolution failures disable storage with an advisory diagnostic,
-independently of source acquisition and evidence verification.
-Cache diagnostics use the sink's explicit advisory route, including acquisition notes,
-so diagnostic adapters cannot turn unavailable acceleration into an operation failure.
+Git's full recorded trees and raw parent-header facts are shared by resolved object
+identity and effective object interpretation within an operation. Full-tree path and
+mode/object indexes are constructed once and retained by the snapshot owner. Refs,
+traversal, parent availability and shallow verdicts are acquired freshly.
 
-Git's full recorded trees and raw parent-header facts are keyed by resolved object identity
-and effective object interpretation. Their data can be shared across original and prospective
-repositories; package projections remain repository/workspace scoped. Full-tree path and
-mode/object indexes are constructed once and retained by the snapshot owner. Refs, traversal,
-parent availability and shallow verdicts are always acquired freshly.
+Manifest documents retain exact dependency strings and TOML value/table shapes.
+The owner reuses parsed syntax only after acquiring the complete current text; it
+retains neither path-dependent interpretation nor a mutable metadata snapshot.
+Historical workspace interpretation requests relevant root/member syntax lazily,
+deriving inheritance, compiled matchers, membership and deferred installation errors
+in the bound context. Unrelated manifests are neither decoded nor parsed.
+Parsed lockfile graphs serve several binary closures within a classification; committed
+graphs can survive prospective passes under the owning snapshot's context.
 
-Manifest syntax and resolved lockfile graphs use complete text, computation revision and
-producer version as identity. Their entries contain no acquired absolute paths. Syntax retains
-exact dependency strings and TOML value/table shapes; it does not retain comments or formatting.
-Rehydration constructs syntax nodes rather than reparsing the source text. Format-preserving
-writers still parse original files. Lockfile admission checks graph index bounds and root
-identities before closure traversal. Installation declarations and registry context remain
-separate from the content-only lock graph.
-
-Installation graphs expose a deterministic key projection of successful declarations, resolved
-path identities, source/patch rules and registry interpretation. The projection can contain
-confidential registry configuration and is only an in-memory identity input. Consumers use
-the storage subject's SHA-256 key digest before persisting configuration-dependent identities.
-Deferred errors have no persisted
-success representation; a derived-computation consumer must bypass reuse while retaining their
-live causes. Parsed lock graph serialization orders root indexes independently of hash-map seeds.
-Versioning consumes these observations for its complete-input decisions; workspace does not own
-classification policy or store a live workspace as a decision entry.
-
-Historical workspace interpretation requests cached root/member syntax on demand, deriving
-inheritance, compiled matchers, membership and deferred installation errors in the current
-context. Unrelated manifests are neither decoded nor parsed. Cargo configuration is not stored.
-Current metadata acquisition reads manifest bytes before consulting parsed syntax; neither
-file timestamps nor cached metadata establish freshness. An acquisition retains its parsed
-root/member documents and tracked listing for adjacent consumers, without extending their
-lifetime across a new observation boundary. Callers keep assessed source, configuration
-and history stable during read-only work; a command entry, deliberate mutation or
-workspace relocation requires a fresh acquisition. Unresolved metadata uses `--no-deps`
-and `--locked`, without turning classification into dependency resolution.
-Content-keyed syntax can outlive repository
+An acquisition moves its tracked listing into the returned work tree and retains parsed
+root/member documents for adjacent consumers. Read-only source traversal borrows acquired
+documents and owns documents acquired on a miss. Callers keep assessed source, configuration
+and history stable during read-only work; an independent command entry, deliberate mutation
+or workspace relocation requires fresh acquisition. Unresolved metadata uses
+`--no-deps --locked`, without turning
+classification into dependency resolution. Content-keyed syntax can outlive repository
 rebinding because it has no repository interpretation.
-Source-location discovery accepts the same acquisition's documents and reads any newly reached
-manifests. Both supplied-document and native-read entry points share recursive discovery and
-root-alias admission; neither retains a workspace snapshot.
+
+Source-location discovery accepts the same acquisition's documents and reads newly
+reached manifests. Native-read and supplied-document entry points share recursive
+discovery and root-alias admission. Versioning adds relocatability constraints and
+fingerprints the selected files, including absent reserved inputs and transitive path
+dependencies outside Cargo's member list.
 
 Replacement refs, replacement environment and graft contents are observed at each
-classification boundary and invalidate invocation memory when they change. Histories with
-an unrepresentable replacement namespace are rejected rather than using the default namespace.
-Histories with
-replacement refs or grafts bypass persistent observations because their referenced-object
-availability is not immutable. Neither credentials nor Git configuration values containing
-credentials are stored. This is local disposable storage, not a remote trust protocol.
+classification boundary and invalidate invocation memory when they change. An
+unrepresentable replacement namespace is rejected rather than treated as the default
+namespace. There is no persistent observation store, cache-location discovery or
+serialized interpretation. Ordinary Cargo/compiler caches remain owned by their tools.
 
 ## Patch content acquisition
 
@@ -151,11 +85,10 @@ stdin is written concurrently with output draining.
 Shared vector ownership preserves each acquired payload allocation rather than copying it into
 a reference-counted slice. Per-object headers and spare capacity stay with that allocation.
 
-Ordinary multi-object batches use the existing typed cache keyed by their ordered immutable
-identities and Git interpretation context. Singleton reads bypass serialization because they
-can exceed the lookahead budget. Live size acquisition still detects unavailable required
-objects before a multi-object cache hit; no missing object becomes an empty file.
-Disabled storage validates reusable identities without constructing unused owned cache keys.
+Every rendering pass acquires its required objects from Git. The size query rejects unavailable
+objects before a multi-object read; the content protocol checks each response against its
+requested identity, type and length. Singleton batches use a direct blob read. No missing object
+becomes an empty file, and no payload is retained beyond its rendering consumers.
 
 ## Fresh classification listings
 
@@ -175,12 +108,12 @@ Presence, nested-manifest removal, symlink admission and packaging rules remain 
 existing owners. Effective modes retain the index baseline followed by worktree changes.
 The observation value can serve adjacent read-only consumers of the admitted classification,
 including packaging selection. It is dropped before edits, resolution or relocation and is
-never reused by an independent command or stored in committed/persistent caches.
+never reused by an independent command or stored with committed snapshots.
 
 An index entry is racily clean when its cached filesystem metadata can appear unchanged despite
 a recent content change, requiring Git to compare content. Raw mode diffs can therefore execute
-clean filters for such entries. Effective filter
-attributes are therefore acquired for the relevant tracked paths before sharing mode queries.
+clean filters for such entries. Effective filter attributes are therefore acquired for the
+relevant tracked paths before sharing mode queries.
 If Git reports a filter attribute, the entire pass retains per-package mode-query ordering; no
 assumption about driver statelessness or configuration absence permits sharing. Attribute
 query failures propagate. This gate never executes a driver, does not widen to unrelated
