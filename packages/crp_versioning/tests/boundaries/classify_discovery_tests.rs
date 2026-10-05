@@ -7,6 +7,7 @@ use std::os::unix::fs::symlink;
 
 use crp_diag::{Discard, Verbose};
 use crp_versioning::classify::*;
+use crp_versioning::resolved::Inputs;
 use crp_workspace::git::{GitRepo, WorkTreeModes};
 use crp_workspace::manifest::{PathCase, WorkspaceInherit, parse_package_manifest};
 use crp_workspace::metadata::WorkPackage;
@@ -40,11 +41,61 @@ fn historical_manifest_batches_decode_only_selected_members() {
         initial.packages.first().unwrap().status(),
         PackageStatus::Unchanged
     );
+    drop(initial);
     fixture.write("member space/src/lib.rs", b"pub fn changed() {}\n");
     let changed = classify(&manifest, Some("HEAD"), Verbose::new(false, &Discard)).unwrap();
     let changed = changed.packages.first().unwrap();
     assert_eq!(changed.status(), PackageStatus::NeedsIncrement);
     assert!(!changed.patch().is_empty());
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "captures, classifies and mutates a real Git workspace")]
+fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() {
+    let fixture = Repository::new();
+    fixture.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['pkg']\nresolver='3'\n",
+    );
+    fixture.write(
+        "pkg/Cargo.toml",
+        b"[package]\nname='pkg'\nversion='1.0.0'\nedition='2024'\n",
+    );
+    fixture.write("pkg/src/lib.rs", b"pub fn original() {}\n");
+    fixture.command(&["add", "-A"]);
+    fixture.command(&["commit", "--quiet", "-m", "baseline"]);
+    let manifest = fixture.path().join("Cargo.toml");
+    let verbose = Verbose::new(false, &Discard);
+    let mut cache = SnapshotCache::default();
+    for pass in 0..2 {
+        let (inputs, acquired) =
+            Inputs::capture_with_cache(&manifest, Some("HEAD"), None, verbose, &mut cache).unwrap();
+        let classification = classify_acquired(acquired, verbose, &mut cache).unwrap();
+        let package = classification.work_tree.packages.first().unwrap();
+        let paths = classification.released_work_tree_paths(package).unwrap();
+        assert_eq!(
+            paths,
+            classification.released_work_tree_paths(package).unwrap()
+        );
+        let class = classification.packages.first().unwrap();
+        if pass == 0 {
+            assert_eq!(class.status(), PackageStatus::Unchanged);
+            assert!(!paths.contains("src/added.rs"));
+        } else {
+            assert_eq!(class.status(), PackageStatus::NeedsIncrement);
+            assert!(class.patch().contains("+pub fn changed() {}"));
+            assert!(class.patch().contains("new mode 100755"));
+            assert!(paths.contains("src/added.rs"));
+            assert!(class.untracked.contains(&"src/untracked.rs".to_owned()));
+        }
+        inputs.verify(&manifest, None).unwrap();
+        drop(classification);
+        fixture.write("pkg/src/lib.rs", b"pub fn changed() {}\n");
+        fixture.write("pkg/src/added.rs", b"pub fn added() {}\n");
+        fixture.command(&["add", "pkg/src/added.rs"]);
+        fixture.command(&["update-index", "--chmod=+x", "pkg/src/lib.rs"]);
+        fixture.write("pkg/src/untracked.rs", b"pub fn untracked() {}\n");
+    }
 }
 
 #[test]

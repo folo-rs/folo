@@ -224,7 +224,10 @@ fn parsed_members_reinterpret_changed_workspace_context_and_relocate_without_sta
                     .keys()
                     .all(|path| path.starts_with(&observed.workspace_root))
             );
-            assert_eq!(observed.tracked_paths, fixture.repo().ls_files("").unwrap());
+            assert_eq!(
+                observed.tracked_paths.as_ref(),
+                fixture.repo().ls_files("").unwrap()
+            );
             assert!(
                 observed
                     .tracked_paths

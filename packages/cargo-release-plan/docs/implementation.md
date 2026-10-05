@@ -91,16 +91,19 @@ Complete manifest text and lockfile text also identify reusable parsed syntax an
 graphs. Workspace owns these subjects; historical workspace reconstruction remains lazy and
 context-bound. Current bytes are acquired before parse reuse. Mutable Cargo metadata,
 classification decisions and successful verification verdicts are not persistent entries.
-Adjacent consumers explicitly share the same acquisition's root/member documents and tracked
-listing. Preview reacquires after edits/resolution and reads artifact contents freshly; preparation
-retains its separate prospective acquisition. See the component guides for these lifetimes.
+Adjacent consumers explicitly share the same acquisition's workspace, selected history,
+root/member documents and tracked listing. Capture hands these observations to classification
+without repeating metadata or ref resolution. Each independent entry acquires new observations.
+The owning call site consumes or drops observations before edits, resolution or relocation.
+Preview reads artifact contents freshly; preparation retains its separate prospective
+acquisition. See the component guides for these lifetimes.
 Patch generation requests only differing objects, resolving both endpoints to exact identities
 before rendering. Workspace supplies byte-bounded batches and immutable content reuse; the
 renderer retains only its current comparison in addition to that bounded lookahead.
-Fresh classification-pass Git listings share the metadata pass's tracked paths and acquire
-scoped mode/untracked observations across packages. Each package applies the existing resource
-and packaging rules independently; acquisition sharing never partitions shared resources or
-extends source admission across edits, resolution or another classification.
+The admitted interval owns the shared tracked listing and scoped mode/untracked observations.
+Classification retains this handle for adjacent read-only consumers, including packaging probes.
+Each package applies the existing resource and packaging rules independently; sharing never
+partitions shared resources or extends admission across edits, resolution or another command.
 
 ## Executable identity
 
@@ -178,10 +181,19 @@ group size, canonical naming, ordering and uniqueness.
 Compatibility is a separate explicit operation, not part of offline classification.
 Prepared inputs and resolved previews already carry source identity, so the checker
 consumes those artifacts rather than extending report schema solely to make an
-unbound report executable. Fresh checks capture inputs around their own read-only
-report and verify them again after external comparison. Preview checks use the
+unbound report executable. Fresh checks capture inputs for their own read-only
+report and share that acquisition with classification and checker selection. Preview checks use the
 retained prospective manifest and share versioning's typed resolved-state
 verification without producing publication-target JSON.
+
+The supported checker performs default full Cargo metadata on its current workspace,
+then resolves and builds separate placeholder projects. Compatibility first admits that
+same default resolution with `cargo metadata --locked`, under the checker environment.
+This prevents an absent or stale assessed lockfile from being installed by the checker's
+metadata invocation. It does not freeze registry observations or the checker's own
+placeholder resolutions. The identical-source canary owns a separate temporary fixture.
+Read-only stages rely on the stable-input command contract rather than repeating
+source fingerprints around each subprocess.
 
 The checker receives all features and one explicit published baseline version per
 consumer contract. A small identical-source library canary validates its ability
@@ -202,10 +214,9 @@ checker invocation assertions rather than library mutation runs.
 New decisions belong outside the excluded acquisition adapters so they retain
 in-process mutation coverage.
 
-Each baseline comes from one registry-history observation. Source verification
-runs after comparison even when the checker fails, and incomplete evidence is
-persisted before errors propagate. Simultaneous checker and source-verification
-failures retain both diagnostics.
+Each baseline comes from one registry-history observation. Incomplete evidence is
+persisted before checker errors propagate. Simultaneous comparison, diagnostic
+delivery and persistence failures retain their independent diagnostics.
 
 The identical-source canary requires a recognized unchanged summary from the
 same checker protocol used for real comparisons. Updating the configured checker
@@ -215,7 +226,7 @@ unknown output remains an operational failure rather than a compatible result.
 For an anticipated parent release, the report identifies packages whose comparison
 anchor is the parent's final commit. Their API comparison uses that source rather
 than an older registry version. The checker owns a detached parent worktree for the
-comparison and preserves source-verification and cleanup failures in its outcome.
+comparison, admits its source after creation and preserves cleanup failures in its outcome.
 Historical anchors retain the registry comparison path.
 
 Registry preflight reuses exact registry observations and resolved-plan inspection.
@@ -938,8 +949,9 @@ drive successive resolver outputs through this same loop, including changing
 files with unchanged version decisions, before any final evidence verification.
 The loop returns the stable artifacts; the callback retains that pass's
 classification in the caller for both readiness validation and report emission.
-No resolver or candidate edit occurs between those consumers. Original source/history
-and retained candidate verification still guard publication of the completed plan.
+No resolver or candidate edit occurs between those consumers. Original source and history
+are admitted at command entry. Relocating the completed prospective workspace discards
+its observations and requires a new captured-state admission before publishing the plan.
 
 Cycle history retains a Git object digest for each complete version/artifact
 state rather than retaining serialized lockfiles and manifests for every pass.

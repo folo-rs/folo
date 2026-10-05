@@ -8,6 +8,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
 use std::{fs, io, mem, str};
@@ -64,6 +65,10 @@ pub const MANIFEST_FILE_NAME: &str = "Cargo.toml";
 ///
 /// This is the result the `report` and `check` commands render.
 #[derive(Debug)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "Read-only consumers access classification results, not its coupled live acquisition"
+)]
 pub struct Classification {
     pub head: String,
     /// The caller's revision naming actual committed release history.
@@ -87,6 +92,62 @@ pub struct Classification {
     /// Carried so a later packaging probe resolves paths exactly as
     /// classification did.
     pub case: PathCase,
+    pub(crate) observations: LiveObservations,
+}
+
+impl Classification {
+    /// Selects released paths using this interval's admitted Git observations.
+    ///
+    /// Assessed inputs must remain unchanged since classification.
+    pub fn released_work_tree_paths(
+        &self,
+        package: &WorkPackage,
+    ) -> Result<BTreeSet<String>, AppError> {
+        observed_released_work_tree_paths(&self.git, package, self.case, Some(&self.observations))
+    }
+}
+
+/// Workspace and history observations belonging to one unchanged input interval.
+///
+/// Assessed source, configuration and history must remain unchanged until the
+/// observation is consumed. Acquire another observation after edits, resolution
+/// or relocation, and on every independent command.
+#[derive(Debug)]
+pub struct AcquiredWorkspace {
+    pub(crate) work_tree: WorkTree,
+    pub(crate) git: GitRepo,
+    pub(crate) history: AssessmentHistory,
+    pub(crate) head: String,
+    // Capture already reads the complete staged index for evidence. Classification consumes
+    // its parsed modes lazily, after filter admission, rather than issuing a second listing.
+    pub(crate) index_modes: Option<WorkTreeModes>,
+}
+
+// The observation owns complete values, not guarded caller data. Deferred manifest errors
+// are immutable diagnostic trait objects; unwinding cannot expose a partial acquisition.
+impl UnwindSafe for AcquiredWorkspace {}
+impl RefUnwindSafe for AcquiredWorkspace {}
+
+impl AcquiredWorkspace {
+    pub(crate) fn acquire(
+        manifest_path: &Path,
+        release_history: Option<&str>,
+        merge_target: Option<&str>,
+        verbose: Verbose<'_>,
+        cache: &mut SnapshotCache,
+    ) -> Result<Self, AppError> {
+        let (work_tree, git) =
+            load_tracked_work_tree_with_documents(manifest_path, &mut cache.documents, verbose)?;
+        let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
+        let head = git.head()?;
+        Ok(Self {
+            work_tree,
+            git,
+            history,
+            head,
+            index_modes: None,
+        })
+    }
 }
 
 /// Per-package classification: its status and the evidence behind it.
@@ -445,7 +506,9 @@ pub fn classify_with_target(
     )
 }
 
-/// Reacquires candidate observations while reusing only context-bound committed snapshots.
+/// Acquires current inputs and classifies them using content-bound caches.
+///
+/// Assessed source, configuration and history must remain unchanged during the call.
 pub fn classify_with_cache(
     manifest_path: &Path,
     release_history: Option<&str>,
@@ -453,16 +516,35 @@ pub fn classify_with_cache(
     verbose: Verbose<'_>,
     cache: &mut SnapshotCache,
 ) -> Result<Classification, AppError> {
-    let (mut work_tree, git) =
-        load_tracked_work_tree_with_documents(manifest_path, &mut cache.documents, verbose)?;
-    let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
+    classify_acquired(
+        AcquiredWorkspace::acquire(manifest_path, release_history, merge_target, verbose, cache)?,
+        verbose,
+        cache,
+    )
+}
+
+/// Consumes observations admitted earlier in the same unchanged input interval.
+///
+/// Assessed source, configuration and history must remain unchanged from acquisition
+/// through this call.
+pub fn classify_acquired(
+    acquired: AcquiredWorkspace,
+    verbose: Verbose<'_>,
+    cache: &mut SnapshotCache,
+) -> Result<Classification, AppError> {
+    let AcquiredWorkspace {
+        mut work_tree,
+        git,
+        history,
+        head,
+        index_modes,
+    } = acquired;
     let release_history_revision = history.release_history_revision.clone();
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
         package.resources =
             resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
-    let head = git.head()?;
     let history_commit = &history.release_history;
     verbose.note(|| {
         format!(
@@ -524,9 +606,9 @@ pub fn classify_with_cache(
         anchors: mem::take(&mut cache.lockfiles),
     };
 
-    let observations = LiveObservations::acquire(
+    let observations = LiveObservations::acquire_with_index(
         &git,
-        &work_tree.tracked_paths,
+        Rc::clone(&work_tree.tracked_paths),
         &work_tree
             .packages
             .iter()
@@ -538,6 +620,7 @@ pub fn classify_with_cache(
             .flat_map(|package| package.resources.values().map(String::as_str))
             .collect::<Vec<_>>(),
         cache.case(),
+        index_modes,
     )?;
     for package in &work_tree.packages {
         let class = classify_one(
@@ -579,7 +662,6 @@ pub fn classify_with_cache(
         });
     }
 
-    history.verify(&git)?;
     Ok(Classification {
         head,
         release_history_revision,
@@ -591,6 +673,7 @@ pub fn classify_with_cache(
         work_tree,
         git,
         case: cache.case(),
+        observations,
     })
 }
 
@@ -603,7 +686,7 @@ fn classify_one(
     work_tree: &WorkTree,
     groups: &Groups,
     git: &GitRepo,
-    observations: &LiveObservations<'_>,
+    observations: &LiveObservations,
     history_commit: &str,
     commits: &[String],
     history_snapshot: &CommitSnapshot,
@@ -967,7 +1050,7 @@ fn diff_package_with_tree(
     anchor: &PackageSide<'_>,
     work_side: &PackageSide<'_>,
     anchor_tree: &HistoricalTree,
-    observations: Option<&LiveObservations<'_>>,
+    observations: Option<&LiveObservations>,
     mut read_blobs: impl FnMut(&[&str]) -> Result<Vec<Vec<u8>>, AppError>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
@@ -1197,7 +1280,7 @@ fn observed_work_tree_modes(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
-    observations: Option<&LiveObservations<'_>>,
+    observations: Option<&LiveObservations>,
 ) -> Result<WorkTreeModes, AppError> {
     let mut pathspecs = vec![side.dir];
     pathspecs.extend(tracked_resources.values().map(String::as_str));
@@ -1398,7 +1481,7 @@ fn observed_untracked_released(
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
     tracked: &[String],
-    observations: Option<&LiveObservations<'_>>,
+    observations: Option<&LiveObservations>,
 ) -> Result<Vec<String>, AppError> {
     let narrow = || git.ls_untracked(side.dir, side.case);
     let listed = match observations {
@@ -1480,11 +1563,24 @@ pub fn released_work_tree_paths(
     package: &WorkPackage,
     case: PathCase,
 ) -> Result<BTreeSet<String>, AppError> {
+    observed_released_work_tree_paths(git, package, case, None)
+}
+
+fn observed_released_work_tree_paths(
+    git: &GitRepo,
+    package: &WorkPackage,
+    case: PathCase,
+    observations: Option<&LiveObservations>,
+) -> Result<BTreeSet<String>, AppError> {
     let side = work_tree_side(package, case);
     let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-    let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
+    let narrow = || git.tracked_paths(&resource_paths, side.case);
+    let tracked_paths = match observations {
+        Some(observations) => observations.tracked_paths(&resource_paths, narrow)?,
+        None => narrow()?,
+    };
     let tracked_resources = tracked_resources(&side, &tracked_paths);
-    let content = released_in_work_tree(git, &side, &tracked_resources, None)?;
+    let content = released_in_work_tree(git, &side, &tracked_resources, observations)?;
     Ok(content.released.into_keys().collect())
 }
 
@@ -1513,7 +1609,7 @@ fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
-    observations: Option<&LiveObservations<'_>>,
+    observations: Option<&LiveObservations>,
 ) -> Result<WorkTreeContent, AppError> {
     let narrow = || git.tracked_paths(&[side.dir], side.case);
     let tracked = match observations {
@@ -1765,6 +1861,10 @@ impl SnapshotCache {
             storage,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn protect(&self, path: &Path) -> Result<(), AppError> {
+        self.storage.protect(path)
     }
 
     fn clear(&mut self) {
@@ -2614,6 +2714,7 @@ mod tests {
     use static_assertions::assert_impl_all;
 
     assert_impl_all!(SnapshotCache: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(AcquiredWorkspace: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn absent_binary_closure_is_not_an_empty_successful_assessment() {

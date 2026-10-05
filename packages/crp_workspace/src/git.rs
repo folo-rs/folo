@@ -440,6 +440,29 @@ impl GitRepo {
         })
     }
 
+    /// Overlays current work-tree modes on an index admitted in this unchanged interval.
+    ///
+    /// The index, configuration and work-tree inputs must remain unchanged since admission.
+    #[cfg_attr(test, mutants::skip)] // Native overlay; parsing and precedence have pure tests.
+    fn work_tree_modes_from_index(
+        &self,
+        mut modes: WorkTreeModes,
+        pathspecs: &[&str],
+        case: PathCase,
+    ) -> Result<WorkTreeModes, AppError> {
+        if pathspecs.is_empty() {
+            return Ok(WorkTreeModes::default());
+        }
+        let diff = Self::scoped_outputs(
+            &["diff-files", "--raw", "-z", "--no-renames", "--"],
+            pathspecs,
+            case,
+            |args| run_capture_os_bytes("git", args, &self.root),
+        )?;
+        overlay_work_tree_modes(&diff, &mut modes)?;
+        Ok(modes)
+    }
+
     fn tracked_paths_with(
         paths: &[&str],
         case: PathCase,
@@ -702,12 +725,7 @@ fn work_tree_modes_from_outputs(
     index: &[u8],
     diff: impl FnOnce() -> Result<Vec<u8>, AppError>,
 ) -> Result<WorkTreeModes, AppError> {
-    let mut modes = WorkTreeModes::default();
-    for record in split_z(index)? {
-        if let Some((mode, path)) = staged_path_mode(&record) {
-            modes.set(path, mode);
-        }
-    }
+    let mut modes = WorkTreeModes::from_index(index)?;
     overlay_work_tree_modes(&diff()?, &mut modes)?;
     Ok(modes)
 }
@@ -840,6 +858,17 @@ pub struct WorkTreeModes {
 }
 
 impl WorkTreeModes {
+    /// Extracts artifact-relevant modes from an already acquired staged listing.
+    pub fn from_index(index: &[u8]) -> Result<Self, AppError> {
+        let mut modes = Self::default();
+        for record in index.split(|byte| *byte == 0) {
+            if let Some((mode, path)) = staged_path_mode(path_text(record)?) {
+                modes.set(path, mode);
+            }
+        }
+        Ok(modes)
+    }
+
     /// Whether Git considers `path` an executable regular file.
     #[must_use]
     pub fn is_executable(&self, path: &str) -> bool {
@@ -1438,6 +1467,19 @@ mod tests {
         );
         // Not a record at all: no field separator.
         assert_eq!(staged_path_mode("100755 abc 0 packages/foo"), None);
+    }
+
+    #[test]
+    fn captured_index_modes_reject_non_utf8_paths_and_empty_scopes_select_nothing() {
+        let error = WorkTreeModes::from_index(b"100755 abc 0\tbad-\xff\0").unwrap_err();
+        assert!(error.find_source::<NonUtf8PathError>().is_some());
+        let modes = WorkTreeModes::from_index(b"100755 abc 0\tpkg/file\0").unwrap();
+        let git = testing::unopened(Path::new("unopened"));
+        assert_eq!(
+            git.work_tree_modes_from_index(modes, &[], PathCase::Sensitive)
+                .unwrap(),
+            WorkTreeModes::default()
+        );
     }
 
     /// A regular file's mode is chosen by its executable bit.

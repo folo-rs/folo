@@ -110,7 +110,11 @@ context. Unrelated manifests are neither decoded nor parsed. Cargo configuration
 Current metadata acquisition reads manifest bytes before consulting parsed syntax; neither
 file timestamps nor cached metadata establish freshness. An acquisition retains its parsed
 root/member documents and tracked listing for adjacent consumers, without extending their
-lifetime across a new observation boundary. Content-keyed syntax can outlive repository
+lifetime across a new observation boundary. Callers keep assessed source, configuration
+and history stable during read-only work; a command entry, deliberate mutation or
+workspace relocation requires a fresh acquisition. Unresolved metadata uses `--no-deps`
+and `--locked`, without turning classification into dependency resolution.
+Content-keyed syntax can outlive repository
 rebinding because it has no repository interpretation.
 Source-location discovery accepts the same acquisition's documents and reads any newly reached
 manifests. Both supplied-document and native-read entry points share recursive discovery and
@@ -142,18 +146,23 @@ objects before a multi-object cache hit; no missing object becomes an empty file
 
 ## Fresh classification listings
 
-Each classification pass borrows its own metadata acquisition's complete tracked listing.
+Each admitted interval shares ownership of its metadata acquisition's complete tracked listing.
 Index modes, their worktree overlay and untracked candidates are acquired over the union of
 relevant literal pathspecs, splitting arguments at the native command-line budget. Untracked
 queries do not expand to unrelated repository paths. Packages select overlapping scopes, so
 shared resources and outer/nested consumers retain independent packaging interpretation.
+Source capture can supply already acquired index modes; live acquisition still obtains the
+worktree overlay only after effective-filter admission. Without capture, acquisition reads the
+index itself. Neither path executes mode queries merely to capture source evidence.
 
 Selection follows Git's literal component boundaries and ASCII byte case comparison, not the
 filesystem's Unicode case model. Noncanonical scopes, non-ASCII insensitive scopes, overridden
 pathspec environments and requests outside acquired scopes use the narrow native query.
 Presence, nested-manifest removal, symlink admission and packaging rules remain in their
 existing owners. Effective modes retain the index baseline followed by worktree changes.
-The observation value expires with its pass and never enters committed or persistent storage.
+The observation value can serve adjacent read-only consumers of the admitted classification,
+including packaging selection. It is dropped before edits, resolution or relocation and is
+never reused by an independent command or stored in committed/persistent caches.
 
 Raw mode diffs can execute clean filters for racily clean index entries. Effective filter
 attributes are therefore acquired for the relevant tracked paths before sharing mode queries.

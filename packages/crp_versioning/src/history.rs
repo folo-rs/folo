@@ -4,7 +4,7 @@ use crp_diag::{Quotable as _, Verbose};
 use crp_workspace::git::{DefaultReleaseHistory, GitRepo};
 use ohno::AppError;
 
-/// Immutable assessment boundaries plus the caller's refs, retained to detect ref movement.
+/// Resolved assessment boundaries plus the caller's refs for independent evidence admission.
 #[derive(Debug)]
 pub(crate) struct AssessmentHistory {
     pub(crate) release_history: String,
@@ -130,9 +130,7 @@ struct UnrelatedMergeTarget {
 
 /// A changing ref cannot supply a stable assessment boundary.
 #[ohno::error]
-#[display(
-    "release-history or merge-target reference moved during assessment; capture fresh evidence"
-)]
+#[display("release-history or merge-target reference changed; capture fresh evidence")]
 struct AssessmentHistoryMoved;
 
 #[cfg(test)]

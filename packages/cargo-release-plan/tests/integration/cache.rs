@@ -176,6 +176,69 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
 #[test]
 #[cfg_attr(
     miri,
+    ignore = "executes independent checks and real Cargo packaging probes"
+)]
+fn packaging_probes_reuse_their_classification_listing_but_commands_reacquire() {
+    let fixture = Fixture::new("[workspace.package]\nreadme='README.md'\n");
+    for name in ["first", "second"] {
+        write_package(&fixture, name, "0.1.0", "readme.workspace=true\n");
+    }
+    fixture.write("README.md", "shared\n");
+    fixture.cargo(&["generate-lockfile", "--offline"]);
+    fixture.commit("packaging baseline");
+    let evidence = TempDir::new().unwrap();
+    for pass in 0..2 {
+        let trace = evidence.path().join(format!("check-{pass}.trace"));
+        let output = success(
+            command(&fixture)
+                .args([
+                    "check",
+                    "--release-history",
+                    "HEAD",
+                    "--verify-packaging",
+                    "--no-cache",
+                ])
+                .env("GIT_TRACE", &trace)
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace = fs::read_to_string(trace).unwrap();
+        for operation in [
+            "git ls-files -z -- ",
+            "git ls-files -s -z -- ",
+            "git diff-files --raw -z --no-renames -- ",
+        ] {
+            assert_eq!(
+                trace
+                    .lines()
+                    .filter(|line| line.contains(operation))
+                    .count(),
+                1,
+                "{trace}"
+            );
+        }
+        // Each independent command must see the staged addition; Cargo's real package list
+        // includes it, so retaining the preceding command's listing would produce a mismatch.
+        fixture.write("packages/first/src/new.rs", "pub fn added() {}\n");
+        fixture.write(
+            "packages/first/Cargo.toml",
+            &fixture
+                .read("packages/first/Cargo.toml")
+                .replace("0.1.0", "0.1.1"),
+        );
+        fixture.git(&["add", "packages/first"]);
+        fixture.cargo(&["generate-lockfile", "--offline"]);
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
     ignore = "executes a stateful Git clean filter and the application"
 )]
 fn shared_resource_filters_keep_each_packages_original_conversion_and_process_boundary() {
@@ -1295,12 +1358,46 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
     fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
     let prepared = evidence.path().join("prepared");
+    let prepare_trace = evidence.path().join("prepare.trace");
     success(
         command(&fixture)
             .args(["prepare", "--release-history", "HEAD", "--output"])
             .arg(&prepared)
+            .env("GIT_TRACE", &prepare_trace)
             .output()
             .unwrap(),
+    );
+    // Storage isolation inventory, original entry, resolved temporary workspace, and
+    // original post-install capture.
+    // The post-install classification consumes that capture rather than acquiring again.
+    let prepare_trace = fs::read_to_string(prepare_trace).unwrap();
+    assert_eq!(
+        prepare_trace
+            .lines()
+            .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+            .count(),
+        4,
+    );
+    assert_eq!(
+        prepare_trace
+            .lines()
+            .filter(|line| line.contains("git ls-files --stage -z"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        prepare_trace
+            .lines()
+            .filter(|line| line.contains("git ls-files -s -z -- "))
+            .count(),
+        0
+    );
+    assert_eq!(
+        prepare_trace
+            .lines()
+            .filter(|line| line.contains("git diff-files --raw"))
+            .count(),
+        1
     );
     let plan = evidence.path().join("proposal.json");
     fs::write(
@@ -1327,6 +1424,16 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .unwrap(),
     );
     assert_eq!(acquisitions(&trace), (0, 0));
+    // Storage isolation inventory, original admission, candidate creation, each convergence
+    // pass, and final relocation.
+    assert_eq!(
+        fs::read_to_string(&trace)
+            .unwrap()
+            .lines()
+            .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
+            .count(),
+        6,
+    );
     let resolved: serde_json::Value =
         serde_json::from_slice(&fs::read(preview.join("plan.json")).unwrap()).unwrap();
     let manifest = PathBuf::from(
@@ -1337,6 +1444,13 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .unwrap()
             .as_str()
             .unwrap(),
+    );
+    let candidate_manifest =
+        fs::read_to_string(manifest.parent().unwrap().join("packages/demo/Cargo.toml")).unwrap();
+    assert!(candidate_manifest.contains("0.1.1"), "{candidate_manifest}");
+    assert_eq!(
+        fs::read_to_string(manifest.parent().unwrap().join("packages/demo/src/lib.rs")).unwrap(),
+        "pub fn changed() {}\n"
     );
     for (name, cache) in [
         ("candidate-root", manifest.parent().unwrap().to_path_buf()),
@@ -1356,6 +1470,7 @@ fn preview_keeps_original_cache_location_and_cache_removal_does_not_invalidate_e
             .unwrap();
         assert!(!output.status.success());
         assert!(!cache.join("git-trees").exists());
+        assert!(!cache.join("manifest-document").exists());
     }
     let compatibility_trace = evidence.path().join("compatibility.trace");
     success(

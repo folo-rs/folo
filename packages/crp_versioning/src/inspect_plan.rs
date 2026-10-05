@@ -4,13 +4,15 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crp_diag::Verbose;
+use crp_workspace::git::GitRepo;
 use crp_workspace::metadata::{WorkTree, load_tracked_work_tree};
 use ohno::AppError;
 use serde::Serialize;
 
+use crate::classify::{AcquiredWorkspace, SnapshotCache};
 use crate::groups::Groups;
 use crate::plan::{PlanFile, PlanStage, resolve_plan};
-use crate::resolved::{ResolutionRequired, ResolvedState, apply_resolved, read_json};
+use crate::resolved::{ResolutionRequired, ResolvedState, read_json, validate_application};
 
 /// Reads and validates preview evidence without producing publication-target output.
 #[cfg_attr(test, mutants::skip)] // Real acquisition is exercised by compatibility integration tests.
@@ -19,21 +21,49 @@ pub fn read_resolved_preview(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<ResolvedState, AppError> {
-    resolved_preview(
-        read_json(path)?,
-        |plan| apply_resolved(plan, manifest, true, verbose).map(|_| ()),
-        |state| state.verify_candidate(&state.evidence_manifest_path),
-    )
+    read_resolved_preview_with_cache(path, manifest, verbose, &mut SnapshotCache::default())
+        .map(|(state, _)| state)
 }
 
-fn resolved_preview(
+/// Admits a resolved preview and retains its candidate observations for read-only work.
+///
+/// Assessed source, configuration and history must remain unchanged while using
+/// the returned candidate.
+#[cfg_attr(test, mutants::skip)] // Native admission; isolation and reuse have integration coverage.
+pub fn read_resolved_preview_with_cache(
+    path: &Path,
+    manifest: &Path,
+    verbose: Verbose<'_>,
+    cache: &mut SnapshotCache,
+) -> Result<(ResolvedState, AcquiredWorkspace), AppError> {
+    let plan: PlanFile = read_json(path)?;
+    validate_expanded(&plan)?;
+    let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
+    // Parsed documents can publish entries during admission, before classification.
+    // Protect the whole retained repository first, including a nested workspace's siblings.
+    cache.protect(path)?;
+    cache.protect(
+        GitRepo::discover(
+            state
+                .evidence_manifest_path
+                .parent()
+                .ok_or_else(ResolutionRequired::new)?,
+        )?
+        .root(),
+    )?;
+    drop(validate_application(&plan, manifest, verbose, cache)?);
+    resolved_preview(plan, |state| {
+        state.acquire_candidate(&state.evidence_manifest_path, verbose, cache)
+    })
+}
+
+fn resolved_preview<T>(
     plan: PlanFile,
-    validate_resolved: impl FnOnce(&PlanFile) -> Result<(), AppError>,
-    verify_candidate: impl FnOnce(&ResolvedState) -> Result<(), AppError>,
-) -> Result<ResolvedState, AppError> {
-    validate_inputs(&plan, true, validate_resolved, verify_candidate)?;
-    plan.resolved
-        .ok_or_else(|| ResolutionRequired::new().into())
+    verify_candidate: impl FnOnce(&ResolvedState) -> Result<T, AppError>,
+) -> Result<(ResolvedState, T), AppError> {
+    let state = plan.resolved.ok_or_else(ResolutionRequired::new)?;
+    let acquired = verify_candidate(&state)?;
+    Ok((state, acquired))
 }
 
 /// Publication eligibility comes from tracked Cargo members, not package naming.
@@ -76,9 +106,18 @@ pub fn read_plan_inspection(
         |plan| {
             // Reuse application's captured-state validation without installing any files.
             // The registry probe must see the same target set that application will accept.
-            apply_resolved(plan, manifest, true, verbose).map(|_| ())
+            validate_application(plan, manifest, verbose, &mut SnapshotCache::default())
+                .map(|(_, acquired)| acquired.work_tree)
         },
-        |state| state.verify_candidate(&state.evidence_manifest_path),
+        |state| {
+            state
+                .acquire_candidate(
+                    &state.evidence_manifest_path,
+                    verbose,
+                    &mut SnapshotCache::default(),
+                )
+                .map(|_| ())
+        },
         || load_tracked_work_tree(manifest).map(|(work_tree, _)| work_tree),
     )
 }
@@ -87,12 +126,15 @@ fn inspect_plan(
     plan: PlanFile,
     require_resolved: bool,
     verbose: Verbose<'_>,
-    validate_resolved: impl FnOnce(&PlanFile) -> Result<(), AppError>,
+    validate_resolved: impl FnOnce(&PlanFile) -> Result<WorkTree, AppError>,
     verify_candidate: impl FnOnce(&ResolvedState) -> Result<(), AppError>,
     load_work_tree: impl FnOnce() -> Result<WorkTree, AppError>,
 ) -> Result<PlanInspection, AppError> {
-    validate_inputs(&plan, require_resolved, validate_resolved, verify_candidate)?;
-    let work_tree = load_work_tree()?;
+    let work_tree =
+        match validate_inputs(&plan, require_resolved, validate_resolved, verify_candidate)? {
+            Some(work_tree) => work_tree,
+            None => load_work_tree()?,
+        };
     let resolved = resolve_plan(
         &plan,
         &Groups::from_workspace(&work_tree),
@@ -113,21 +155,21 @@ fn inspect_plan(
     })
 }
 
-fn validate_inputs(
+fn validate_inputs<T>(
     plan: &PlanFile,
     require_resolved: bool,
-    validate_resolved: impl FnOnce(&PlanFile) -> Result<(), AppError>,
+    validate_resolved: impl FnOnce(&PlanFile) -> Result<T, AppError>,
     verify_candidate: impl FnOnce(&ResolvedState) -> Result<(), AppError>,
-) -> Result<(), AppError> {
+) -> Result<Option<T>, AppError> {
     validate_expanded(plan)?;
-    if require_resolved || plan.resolved.is_some() {
-        validate_resolved(plan)?;
-    }
+    let acquired = (require_resolved || plan.resolved.is_some())
+        .then(|| validate_resolved(plan))
+        .transpose()?;
     if let Some(state) = &plan.resolved {
         // Both consumers can run compatibility tooling immediately after validation.
         verify_candidate(state)?;
     }
-    Ok(())
+    Ok(acquired)
 }
 
 fn validate_expanded(plan: &PlanFile) -> Result<(), AppError> {
@@ -155,6 +197,7 @@ struct ExpandedPlanRequired;
 mod tests {
     use std::cell::Cell;
     use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     use crp_workspace::lockfile::InstallationGraph;
     use crp_workspace::metadata::{ManifestSnapshot, VersionTarget};
@@ -170,45 +213,24 @@ mod tests {
         let plan = plan(&["api"], true);
         let expected = plan.resolved.clone().unwrap();
         let order = Cell::new(0);
-        let state = resolved_preview(
-            plan,
-            |_| {
-                assert_eq!(order.replace(1), 0);
-                Ok(())
-            },
-            |state| {
-                assert_eq!(order.replace(2), 1);
-                assert_eq!(state, &expected);
-                Ok(())
-            },
-        )
+        let state = resolved_preview(plan, |state| {
+            assert_eq!(order.replace(1), 0);
+            assert_eq!(state, &expected);
+            Ok("acquired")
+        })
         .unwrap();
-        assert_eq!(state, expected);
-        assert_eq!(order.get(), 2);
+        assert_eq!(state, (expected, "acquired"));
+        assert_eq!(order.get(), 1);
     }
 
     #[test]
     fn resolved_preview_requires_state_and_preserves_validation_failures() {
-        let error = resolved_preview(plan(&[], false), |_| Ok(()), |_| panic!()).unwrap_err();
+        let error = resolved_preview::<()>(plan(&[], false), |_| panic!()).unwrap_err();
         assert!(error.find_source::<ResolutionRequired>().is_some());
-        for source_fails in [true, false] {
-            let error = resolved_preview(
-                plan(&[], true),
-                |_| {
-                    if source_fails {
-                        Err(InspectionFailure::new().into())
-                    } else {
-                        Ok(())
-                    }
-                },
-                |_| {
-                    assert!(!source_fails);
-                    Err(InspectionFailure::new().into())
-                },
-            )
-            .unwrap_err();
-            assert!(error.find_source::<InspectionFailure>().is_some());
-        }
+        let error =
+            resolved_preview::<()>(plan(&[], true), |_| Err(InspectionFailure::new().into()))
+                .unwrap_err();
+        assert!(error.find_source::<InspectionFailure>().is_some());
     }
 
     #[test]
@@ -256,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn inspection_verifies_evidence_before_loading_and_serializes_the_publication_intersection() {
+    fn inspection_reuses_admitted_workspace_and_serializes_the_publication_intersection() {
         let plan = plan(&["zeta", "helper", "api"], true);
         let expected = plan.clone();
         let order = Cell::new(0);
@@ -267,15 +289,6 @@ mod tests {
             |plan| {
                 assert_eq!(order.replace(1), 0);
                 assert_eq!(*plan, expected);
-                Ok(())
-            },
-            |state| {
-                assert_eq!(order.replace(2), 1);
-                assert_eq!(state, expected.resolved.as_ref().unwrap());
-                Ok(())
-            },
-            || {
-                assert_eq!(order.replace(3), 2);
                 Ok(work_tree(&[
                     ("zeta", true),
                     ("helper", false),
@@ -285,9 +298,15 @@ mod tests {
                     ("api", true),
                 ]))
             },
+            |state| {
+                assert_eq!(order.replace(2), 1);
+                assert_eq!(state, expected.resolved.as_ref().unwrap());
+                Ok(())
+            },
+            || panic!("source admission already acquired this workspace"),
         )
         .unwrap();
-        assert_eq!(order.get(), 3);
+        assert_eq!(order.get(), 2);
         assert_eq!(
             serde_json::to_value(output).unwrap(),
             json!({
@@ -303,7 +322,7 @@ mod tests {
             plan(&[], true),
             false,
             Verbose::new(false, &crp_diag::Discard),
-            |_| Ok(()),
+            |_| Ok(work_tree(&[])),
             |_| Err(InspectionFailure::new().into()),
             || panic!(),
         )
@@ -394,7 +413,7 @@ mod tests {
     fn work_tree(targets: &[(&str, bool)]) -> WorkTree {
         WorkTree {
             manifests: ManifestSnapshot::default(),
-            tracked_paths: Vec::new(),
+            tracked_paths: Rc::default(),
             workspace_root: PathBuf::from("workspace"),
             packages: Vec::new(),
             version_targets: targets

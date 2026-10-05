@@ -53,8 +53,9 @@ Captured inputs retain `release_history` and `release_history_revision`, plus
 `merge_target` for a distinct predecessor and `merge_target_revision` whenever supplied.
 Live verification resolves
 the original refs and rejects movement. Prospective and retained workspaces use
-the frozen commits, independently of the clone's ref names; after candidate
-verification, the original captured refs are checked again at the source repository.
+the frozen commits, independently of the clone's ref names. Independent candidate
+verification also admits the original captured refs at the source repository;
+adjacent candidate consumers share the command-entry admission.
 Preparation retains
 the context across lockfile refresh; every fixed-point classification uses it.
 
@@ -92,8 +93,10 @@ from exact blob identities. Historical paths resolve through the retained tree; 
 name the objects written by the original clean conversion, never a second filter execution.
 Workspace's bounded reader shares duplicate identities within each batch and releases content
 as rendering advances. The existing content and mode renderers still own patch semantics.
-Every pass uses workspace's fresh, scoped Git listings alongside that pass's metadata tracked
-paths. Resource selection overlaps across packages and the existing packaging/presence helpers
+Each admitted classification owns workspace's scoped Git observations and shares its metadata
+tracked listing without copying the paths. Adjacent read-only packaging checks select from
+that same handle rather than querying tracked paths again. Resource selection overlaps across
+packages and the existing packaging/presence helpers
 interpret each selection. Symlink and presence checks precede that package's hashes. Hashing
 keeps per-package ordering and process boundaries, including for shared resources selected by
 stateful clean filters; mutable listings never enter the committed-snapshot cache.
@@ -119,8 +122,9 @@ Candidate metadata and lockfile bytes are reacquired at each pass. Workspace's c
 syntax and lockfile graphs avoid repeating interpretation for equal bytes without preserving
 a mutable metadata snapshot or an availability verdict. Historical workspaces are reconstructed
 from lazily requested parsed documents under the bound context; compiled matchers and deferred
-errors are not serialized. History refs are still resolved and verified. The converged classification supplies both the final
-readiness verdict and report, followed by the original source and candidate checks.
+errors are not serialized. History refs are resolved at acquisition. The converged
+classification supplies both the final readiness verdict and report; relocation
+then requires fresh candidate admission.
 
 Preview computes the next edits from its preceding classification's workspace root, member
 manifest paths and member directory identities. These remain raw Cargo-relative observations,
@@ -133,9 +137,17 @@ metadata; original-workspace observations never stand in for the candidate.
 Source capture reuses the tracked listing and parsed root/member documents acquired by its own
 metadata projection, including during path-dependency traversal. Files reached outside those
 documents are still acquired, and ignored/untracked build-source traversal and index capture
-remain independent. Successful verification can return its freshly acquired workspace to an
-immediate consumer such as preparation or application. Each verification still captures and
-admits current inputs; only its acquired values are shared, never its verdict.
+remain independent. Successful admission returns the acquired workspace, Git identity and
+resolved history to adjacent classification or plan consumers. Its parsed index modes also
+serve classification's baseline without another staged listing when effective filters permit
+shared mode queries. Capture itself does not execute mode overlays or clean filters.
+Preparation uses its original
+acquisition to locate the lockfile, drops it before installing resolved bytes, then captures
+and classifies the resulting source with one acquisition. Application drops its admission
+before writing and verifies the resulting state with a new capture. Preview consumes the
+preceding classification before edits/resolution and reacquires after each pass.
+Independent commands never reuse a prior live-input admission. The stable-input contract
+permits read-only stages to share acquired values without repeated fingerprints or ref checks.
 
 Captured-source traversal, artifact admission and prospective evidence ownership use
 injected observations and effects. This keeps transitive membership, original/final

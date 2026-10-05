@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf, absolute};
+use std::rc::Rc;
 use std::{fs, io};
 
 use crp_diag::{Quotable as _, Verbose};
@@ -51,7 +52,7 @@ pub struct WorkTree {
     /// Parsed documents from this acquisition, before any edits or Cargo resolution.
     pub manifests: ManifestSnapshot,
     /// The same live index listing used to select this acquisition's tracked members.
-    pub tracked_paths: Vec<String>,
+    pub tracked_paths: Rc<[String]>,
     pub packages: Vec<WorkPackage>,
     /// Every Git-tracked member whose declared version a plan may set.
     pub version_targets: Vec<VersionTarget>,
@@ -501,8 +502,8 @@ pub fn capture_metadata(manifest_path: &Path) -> Result<Vec<u8>, AppError> {
         .parent()
         .expect("an absolute manifest filename has a parent directory");
     // `--no-deps` is the classification Cargo invocation: no graph resolve and
-    // no crates.io. `--offline` is omitted so a workspace without a lockfile
-    // can still be classified; no registry packages are consulted.
+    // no crates.io. `--locked` asserts the read-only command contract; no graph
+    // resolution is requested, so a workspace without a lockfile is still supported.
     // The requested schema version is pinned because the `Metadata*`
     // projections in this module deserialize exactly that documented contract.
     run_capture_bytes(
@@ -510,6 +511,7 @@ pub fn capture_metadata(manifest_path: &Path) -> Result<Vec<u8>, AppError> {
         &[
             "metadata",
             "--no-deps",
+            "--locked",
             "--format-version",
             "1",
             "--manifest-path",
@@ -794,7 +796,7 @@ fn work_tree_from_metadata_parsed_with(
     Ok(WorkTree {
         workspace_root,
         manifests,
-        tracked_paths: tracked.paths.clone(),
+        tracked_paths: tracked.paths.clone().into(),
         packages,
         version_targets,
         exact_dependencies,

@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
+use crp_workspace::git::LiveObservations;
 use crp_workspace::git::testing::unopened;
 use crp_workspace::lockfile::InstallationGraph;
 use crp_workspace::manifest::PathCase;
@@ -33,7 +35,7 @@ pub(crate) fn classification(packages: Vec<PackageClass>) -> Classification {
         membership: Groups::default(),
         work_tree: WorkTree {
             manifests: ManifestSnapshot::default(),
-            tracked_paths: Vec::new(),
+            tracked_paths: Rc::default(),
             workspace_root: PathBuf::from("workspace"),
             packages: Vec::new(),
             version_targets,
@@ -45,6 +47,7 @@ pub(crate) fn classification(packages: Vec<PackageClass>) -> Classification {
         git: unopened(Path::new("workspace")),
         // No filesystem is consulted by these fixtures.
         case: PathCase::Sensitive,
+        observations: LiveObservations::default(),
     }
 }
 

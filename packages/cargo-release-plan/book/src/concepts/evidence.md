@@ -6,6 +6,22 @@ cannot determine whether a behavioral change breaks a promise to users.
 
 ## Facts first, then semantic impact
 
+### Keep command inputs stable
+
+Keep assessed source, configuration and history unchanged while a command runs,
+apart from its explicit editing or dependency-resolution steps. Tools invoked for
+read-only work must follow the same requirement. Build output outside assessed
+inputs is permitted, as are Git object additions and index stat refreshes that
+leave semantic source and staged identities unchanged.
+
+Each command acquires current inputs. It can reuse those observations during
+read-only work, but acquires new ones after its own writes or resolution and for
+new or relocated workspaces. Run source-mutating commands against the same
+workspace separately; concurrent readers can share the disposable cache.
+This requirement does not freeze remote registry or publication state.
+
+### Assess the acquired facts
+
 A **release report** lists each package's changed released content, declared
 version and workspace dependencies. File patches explain source changes;
 structured entries explain inherited manifest values and binary dependency changes.
