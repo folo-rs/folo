@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf, absolute};
 
 use crp_diag::Verbose;
 use crp_workspace::artifact_path::{resolve_path, same_path};
-use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::command::hash_bytes;
 use crp_workspace::manifest::requirement_names_version;
 use crp_workspace::metadata::WorkTree;
@@ -17,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::apply::{ManifestEdit, compute_edits};
 use crate::check::{check_classification, releases_breaking_change};
 use crate::classify::{
-    ChangedItem, PackageClass, PackageStatus, SnapshotCache, classify_acquired, classify_with_cache,
+    ChangedItem, PackageClass, PackageStatus, Snapshots, classify_acquired, classify_with_snapshots,
 };
 use crate::groups::{GroupVerdict, Groups};
 use crate::plan::{
@@ -52,30 +51,10 @@ pub fn run_prepare_with_target(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
-    run_prepare_with_cache(
-        output,
-        release_history,
-        merge_target,
-        manifest,
-        verbose,
-        Cache::resolve(manifest, &CacheOptions::Default, verbose)?,
-    )
-}
-
-#[cfg_attr(test, mutants::skip)] // Native source capture, resolution and evidence publication.
-pub fn run_prepare_with_cache(
-    output: &Path,
-    release_history: Option<&str>,
-    merge_target: Option<&str>,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    cache: Cache,
-) -> Result<String, AppError> {
-    cache.protect(output)?;
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
     let manifest = canonical(manifest)?;
-    let mut cache = SnapshotCache::new(cache);
-    let (inputs, acquired) = Inputs::capture_with_cache(
+    let mut cache = Snapshots::default();
+    let (inputs, acquired) = Inputs::capture_with_snapshots(
         &manifest,
         release_history,
         merge_target,
@@ -95,7 +74,7 @@ pub fn run_prepare_with_cache(
         fs::write(&lockfile, file.contents)
             .map_err(|error| WriteFileError::caused_by(&lockfile, error))?;
     }
-    let (refreshed, acquired) = Inputs::capture_with_cache(
+    let (refreshed, acquired) = Inputs::capture_with_snapshots(
         &manifest,
         release_history,
         merge_target,
@@ -132,67 +111,16 @@ pub fn run_preview(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
-    run_preview_with_options(
-        plan,
-        prepared,
-        output,
-        manifest,
-        verbose,
-        &CacheOptions::Default,
-    )
-}
-
-#[cfg_attr(test, mutants::skip)] // Resolves original-workspace storage after preview admission.
-pub fn run_preview_with_options(
-    plan: &Path,
-    prepared: &Path,
-    output: &Path,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    options: &CacheOptions,
-) -> Result<String, AppError> {
-    run_preview_acquiring_cache(plan, prepared, output, manifest, verbose, || {
-        Cache::resolve(manifest, options, verbose)
-    })
-}
-
-#[cfg_attr(test, mutants::skip)] // Native prospective lifetime and resolution.
-pub fn run_preview_with_cache(
-    plan: &Path,
-    prepared: &Path,
-    output: &Path,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    cache: Cache,
-) -> Result<String, AppError> {
-    run_preview_acquiring_cache(plan, prepared, output, manifest, verbose, || Ok(cache))
-}
-
-#[cfg_attr(test, mutants::skip)] // Native prospective lifetime and resolution.
-fn run_preview_acquiring_cache(
-    plan: &Path,
-    prepared: &Path,
-    output: &Path,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    acquire_cache: impl FnOnce() -> Result<Cache, AppError>,
-) -> Result<String, AppError> {
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
     let (prepared_input, plan_input) =
         preview_inputs(plan, prepared, &output, manifest, |inputs| {
             inputs.verify(manifest, None).map(|_| ())
         })?;
-    // Collision-safe completion invalidation precedes even cache metadata acquisition.
-    // The selected original-workspace location is still fixed before prospective creation.
-    let cache = acquire_cache()?;
-    cache.protect(plan)?;
-    cache.protect(prepared)?;
-    cache.protect(&output)?;
     let prepared = prepared_input;
     let plan = plan_input;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
-    let mut cache = SnapshotCache::new(cache);
-    let classification = classify_with_cache(
+    let mut cache = Snapshots::default();
+    let classification = classify_with_snapshots(
         &prospective.manifest,
         Some(&prepared.inputs.release_history),
         prepared.inputs.merge_target.as_deref(),
@@ -222,7 +150,7 @@ fn run_preview_acquiring_cache(
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
             })?;
             prospective.resolve(verbose)?;
-            let current = classify_with_cache(
+            let current = classify_with_snapshots(
                 &prospective.manifest,
                 Some(&prepared.inputs.release_history),
                 prepared.inputs.merge_target.as_deref(),
@@ -1299,7 +1227,8 @@ mod tests {
         record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap();
         files[0].path = "Cargo.toml".into();
         record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap();
-        files[0].contents = "resolved dependency\n".repeat(1024);
+        // The exact retained token proves compact history independently of payload size.
+        files[0].contents = "resolved dependency\n".to_owned();
         let token = "digest supplied by the acquisition boundary";
         record_state(&mut visited, &resolved, &files, |bytes| {
             let state: Value = serde_json::from_slice(bytes).unwrap();

@@ -173,7 +173,7 @@ impl Prospective {
 
     /// Reads artifact bytes using the immediately preceding prospective acquisition.
     #[cfg_attr(test, mutants::skip)] // File reads are covered by boundary artifact tests.
-    pub fn artifacts_from_workspace(
+    pub(crate) fn artifacts_from_workspace(
         &self,
         inputs: &Inputs,
         workspace_root: &Path,
@@ -196,9 +196,11 @@ fn capture_workspace_artifacts(
     member_manifests: &[PathBuf],
     read: impl FnMut(&Path) -> io::Result<String>,
 ) -> Result<Vec<Artifact>, AppError> {
-    let mut paths: BTreeSet<PathBuf> = member_manifests.iter().cloned().collect();
-    paths.insert(workspace_root.join("Cargo.toml"));
-    paths.insert(workspace_root.join("Cargo.lock"));
+    let manifest = workspace_root.join("Cargo.toml");
+    let lockfile = workspace_root.join("Cargo.lock");
+    let mut paths: BTreeSet<&Path> = member_manifests.iter().map(PathBuf::as_path).collect();
+    paths.insert(&manifest);
+    paths.insert(&lockfile);
     capture_artifacts(root, original, paths, read)
 }
 
@@ -231,13 +233,13 @@ fn resolve_offline(
 fn capture_artifacts(
     root: &Path,
     original: &Path,
-    paths: BTreeSet<PathBuf>,
+    paths: BTreeSet<&Path>,
     mut read: impl FnMut(&Path) -> io::Result<String>,
 ) -> Result<Vec<Artifact>, AppError> {
     let mut artifacts = Vec::new();
     for path in paths {
-        let relative = relative(root, &path)?;
-        let contents = read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
+        let relative = relative(root, path)?;
+        let contents = read(path).map_err(|error| ReadFileError::caused_by(path, error))?;
         if read(&original.join(&relative)).ok().as_ref() != Some(&contents) {
             artifacts.push(Artifact {
                 path: relative,
@@ -443,13 +445,25 @@ mod tests {
     }
 
     #[test]
-    fn artifact_capture_emits_only_changed_or_unreadable_originals_with_exact_bytes() {
+    fn artifact_capture_emits_changed_or_missing_originals_with_exact_bytes() {
+        assert_changed_artifacts(ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn artifact_capture_emits_changed_or_unreadable_originals_with_exact_bytes() {
+        assert_changed_artifacts(ErrorKind::PermissionDenied);
+    }
+
+    fn assert_changed_artifacts(original_error: ErrorKind) {
         let root = Path::new("candidate");
         let original = Path::new("original");
         let paths = ["Cargo.toml", "Cargo.lock", "member/Cargo.toml"].map(|path| root.join(path));
-        for original_error in [ErrorKind::NotFound, ErrorKind::PermissionDenied] {
-            let mut reads = Vec::new();
-            let artifacts = capture_artifacts(root, original, paths.clone().into(), |path| {
+        let mut reads = Vec::new();
+        let artifacts = capture_artifacts(
+            root,
+            original,
+            paths.iter().map(PathBuf::as_path).collect(),
+            |path| {
                 reads.push(path.to_owned());
                 if path == root.join("Cargo.toml") || path == original.join("Cargo.toml") {
                     Ok("unchanged".to_owned())
@@ -463,38 +477,50 @@ mod tests {
                     assert_eq!(path, original.join("member/Cargo.toml"));
                     Ok("old manifest\n".to_owned())
                 }
-            })
-            .unwrap();
-            assert_eq!(
-                artifacts,
-                [
-                    Artifact {
-                        path: "Cargo.lock".into(),
-                        contents: "resolved lockfile\n".to_owned()
-                    },
-                    Artifact {
-                        path: "member/Cargo.toml".into(),
-                        contents: "new manifest\n".to_owned()
-                    },
-                ]
-            );
-            assert_eq!(
-                reads,
-                [
-                    "candidate/Cargo.lock",
-                    "original/Cargo.lock",
-                    "candidate/Cargo.toml",
-                    "original/Cargo.toml",
-                    "candidate/member/Cargo.toml",
-                    "original/member/Cargo.toml"
-                ]
-                .map(PathBuf::from)
-            );
-        }
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            artifacts,
+            [
+                Artifact {
+                    path: "Cargo.lock".into(),
+                    contents: "resolved lockfile\n".to_owned()
+                },
+                Artifact {
+                    path: "member/Cargo.toml".into(),
+                    contents: "new manifest\n".to_owned()
+                },
+            ]
+        );
+        assert_eq!(
+            reads,
+            [
+                "candidate/Cargo.lock",
+                "original/Cargo.lock",
+                "candidate/Cargo.toml",
+                "original/Cargo.toml",
+                "candidate/member/Cargo.toml",
+                "original/member/Cargo.toml"
+            ]
+            .map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn artifact_capture_omits_equal_contents() {
+        let root = Path::new("candidate");
+        let original = Path::new("original");
+        let paths = ["Cargo.toml", "Cargo.lock", "member/Cargo.toml"].map(|path| root.join(path));
         assert!(
-            capture_artifacts(root, original, paths.into(), |_| Ok("same".to_owned()))
-                .unwrap()
-                .is_empty()
+            capture_artifacts(
+                root,
+                original,
+                paths.iter().map(PathBuf::as_path).collect(),
+                |_| Ok("same".to_owned())
+            )
+            .unwrap()
+            .is_empty()
         );
     }
 
@@ -505,7 +531,7 @@ mod tests {
         let error = capture_artifacts(
             root,
             Path::new("original"),
-            BTreeSet::from([path.clone()]),
+            BTreeSet::from([path.as_path()]),
             |requested| {
                 assert_eq!(requested, path);
                 Err(ErrorKind::PermissionDenied.into())
@@ -520,7 +546,7 @@ mod tests {
         let error = capture_artifacts(
             root,
             Path::new("original"),
-            BTreeSet::from([PathBuf::from("outside/Cargo.toml")]),
+            BTreeSet::from([Path::new("outside/Cargo.toml")]),
             |_| panic!(),
         )
         .unwrap_err();

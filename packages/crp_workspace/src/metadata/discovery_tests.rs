@@ -20,6 +20,42 @@ fn only_tracked_manifests_are_workspace_members() {
 }
 
 #[test]
+fn projection_moves_the_acquired_listing_into_the_work_tree() {
+    let root = Path::new("workspace");
+    let git = unopened(root);
+    let tracked = TrackedMetadata {
+        git: &git,
+        workspace_root: root,
+        paths: vec!["Cargo.toml".to_owned()],
+        case: PathCase::Sensitive,
+    };
+    let allocation = tracked.paths[0].as_ptr();
+    let metadata = MetadataJson {
+        packages: Vec::new(),
+        workspace_members: Vec::new(),
+        workspace_root: root.to_string_lossy().into_owned(),
+        metadata: Value::Null,
+    };
+    let work_tree = work_tree_from_metadata_parsed_with(
+        &metadata,
+        tracked,
+        |path| {
+            if path == root.join("Cargo.toml") {
+                Ok("[workspace]".to_owned())
+            } else {
+                Err(io::ErrorKind::NotFound.into())
+            }
+        },
+        |path| Ok(path.to_owned()),
+        |_| Ok(false),
+        parse_document,
+    )
+    .unwrap();
+    assert_eq!(work_tree.tracked_paths.as_ref(), ["Cargo.toml"]);
+    assert_eq!(work_tree.tracked_paths[0].as_ptr(), allocation);
+}
+
+#[test]
 fn lockfile_relevance_uses_present_regular_binary_sources_not_examples() {
     let root = Path::new("workspace");
     let git = unopened(root);

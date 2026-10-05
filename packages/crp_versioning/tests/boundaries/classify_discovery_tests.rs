@@ -18,6 +18,53 @@ use crate::git_fixture::Repository;
 #[test]
 #[cfg_attr(
     miri,
+    ignore = "classifies Git replacement changes across fresh acquisitions"
+)]
+fn reused_snapshots_follow_changed_git_interpretation() {
+    let fixture = Repository::new();
+    fixture.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['member']\nresolver='3'\n",
+    );
+    let package = "[package]\nname='member'\nversion='1.0.0'\nedition='2024'\n";
+    fixture.write("member/Cargo.toml", package.as_bytes());
+    fixture.write("member/src/lib.rs", b"pub fn value() {}\n");
+    fixture.command(&["add", "-A"]);
+    fixture.command(&["commit", "--quiet", "-m", "root"]);
+    let git = fixture.repo();
+    let root = git.rev_parse("HEAD").unwrap();
+    fixture.write(
+        "member/Cargo.toml",
+        package.replace("1.0.0", "1.1.0").as_bytes(),
+    );
+    fixture.command(&["add", "-A"]);
+    fixture.command(&["commit", "--quiet", "-m", "release"]);
+    let head = git.rev_parse("HEAD").unwrap();
+    let manifest = fixture.path().join("Cargo.toml");
+    let mut snapshots = Snapshots::default();
+    let mut observe = || {
+        classify_with_snapshots(
+            &manifest,
+            Some(&head),
+            None,
+            Verbose::new(false, &Discard),
+            &mut snapshots,
+        )
+        .unwrap()
+        .packages
+        .remove(0)
+        .status()
+    };
+    assert_eq!(observe(), PackageStatus::Unchanged);
+    fixture.command(&["replace", &head, &root]);
+    assert_eq!(observe(), PackageStatus::PendingRelease);
+    fixture.command(&["replace", "-d", &head]);
+    assert_eq!(observe(), PackageStatus::Unchanged);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
     ignore = "classifies real Git history with offline Cargo metadata"
 )]
 fn historical_manifest_batches_decode_only_selected_members() {
@@ -66,11 +113,12 @@ fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() 
     fixture.command(&["commit", "--quiet", "-m", "baseline"]);
     let manifest = fixture.path().join("Cargo.toml");
     let verbose = Verbose::new(false, &Discard);
-    let mut cache = SnapshotCache::default();
+    let mut snapshots = Snapshots::default();
     for pass in 0..2 {
         let (inputs, acquired) =
-            Inputs::capture_with_cache(&manifest, Some("HEAD"), None, verbose, &mut cache).unwrap();
-        let classification = classify_acquired(acquired, verbose, &mut cache).unwrap();
+            Inputs::capture_with_snapshots(&manifest, Some("HEAD"), None, verbose, &mut snapshots)
+                .unwrap();
+        let classification = classify_acquired(acquired, verbose, &mut snapshots).unwrap();
         let package = classification.work_tree.packages.first().unwrap();
         let paths = classification.released_work_tree_paths(package).unwrap();
         assert_eq!(

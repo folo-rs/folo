@@ -159,6 +159,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn receipt_rejects_a_snapshot_from_another_project() {
+        let mut receipt = receipt("linux", 1);
+        receipt.instance = "another-project".parse().unwrap();
+
+        let error = Receipt::parse(&receipt.encode().unwrap()).unwrap_err();
+
+        assert!(error.find_source::<InvalidReceipt>().is_some());
+    }
+
+    #[test]
+    fn receipt_rejects_a_snapshot_from_another_commit() {
+        let mut receipt = receipt("linux", 1);
+        receipt.head = "b".repeat(40).parse().unwrap();
+
+        let error = Receipt::parse(&receipt.encode().unwrap()).unwrap_err();
+
+        assert!(error.find_source::<InvalidReceipt>().is_some());
+    }
+
+    #[test]
     fn receipt_requires_known_version_and_valid_fields() {
         let raw: Value = serde_json::from_slice(&receipt("linux", 1).encode().unwrap()).unwrap();
         for (field, value) in [

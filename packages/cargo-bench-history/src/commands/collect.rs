@@ -194,21 +194,30 @@ pub(crate) async fn execute(
             .snapshot
             .as_ref()
             .expect("snapshot mode constructs evidence before returning collection success");
-        let json = snapshot
-            .to_json()
-            .map_err(|error| CollectionOutputError::caused_by("encoding", error))?;
-        let json = str::from_utf8(&json).expect("JSON serialization always emits UTF-8");
-        let written = TokioConfigWriter
-            .write_new(path, json)
-            .await
-            .map_err(|error| CollectionOutputError::caused_by("writing", error))?;
-        if !written {
-            return Err(
-                InvalidCommandError::new("collect", "collection output already exists").into(),
-            );
-        }
+        write_collection_output(&TokioConfigWriter, path, snapshot).await?;
     }
     Ok(collection_outcome(options, &summary))
+}
+
+/// Publishes exact-current evidence through the write-once file port.
+async fn write_collection_output(
+    writer: &impl ConfigWriter,
+    path: &Path,
+    snapshot: &CollectionSnapshot,
+) -> Result<(), AppError> {
+    let json = snapshot
+        .to_json()
+        .map_err(|error| CollectionOutputError::caused_by("encoding", error))?;
+    let json = str::from_utf8(&json).expect("JSON serialization always emits UTF-8");
+    let written = writer
+        .write_new(path, json)
+        .await
+        .map_err(|error| CollectionOutputError::caused_by("writing", error))?;
+    // Preflight cannot reserve the destination; final creation must still reject occupation.
+    if !written {
+        return Err(InvalidCommandError::new("collect", "collection output already exists").into());
+    }
+    Ok(())
 }
 
 /// Rejects an occupied snapshot destination before collection can change shared history.
@@ -1334,6 +1343,37 @@ mod tests {
         .unwrap_err();
         assert!(error.find_source::<CollectionOutputError>().is_some());
         assert!(error.find_source::<io::Error>().is_some());
+    }
+
+    #[test]
+    fn snapshot_publication_preserves_evidence_and_rejects_final_write_failures() {
+        let path = Path::new("collection.json");
+        let snapshot = CollectionSnapshot::new(
+            "project",
+            &"a".repeat(40),
+            "x86_64-unknown-linux-gnu".into(),
+            "0123456789abcdef".into(),
+            Vec::new(),
+        )
+        .unwrap();
+        let writer = MemoryConfigWriter::default();
+        block_on(write_collection_output(&writer, path, &snapshot)).unwrap();
+        let written = writer.written(path).unwrap();
+        assert_eq!(
+            CollectionSnapshot::from_slice(written.as_bytes()).unwrap(),
+            snapshot
+        );
+
+        let occupied = MemoryConfigWriter::with_existing(path, "original");
+        let error = block_on(write_collection_output(&occupied, path, &snapshot)).unwrap_err();
+        assert!(error.find_source::<InvalidCommandError>().is_some());
+        assert_eq!(occupied.written(path).as_deref(), Some("original"));
+
+        let writer = MemoryConfigWriter::failing();
+        let error = block_on(write_collection_output(&writer, path, &snapshot)).unwrap_err();
+        assert!(error.find_source::<CollectionOutputError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(writer.written(path).is_none());
     }
 
     /// A zero-iteration `alloc_tracker` operation the workload could not run: the

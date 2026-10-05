@@ -14,7 +14,6 @@
 pub(crate) use errors::*;
 
 pub mod artifact_path;
-pub mod cache;
 pub mod command;
 mod errors;
 pub mod git;

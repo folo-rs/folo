@@ -99,32 +99,27 @@ that same handle rather than querying tracked paths again. Resource selection ov
 packages and the existing packaging/presence helpers
 interpret each selection. Symlink and presence checks precede that package's hashes. Hashing
 keeps per-package ordering and process boundaries, including for shared resources selected by
-stateful clean filters; mutable listings never enter the committed-snapshot cache.
+stateful clean filters; mutable listings never enter the committed snapshots.
 When effective attributes select any relevant filter driver, mode observations also retain
 per-package acquisition because Git's raw diff can perform clean conversion.
-Historical member discovery reads recorded paths through the same cache and membership
+Historical member discovery reads recorded paths through the same snapshot and membership
 logic whether observations come from Git or an in-process fixture.
 Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by
 resolved commit and invalidated by repository, workspace, case-rule or registry-context changes.
 Git object interpretation changes invalidate those snapshots and retained parent-presence facts too.
 Each snapshot retains its full historical tree and shared path/mode/object indexes, so package
 comparisons select from already acquired facts rather than querying the anchor again.
-Workspace's typed persistent cache supplies immutable trees and facts indicating whether a
-commit header records a parent. Parent identities and complete header contents are not retained.
-These facts never substitute for fresh parent availability or shallow-boundary checks, and
-first-parent traversals are not retained. Invocation hits borrow the retained snapshot and
-avoid constructing persistent keys or copying acquisition context.
-Miss loaders borrow the owner's storage, Git interpretation and content-keyed documents
-directly; parsed-document ownership is not moved out on either hits or misses.
-The original workspace's resolved cache location is carried through prospective passes;
-it remains outside captured source and evidence and is not part of a plan's validity.
-Candidate metadata and lockfile bytes are reacquired at each pass. Workspace's content-keyed
-syntax and lockfile graphs avoid repeating interpretation for equal bytes without preserving
-a mutable metadata snapshot or an availability verdict. Historical workspaces are reconstructed
-from lazily requested parsed documents under the bound context; compiled matchers and deferred
-errors are not serialized. History refs are resolved at acquisition. The converged
-classification supplies both the final readiness verdict and report; relocation
-then requires fresh candidate admission.
+Raw commit-header facts are retained separately from fresh parent availability and
+shallow-boundary checks; first-parent traversals are not retained. Invocation hits borrow
+the retained snapshot. Miss loaders borrow the owner's repository context, Git
+interpretation and content-keyed documents directly; parsed-document ownership is not
+moved out on hits or misses.
+Candidate metadata and lockfile bytes are reacquired at each pass. Manifest syntax is
+reused only for equal complete text. Historical workspaces are reconstructed from lazily
+requested parsed documents under the bound context. Current lockfile graphs serve all
+binary classifications in that pass; committed graphs follow snapshot context invalidation.
+History refs are resolved at acquisition. The converged classification supplies both
+the final readiness verdict and report; relocation requires fresh candidate admission.
 
 Preview computes the next edits from its preceding classification's workspace root, member
 manifest paths and member directory identities. These remain raw Cargo-relative observations,
@@ -134,7 +129,7 @@ post-resolution classification's workspace/member paths while reading artifact c
 Preparation has no preceding prospective classification and acquires its own prospective
 metadata; original-workspace observations never stand in for the candidate.
 
-Source capture reuses the tracked listing and parsed root/member documents acquired by its own
+Source capture reuses the tracked listing and borrows parsed root/member documents acquired by its own
 metadata projection, including during path-dependency traversal. Files reached outside those
 documents are still acquired, and ignored/untracked build-source traversal and index capture
 remain independent. Successful admission returns the acquired workspace, Git identity and
@@ -154,10 +149,8 @@ injected observations and effects. This keeps transitive membership, original/fi
 fingerprints, retained isolation, foreign-owner rejection and marker invalidation within
 unit mutation coverage. Native adapters retain integration coverage for subprocess
 arguments, real aliases, atomic file promotion and workspace lifetime.
-Workspace owns the source-location inventory shared with cache admission; versioning
+Workspace owns source-location discovery; versioning
 requires relocatable dependency paths and captures the same reserved files and recursive
 source contents for fingerprints.
 Preview admits its output and invalidates any previous completion marker before acquiring
-cache metadata. Both the default wrapper and the application's options-based entry point
-share that ordering; input aliases are rejected before removal. Storage is still resolved
-from the original workspace before constructing the prospective workspace.
+repository state; input aliases are rejected before removal.
