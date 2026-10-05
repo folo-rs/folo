@@ -135,5 +135,13 @@ arguments, real aliases, atomic file promotion and workspace lifetime.
 Workspace owns source-location discovery; versioning
 requires relocatable dependency paths and captures the same reserved files and recursive
 source contents for fingerprints.
-Preview admits its output and invalidates any previous completion marker before acquiring
-repository state; input aliases are rejected before removal.
+Captured acquisitions retain discovered source-location boundaries for output admission.
+Evidence writers reuse these boundaries and the acquired tracked listing and manifest
+resource declarations rather than repeating source scans. Standalone reports discover
+locations from their own acquired documents without applying prospective relocation rules.
+Compatibility with a preview admits output against both original and candidate acquisitions.
+Workspace's alias-aware destination check runs before output creation, report reset,
+prospective ownership or completion-marker removal. Preview invalidates its prior marker
+only after source and destination admission. Missing or malformed preparation and stale
+captured inputs preserve the previous marker, whose consumers still require successful
+input admission. Malformed proposals after admission invalidate the previous completion.

@@ -4,6 +4,16 @@ Local planning and post-merge publication serve different purposes and have
 separate schema lifecycles. Use tool-produced evidence where specified; do not
 fabricate captured inputs, identities or publication outcomes.
 
+Planning evidence directories must be separate from assessed source: tracked and
+reserved input files, recursive source directories and package resources. This includes
+both original source and retained preview source. Excluded locations within the checkout
+or Cargo target directory are permitted when they are disjoint from those inputs.
+Output admission precedes artifact creation and cleanup. A failed admission leaves
+existing output untouched; preview invalidates its previous completion only after
+admitting the source and output destination. Missing or malformed preparation and
+stale captured inputs therefore leave the previous marker untouched. A retained
+marker alone is not admission: consumers still verify its captured inputs.
+
 ## Local decisions and plans
 
 A decisions document is caller-authored literal JSON:

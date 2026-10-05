@@ -4,9 +4,90 @@ use std::fs;
 use std::io::Write as _;
 #[cfg(unix)]
 use std::io::{Error as IoError, ErrorKind};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+use std::path::Path;
+#[cfg(windows)]
+use std::process::Command;
 
 use crp_workspace::artifact_path::*;
 use tempfile::tempdir;
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "resolves real filesystem aliases and nonexistent output suffixes"
+)]
+fn output_admission_resolves_aliases_without_creating_destinations() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("lib.rs"), "source").unwrap();
+    let alias = directory.path().join("alias");
+    directory_alias(&source, &alias);
+    for output in [
+        alias.join("missing/evidence"),
+        directory.path().join("new/../source/evidence"),
+    ] {
+        admit_output(&output, [source.clone()], ["diffs"]).unwrap_err();
+        assert!(!output.exists());
+    }
+    assert!(!directory.path().join("new").exists());
+    let other = directory.path().join("excluded");
+    fs::create_dir_all(&other).unwrap();
+    let other_alias = directory.path().join("excluded-alias");
+    directory_alias(&other, &other_alias);
+    admit_output(&other_alias.join("evidence"), [source.clone()], ["diffs"]).unwrap();
+    assert!(!other.join("evidence").exists());
+    directory_alias(&source, &other.join("unrelated"));
+    admit_output(&other, [source.clone()], ["diffs"]).unwrap();
+    // Output subtree replacement must not operate through an existing redirected child.
+    directory_alias(&source, &other.join("diffs"));
+    admit_output(&other, [source.clone()], ["diffs"]).unwrap_err();
+    assert_eq!(fs::read_to_string(source.join("lib.rs")).unwrap(), "source");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "probes native directory case before checking missing source aliases"
+)]
+fn output_admission_uses_observed_case_for_absent_reserved_directories() {
+    let directory = tempdir().unwrap();
+    fs::write(directory.path().join("Cargo.toml"), "probe").unwrap();
+    let insensitive = directory.path().join("cARGO.TOML").try_exists().unwrap();
+    let output = directory.path().join("SRC/evidence");
+    let result = admit_output(&output, [directory.path().join("src")], []);
+    assert_eq!(result.is_err(), insensitive);
+    assert!(!output.exists());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+fn directory_alias(source: &Path, alias: &Path) {
+    symlink(source, alias).unwrap();
+}
+
+#[cfg(windows)]
+fn directory_alias(source: &Path, alias: &Path) {
+    // Junctions exercise Windows aliases without requiring symbolic-link privileges.
+    let output = Command::new("pwsh")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:CRP_TEST_ALIAS -Target $env:CRP_TEST_SOURCE | Out-Null",
+        ])
+        .env("CRP_TEST_SOURCE", source)
+        .env("CRP_TEST_ALIAS", alias)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 #[test]
 #[cfg_attr(miri, ignore = "Creates and promotes owned temporary artifact files")]

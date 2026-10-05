@@ -35,6 +35,7 @@ use crp_workspace::metadata::{
     ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree_with_documents,
 };
 use crp_workspace::packaging::{PackagingRules, relativize};
+use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
 use semver::Version;
 use serde::ser::SerializeStruct;
@@ -46,6 +47,7 @@ use crate::diff::{FileVersion, file_diff, mode_change_diff};
 use crate::groups::{GroupVerdict, Groups};
 use crate::history::AssessmentHistory;
 use crate::inherited::{InheritedChange, inherited_changes};
+use crate::resolved::admit_output;
 use crate::{
     LockfileClosureUnavailableError, MalformedLockfileError, ReadFileError, SymlinkReleasedError,
     VersionRegressionError,
@@ -100,6 +102,9 @@ pub struct AcquiredWorkspace {
     pub(crate) git: GitRepo,
     pub(crate) history: AssessmentHistory,
     pub(crate) head: String,
+    /// Captured-input commands retain their discovered boundaries; ordinary classification
+    /// does not require recursive source discovery unless it will write evidence.
+    pub(crate) source_inputs: Option<SourceInputs>,
 }
 
 // The observation owns complete values, not guarded caller data. Deferred manifest errors
@@ -124,7 +129,17 @@ impl AcquiredWorkspace {
             git,
             history,
             head,
+            source_inputs: None,
         })
+    }
+
+    /// Admits an evidence destination against this unchanged acquisition's source.
+    pub fn admit_output<'a>(
+        &self,
+        output: &Path,
+        owned_entries: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), AppError> {
+        admit_output(self, output, owned_entries)
     }
 }
 
@@ -511,6 +526,7 @@ pub fn classify_acquired(
         git,
         history,
         head,
+        ..
     } = acquired;
     let release_history_revision = history.release_history_revision.clone();
     for package in &mut work_tree.packages {

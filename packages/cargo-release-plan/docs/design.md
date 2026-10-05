@@ -348,6 +348,17 @@ live-input admission.
 Source-mutating commands on the same assessed workspace must run separately.
 Local input stability does not replace current registry and publication observations.
 
+Evidence destinations must be disjoint from assessed source locations, including
+reserved input files, recursively captured source directories and manifest-named
+resources. This applies to the original workspace and any retained candidate used
+by the command. Output placement is admitted before creating artifacts or removing
+earlier output. Existing aliases and missing destination suffixes follow the
+filesystem's observed path identity, not operating-system assumptions.
+
+Excluded output locations inside a checkout or target directory are permitted when
+they do not overlap those inputs. The stable-input requirement does not delegate
+responsibility for the tool's own evidence writes to the caller.
+
 ### Operation-local reuse
 
 Commands reuse admitted observations within their unchanged input intervals and share
