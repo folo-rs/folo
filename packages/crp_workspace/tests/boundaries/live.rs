@@ -5,8 +5,10 @@ use std::ffi::OsString;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::{ffi::OsStringExt as _, fs::PermissionsExt as _};
+use std::rc::Rc;
 
-use crp_workspace::git::LiveObservations;
+use crp_workspace::command::run_capture_bytes;
+use crp_workspace::git::{LiveObservations, WorkTreeModes};
 use crp_workspace::manifest::PathCase;
 
 use crate::git_fixture::Repository;
@@ -80,12 +82,17 @@ fn shared_selections_equal_narrow_queries_for_literal_unicode_and_overlapping_pa
     }
     fs::remove_file(fixture.path().join("Pkg/[literal]/nested/Cargo.toml")).unwrap();
     let git = fixture.repo();
-    let tracked = git.ls_files("").unwrap();
+    let tracked: Rc<[String]> = git.ls_files("").unwrap().into();
     let directories = ["Pkg", "Pkg/[literal]", "Pkg/plain", "\u{c4}rea"];
     for case in [PathCase::Sensitive, PathCase::Insensitive] {
-        let shared =
-            LiveObservations::acquire(&git, &tracked, &directories, &["shared/LICENSE"], case)
-                .unwrap();
+        let shared = LiveObservations::acquire(
+            &git,
+            Rc::clone(&tracked),
+            &directories,
+            &["shared/LICENSE"],
+            case,
+        )
+        .unwrap();
         for scope in [
             "Pkg",
             "pkg",
@@ -122,15 +129,23 @@ fn shared_selections_equal_narrow_queries_for_literal_unicode_and_overlapping_pa
 
 #[test]
 #[cfg_attr(miri, ignore = "reacquires changed real Git index and untracked state")]
-fn a_new_pass_observes_index_and_untracked_changes() {
+fn a_new_interval_observes_index_and_untracked_changes() {
     let fixture = Repository::new();
     fixture.write("pkg/file", b"one");
     fixture.command(&["add", "pkg"]);
     let git = fixture.repo();
     for iteration in 0..2 {
-        let tracked = git.ls_files("").unwrap();
-        let observed =
-            LiveObservations::acquire(&git, &tracked, &["pkg"], &[], PathCase::Sensitive).unwrap();
+        let tracked = git.ls_files("").unwrap().into();
+        let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root()).unwrap();
+        let observed = LiveObservations::acquire_with_index(
+            &git,
+            tracked,
+            &["pkg"],
+            &[],
+            PathCase::Sensitive,
+            Some(WorkTreeModes::from_index(&index).unwrap()),
+        )
+        .unwrap();
         assert_eq!(
             observed
                 .modes(&["pkg"], || panic!("shared"))
@@ -155,6 +170,7 @@ fn a_new_pass_observes_index_and_untracked_changes() {
                 .len(),
             iteration + 1
         );
+        drop(observed);
         fixture.command(&["update-index", "--chmod=+x", "pkg/file"]);
         fixture.write("pkg/added", b"added");
         fixture.command(&["add", "pkg/added"]);
@@ -190,9 +206,17 @@ fn shared_scopes_preserve_worktree_mode_precedence_and_exclude_unrelated_errors(
     )
     .unwrap();
     let git = fixture.repo();
-    let tracked = git.ls_files("").unwrap();
-    let shared =
-        LiveObservations::acquire(&git, &tracked, &["pkg"], &[], PathCase::Sensitive).unwrap();
+    let tracked = git.ls_files("").unwrap().into();
+    let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root()).unwrap();
+    let shared = LiveObservations::acquire_with_index(
+        &git,
+        tracked,
+        &["pkg"],
+        &[],
+        PathCase::Sensitive,
+        Some(WorkTreeModes::from_index(&index).unwrap()),
+    )
+    .unwrap();
     assert!(
         !shared
             .modes(&["pkg"], || panic!("shared"))

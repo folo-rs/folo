@@ -347,7 +347,7 @@ fn retained_acquisition_pins_history_and_target_and_propagates_both_failures() {
                     if fail_capture {
                         Err(CandidateFailure::new().into())
                     } else {
-                        Ok(inputs.clone())
+                        Ok((inputs.clone(), "acquired"))
                     }
                 },
                 |current, digest| {
@@ -362,14 +362,15 @@ fn retained_acquisition_pins_history_and_target_and_propagates_both_failures() {
         assert!(error.find_source::<CandidateFailure>().is_some());
         assert_eq!(error.find_source::<StaleInputs>().is_some(), fail_capture);
     }
-    inputs
+    let acquired = inputs
         .verify_candidate_with(
             Path::new("candidate"),
             "final",
-            |_, _, _| Ok(inputs.clone()),
+            |_, _, _| Ok((inputs.clone(), "acquired")),
             |_, _| Ok(()),
         )
         .unwrap();
+    assert_eq!(acquired, "acquired");
 }
 
 #[test]

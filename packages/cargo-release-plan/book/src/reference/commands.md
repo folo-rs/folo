@@ -28,8 +28,9 @@ The options cannot be combined. Keep the cache separate from source and evidence
 including Git administration, retained preview repositories and reserved input locations.
 
 No session identifier or workflow-managed validity check is needed. The tool
-decides which entries match the current inputs and continues to verify source
-and history. Deleting only the cache does not invalidate prepared evidence or resolved
+decides which entries match current inputs, acquired on command entry and after deliberate
+mutations. Keep inputs stable during [read-only command stages](../concepts/evidence.md#keep-command-inputs-stable).
+Deleting only the cache does not invalidate prepared evidence or resolved
 plans. A full `cargo clean` deletes the entire target directory, so keep evidence outside
 that directory if it must survive cleanup. Corruption and cache I/O problems are
 reported as advisories and observations are reacquired. An unavailable cache location
@@ -130,8 +131,10 @@ decisions. Select exactly one source mode:
 - Without either, a fresh read-only report uses `--release-history` and optional
   `--merge-target`. These inputs cannot be combined with already-bound evidence.
 
-It regenerates a report bound to the selected source and verifies captured inputs
-before and after checking. It never accepts detached `--report` evidence.
+It admits the selected source and regenerates a report from those same observations.
+Assessed source, configuration and history must remain unchanged during checking.
+An assessed workspace with selected contracts must have a lockfile accepted by Cargo's
+default metadata resolution without changes. It never accepts detached `--report` evidence.
 The regenerated report uses report/plan schema `6`.
 
 The new output directory contains `compatibility.json`, `semver-checks.log` and

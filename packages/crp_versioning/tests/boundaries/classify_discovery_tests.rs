@@ -1,16 +1,20 @@
 //! External acquisition for classify.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
+use std::sync::Mutex;
+use std::{fs, io};
 
-use crp_diag::{Discard, Verbose};
+use crp_diag::{DiagnosticSink, Discard, Verbose};
 use crp_versioning::classify::*;
+use crp_versioning::resolved::Inputs;
+use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::git::{GitRepo, WorkTreeModes};
 use crp_workspace::manifest::{PathCase, WorkspaceInherit, parse_package_manifest};
 use crp_workspace::metadata::WorkPackage;
 use crp_workspace::packaging::PackagingRules;
+use tempfile::TempDir;
 
 use crate::git_fixture::Repository;
 
@@ -40,11 +44,131 @@ fn historical_manifest_batches_decode_only_selected_members() {
         initial.packages.first().unwrap().status(),
         PackageStatus::Unchanged
     );
+    drop(initial);
     fixture.write("member space/src/lib.rs", b"pub fn changed() {}\n");
     let changed = classify(&manifest, Some("HEAD"), Verbose::new(false, &Discard)).unwrap();
     let changed = changed.packages.first().unwrap();
     assert_eq!(changed.status(), PackageStatus::NeedsIncrement);
     assert!(!changed.patch().is_empty());
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "captures, classifies and mutates a real Git workspace")]
+fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() {
+    let fixture = Repository::new();
+    fixture.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['pkg']\nresolver='3'\n",
+    );
+    fixture.write(
+        "pkg/Cargo.toml",
+        b"[package]\nname='pkg'\nversion='1.0.0'\nedition='2024'\n",
+    );
+    fixture.write("pkg/src/lib.rs", b"pub fn original() {}\n");
+    fixture.command(&["add", "-A"]);
+    fixture.command(&["commit", "--quiet", "-m", "baseline"]);
+    let manifest = fixture.path().join("Cargo.toml");
+    let diagnostics = DecisionDiagnostics::default();
+    let verbose = Verbose::new(true, &diagnostics);
+    let storage = TempDir::new().unwrap();
+    let mut cache = SnapshotCache::new(
+        Cache::resolve(
+            &manifest,
+            &CacheOptions::Directory(storage.path().to_owned()),
+            verbose,
+        )
+        .unwrap(),
+    );
+    for pass in 0..2 {
+        diagnostics.0.lock().unwrap().clear();
+        let (inputs, acquired) =
+            Inputs::capture_with_cache(&manifest, Some("HEAD"), None, verbose, &mut cache).unwrap();
+        let classification = classify_acquired(acquired, verbose, &mut cache).unwrap();
+        assert!(
+            diagnostics
+                .0
+                .lock()
+                .unwrap()
+                .contains("computed classification decisions")
+        );
+        let package = classification.work_tree.packages.first().unwrap();
+        let paths = classification.released_work_tree_paths(package).unwrap();
+        assert_eq!(
+            paths,
+            classification.released_work_tree_paths(package).unwrap()
+        );
+        let class = classification.packages.first().unwrap();
+        if pass == 0 {
+            assert_eq!(class.status(), PackageStatus::Unchanged);
+            assert!(!paths.contains("src/added.rs"));
+        } else {
+            assert_eq!(class.status(), PackageStatus::NeedsIncrement);
+            assert!(class.patch().contains("+pub fn changed() {}"));
+            assert!(class.patch().contains("new mode 100755"));
+            assert!(paths.contains("src/added.rs"));
+            assert!(class.untracked.contains(&"src/untracked.rs".to_owned()));
+        }
+        {
+            let uncached = classify_with_cache(
+                &manifest,
+                Some("HEAD"),
+                None,
+                Verbose::new(false, &Discard),
+                &mut SnapshotCache::default(),
+            )
+            .unwrap();
+            let uncached = uncached.packages.first().unwrap();
+            assert_eq!(class.status(), uncached.status());
+            assert_eq!(class.patch(), uncached.patch());
+            assert_eq!(class.untracked, uncached.untracked);
+        }
+        drop(classification);
+
+        // A separate evidence consumer admits afresh, then passes the admission directly
+        // to classification. Equal complete inputs reuse decisions, not a verification verdict.
+        diagnostics.0.lock().unwrap().clear();
+        let (applied, acquired) = inputs
+            .verify_with_cache(&manifest, None, verbose, &mut cache)
+            .unwrap();
+        assert!(!applied);
+        let classification = classify_acquired(acquired, verbose, &mut cache).unwrap();
+        assert!(
+            diagnostics
+                .0
+                .lock()
+                .unwrap()
+                .contains("reusing classification decisions from memory")
+        );
+        assert_eq!(
+            fs::read_dir(storage.path().join("classification-decisions"))
+                .unwrap()
+                .count(),
+            pass + 1
+        );
+        drop(classification);
+        if pass != 0 {
+            break;
+        }
+        fixture.write("pkg/src/lib.rs", b"pub fn changed() {}\n");
+        fixture.write("pkg/src/added.rs", b"pub fn added() {}\n");
+        fixture.command(&["add", "pkg/src/added.rs"]);
+        fixture.command(&["update-index", "--chmod=+x", "pkg/src/lib.rs"]);
+        fixture.write("pkg/src/untracked.rs", b"pub fn untracked() {}\n");
+        inputs
+            .verify_with_cache(&manifest, None, verbose, &mut cache)
+            .unwrap_err();
+    }
+}
+
+/// Observes real decision hit/miss diagnostics without modifying the process environment.
+#[derive(Debug, Default)]
+struct DecisionDiagnostics(Mutex<String>);
+
+impl DiagnosticSink for DecisionDiagnostics {
+    fn write(&self, text: &str) -> io::Result<()> {
+        self.0.lock().unwrap().push_str(text);
+        Ok(())
+    }
 }
 
 #[test]
@@ -68,7 +192,7 @@ fn work_tree_presence_and_hash_inputs_distinguish_missing_and_invalid_paths() {
     // Unlike permissions, this failure does not depend on the test user's privileges.
     let invalid = "pkg/invalid\0path".to_string();
     let error = present_in_work_tree(&git, std::slice::from_ref(&invalid)).unwrap_err();
-    assert!(error.find_source::<std::io::Error>().is_some());
+    assert!(error.find_source::<io::Error>().is_some());
     let error = validated_work_tree_files(
         &git,
         "pkg",
@@ -76,7 +200,7 @@ fn work_tree_presence_and_hash_inputs_distinguish_missing_and_invalid_paths() {
         &WorkTreeModes::default(),
     )
     .unwrap_err();
-    assert!(error.find_source::<std::io::Error>().is_some());
+    assert!(error.find_source::<io::Error>().is_some());
 
     fixture.command(&["add", "pkg/present"]);
     let id = git.hash_objects(&["pkg/present"]).unwrap().remove(0);

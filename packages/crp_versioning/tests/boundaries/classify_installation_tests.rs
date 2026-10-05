@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use std::rc::Rc;
 
 use crp_versioning::classify::*;
 use crp_workspace::cache::Cache;
@@ -315,7 +316,7 @@ fn endpoints(
     };
     let work_tree = WorkTree {
         manifests: ManifestSnapshot::default(),
-        tracked_paths: Vec::new(),
+        tracked_paths: Rc::default(),
         workspace_root: root.to_path_buf(),
         packages: vec![work_package.clone()],
         version_targets: Vec::new(),

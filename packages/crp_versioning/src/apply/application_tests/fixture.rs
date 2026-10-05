@@ -1,5 +1,7 @@
 //! Synthetic manifests and injected acquisition failures for edit calculation.
 
+use std::rc::Rc;
+
 use crp_workspace::lockfile::InstallationGraph;
 use crp_workspace::metadata::{ExactDependency, ManifestSnapshot, VersionTarget};
 
@@ -52,7 +54,7 @@ pub(crate) fn work_tree() -> WorkTree {
     let paths = unique_paths();
     WorkTree {
         manifests: ManifestSnapshot::default(),
-        tracked_paths: Vec::new(),
+        tracked_paths: Rc::default(),
         workspace_root: PathBuf::from("workspace"),
         packages: Vec::new(),
         version_targets: ["root", "api", "helper", "untouched"]
