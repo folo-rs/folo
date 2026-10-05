@@ -367,7 +367,7 @@ impl ManifestSnapshot {
     }
 
     #[must_use]
-    pub fn document(&self, path: &Path) -> &DocumentMut {
+    fn document(&self, path: &Path) -> &DocumentMut {
         self.documents
             .get(path)
             .expect("the requested manifest belongs to this snapshot")

@@ -94,7 +94,7 @@ impl SourceInputs {
         Self::dependencies_with(manifests, resolve_dependency, read_document)
     }
 
-    fn dependencies_with<'a>(
+    pub(crate) fn dependencies_with<'a>(
         manifests: impl IntoIterator<Item = &'a PathBuf>,
         mut resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
         mut document: impl FnMut(&Path) -> Result<DocumentMut, AppError>,

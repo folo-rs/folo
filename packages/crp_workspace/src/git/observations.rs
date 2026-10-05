@@ -1,6 +1,7 @@
 //! Immutable Git observations, separate from live ref and history-availability decisions.
 
 use std::collections::HashMap;
+use std::env::VarError;
 use std::path::PathBuf;
 use std::{env, fs, io};
 
@@ -89,7 +90,7 @@ pub struct GitObjectContext {
 impl GitObjectContext {
     #[cfg_attr(test, mutants::skip)] // Acquires Git/environment/filesystem interpretation inputs.
     pub fn capture(git: &GitRepo) -> Result<Self, AppError> {
-        let replacement_base = env::var("GIT_REPLACE_REF_BASE").ok();
+        let replacement_base = replacement_namespace(env::var("GIT_REPLACE_REF_BASE"))?;
         let replacements_disabled = env::var_os("GIT_NO_REPLACE_OBJECTS").is_some();
         let replacements = run_capture(
             "git",
@@ -147,6 +148,21 @@ impl GitObjectContext {
         Ok(())
     }
 }
+
+fn replacement_namespace(value: Result<String, VarError>) -> Result<Option<String>, AppError> {
+    match value {
+        Ok(value) => Ok(Some(value)),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(error @ VarError::NotUnicode(_)) => {
+            Err(InvalidReplacementNamespace::caused_by(error).into())
+        }
+    }
+}
+
+/// Git inherits the exact namespace; substituting one changes object interpretation.
+#[ohno::error]
+#[display("GIT_REPLACE_REF_BASE cannot be represented as UTF-8")]
+struct InvalidReplacementNamespace;
 
 /// Exact object identity plus the interpretation in which its facts were acquired.
 #[derive(Debug, Serialize)]
@@ -232,6 +248,26 @@ struct UnresolvedObjectIdentity {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_namespace_preserves_empty_and_custom_values_and_rejects_invalid_text() {
+        assert_eq!(
+            replacement_namespace(Err(VarError::NotPresent)).unwrap(),
+            None
+        );
+        for value in ["", "refs/custom/"] {
+            assert_eq!(
+                replacement_namespace(Ok(value.into())).unwrap(),
+                Some(value.into())
+            );
+        }
+        assert!(
+            replacement_namespace(Err(VarError::NotUnicode("unrepresentable".into())))
+                .unwrap_err()
+                .find_source::<InvalidReplacementNamespace>()
+                .is_some()
+        );
+    }
 
     #[test]
     fn headers_reuse_successful_false_and_true_results_until_cleared() {
