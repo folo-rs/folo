@@ -14,14 +14,13 @@ use std::{env, fs, io};
 use crp_diag::{DiagnosticSink, Quotable as _, Stderr, Verbose, quote_path};
 use crp_publication::PublicationOutput;
 use crp_publication::publication::registry::RegistryClient;
-use crp_versioning::classify::{SnapshotCache, classify_acquired};
-use crp_versioning::inspect_plan::read_resolved_preview_with_cache;
+use crp_versioning::classify::{Snapshots, classify_acquired};
+use crp_versioning::inspect_plan::read_resolved_preview_with_snapshots;
 use crp_versioning::preview::Prepared;
 use crp_versioning::report::{read_report, write_report};
 use crp_versioning::resolved::{Inputs, ResolvedState, read_json};
 use crp_versioning::semver_targets::semver_targets;
 use crp_workspace::artifact_path::write_new;
-use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::command::{BUILD_CREDENTIAL_VARIABLES, run_capture};
 use crp_workspace::git::GitRepo;
 use ohno::AppError;
@@ -271,10 +270,6 @@ impl DeferredDiagnostics {
 }
 
 impl DiagnosticSink for DeferredDiagnostics {
-    fn write_advisory(&self, text: &str) {
-        self.destination.write_advisory(text);
-    }
-
     fn write(&self, text: &str) -> io::Result<()> {
         if self
             .failure
@@ -329,7 +324,6 @@ pub(crate) fn check_with_target(
     output: &Path,
     deny_findings: bool,
     verbose: bool,
-    cache_options: &CacheOptions,
 ) -> Result<(bool, String), AppError> {
     let deferred = Arc::new(DeferredDiagnostics::new(Arc::new(Stderr)));
     let diagnostics = PublicationOutput::new(
@@ -346,7 +340,6 @@ pub(crate) fn check_with_target(
         output,
         deny_findings,
         &diagnostics,
-        cache_options,
     );
     finish_delivery(result, deferred.take_failure())
 }
@@ -367,35 +360,29 @@ fn check_with_output(
     output: &Path,
     deny_findings: bool,
     diagnostics: &PublicationOutput,
-    cache_options: &CacheOptions,
 ) -> Result<(bool, String), AppError> {
     let verbose = diagnostics.notes();
     if output.try_exists()? {
         return Err(CompatibilityDestinationExists::new(output).into());
     }
     fs::create_dir_all(output)?;
-    let observation_cache = Cache::resolve(manifest, cache_options, verbose)?;
-    observation_cache.protect(output)?;
-    if let Some(path) = prepared.or(plan) {
-        observation_cache.protect(path)?;
-    }
-    let mut snapshots = SnapshotCache::new(observation_cache);
+    let mut snapshots = Snapshots::default();
     let (evidence, manifest, acquired) = if let Some(path) = prepared {
         let prepared: Prepared = read_json(path)?;
         let manifest = manifest.canonicalize()?;
         let (_, acquired) =
             prepared
                 .inputs
-                .verify_with_cache(&manifest, None, verbose, &mut snapshots)?;
+                .verify_with_snapshots(&manifest, None, verbose, &mut snapshots)?;
         (Evidence::Source(prepared.inputs), manifest, acquired)
     } else if let Some(path) = plan {
         let (resolved, acquired) =
-            read_resolved_preview_with_cache(path, manifest, verbose, &mut snapshots)?;
+            read_resolved_preview_with_snapshots(path, manifest, verbose, &mut snapshots)?;
         let manifest = resolved.evidence_manifest_path.clone();
         (Evidence::Preview(resolved), manifest, acquired)
     } else {
         let manifest = manifest.canonicalize()?;
-        let (inputs, acquired) = Inputs::capture_with_cache(
+        let (inputs, acquired) = Inputs::capture_with_snapshots(
             &manifest,
             release_history,
             merge_target,
@@ -1419,21 +1406,6 @@ mod tests {
             assert!(text.contains(marker));
         }
         assert!(deferred.take_failure().is_none());
-    }
-
-    #[test]
-    fn cache_advisories_do_not_latch_supporting_delivery_failures() {
-        let destination = Arc::new(ClosedDiagnostics(AtomicUsize::new(0)));
-        let deferred = DeferredDiagnostics::new(Arc::<ClosedDiagnostics>::clone(&destination));
-        deferred.write_advisory("cache unavailable");
-        assert_eq!(destination.0.load(Ordering::Relaxed), 1);
-        assert!(deferred.take_failure().is_none());
-        finish_delivery(Ok(()), deferred.take_failure()).unwrap();
-        deferred.write("checker diagnostic").unwrap();
-        deferred.write_advisory("another cache advisory");
-        assert_eq!(destination.0.load(Ordering::Relaxed), 3);
-        let error = deferred.take_failure().unwrap();
-        assert!(error.find_source::<CheckerMirrorFailed>().is_some());
     }
 
     /// Counts attempted delivery to an unavailable supporting diagnostic destination.

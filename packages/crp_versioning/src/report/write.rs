@@ -4,14 +4,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crp_diag::{Verbose, quote_path};
-use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::metadata::ReportedDep;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
 use crate::classify::{
-    AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus, SnapshotCache,
-    classify_with_cache,
+    AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus, Snapshots,
+    classify_with_snapshots,
 };
 use crate::plan::SCHEMA_VERSION;
 use crate::report::output::{FileOutput, ReportOutput};
@@ -80,35 +79,15 @@ pub fn run_report_with_target(
     manifest_path: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
-    run_report_with_cache(
-        out_dir,
-        release_history,
-        merge_target,
-        manifest_path,
-        verbose,
-        Cache::resolve(manifest_path, &CacheOptions::Default, verbose)?,
-    )
-}
-
-#[cfg_attr(test, mutants::skip)] // Native acquisition and report publication.
-pub fn run_report_with_cache(
-    out_dir: &Path,
-    release_history: Option<&str>,
-    merge_target: Option<&str>,
-    manifest_path: &Path,
-    verbose: Verbose<'_>,
-    cache: Cache,
-) -> Result<String, AppError> {
-    cache.protect(out_dir)?;
     create_report(
         out_dir,
         || {
-            classify_with_cache(
+            classify_with_snapshots(
                 manifest_path,
                 release_history,
                 merge_target,
                 verbose,
-                &mut SnapshotCache::new(cache),
+                &mut Snapshots::default(),
             )
         },
         &mut FileOutput { directory: out_dir },

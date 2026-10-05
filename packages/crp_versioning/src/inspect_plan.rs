@@ -4,12 +4,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crp_diag::Verbose;
-use crp_workspace::git::GitRepo;
 use crp_workspace::metadata::{WorkTree, load_tracked_work_tree};
 use ohno::AppError;
 use serde::Serialize;
 
-use crate::classify::{AcquiredWorkspace, SnapshotCache};
+use crate::classify::{AcquiredWorkspace, Snapshots};
 use crate::groups::Groups;
 use crate::plan::{PlanFile, PlanStage, resolve_plan};
 use crate::resolved::{ResolutionRequired, ResolvedState, read_json, validate_application};
@@ -21,7 +20,7 @@ pub fn read_resolved_preview(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<ResolvedState, AppError> {
-    read_resolved_preview_with_cache(path, manifest, verbose, &mut SnapshotCache::default())
+    read_resolved_preview_with_snapshots(path, manifest, verbose, &mut Snapshots::default())
         .map(|(state, _)| state)
 }
 
@@ -30,27 +29,14 @@ pub fn read_resolved_preview(
 /// Assessed source, configuration and history must remain unchanged while using
 /// the returned candidate.
 #[cfg_attr(test, mutants::skip)] // Native admission; isolation and reuse have integration coverage.
-pub fn read_resolved_preview_with_cache(
+pub fn read_resolved_preview_with_snapshots(
     path: &Path,
     manifest: &Path,
     verbose: Verbose<'_>,
-    cache: &mut SnapshotCache,
+    cache: &mut Snapshots,
 ) -> Result<(ResolvedState, AcquiredWorkspace), AppError> {
     let plan: PlanFile = read_json(path)?;
     validate_expanded(&plan)?;
-    let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
-    // Parsed documents can publish entries during admission, before classification.
-    // Protect the whole retained repository first, including a nested workspace's siblings.
-    cache.protect(path)?;
-    cache.protect(
-        GitRepo::discover(
-            state
-                .evidence_manifest_path
-                .parent()
-                .ok_or_else(ResolutionRequired::new)?,
-        )?
-        .root(),
-    )?;
     drop(validate_application(&plan, manifest, verbose, cache)?);
     resolved_preview(plan, |state| {
         state.acquire_candidate(&state.evidence_manifest_path, verbose, cache)
@@ -106,7 +92,7 @@ pub fn read_plan_inspection(
         |plan| {
             // Reuse application's captured-state validation without installing any files.
             // The registry probe must see the same target set that application will accept.
-            validate_application(plan, manifest, verbose, &mut SnapshotCache::default())
+            validate_application(plan, manifest, verbose, &mut Snapshots::default())
                 .map(|(_, acquired)| acquired.work_tree)
         },
         |state| {
@@ -114,7 +100,7 @@ pub fn read_plan_inspection(
                 .acquire_candidate(
                     &state.evidence_manifest_path,
                     verbose,
-                    &mut SnapshotCache::default(),
+                    &mut Snapshots::default(),
                 )
                 .map(|_| ())
         },

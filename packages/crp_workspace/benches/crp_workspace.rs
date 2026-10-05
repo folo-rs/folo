@@ -10,7 +10,6 @@ use std::hint::black_box;
 use std::path::Path;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use crp_diag::{Discard, Verbose};
 use crp_workspace::git::decode_blob_batch;
 use crp_workspace::lockfile::benchmark_lockfile_closures;
 use crp_workspace::manifest_document::ManifestDocuments;
@@ -45,15 +44,14 @@ fn manifest_reuse(c: &mut Criterion) {
         }
         let mut documents = ManifestDocuments::default();
         let path = Path::new("Cargo.toml");
-        let verbose = Verbose::new(false, &Discard);
         documents
-            .parse(path, &text, verbose)
+            .parse(path, &text)
             .expect("generated TOML is valid");
         group.bench_function(name, |b| {
             b.iter(|| {
                 black_box(
                     documents
-                        .parse(path, black_box(&text), verbose)
+                        .parse(path, black_box(&text))
                         .expect("the cached document has already been parsed"),
                 )
             });

@@ -7,7 +7,6 @@ use crp_diag::{Discard, Verbose};
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::preview::*;
 use crp_versioning::resolved::read_json;
-use crp_workspace::cache::Cache;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -202,13 +201,12 @@ fn injected_cache_preview_also_invalidates_before_reading_inputs() {
     let marker = directory.path().join("plan.json");
     let absent = directory.path().join("absent");
     fs::write(&marker, "previous completion").unwrap();
-    run_preview_with_cache(
+    run_preview(
         &absent,
         &absent,
         directory.path(),
         &absent,
         Verbose::new(false, &Discard),
-        Cache::default(),
     )
     .unwrap_err();
     assert!(!marker.exists());

@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf, absolute};
 use std::{fs, io};
 
-use crp_diag::{Quotable as _, Verbose};
+use crp_diag::Quotable as _;
 use ohno::AppError;
 use semver::{Op, Version, VersionReq};
 use serde::Deserialize;
@@ -449,18 +449,13 @@ impl TrackedMetadata<'_> {
 
 /// Loads the current workspace while restricting release inputs to tracked files.
 pub fn load_tracked_work_tree(manifest_path: &Path) -> Result<(WorkTree, GitRepo), AppError> {
-    load_tracked_work_tree_with_documents(
-        manifest_path,
-        &mut ManifestDocuments::default(),
-        Verbose::new(false, &crp_diag::Discard),
-    )
+    load_tracked_work_tree_with_documents(manifest_path, &mut ManifestDocuments::default())
 }
 
 /// Acquires current metadata and bytes before consulting content-keyed parsed syntax.
 pub fn load_tracked_work_tree_with_documents(
     manifest_path: &Path,
     documents: &mut ManifestDocuments,
-    verbose: Verbose<'_>,
 ) -> Result<(WorkTree, GitRepo), AppError> {
     let metadata = query_metadata(manifest_path)?;
     let workspace_root = PathBuf::from(&metadata.workspace_root);
@@ -477,7 +472,7 @@ pub fn load_tracked_work_tree_with_documents(
         |path| fs::read_to_string(path),
         |path| fs::canonicalize(path),
         |path| fs::symlink_metadata(path).map(|metadata| metadata.is_file()),
-        |path, text| documents.parse(path, text, verbose),
+        |path, text| documents.parse(path, text),
     )?;
     Ok((work_tree, git))
 }

@@ -1,4 +1,4 @@
-//! Source locations shared by captured evidence and disposable-cache admission.
+//! Source locations included in captured evidence.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -13,7 +13,7 @@ use crate::manifest::{for_each_dependency_table, parse_document};
 /// Discovers reserved files and recursively acquired source directories.
 ///
 /// Paths retain their acquired spelling. Callers add Git-tracked files and decide whether
-/// dependency locations are relocatable; cache admission also protects nonrelocatable sources.
+/// dependency locations are relocatable.
 #[derive(Debug, Default)]
 pub struct SourceInputs {
     pub files: BTreeSet<PathBuf>,
@@ -94,7 +94,7 @@ impl SourceInputs {
         Self::dependencies_with(manifests, resolve_dependency, read_document)
     }
 
-    pub(crate) fn dependencies_with<'a>(
+    fn dependencies_with<'a>(
         manifests: impl IntoIterator<Item = &'a PathBuf>,
         mut resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
         mut document: impl FnMut(&Path) -> Result<DocumentMut, AppError>,
