@@ -138,11 +138,14 @@ than turning the lookahead budget into a content limit. A single distinct object
 query. A secondary object-count bound limits framing and retained-map overhead even for empty
 blobs. Request identity, blob type, exact length and framing remain checked, and subprocess
 stdin is written concurrently with output draining.
+Shared vector ownership preserves each acquired payload allocation rather than copying it into
+a reference-counted slice. Per-object headers and spare capacity stay with that allocation.
 
 Ordinary multi-object batches use the existing typed cache keyed by their ordered immutable
 identities and Git interpretation context. Singleton reads bypass serialization because they
 can exceed the lookahead budget. Live size acquisition still detects unavailable required
 objects before a multi-object cache hit; no missing object becomes an empty file.
+Disabled storage validates reusable identities without constructing unused owned cache keys.
 
 ## Fresh classification listings
 
@@ -164,7 +167,9 @@ The observation value can serve adjacent read-only consumers of the admitted cla
 including packaging selection. It is dropped before edits, resolution or relocation and is
 never reused by an independent command or stored in committed/persistent caches.
 
-Raw mode diffs can execute clean filters for racily clean index entries. Effective filter
+An index entry is racily clean when its cached filesystem metadata can appear unchanged despite
+a recent content change, requiring Git to compare content. Raw mode diffs can therefore execute
+clean filters for such entries. Effective filter
 attributes are therefore acquired for the relevant tracked paths before sharing mode queries.
 If Git reports a filter attribute, the entire pass retains per-package mode-query ordering; no
 assumption about driver statelessness or configuration absence permits sharing. Attribute

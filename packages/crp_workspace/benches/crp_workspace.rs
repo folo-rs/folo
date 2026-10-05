@@ -33,6 +33,8 @@ criterion_group!(
 );
 criterion_main!(benches);
 
+// Consecutive duplicates exercise shared retention. Compact payloads keep both cases in one
+// batch, isolating in-process reader bookkeeping rather than Git latency or budget turnover.
 fn bounded_blob_reader(c: &mut Criterion) {
     let mut group = c.benchmark_group("crp_workspace/bounded_blob_reader");
     for (name, count) in [("low", LOW_PACKAGE_COUNT), ("high", HIGH_PACKAGE_COUNT)] {

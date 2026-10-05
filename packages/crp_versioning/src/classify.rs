@@ -1199,7 +1199,7 @@ impl IdentifiedDiff<'_> {
 
     fn render(
         &self,
-        mut bytes: impl FnMut(&str) -> Result<Rc<[u8]>, AppError>,
+        mut bytes: impl FnMut(&str) -> Result<Rc<Vec<u8>>, AppError>,
     ) -> Result<(Vec<ChangedItem>, String, DiffStat), AppError> {
         let mut changed = Vec::new();
         let mut patch = String::new();

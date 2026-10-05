@@ -121,6 +121,7 @@ fn persistent_observations_eliminate_duplicate_git_acquisitions_without_changing
             "git ls-files -s -z -- ",
             "git diff-files --raw -z --no-renames -- ",
             "git ls-files -z --others --exclude-standard -- ",
+            "git cat-file --batch-check",
         ] {
             assert_eq!(
                 trace_text

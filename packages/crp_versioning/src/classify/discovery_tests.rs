@@ -231,11 +231,11 @@ fn check_acquired_diff(old_present: bool, new_present: bool) {
                 .render(|id| {
                     assert!(content_changed);
                     if old_present && id == "old-id" {
-                        Ok(Rc::from(b"old\n".as_slice()))
+                        Ok(Rc::new(b"old\n".to_vec()))
                     } else {
                         assert!(new_present);
                         assert_eq!(id, new_id);
-                        Ok(Rc::from(b"new\n".as_slice()))
+                        Ok(Rc::new(b"new\n".to_vec()))
                     }
                 })
                 .unwrap();
@@ -257,6 +257,10 @@ fn check_acquired_diff(old_present: bool, new_present: bool) {
                 }
                 assert_eq!(stat.insertions, usize::from(content_changed && new_present));
                 assert_eq!(stat.deletions, usize::from(content_changed && old_present));
+                if old_present && new_present && !same_content {
+                    assert!(patch.lines().any(|line| line == "-old"));
+                    assert!(patch.lines().any(|line| line == "+new"));
+                }
             }
         }
     }

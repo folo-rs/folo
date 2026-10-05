@@ -25,7 +25,7 @@ use crate::{
 };
 
 mod blob_batch;
-pub use blob_batch::{decode_blob_batch, decode_blob_sizes};
+pub use blob_batch::decode_blob_batch;
 mod blob_reader;
 pub use blob_reader::*;
 mod observations;

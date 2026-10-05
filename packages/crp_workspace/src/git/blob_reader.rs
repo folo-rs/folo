@@ -30,7 +30,11 @@ pub struct BlobReader<'a> {
     budget: NonZero<usize>,
     position: usize,
     end: usize,
-    retained: HashMap<&'a str, Rc<[u8]>>,
+    #[expect(
+        clippy::rc_buffer,
+        reason = "Preserve acquired Vec allocations instead of copying potentially oversized payloads"
+    )]
+    retained: HashMap<&'a str, Rc<Vec<u8>>>,
 }
 
 impl<'a> BlobReader<'a> {
@@ -70,7 +74,7 @@ impl<'a> BlobReader<'a> {
         &mut self,
         id: &str,
         acquire: impl FnOnce(&[&str]) -> Result<Vec<Vec<u8>>, AppError>,
-    ) -> Result<Rc<[u8]>, AppError> {
+    ) -> Result<Rc<Vec<u8>>, AppError> {
         if self.requests.get(self.position) != Some(&id) {
             return Err(InvalidBlobBatch::new().into());
         }
@@ -85,7 +89,7 @@ impl<'a> BlobReader<'a> {
                 if self.sizes.len() > 1 && self.sizes.get(id) != Some(&blob.len()) {
                     return Err(InvalidBlobBatch::new().into());
                 }
-                self.retained.insert(id, Rc::from(blob));
+                self.retained.insert(id, Rc::new(blob));
             }
             self.end = end;
         }
@@ -132,8 +136,8 @@ impl<'a> BlobReader<'a> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::io;
     use std::rc::Weak;
+    use std::{io, mem};
 
     use super::*;
 
@@ -153,7 +157,7 @@ mod tests {
                     assert!(
                         previous
                             .iter()
-                            .all(|weak: &Weak<[u8]>| weak.upgrade().is_none())
+                            .all(|weak: &Weak<Vec<u8>>| weak.upgrade().is_none())
                     );
                     batches.push(ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>());
                     Ok(ids
@@ -181,6 +185,99 @@ mod tests {
         let second = reader.read("a", |_| panic!("retained")).unwrap();
         assert!(Rc::ptr_eq(&first, &second));
         reader.read("a", |_| panic!("exhausted")).unwrap_err();
+    }
+
+    #[test]
+    fn shared_ownership_preserves_acquired_payload_allocations() {
+        // Ordinary and oversized payloads must both retain the acquired buffer.
+        for length in [2, 7] {
+            let bytes = vec![1; length];
+            let pointer = bytes.as_ptr();
+            let mut reader =
+                BlobReader::new(&["a", "a"], NonZero::new(4).unwrap(), |_| panic!("single"))
+                    .unwrap();
+            let first = reader.read("a", |_| Ok(vec![bytes])).unwrap();
+            assert_eq!(first.as_ptr(), pointer);
+            let second = reader.read("a", |_| panic!("retained")).unwrap();
+            assert!(Rc::ptr_eq(&first, &second));
+        }
+    }
+
+    #[test]
+    fn bounded_sequences_preserve_order_and_retry_across_batch_boundaries() {
+        // Short sequences cover repeated identities, empty payloads, ordinary payloads and
+        // oversized singletons. Fixed attempts terminate independently of reader progress.
+        let payloads = HashMap::from([("e", vec![]), ("s", vec![1, 2]), ("o", vec![3; 5])]);
+        // Representative Miri inputs bound interpreter work; native runs cover every
+        // starting identity and budget. Both retain duplicates and oversized batches.
+        let identities = ["e", "s", "o"];
+        let starts = if cfg!(miri) {
+            &identities[..1]
+        } else {
+            &identities[..]
+        };
+        let budgets: &[usize] = if cfg!(miri) { &[4] } else { &[1, 4] };
+        for &first in starts {
+            for second in ["e", "s", "o"] {
+                for third in ["e", "s", "o"] {
+                    let requests = [first, second, third];
+                    for &budget in budgets {
+                        for failure_position in 0..=requests.len() {
+                            let mut reader =
+                                BlobReader::new(&requests, NonZero::new(budget).unwrap(), |ids| {
+                                    Ok(ids
+                                        .iter()
+                                        .map(|id| payloads.get(id).unwrap().len())
+                                        .collect())
+                                })
+                                .unwrap();
+                            for (position, id) in requests.iter().enumerate() {
+                                reader
+                                    .read("out-of-order", |_| panic!("not admitted"))
+                                    .unwrap_err();
+                                let mut fail_once = position == failure_position;
+                                let mut succeeded = false;
+                                for attempt in 0..2 {
+                                    let result = reader.read(id, |ids| {
+                                        assert_eq!(
+                                            ids.iter().collect::<HashSet<_>>().len(),
+                                            ids.len()
+                                        );
+                                        let bytes: usize = ids
+                                            .iter()
+                                            .map(|id| payloads.get(id).unwrap().len())
+                                            .sum();
+                                        assert!(bytes <= budget || ids.len() == 1);
+                                        if mem::take(&mut fail_once) {
+                                            return Err(
+                                                io::Error::other("injected acquisition").into()
+                                            );
+                                        }
+                                        Ok(ids
+                                            .iter()
+                                            .map(|id| payloads.get(id).unwrap().clone())
+                                            .collect())
+                                    });
+                                    match result {
+                                        Ok(bytes) => {
+                                            assert_eq!(bytes.as_ref(), payloads.get(id).unwrap());
+                                            succeeded = true;
+                                            break;
+                                        }
+                                        Err(error) => {
+                                            assert_eq!(attempt, 0);
+                                            assert!(error.find_source::<io::Error>().is_some());
+                                        }
+                                    }
+                                }
+                                assert!(succeeded);
+                            }
+                            reader.read(first, |_| panic!("exhausted")).unwrap_err();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
