@@ -9,6 +9,13 @@ use std::panic::RefUnwindSafe;
 /// unwind handling. Interior state must be synchronized and preserve ref-unwind-safe invariants.
 pub trait DiagnosticSink: fmt::Debug + Send + Sync + RefUnwindSafe {
     fn write(&self, text: &str) -> io::Result<()>;
+
+    /// Attempts delivery without recording a failure for later propagation.
+    ///
+    /// Adapters that defer ordinary write failures must forward this separately.
+    fn write_advisory(&self, text: &str) {
+        drop(self.write(text));
+    }
 }
 
 /// Receives lazy notes so decision tests need no process-global stream capture.
@@ -173,6 +180,10 @@ mod tests {
             "decision".to_owned()
         });
         assert!(built);
+        Closed.write_advisory("unconditional advisory");
+        let recording = Recording::default();
+        recording.write_advisory("delivered advisory");
+        assert_eq!(*recording.0.lock().unwrap(), ["delivered advisory"]);
     }
 
     #[test]
