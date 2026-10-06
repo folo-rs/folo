@@ -149,8 +149,8 @@ pub(crate) fn candidate(assessment: &Assessment) -> PathBuf {
         .to_path_buf()
 }
 
-/// Checks equivalent persisted reports, outcomes, checker logs and patches across independent calls,
-/// allowing only the invocation-owned report location to differ.
+/// Checks equivalent persisted reports, outcomes, checker logs and patches across
+/// independent calls, allowing only the invocation-owned report location to differ.
 pub(crate) fn same_evidence(expected: &Path, actual: &Path) {
     assert_eq!(
         fs::read(expected.join("report.json")).unwrap(),
