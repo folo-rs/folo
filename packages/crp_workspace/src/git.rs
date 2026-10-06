@@ -418,7 +418,7 @@ impl GitRepo {
     fn tracked_paths_with(
         paths: &[&str],
         case: PathCase,
-        run: impl FnMut(&[String]) -> Result<Vec<u8>, AppError>,
+        run: impl FnMut(&[&str]) -> Result<Vec<u8>, AppError>,
     ) -> Result<Vec<String>, AppError> {
         if paths.is_empty() {
             return Ok(Vec::new());
@@ -433,7 +433,7 @@ impl GitRepo {
     fn work_tree_modes_with(
         pathspecs: &[&str],
         case: PathCase,
-        mut run: impl FnMut(&[String]) -> Result<Vec<u8>, AppError>,
+        mut run: impl FnMut(&[&str]) -> Result<Vec<u8>, AppError>,
     ) -> Result<WorkTreeModes, AppError> {
         if pathspecs.is_empty() {
             return Ok(WorkTreeModes::default());
@@ -503,7 +503,7 @@ impl GitRepo {
         prefix: &[&str],
         paths: &[&str],
         case: PathCase,
-        mut run: impl FnMut(&[String]) -> Result<Vec<u8>, AppError>,
+        mut run: impl FnMut(&[&str]) -> Result<Vec<u8>, AppError>,
     ) -> Result<Vec<u8>, AppError> {
         let paths: Vec<_> = paths
             .iter()
@@ -512,12 +512,7 @@ impl GitRepo {
         let paths: Vec<_> = paths.iter().map(String::as_str).collect();
         let mut output = Vec::new();
         for batch in command_line_batches(&paths, PATH_ARG_BUDGET)? {
-            let args: Vec<_> = prefix
-                .iter()
-                .copied()
-                .chain(batch)
-                .map(str::to_owned)
-                .collect();
+            let args: Vec<_> = prefix.iter().copied().chain(batch).collect();
             output.extend(run(&args)?);
         }
         Ok(output)

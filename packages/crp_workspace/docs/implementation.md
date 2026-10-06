@@ -111,6 +111,8 @@ Index modes, their worktree overlay and untracked candidates are acquired over t
 relevant literal pathspecs, splitting arguments at the native command-line budget. Untracked
 queries do not expand to unrelated repository paths. Packages select overlapping scopes, so
 shared resources and outer/nested consumers retain independent packaging interpretation.
+Synchronous scoped queries borrow arguments from the fixed prefix and retained pathspec strings;
+batch assembly does not duplicate their owned contents.
 Source capture can supply already acquired index modes; live acquisition still obtains the
 worktree overlay only after effective-filter admission. Without capture, acquisition reads the
 index itself. Neither path executes mode queries merely to capture source evidence.
