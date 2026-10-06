@@ -1,4 +1,4 @@
-//! Proposal artifact acquisition, input protection and output invalidation.
+//! Proposal artifact acquisition and output invalidation.
 
 use std::fs;
 use std::path::Path;
@@ -7,27 +7,6 @@ use cargo_release_plan::{RunInput, RunOutcome, run};
 use ohno::AppError;
 use serde_json::{Value, json};
 use tempfile::tempdir;
-
-#[test]
-#[cfg_attr(miri, ignore = "resolves real proposal input and output paths")]
-fn missing_output_parents_cannot_make_an_input_writable_as_a_proposal() {
-    let directory = tempdir().unwrap();
-    let report_path = directory.path().join("report.json");
-    let decisions_path = directory.path().join("decisions.json");
-    fs::write(&report_path, report().to_string()).unwrap();
-    fs::write(&decisions_path, r#"{"schema_version":2,"changes":[]}"#).unwrap();
-    for input in [&report_path, &decisions_path] {
-        let before = fs::read(input).unwrap();
-        let output = directory
-            .path()
-            .join("missing")
-            .join("..")
-            .join(input.file_name().unwrap());
-        propose(&report_path, &decisions_path, &output).unwrap_err();
-        assert_eq!(fs::read(input).unwrap(), before);
-        assert!(!directory.path().join("missing").exists());
-    }
-}
 
 #[test]
 #[cfg_attr(miri, ignore = "validates real proposal input and output paths")]
@@ -72,11 +51,6 @@ fn failed_reruns_remove_stale_proposals_and_preserve_inputs() {
     fs::write(&decisions_path, "null").unwrap();
     propose(&report_path, &decisions_path, &output).unwrap_err();
     assert!(!output.exists());
-    let before = fs::read(&report_path).unwrap();
-    propose(directory.path(), &decisions_path, &report_path).unwrap_err();
-    assert_eq!(fs::read(&report_path).unwrap(), before);
-    propose(&report_path, &decisions_path, &decisions_path).unwrap_err();
-    assert_eq!(fs::read_to_string(&decisions_path).unwrap(), "null");
 }
 
 #[test]

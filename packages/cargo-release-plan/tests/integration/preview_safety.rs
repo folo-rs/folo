@@ -10,61 +10,12 @@ use tempfile::tempdir;
 use crate::harness::{prepare, seeded_package};
 
 #[test]
-#[cfg_attr(miri, ignore = "executes preparation against a real source directory")]
-fn preparation_rejects_source_output_before_mutation() {
-    let fixture = seeded_package();
-    let output = fixture.path().join("packages/demo/src/evidence");
-    let result = run(&RunInput::Prepare {
-        merge_target: None,
-        output: output.clone(),
-        release_history: Some("HEAD".to_owned()),
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    });
-    assert!(!output.exists(), "{result:?}");
-    result.unwrap_err();
-    assert!(!fixture.path().join("Cargo.lock").exists());
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "executes preview against a real source directory")]
-fn preview_rejects_source_output_before_mutation() {
-    let fixture = seeded_package();
-    let prepared = prepare(&fixture);
-    let proposal = fixture.path().join("proposal.json");
-    fs::write(
-        &proposal,
-        serde_json::to_vec(&json!({
-            "schema_version": SCHEMA_VERSION,
-            "increments": []
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let output = fixture.path().join("packages/demo/src/evidence");
-    let result = run(&RunInput::Preview {
-        plan: proposal,
-        prepared,
-        output: output.clone(),
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    });
-    assert!(!output.exists(), "{result:?}");
-    result.unwrap_err();
-}
-
-#[test]
 #[cfg_attr(
     miri,
-    ignore = "checks that output marker cleanup cannot remove admitted source"
+    ignore = "prepares evidence in a caller-selected source directory"
 )]
-fn source_output_markers_are_preserved_before_preparation_and_preview() {
+fn preparation_uses_the_caller_selected_output() {
     let fixture = seeded_package();
-    fixture.write(
-        "packages/demo/src/evidence/prepared.json",
-        "source preparation",
-    );
-    fixture.write("packages/demo/src/evidence/plan.json", "source plan");
     let output = fixture.path().join("packages/demo/src/evidence");
     run(&RunInput::Prepare {
         output: output.clone(),
@@ -73,30 +24,38 @@ fn source_output_markers_are_preserved_before_preparation_and_preview() {
         manifest_path: fixture.manifest(),
         verbose: false,
     })
-    .unwrap_err();
+    .unwrap();
+    assert!(output.join("prepared.json").is_file());
+    assert!(output.join("report.json").is_file());
+    assert!(!output.join(".prospective").exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "previews evidence in a caller-selected source directory"
+)]
+fn preview_uses_the_caller_selected_output() {
+    let fixture = seeded_package();
     let prepared = prepare(&fixture);
+    let proposal = fixture.path().join("proposal.json");
+    fs::write(
+        &proposal,
+        json!({"schema_version": SCHEMA_VERSION, "increments": []}).to_string(),
+    )
+    .unwrap();
+    let output = fixture.path().join("packages/demo/src/evidence");
     run(&RunInput::Preview {
-        plan: fixture.path().join("missing-proposal.json"),
+        plan: proposal,
         prepared,
-        output,
+        output: output.clone(),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
-    .unwrap_err();
-    assert_eq!(
-        fixture.read("packages/demo/src/evidence/prepared.json"),
-        "source preparation"
-    );
-    assert_eq!(
-        fixture.read("packages/demo/src/evidence/plan.json"),
-        "source plan"
-    );
-    assert!(
-        !fixture
-            .path()
-            .join("packages/demo/src/evidence/.prospective")
-            .exists()
-    );
+    .unwrap();
+    assert!(output.join("plan.json").is_file());
+    assert!(output.join("workspace/Cargo.toml").is_file());
+    assert!(!output.join(".prospective").exists());
 }
 
 #[test]
@@ -118,25 +77,6 @@ fn preparation_preserves_an_occupied_prospective_directory() {
     assert_eq!(fixture.read("prepared/.prospective/keep"), "another owner");
     assert!(!fixture.path().join("prepared/prepared.json").exists());
     assert!(!fixture.path().join("Cargo.lock").exists());
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "uses owned preview artifact files")]
-fn preview_output_cannot_destroy_an_input_document() {
-    let directory = tempdir().unwrap();
-    let plan = directory.path().join("plan.json");
-    let before = r#"{"schema_version":6,"increments":[]}"#;
-    fs::write(&plan, before).unwrap();
-    // Collision checks precede reads, so neither a repository nor prepared evidence is needed.
-    run(&RunInput::Preview {
-        plan: plan.clone(),
-        prepared: directory.path().join("absent-prepared.json"),
-        output: directory.path().to_owned(),
-        manifest_path: directory.path().join("absent-Cargo.toml"),
-        verbose: false,
-    })
-    .unwrap_err();
-    assert_eq!(fs::read_to_string(plan).unwrap(), before);
 }
 
 #[test]
@@ -165,47 +105,6 @@ fn unavailable_source_cannot_authorize_removing_a_previous_output() {
         .unwrap_err();
         assert_eq!(fs::read_to_string(marker).unwrap(), "previous completion");
     }
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "checks captured dependency and resource locations before preparation"
-)]
-fn preparation_protects_ignored_dependency_sources_and_package_resources() {
-    let fixture = seeded_package();
-    fixture.write_workspace("exclude = ['target/dependency']\n");
-    fixture.write(".gitignore", "/target/\n");
-    fixture.write(
-        "packages/demo/Cargo.toml",
-        "[package]\nname='demo'\nversion='0.1.0'\nedition='2021'\n\
-         readme='../../target/docs/manual.md'\n\
-         [dependencies]\nhelper={path='../../target/dependency'}\n",
-    );
-    fixture.write(
-        "target/dependency/Cargo.toml",
-        "[package]\nname='helper'\nversion='0.1.0'\nedition='2021'\n[workspace]\n",
-    );
-    fixture.write("target/dependency/src/lib.rs", "pub fn helper() {}\n");
-    fixture.write("target/docs/manual.md", "resource");
-    fixture.commit("ignored local inputs");
-    for path in ["target/dependency/src/evidence", "target/docs"] {
-        let result = run(&RunInput::Prepare {
-            merge_target: None,
-            output: fixture.path().join(path),
-            release_history: Some("HEAD".to_owned()),
-            manifest_path: fixture.manifest(),
-            verbose: false,
-        });
-        result.unwrap_err();
-        assert!(!fixture.path().join(path).join(".prospective").exists());
-        assert!(!fixture.path().join("Cargo.lock").exists());
-    }
-    assert_eq!(fixture.read("target/docs/manual.md"), "resource");
-    assert_eq!(
-        fixture.read("target/dependency/src/lib.rs"),
-        "pub fn helper() {}\n"
-    );
 }
 
 #[test]

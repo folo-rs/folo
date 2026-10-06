@@ -64,15 +64,21 @@ Source-location discovery accepts the same acquisition's documents and reads new
 reached manifests. Native-read and supplied-document entry points share recursive
 discovery and root-alias admission. Versioning adds relocatability constraints and
 fingerprints the selected files, including absent reserved inputs and transitive path
-dependencies outside Cargo's member list.
+dependencies outside Cargo's member list. Explicit build-script and target paths come
+from these same documents, including dependency documents. Dependency traversal deduplicates
+resolved identities independently of reserved files.
+Nonmember dependencies reserve their conventional build script unless explicitly disabled.
+Explicit target and build-script paths share directory selection. The containing directory
+is recursive only when its resolved identity is strictly below the owning package directory;
+package roots, ancestors and outside directories are not recursive source roots. Declared
+files remain selected in every case. Native directory resolution is injected into the
+in-process selection tests. This implements the application's captured-source contract:
+support files outside source directories must be tracked, without interpreting Rust modules.
 
-Evidence destination admission resolves existing ancestors and compares source boundaries
-component by component, including missing suffixes. It observes each relevant directory's
-case behavior without creating probes in source. Unequal Unicode or undecodable components
-cannot establish disjointness through ASCII case rules. Output-owned children must not
-redirect replacement writes or cleanup into another location; unrelated output children
-do not affect admission. Git's actual administrative and shared storage directories
-remain protected when the assessed repository is a linked worktree.
+Source discovery supplies captured evidence, not destination safety checks. Output placement
+belongs to callers; writers do not inventory source or Git configuration to assess it.
+Shared artifact operations provide atomic publication and filesystem path resolution where
+required by captured source relocation and artifact ownership.
 
 Replacement refs, replacement environment and graft contents are observed at each
 classification boundary and invalidate invocation memory when they change. An

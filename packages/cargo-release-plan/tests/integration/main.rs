@@ -15,6 +15,7 @@ mod acquisitions;
 mod artifact_commands;
 mod baseline;
 mod captured;
+mod captured_targets;
 mod cli_binary;
 mod compatibility;
 mod compatibility_lifecycle;

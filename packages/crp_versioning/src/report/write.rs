@@ -15,9 +15,6 @@ use crate::classify::{
 use crate::plan::SCHEMA_VERSION;
 use crate::report::output::{FileOutput, ReportOutput};
 
-/// Immediate files and subtrees replaced when publishing a report.
-pub const REPORT_OUTPUTS: [&str; 3] = ["report.json", "report.json.tmp", "diffs"];
-
 /// On-disk `report.json` body.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ReportFile {
@@ -93,7 +90,6 @@ pub fn run_report_with_target(
                 verbose,
                 &mut snapshots,
             )?;
-            acquired.admit_output(out_dir, REPORT_OUTPUTS)?;
             classify_acquired(acquired, verbose, &mut snapshots)
         },
         &mut FileOutput { directory: out_dir },
@@ -101,7 +97,7 @@ pub fn run_report_with_target(
 }
 
 // Preview already has a classification; this adapter supplies the real publication operations.
-/// Writes a report to an output already admitted against its assessed source locations.
+/// Writes a report and its patches to the caller-selected output directory.
 #[cfg_attr(test, mutants::skip)]
 pub fn write_report(out_dir: &Path, classification: &Classification) -> Result<String, AppError> {
     emit_report(
