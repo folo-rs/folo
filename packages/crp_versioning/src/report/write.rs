@@ -9,11 +9,14 @@ use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
 use crate::classify::{
-    AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus, Snapshots,
-    classify_with_snapshots,
+    AcquiredWorkspace, AnchorJson, ChangedItem, Classification, DiffStat, PackageClass,
+    PackageStatus, Snapshots, classify_acquired,
 };
 use crate::plan::SCHEMA_VERSION;
 use crate::report::output::{FileOutput, ReportOutput};
+
+/// Immediate files and subtrees replaced when publishing a report.
+pub const REPORT_OUTPUTS: [&str; 3] = ["report.json", "report.json.tmp", "diffs"];
 
 /// On-disk `report.json` body.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -82,19 +85,23 @@ pub fn run_report_with_target(
     create_report(
         out_dir,
         || {
-            classify_with_snapshots(
+            let mut snapshots = Snapshots::default();
+            let acquired = AcquiredWorkspace::acquire(
                 manifest_path,
                 release_history,
                 merge_target,
                 verbose,
-                &mut Snapshots::default(),
-            )
+                &mut snapshots,
+            )?;
+            acquired.admit_output(out_dir, REPORT_OUTPUTS)?;
+            classify_acquired(acquired, verbose, &mut snapshots)
         },
         &mut FileOutput { directory: out_dir },
     )
 }
 
 // Preview already has a classification; this adapter supplies the real publication operations.
+/// Writes a report to an output already admitted against its assessed source locations.
 #[cfg_attr(test, mutants::skip)]
 pub fn write_report(out_dir: &Path, classification: &Classification) -> Result<String, AppError> {
     emit_report(

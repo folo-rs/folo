@@ -24,7 +24,7 @@ use crate::plan::{
     increment_version, resolve_plan,
 };
 use crate::prospective::Prospective;
-use crate::report::write_report;
+use crate::report::{REPORT_OUTPUTS, write_report};
 use crate::resolved::{
     Artifact, Inputs, ResolvedState, StaleInputs, canonical, read_json, write_json,
 };
@@ -60,6 +60,12 @@ pub fn run_prepare_with_target(
         merge_target,
         verbose,
         &mut cache,
+    )?;
+    acquired.admit_output(
+        &output,
+        REPORT_OUTPUTS
+            .into_iter()
+            .chain(["prepared.json", ".prospective"]),
     )?;
     let lockfile = acquired.work_tree.workspace_root.join("Cargo.lock");
     drop(acquired);
@@ -112,14 +118,21 @@ pub fn run_preview(
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
+    let mut cache = Snapshots::default();
     let (prepared_input, plan_input) =
         preview_inputs(plan, prepared, &output, manifest, |inputs| {
-            inputs.verify(manifest, None).map(|_| ())
+            let (_, acquired) =
+                inputs.verify_with_snapshots(manifest, None, verbose, &mut cache)?;
+            acquired.admit_output(
+                &output,
+                REPORT_OUTPUTS
+                    .into_iter()
+                    .chain(["plan.json", ".prospective", "workspace"]),
+            )
         })?;
     let prepared = prepared_input;
     let plan = plan_input;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
-    let mut cache = Snapshots::default();
     let classification = classify_with_snapshots(
         &prospective.manifest,
         Some(&prepared.inputs.release_history),
@@ -259,12 +272,12 @@ pub fn preview_inputs(
             return Err(OutputInputCollision::new().into());
         }
     }
-    // The completion marker belongs to this invocation from its first fallible input read.
-    // A failed standalone rerun must not leave an earlier resolved plan looking current.
-    remove_marker(&marker)?;
     guard_output_inputs(output, &inputs)?;
     let prepared: Prepared = read_json(prepared)?;
     verify(&prepared.inputs)?;
+    // Source admission must precede even marker removal. Once the destination is admitted,
+    // a failed proposal read or resolution invalidates its previous completion.
+    remove_marker(&marker)?;
     let plan: PlanFile = read_json(plan)?;
     plan.validate_schema()?;
     plan.validate_history(&prepared.inputs)?;

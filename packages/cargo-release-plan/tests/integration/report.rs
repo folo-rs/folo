@@ -1,12 +1,73 @@
 //! Report and check output: the JSON document and the failure renderings.
 
 use std::fs;
+use std::path::PathBuf;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 use serde_json::{Value, json};
+use tempfile::tempdir;
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{check, report_json, seeded_package};
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "checks report source isolation against real Git and Cargo"
+)]
+fn report_rejects_source_output_without_resetting_existing_evidence() {
+    let fixture = seeded_package();
+    fixture.write("packages/demo/src/evidence/report.json", "source input");
+    fixture.write("packages/demo/src/evidence/diffs/keep", "source subtree");
+    let result = run(&RunInput::Report {
+        out_dir: fixture.path().join("packages/demo/src/evidence"),
+        release_history: Some("HEAD".to_owned()),
+        merge_target: None,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    });
+    result.unwrap_err();
+    assert_eq!(
+        fixture.read("packages/demo/src/evidence/report.json"),
+        "source input"
+    );
+    assert_eq!(
+        fixture.read("packages/demo/src/evidence/diffs/keep"),
+        "source subtree"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "checks report isolation in a linked Git worktree")]
+fn report_protects_linked_worktree_and_shared_repository_storage() {
+    let fixture = seeded_package();
+    let directory = tempdir().unwrap();
+    let checkout = directory.path().join("checkout");
+    fixture.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        checkout.to_str().unwrap(),
+        "HEAD",
+    ]);
+    let pointer = fs::read_to_string(checkout.join(".git")).unwrap();
+    let administration = PathBuf::from(pointer.trim().strip_prefix("gitdir: ").unwrap());
+    for output in [
+        fixture.path().join(".git/evidence"),
+        administration.join("evidence"),
+    ] {
+        let result = run(&RunInput::Report {
+            out_dir: output.clone(),
+            release_history: Some("HEAD".to_owned()),
+            merge_target: None,
+            manifest_path: checkout.join("Cargo.toml"),
+            verbose: false,
+        });
+        result.unwrap_err();
+        assert!(!output.exists());
+    }
+    assert_eq!(fixture.sha("HEAD"), fixture.sha("main"));
+}
 
 /// A compatible edge remains valid inside a transitively derived group.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
