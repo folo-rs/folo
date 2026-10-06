@@ -3,8 +3,11 @@
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
+use std::path::Path;
 
-use crp_workspace::manifest::{PathCase, WorkspaceInherit, parse_package_manifest};
+use crp_workspace::manifest::{
+    PathCase, WorkspaceInherit, package_manifest_from_document, parse_document,
+};
 use crp_workspace::metadata::*;
 
 use crate::git_fixture::Repository;
@@ -36,13 +39,15 @@ fn tracked_packages_reject_reserved_metadata_typos_before_projection() {
 fn automatic_installable_targets_require_tracked_present_regular_files() {
     let fixture = Repository::new();
     let git = fixture.repo();
-    let manifest = parse_package_manifest(
+    let document = parse_document(
+        Path::new("pkg/Cargo.toml"),
         "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\n",
-        "pkg/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let manifest =
+        package_manifest_from_document(&document, "pkg/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     let mut tracked = TrackedMetadata {
         git: &git,
         workspace_root: fixture.path(),

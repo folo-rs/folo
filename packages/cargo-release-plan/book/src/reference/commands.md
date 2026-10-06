@@ -16,8 +16,8 @@ concrete PowerShell command sequences.
 
 ## Input acquisition
 
-Each command acquires current inputs and may reuse admitted observations during read-only
-work. Keep inputs stable during
+Each command acquires current inputs and may reuse those observations after the required
+input checks during read-only work. Keep inputs stable during
 [read-only command stages](../concepts/evidence.md#keep-command-inputs-stable).
 Commands acquire new inputs after their own edits or resolution and for new or relocated
 workspaces. No workflow-managed cache identifier or observation-storage configuration is
@@ -120,7 +120,7 @@ decisions. Select exactly one source mode:
 - Without either, a fresh read-only report uses `--release-history` and optional
   `--merge-target`. These inputs cannot be combined with already-bound evidence.
 
-It admits the selected source and regenerates a report from those same observations.
+It checks the selected inputs and regenerates a report from those same observations.
 Assessed source, configuration and history must remain unchanged during checking.
 An assessed workspace with selected contracts must have a lockfile accepted by Cargo's
 default metadata resolution without changes. It never accepts detached `--report` evidence.

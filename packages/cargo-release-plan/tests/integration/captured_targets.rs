@@ -222,6 +222,8 @@ fn targets_outside_dedicated_directories_use_git_added_support_files() {
     }
 }
 
+// Ignored support modules and unrelated files distinguish dedicated-directory capture
+// from support explicitly added to the current index.
 fn dependency_targets(library: &str, build: &str) -> Fixture {
     let fixture = seeded_package();
     fixture.write_workspace("exclude=['helper']");
@@ -283,6 +285,8 @@ fn dependency_targets(library: &str, build: &str) -> Fixture {
     fixture
 }
 
+// Build the retained workspace to verify reconstruction, then return original preparation
+// so callers can verify that later source changes invalidate its captured inputs.
 fn check_retained_targets(fixture: &Fixture) -> Prepared {
     let output = tempdir().unwrap();
     let prepared = output.path().join("prepared");

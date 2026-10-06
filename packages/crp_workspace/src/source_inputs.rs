@@ -23,25 +23,8 @@ pub struct SourceInputs {
 }
 
 impl SourceInputs {
-    // Connects native manifest acquisition to the unit-tested workspace inventory.
-    #[cfg_attr(test, mutants::skip)]
-    pub fn discover(
-        root: &Path,
-        workspace_root: &Path,
-        manifests: &[PathBuf],
-        resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
-    ) -> Result<Self, AppError> {
-        Self::discover_with_documents(
-            root,
-            workspace_root,
-            manifests,
-            resolve_dependency,
-            read_document,
-        )
-    }
-
     /// Shares freshly acquired documents without retaining mutable workspace observations.
-    // Native root alias resolution is shared with ordinary discovery.
+    // Native root alias resolution is exercised by boundary tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn discover_with_documents<D: Borrow<DocumentMut>>(
         root: &Path,
@@ -195,6 +178,7 @@ impl SourceInputs {
         Ok(())
     }
 
+    /// Selects declared files and dedicated descendant directories for source capture.
     fn target_source(
         &mut self,
         directory: &Path,
@@ -202,7 +186,7 @@ impl SourceInputs {
         resolve_directory: &mut impl FnMut(&Path) -> Result<PathBuf, AppError>,
     ) -> Result<(), AppError> {
         let path = directory.join(path);
-        let parent = path.parent().expect("a target has a parent directory");
+        let parent = path.parent().ok_or_else(|| ReadFileError::new(&path))?;
         if parent != directory {
             let package = resolve_directory(directory)?;
             let source = resolve_directory(parent)?;
@@ -218,7 +202,7 @@ impl SourceInputs {
     }
 }
 
-// Both native entry points acquire complete current bytes before parsing.
+// Dependency discovery acquires complete current bytes before parsing.
 #[cfg_attr(test, mutants::skip)]
 fn read_document(path: &Path) -> Result<DocumentMut, AppError> {
     let text = fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error))?;
@@ -533,5 +517,19 @@ mod tests {
                 .unwrap_err();
             assert_eq!(reads.last().unwrap(), failing);
         }
+    }
+
+    #[test]
+    fn root_only_target_is_an_input_error_without_directory_acquisition() {
+        #[cfg(windows)]
+        let root = r"C:\";
+        #[cfg(not(windows))]
+        let root = "/";
+        let error = SourceInputs::default()
+            .target_source(Path::new("package"), root, &mut |_| {
+                panic!("a root-only target cannot select a source directory")
+            })
+            .unwrap_err();
+        assert!(error.find_source::<ReadFileError>().is_some());
     }
 }
