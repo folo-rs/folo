@@ -18,7 +18,7 @@ use crp_versioning::classify::{Snapshots, classify_acquired};
 use crp_versioning::inspect_plan::read_resolved_preview_with_snapshots;
 use crp_versioning::preview::Prepared;
 use crp_versioning::report::{read_report, write_report};
-use crp_versioning::resolved::{Inputs, ResolvedState, read_json};
+use crp_versioning::resolved::{Inputs, read_json};
 use crp_versioning::semver_targets::semver_targets;
 use crp_workspace::artifact_path::write_new;
 use crp_workspace::command::{BUILD_CREDENTIAL_VARIABLES, run_capture};
@@ -28,24 +28,6 @@ use semver::Version;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-
-/// Identifies the assessed source without accepting a report detached from its input snapshot.
-enum Evidence {
-    Source(Inputs),
-    Preview(ResolvedState),
-}
-
-impl Evidence {
-    fn root(&self) -> &Path {
-        self.inputs().root()
-    }
-    fn inputs(&self) -> &Inputs {
-        match self {
-            Self::Source(inputs) => inputs,
-            Self::Preview(resolved) => &resolved.inputs,
-        }
-    }
-}
 
 fn comparison_baseline(
     name: &str,
@@ -366,19 +348,22 @@ fn check_with_output(
         return Err(CompatibilityDestinationExists::new(output).into());
     }
     let mut snapshots = Snapshots::default();
-    let (evidence, manifest, acquired) = if let Some(path) = prepared {
+    let (original_root, manifest, acquired) = if let Some(path) = prepared {
         let prepared: Prepared = read_json(path)?;
         let manifest = manifest.canonicalize()?;
         let (_, acquired) =
             prepared
                 .inputs
                 .verify_with_snapshots(&manifest, None, verbose, &mut snapshots)?;
-        (Evidence::Source(prepared.inputs), manifest, acquired)
+        (prepared.inputs.root, manifest, acquired)
     } else if let Some(path) = plan {
         let (resolved, acquired) =
             read_resolved_preview_with_snapshots(path, manifest, verbose, &mut snapshots)?;
-        let manifest = resolved.evidence_manifest_path.clone();
-        (Evidence::Preview(resolved), manifest, acquired)
+        (
+            resolved.inputs.root,
+            resolved.evidence_manifest_path,
+            acquired,
+        )
     } else {
         let manifest = manifest.canonicalize()?;
         let (inputs, acquired) = Inputs::capture_with_snapshots(
@@ -388,7 +373,7 @@ fn check_with_output(
             verbose,
             &mut snapshots,
         )?;
-        (Evidence::Source(inputs), manifest, acquired)
+        (inputs.root, manifest, acquired)
     };
     let classification = classify_acquired(acquired, verbose, &mut snapshots)?;
     write_report(output, &classification)?;
@@ -397,7 +382,7 @@ fn check_with_output(
     let report = output.join("report.json");
     let source_report = read_report(&report)?;
     let targets = semver_targets(&source_report, verbose);
-    let cache = cache_path(&env::temp_dir(), evidence.root())?;
+    let cache = cache_path(&env::temp_dir(), &original_root)?;
     fs::create_dir_all(&cache)?;
     let log = output.join("semver-checks.log");
     let log = fs::File::create(log).map_err(CheckerLogFailed::caused_by)?;
@@ -424,7 +409,7 @@ fn check_with_output(
             // A caller can name a moved member. Use Cargo's workspace root, as classification
             // does, and share the single captured parent snapshot across selected contracts.
             let source =
-                parent_source.insert(ParentSource::create(evidence.root(), &anchor.commit)?);
+                parent_source.insert(ParentSource::create(&original_root, &anchor.commit)?);
             source.verify()?;
             Some(source.root.join(&workspace_prefix))
         } else {

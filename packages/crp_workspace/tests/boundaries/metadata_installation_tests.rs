@@ -8,7 +8,7 @@ use crp_workspace::git::GitRepo;
 use crp_workspace::lockfile::{InstallationGraph, Lockfile};
 use crp_workspace::manifest::{
     DependencySource, PackageIdentity, PathCase, WorkspaceInherit, installation_patches,
-    parse_document, parse_package_manifest,
+    package_manifest_from_document, parse_document,
 };
 use crp_workspace::metadata::*;
 use semver::Version;
@@ -234,13 +234,9 @@ fn path_installation() -> InstallationGraph {
          [patch.crates-io]\nfoo = { path = 'vendor/foo' }\n",
     )
     .unwrap();
-    let package = parse_package_manifest(
-        &root.to_string(),
-        "Cargo.toml",
-        &WorkspaceInherit::default(),
-    )
-    .unwrap()
-    .unwrap();
+    let package = package_manifest_from_document(&root, "Cargo.toml", &WorkspaceInherit::default())
+        .unwrap()
+        .unwrap();
     let mut installation = InstallationGraph::default();
     installation.insert(
         package.name,

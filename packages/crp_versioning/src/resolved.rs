@@ -166,6 +166,10 @@ impl Inputs {
         .map(|_| ())
     }
 
+    /// Checks candidate contents against frozen commits after original-source validation.
+    ///
+    /// The returned observations belong to this unchanged command interval; original refs
+    /// are checked by the caller. See docs/implementation.md, "Anticipated squash predecessors".
     pub(crate) fn capture_candidate(
         &self,
         manifest: &Path,
@@ -513,6 +517,10 @@ impl ResolvedState {
             .map(|_| ())
     }
 
+    /// Selects and checks the retained candidate after command-entry source validation.
+    ///
+    /// This shares the caller's original-ref checks, unlike independent `verify_candidate`.
+    /// See docs/implementation.md, "Anticipated squash predecessors".
     pub(crate) fn acquire_candidate(
         &self,
         manifest: &Path,
@@ -667,6 +675,11 @@ pub(crate) fn apply_resolved(
     ))
 }
 
+/// Validates live source and plan artifacts without installing files.
+///
+/// Returns whether the final state is already installed and the workspace observations
+/// for the current unchanged interval. Drop those observations before writing.
+/// See docs/implementation.md, "Shared operation and tests".
 pub(crate) fn validate_application(
     plan: &PlanFile,
     manifest: &Path,

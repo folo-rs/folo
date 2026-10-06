@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::git::testing::unopened;
-use crate::manifest::{DependencySource, InstallationDependencies, parse_package_manifest};
+use crate::manifest::{DependencySource, InstallationDependencies};
 
 #[test]
 fn only_tracked_manifests_are_workspace_members() {
@@ -62,13 +62,15 @@ fn projection_moves_the_acquired_listing_into_the_work_tree() {
 fn lockfile_relevance_uses_present_regular_binary_sources_not_examples() {
     let root = Path::new("workspace");
     let git = unopened(root);
-    let manifest = parse_package_manifest(
+    let document = parse_document(
+        Path::new("pkg/Cargo.toml"),
         "[package]\nname='pkg'\nversion='1.0.0'\n",
-        "pkg/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let manifest =
+        package_manifest_from_document(&document, "pkg/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     for path in [
         "pkg/src/main.rs",
         "pkg/examples/main.rs",
@@ -368,13 +370,15 @@ fn installation_acquisition_uses_tracked_spelling_and_distinguishes_missing_from
         documents: BTreeMap::new(),
         packages: BTreeMap::new(),
     };
-    let package = parse_package_manifest(
+    let document = parse_document(
+        Path::new("tool/Cargo.toml"),
         "[package]\nname='tool'\nversion='1.0.0'\n[dependencies]\nhelper={path='../helper'}\n",
-        "tool/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let package =
+        package_manifest_from_document(&document, "tool/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     for failure in [
         None,
         Some(io::ErrorKind::NotFound),

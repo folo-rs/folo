@@ -86,6 +86,11 @@ fn preparation_preserves_an_occupied_prospective_directory() {
 )]
 fn unavailable_source_cannot_authorize_removing_a_previous_output() {
     let fixture = seeded_package();
+    let prepared = prepare(&fixture);
+    fixture.write(
+        "proposal.json",
+        &json!({"schema_version": SCHEMA_VERSION, "increments": []}).to_string(),
+    );
     let evidence = tempdir().unwrap();
     for contents in [Some("["), None] {
         if let Some(contents) = contents {
@@ -95,14 +100,17 @@ fn unavailable_source_cannot_authorize_removing_a_previous_output() {
         }
         let marker = evidence.path().join("plan.json");
         fs::write(&marker, "previous completion").unwrap();
-        run(&RunInput::Preview {
+        let error = run(&RunInput::Preview {
             plan: fixture.path().join("proposal.json"),
-            prepared: fixture.path().join("prepared.json"),
+            prepared: prepared.clone(),
             output: evidence.path().to_owned(),
             manifest_path: fixture.manifest(),
             verbose: false,
         })
         .unwrap_err();
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("stale"));
+        assert!(diagnostic.contains("Cargo.toml"));
         assert_eq!(fs::read_to_string(marker).unwrap(), "previous completion");
     }
 }
