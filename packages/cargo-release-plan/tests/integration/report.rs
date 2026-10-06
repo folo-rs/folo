@@ -94,24 +94,35 @@ fn report_staging_never_truncates_preexisting_shared_file_contents() {
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(miri, ignore = "replaces a dangling filesystem completion marker")]
-fn report_replaces_a_dangling_completion_marker() {
+#[cfg_attr(miri, ignore = "replaces dangling filesystem report entries")]
+fn report_replaces_dangling_owned_entries() {
     let fixture = seeded_package();
-    let output = tempdir().unwrap();
-    let missing = output.path().join("missing");
-    let marker = output.path().join("report.json");
-    symlink(&missing, &marker).unwrap();
-    fs::create_dir_all(output.path().join("diffs")).unwrap();
-    fs::write(output.path().join("diffs/old.patch"), "old patch").unwrap();
+    for entry in ["report.json", "diffs"] {
+        let output = tempdir().unwrap();
+        let missing = output.path().join("missing");
+        let marker = output.path().join("report.json");
+        symlink(&missing, output.path().join(entry)).unwrap();
+        if entry == "report.json" {
+            fs::create_dir_all(output.path().join("diffs")).unwrap();
+            fs::write(output.path().join("diffs/old.patch"), "old patch").unwrap();
+        } else {
+            fs::write(&marker, "previous completion").unwrap();
+        }
 
-    let result = report_command(&fixture, output.path()).output().unwrap();
+        let result = report_command(&fixture, output.path()).output().unwrap();
 
-    assert!(result.status.success(), "{result:?}");
-    assert!(fs::symlink_metadata(&marker).unwrap().is_file());
-    assert!(!missing.exists());
-    assert!(!output.path().join("diffs/old.patch").exists());
-    let report: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
-    assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+        assert!(result.status.success(), "{result:?}");
+        assert!(fs::symlink_metadata(&marker).unwrap().is_file());
+        assert!(
+            fs::symlink_metadata(output.path().join("diffs"))
+                .unwrap()
+                .is_dir()
+        );
+        assert!(!missing.exists());
+        assert!(!output.path().join("diffs/old.patch").exists());
+        let report: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+        assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+    }
 }
 
 #[test]

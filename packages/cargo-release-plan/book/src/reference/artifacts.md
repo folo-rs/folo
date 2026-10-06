@@ -13,6 +13,18 @@ Preview validates captured inputs before invalidating its previous completion ma
 Missing or malformed preparation and stale captured inputs leave that marker untouched.
 A retained marker alone is not admission: consumers still verify its captured inputs.
 
+## Captured source inputs
+
+Preparation and preview capture declared inputs, Git-tracked files and source-directory
+contents. Source directories include `src` and dedicated custom target or build-script
+directories below each package root, including path dependencies. A target at the package
+root or outside it contributes its declared file without recursively capturing the
+package root or its ancestors.
+
+Supporting modules and other build inputs outside those source directories must be
+Git-tracked. Use `git add`; a commit is not required. The tool does not interpret Rust
+modules or invoke a compiler to discover additional inputs.
+
 ## Local decisions and plans
 
 A decisions document is caller-authored literal JSON:

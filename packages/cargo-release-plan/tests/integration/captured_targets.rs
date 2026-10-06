@@ -2,12 +2,14 @@
 
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use cargo_release_plan::{RunInput, run};
 use crp_versioning::preview::Prepared;
 use serde_json::Value;
+use tempfile::tempdir;
 
-use crate::fixture::write_package;
+use crate::fixture::{Fixture, write_package};
 use crate::harness::seeded_package;
 
 #[test]
@@ -139,4 +141,185 @@ fn dependency_default_build_script_is_captured_and_verified() {
     })
     .unwrap_err();
     assert!(!rejected.exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "builds original and retained custom-target dependencies"
+)]
+fn dedicated_target_directories_reconstruct_and_verify_ignored_modules() {
+    let fixture = dependency_targets("custom/lib.rs", "build-sources/nested/../build.rs");
+    fixture.cargo(&["check", "--offline", "--quiet"]);
+    fixture.commit("select dedicated targets");
+
+    let prepared = check_retained_targets(&fixture);
+
+    for path in [
+        "helper/custom/library_helper.rs",
+        "helper/custom/library_helper/nested.rs",
+        "helper/build-sources/build_helper.rs",
+    ] {
+        assert!(prepared.inputs.paths.contains(Path::new(path)));
+        assert!(fixture.git(&["ls-files", "--", path]).is_empty());
+        let before = fixture.read(path);
+        fixture.write(path, &format!("{before}\n// changed captured module\n"));
+        prepared
+            .inputs
+            .verify(&fixture.manifest(), None)
+            .unwrap_err();
+        fixture.write(path, &before);
+        prepared.inputs.verify(&fixture.manifest(), None).unwrap();
+    }
+    for path in ["helper/unselected.txt", "support/unselected.txt"] {
+        assert!(!prepared.inputs.paths.contains(Path::new(path)));
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "reconstructs Git-added support files without a commit")]
+fn targets_outside_dedicated_directories_use_git_added_support_files() {
+    for directory in ["", "../support/"] {
+        let fixture = dependency_targets(
+            &format!("{directory}lib.rs"),
+            &format!("{directory}build.rs"),
+        );
+        fixture.cargo(&["check", "--offline", "--quiet"]);
+        fixture.commit("select root and outside targets");
+        let source = if directory.is_empty() {
+            "helper"
+        } else {
+            "support"
+        };
+        let modules = [
+            format!("{source}/library_helper.rs"),
+            format!("{source}/library_helper/nested.rs"),
+            format!("{source}/build_helper.rs"),
+        ];
+        for path in &modules {
+            assert!(
+                fixture
+                    .git(&["ls-tree", "-r", "--name-only", "HEAD", "--", path])
+                    .is_empty()
+            );
+            fixture.git(&["add", "--force", "--", path]);
+        }
+        let prepared = check_retained_targets(&fixture);
+        for path in &modules {
+            assert!(prepared.inputs.paths.contains(Path::new(path)));
+            let before = fixture.read(path);
+            fixture.write(path, &format!("{before}\n// changed tracked support\n"));
+            prepared
+                .inputs
+                .verify(&fixture.manifest(), None)
+                .unwrap_err();
+            fixture.write(path, &before);
+            prepared.inputs.verify(&fixture.manifest(), None).unwrap();
+        }
+        for path in ["helper/unselected.txt", "support/unselected.txt"] {
+            assert!(!prepared.inputs.paths.contains(Path::new(path)));
+        }
+    }
+}
+
+fn dependency_targets(library: &str, build: &str) -> Fixture {
+    let fixture = seeded_package();
+    fixture.write_workspace("exclude=['helper']");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "[dependencies]\nhelper={path='../../helper'}",
+    );
+    fixture.write(
+        "packages/demo/src/lib.rs",
+        "pub fn value() -> u8 { helper::value() }\n",
+    );
+    fixture.write(
+        ".gitignore",
+        "**/target/\n**/library_helper.rs\n**/library_helper/\n**/build_helper.rs\n**/unselected.txt\n",
+    );
+    fixture.write(
+        "helper/Cargo.toml",
+        &format!(
+            "[package]\nname='helper'\nversion='0.1.0'\nedition='2024'\nbuild='{build}'\n\
+             [lib]\npath='{library}'\n[workspace]\n"
+        ),
+    );
+    fixture.write(
+        &format!("helper/{library}"),
+        "mod library_helper; pub fn value() -> u8 { library_helper::value() }\n",
+    );
+    fixture.write(
+        &format!("helper/{build}"),
+        "mod build_helper; fn main() { build_helper::build(); }\n",
+    );
+    let library_directory = Path::new(library).parent().unwrap();
+    let build_directory = Path::new(build).parent().unwrap();
+    for (directory, name, contents) in [
+        (
+            library_directory,
+            "library_helper.rs",
+            "mod nested; pub fn value() -> u8 { nested::value() }\n",
+        ),
+        (
+            library_directory,
+            "library_helper/nested.rs",
+            "pub fn value() -> u8 { 1 }\n",
+        ),
+        (build_directory, "build_helper.rs", "pub fn build() {}\n"),
+    ] {
+        fixture.write(
+            Path::new("helper")
+                .join(directory)
+                .join(name)
+                .to_str()
+                .unwrap(),
+            contents,
+        );
+    }
+    fixture.write("helper/unselected.txt", "not a declared or tracked source");
+    fixture.write("support/unselected.txt", "not a declared or tracked source");
+    fixture
+}
+
+fn check_retained_targets(fixture: &Fixture) -> Prepared {
+    let output = tempdir().unwrap();
+    let prepared = output.path().join("prepared");
+    run(&RunInput::Prepare {
+        output: prepared.clone(),
+        release_history: Some("HEAD".to_owned()),
+        merge_target: None,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let plan = output.path().join("proposal.json");
+    fs::write(
+        &plan,
+        r#"{"schema_version":6,"increments":[{"name":"demo","bump":"minor"}]}"#,
+    )
+    .unwrap();
+    let preview = output.path().join("preview");
+    run(&RunInput::Preview {
+        plan,
+        prepared: prepared.join("prepared.json"),
+        output: preview.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let result = Command::new("cargo")
+        .args([
+            "check",
+            "--offline",
+            "--locked",
+            "--quiet",
+            "--manifest-path",
+        ])
+        .arg(preview.join("workspace/Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    serde_json::from_slice(&fs::read(prepared.join("prepared.json")).unwrap()).unwrap()
 }

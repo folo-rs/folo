@@ -466,7 +466,19 @@ fn capture_sources(
         }
     }
     for directory in &sources.source_directories {
-        collect_sources(root, directory, paths)?;
+        if directory
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            // Dedicated target directories can retain parent components in their declared
+            // spelling. Fingerprints and prospective copies require repository-relative paths.
+            let directory = artifact_path::resolve_path(directory)?;
+            #[cfg(windows)]
+            let directory = ordinary_windows_path(&directory);
+            collect_sources(root, &directory, paths)?;
+        } else {
+            collect_sources(root, directory, paths)?;
+        }
     }
     Ok(())
 }

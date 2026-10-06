@@ -123,6 +123,10 @@ metadata projection, including during path-dependency traversal. Files reached o
 documents are still acquired, and ignored/untracked build-source traversal and index capture
 remain independent. Explicit target paths with parent components resolve their parent for
 relocation while keeping the final entry subject to ordinary-file admission.
+Dedicated target directories use the same recursive capture as conventional sources, with
+parent components resolved before recording repository-relative contents. Root-level and
+outside-directory supporting files enter through the acquired Git listing, including
+newly added index entries; capture does not inspect Rust imports or infer additional roots.
 Successful admission returns the acquired workspace, Git identity and
 resolved history to adjacent classification or plan consumers. Preparation uses its original
 acquisition to locate the lockfile, drops it before installing resolved bytes, then captures

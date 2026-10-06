@@ -40,9 +40,10 @@ impl ReportOutput for FileOutput<'_> {
             Err(error) => return Err(WriteFileError::caused_by(&report_path, error).into()),
         }
         let diffs_dir = self.directory.join("diffs");
-        if diffs_dir.exists() {
-            fs::remove_dir_all(&diffs_dir)
-                .map_err(|error| WriteFileError::caused_by(&diffs_dir, error))?;
+        match fs::remove_dir_all(&diffs_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(WriteFileError::caused_by(&diffs_dir, error).into()),
         }
         fs::create_dir_all(&diffs_dir)
             .map_err(|error| WriteFileError::caused_by(&diffs_dir, error))?;

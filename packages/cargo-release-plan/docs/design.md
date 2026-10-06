@@ -354,6 +354,19 @@ checking for input collisions. Writers manage only their documented artifact fil
 owned workspace directories. Captured-input and resolved-plan validation remains required
 when evidence is consumed.
 
+### Captured source inputs
+
+Preparation and preview capture declared inputs, Git-tracked files and the contents of
+source directories. These include conventional `src` directories and dedicated target or
+build-script directories below a package root, including those of path dependencies.
+A target located at the package root or outside it contributes its declared file, not a
+recursive capture of the package root or its ancestors.
+
+Supporting files outside the captured source directories must be Git-tracked.
+Adding them with `git add` is sufficient; a commit is not required. This requirement
+applies to modules and other build inputs such as included files. Source capture does
+not interpret Rust module declarations or run compilers to discover inputs.
+
 ### Operation-local reuse
 
 Commands reuse admitted observations within their unchanged input intervals and share

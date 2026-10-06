@@ -68,6 +68,12 @@ dependencies outside Cargo's member list. Explicit build-script and target paths
 from these same documents, including dependency documents. Dependency traversal deduplicates
 resolved identities independently of reserved files.
 Nonmember dependencies reserve their conventional build script unless explicitly disabled.
+Explicit target and build-script paths share directory selection. The containing directory
+is recursive only when its resolved identity is strictly below the owning package directory;
+package roots, ancestors and outside directories are not recursive source roots. Declared
+files remain selected in every case. Native directory resolution is injected into the
+in-process selection tests. This implements the application's captured-source contract:
+support files outside source directories must be tracked, without interpreting Rust modules.
 
 Source discovery supplies captured evidence, not destination safety checks. Output placement
 belongs to callers; writers do not inventory source or Git configuration to assess it.
