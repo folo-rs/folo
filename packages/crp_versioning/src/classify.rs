@@ -21,6 +21,8 @@ use crp_workspace::git::{
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
 };
+#[cfg(test)]
+use crp_workspace::manifest::parse_workspace_members;
 use crp_workspace::manifest::{
     DEFAULT_README_FILES, PackageIdentity, PackageManifest, PathCase, WorkspaceInherit,
     WorkspaceMembers, cargo_config_paths, collect_registry_indices, installation_error,
@@ -28,8 +30,6 @@ use crp_workspace::manifest::{
     package_manifest_from_document, parse_document, path_package_identity, to_git_separators,
     workspace_members_from_document,
 };
-#[cfg(test)]
-use crp_workspace::manifest::{parse_package_manifest, parse_workspace_members};
 use crp_workspace::manifest_document::ManifestDocuments;
 use crp_workspace::metadata::{
     ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree_with_documents,
@@ -1939,29 +1939,8 @@ fn load_snapshot_documents(
     })
 }
 
-pub fn resolve_historical_installation_paths_with(
-    installation: &mut InstallationGraph,
-    identities: BTreeMap<String, Option<PackageIdentity>>,
-    git: &GitRepo,
-    tree_paths: &[String],
-    case: PathCase,
-    mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
-) {
-    resolve_historical_installation_documents(
-        installation,
-        identities,
-        git,
-        tree_paths,
-        case,
-        |path| {
-            read(path)?
-                .map(|content| parse_document(Path::new(path), &content))
-                .transpose()
-        },
-    );
-}
-
-fn resolve_historical_installation_documents(
+/// Resolves historical dependency identities from lazily acquired documents.
+pub fn resolve_historical_installation_documents(
     installation: &mut InstallationGraph,
     mut identities: BTreeMap<String, Option<PackageIdentity>>,
     git: &GitRepo,
@@ -2004,21 +1983,7 @@ fn resolve_historical_installation_documents(
 ///
 /// Cargo loads ancestor configurations from outermost to innermost and prefers
 /// the extensionless filename when both names exist in the same directory.
-pub fn historical_registries_with(
-    prefix: &str,
-    ambient: &BTreeMap<String, String>,
-    tree_paths: &[String],
-    case: PathCase,
-    mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
-) -> Result<BTreeMap<String, String>, AppError> {
-    historical_registries_documents(prefix, ambient, tree_paths, case, |path| {
-        read(path)?
-            .map(|content| parse_document(Path::new(path), &content))
-            .transpose()
-    })
-}
-
-fn historical_registries_documents(
+pub fn historical_registries_documents(
     prefix: &str,
     ambient: &BTreeMap<String, String>,
     tree_paths: &[String],
@@ -3517,10 +3482,14 @@ mod tests {
                 .iter()
                 .map(|(dir, content)| {
                     let path = format!("{dir}/Cargo.toml");
-                    let parsed =
-                        parse_package_manifest(content, &path, &WorkspaceInherit::default())
-                            .unwrap()
-                            .unwrap();
+                    let document = parse_document(Path::new(&path), content).unwrap();
+                    let parsed = package_manifest_from_document(
+                        &document,
+                        &path,
+                        &WorkspaceInherit::default(),
+                    )
+                    .unwrap()
+                    .unwrap();
                     ((*dir).to_string(), parsed)
                 })
                 .collect();

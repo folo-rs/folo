@@ -33,12 +33,11 @@ fn success(output: Output) -> Output {
     output
 }
 
-fn report(fixture: &Fixture, output: &Path, trace: &Path, options: &[&str]) -> Output {
+fn report(fixture: &Fixture, output: &Path, trace: &Path) -> Output {
     success(
         command(fixture)
             .args(["report", "--release-history", "HEAD", "--out-dir"])
             .arg(output)
-            .args(options)
             .env("GIT_TRACE", trace)
             .output()
             .unwrap(),
@@ -90,7 +89,7 @@ fn independent_reports_reacquire_inputs_and_share_each_immutable_snapshot() {
     fs::write(storage.join("untouched"), "old data").unwrap();
     for name in ["first", "second"] {
         let trace = evidence.path().join(format!("{name}.trace"));
-        report(&fixture, &evidence.path().join(name), &trace, &[]);
+        report(&fixture, &evidence.path().join(name), &trace);
         assert_eq!(acquisitions(&trace), (1, 1));
     }
     assert_reports_equal(
@@ -107,7 +106,6 @@ fn independent_reports_reacquire_inputs_and_share_each_immutable_snapshot() {
         &fixture,
         &evidence.path().join("changed"),
         &evidence.path().join("changed.trace"),
-        &[],
     );
     assert_ne!(
         fs::read(evidence.path().join("first/report.json")).unwrap(),
@@ -130,7 +128,6 @@ fn non_utf8_replacement_namespace_is_not_an_unset_variable() {
         &fixture,
         &evidence.path().join("baseline"),
         &evidence.path().join("baseline.trace"),
-        &[],
     );
     let namespace = OsString::from_vec(b"refs/replacements-\xff/".to_vec());
     let output = command(&fixture)

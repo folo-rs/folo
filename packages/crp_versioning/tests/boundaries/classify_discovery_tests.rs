@@ -4,11 +4,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
+use std::path::Path;
 
 use crp_diag::{Discard, Verbose};
 use crp_versioning::classify::*;
 use crp_workspace::git::{GitRepo, WorkTreeModes};
-use crp_workspace::manifest::{PathCase, WorkspaceInherit, parse_package_manifest};
+use crp_workspace::manifest::{
+    PathCase, WorkspaceInherit, package_manifest_from_document, parse_document,
+};
 use crp_workspace::metadata::WorkPackage;
 use crp_workspace::packaging::PackagingRules;
 
@@ -188,13 +191,15 @@ fn work_tree_selection_and_untracked_advice_share_packaging_boundaries() {
         ("NOTICE".to_string(), "shared/NOTICE".to_string()),
         ("MISSING".to_string(), "shared/MISSING".to_string()),
     ]);
-    let manifest = parse_package_manifest(
+    let document = parse_document(
+        Path::new("pkg/Cargo.toml"),
         "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\ninclude = [\"src/\"]\n",
-        "pkg/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let manifest =
+        package_manifest_from_document(&document, "pkg/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     let package = WorkPackage {
         manifest,
         manifest_path: fixture.path().join("pkg/Cargo.toml"),

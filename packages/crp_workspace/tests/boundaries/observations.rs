@@ -3,6 +3,7 @@
 use std::fs;
 
 use crp_workspace::git::{CommitHeaders, GitObjectContext, HistoricalTree};
+use crp_workspace::manifest::parse_document;
 use crp_workspace::manifest_document::ManifestDocuments;
 use crp_workspace::metadata::{load_tracked_work_tree, load_tracked_work_tree_with_documents};
 use crp_workspace::source_inputs::SourceInputs;
@@ -88,11 +89,12 @@ fn parsed_members_reinterpret_changed_workspace_context_and_relocate_without_sta
                 |path| Ok(observed.manifests.documents.get(path).unwrap().clone()),
             )
             .unwrap();
-            let fresh_sources = SourceInputs::discover(
+            let fresh_sources = SourceInputs::discover_with_documents(
                 git.root(),
                 &fresh.workspace_root,
                 &fresh.member_manifests,
                 |_, _| panic!("this fixture has no path dependencies"),
+                |path| parse_document(path, &fs::read_to_string(path)?),
             )
             .unwrap();
             assert_eq!(shared_sources.files, fresh_sources.files);
@@ -106,6 +108,33 @@ fn parsed_members_reinterpret_changed_workspace_context_and_relocate_without_sta
                     .contains(&observed.workspace_root.join(member).join("build.rs"))
             );
         }
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads explicit target declarations from a native manifest"
+)]
+fn root_only_targets_return_errors_from_fallible_discovery() {
+    let fixture = repository();
+    let root = fixture.path().ancestors().last().unwrap().to_str().unwrap();
+    for target in [
+        format!("build='{root}'"),
+        format!("build=false\n[lib]\npath='{root}'"),
+        format!("build=false\n[[bin]]\npath='{root}'"),
+        format!("build=false\n[[example]]\npath='{root}'"),
+        format!("build=false\n[[test]]\npath='{root}'"),
+        format!("build=false\n[[bench]]\npath='{root}'"),
+    ] {
+        fixture.write(
+            "Cargo.toml",
+            format!("[package]\nname='demo'\nversion='1.0.0'\n{target}\n").as_bytes(),
+        );
+        SourceInputs::dependencies([&fixture.path().join("Cargo.toml")], |_, _| {
+            panic!("this fixture has no path dependencies")
+        })
+        .unwrap_err();
     }
 }
 
