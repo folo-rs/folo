@@ -66,6 +66,11 @@ fn captured_evidence_rejects_index_drift_before_entry_classification() {
             .unwrap();
         assert!(!result.status.success());
         assert!(!assessment.path("prepared-index/report.json").exists());
+        assert!(
+            !assessment
+                .path("prepared-index/compatibility.json")
+                .exists()
+        );
         assert!(!assessment.path("prepared-index.calls").exists());
         assessment.fixture.git(&["add", "--", path]);
         success(assessment.check("restored-index").output().unwrap());

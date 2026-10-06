@@ -27,6 +27,7 @@ impl Assessment {
             ".cargo/config.toml",
             "[build]\ntarget-dir = 'configured-target'\n",
         );
+        // Preparation refreshes the stale lockfile before capturing the child evidence.
         fixture.commit("child removes parent API");
         fixture.git(&["branch", "release-history", &history]);
         let evidence = TempDir::new().unwrap();
