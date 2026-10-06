@@ -8,7 +8,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crp_diag::{Quotable as _, Verbose, quote_path};
-use crp_workspace::artifact_path::same_path;
 use ohno::AppError;
 use semver::Version;
 use serde::Serialize;
@@ -24,7 +23,7 @@ use crate::report::{ReportFile, ReportPackage, read_report};
 use crate::resolved::write_json;
 
 // Only connects proposal orchestration to real artifact operations; the core below
-// owns input protection, invalidation, generation and failed-publication cleanup.
+// owns invalidation, generation and failed-publication cleanup.
 #[cfg_attr(test, mutants::skip)]
 pub fn run_propose(
     report: &Path,
@@ -43,13 +42,6 @@ fn propose(
     artifacts: &mut impl ProposalArtifacts,
 ) -> Result<String, AppError> {
     let report = artifacts.report_path(report);
-    // An invalid rerun invalidates its previous proposal, but never its own source evidence.
-    // Canonical comparison also protects inputs addressed through filesystem path aliases.
-    for input in [&report, decisions] {
-        if artifacts.same_path(input, out)? {
-            return Err(ProposalInputCollision::new().into());
-        }
-    }
     artifacts.remove(out)?;
     let report = artifacts.read_report(&report)?;
     let decisions = artifacts.read_decisions(decisions)?;
@@ -72,7 +64,6 @@ fn propose(
 /// The core owns ordering and cleanup decisions; implementations acquire and publish evidence.
 trait ProposalArtifacts {
     fn report_path(&mut self, path: &Path) -> PathBuf;
-    fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError>;
     fn remove(&mut self, path: &Path) -> Result<(), AppError>;
     fn read_report(&mut self, path: &Path) -> Result<ReportFile, AppError>;
     fn read_decisions(&mut self, path: &Path) -> Result<Decisions, AppError>;
@@ -92,10 +83,6 @@ impl ProposalArtifacts for FileArtifacts {
         } else {
             path.to_path_buf()
         }
-    }
-
-    fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError> {
-        same_path(left, right)
     }
 
     fn remove(&mut self, path: &Path) -> Result<(), AppError> {
@@ -474,11 +461,6 @@ pub(crate) fn record_state(
     Ok(())
 }
 
-/// Input evidence must survive even when an invocation has an invalid output location.
-#[ohno::error]
-#[display("proposal output overlaps an input; choose a separate output location")]
-struct ProposalInputCollision;
-
 /// Repeating a non-final state means semantic and mechanical consequences cannot settle.
 #[ohno::error]
 #[display("release proposal repeated a non-final decision state")]
@@ -534,8 +516,6 @@ mod tests {
     fn proposal_publication_orders_acquisition_and_cleans_failed_writes() {
         let expected = [
             "report-path",
-            "compare-report",
-            "compare-decisions",
             "remove",
             "read-report",
             "read-decisions",
@@ -572,33 +552,6 @@ mod tests {
                 assert!(result.unwrap().contains("output/plan.json"));
                 assert_eq!(artifacts.calls, expected);
             }
-        }
-    }
-
-    #[test]
-    fn proposal_collisions_precede_marker_removal_and_input_reads() {
-        for collision in ["evidence/report.json", "decisions.json"] {
-            let mut artifacts = ArtifactObservations {
-                collision: Some(PathBuf::from(collision)),
-                ..ArtifactObservations::default()
-            };
-            let error = propose(
-                Path::new("evidence"),
-                Path::new("decisions.json"),
-                Path::new("output/plan.json"),
-                Verbose::new(false, &crp_diag::Discard),
-                &mut artifacts,
-            )
-            .unwrap_err();
-            assert!(error.find_source::<ProposalInputCollision>().is_some());
-            assert_eq!(
-                artifacts.calls,
-                if collision == "decisions.json" {
-                    vec!["report-path", "compare-report", "compare-decisions"]
-                } else {
-                    vec!["report-path", "compare-report"]
-                }
-            );
         }
     }
 
@@ -640,14 +593,7 @@ mod tests {
         assert!(error.find_source::<MissingIncrement>().is_some());
         assert_eq!(
             artifacts.calls,
-            [
-                "report-path",
-                "compare-report",
-                "compare-decisions",
-                "remove",
-                "read-report",
-                "read-decisions",
-            ]
+            ["report-path", "remove", "read-report", "read-decisions",]
         );
     }
 
@@ -656,7 +602,6 @@ mod tests {
     struct ArtifactObservations {
         calls: Vec<&'static str>,
         failure: Option<usize>,
-        collision: Option<PathBuf>,
         failed_publication: bool,
         missing_decision: bool,
     }
@@ -679,17 +624,6 @@ mod tests {
             assert_eq!(path, Path::new("evidence"));
             self.calls.push("report-path");
             path.join("report.json")
-        }
-
-        fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError> {
-            assert_eq!(right, Path::new("output/plan.json"));
-            if left == Path::new("evidence/report.json") {
-                self.visit("compare-report")?;
-            } else {
-                assert_eq!(left, Path::new("decisions.json"));
-                self.visit("compare-decisions")?;
-            }
-            Ok(self.collision.as_deref() == Some(left))
         }
 
         fn remove(&mut self, path: &Path) -> Result<(), AppError> {

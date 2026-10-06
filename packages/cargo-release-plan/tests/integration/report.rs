@@ -3,7 +3,7 @@
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
@@ -13,382 +13,7 @@ use tempfile::tempdir;
 use crate::fixture::{Fixture, GLOBAL_CONFIG, write_package};
 use crate::harness::{check, report_json, seeded_package};
 
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "checks report source isolation against real Git and Cargo"
-)]
-fn report_rejects_source_output_without_resetting_existing_evidence() {
-    let fixture = seeded_package();
-    fixture.write("packages/demo/src/evidence/report.json", "source input");
-    fixture.write("packages/demo/src/evidence/diffs/keep", "source subtree");
-    let result = run(&RunInput::Report {
-        out_dir: fixture.path().join("packages/demo/src/evidence"),
-        release_history: Some("HEAD".to_owned()),
-        merge_target: None,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    });
-    result.unwrap_err();
-    assert_eq!(
-        fixture.read("packages/demo/src/evidence/report.json"),
-        "source input"
-    );
-    assert_eq!(
-        fixture.read("packages/demo/src/evidence/diffs/keep"),
-        "source subtree"
-    );
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "checks report isolation in a linked Git worktree")]
-fn report_protects_linked_worktree_and_shared_repository_storage() {
-    let fixture = seeded_package();
-    let directory = tempdir().unwrap();
-    let checkout = directory.path().join("checkout");
-    fixture.git(&[
-        "worktree",
-        "add",
-        "--detach",
-        checkout.to_str().unwrap(),
-        "HEAD",
-    ]);
-    let pointer = fs::read_to_string(checkout.join(".git")).unwrap();
-    let administration = PathBuf::from(pointer.trim().strip_prefix("gitdir: ").unwrap());
-    for output in [
-        fixture.path().join(".git/evidence"),
-        administration.join("evidence"),
-    ] {
-        let result = run(&RunInput::Report {
-            out_dir: output.clone(),
-            release_history: Some("HEAD".to_owned()),
-            merge_target: None,
-            manifest_path: checkout.join("Cargo.toml"),
-            verbose: false,
-        });
-        result.unwrap_err();
-        assert!(!output.exists());
-    }
-    assert_eq!(fixture.sha("HEAD"), fixture.sha("main"));
-}
-
-#[test]
-#[cfg(unix)]
-#[cfg_attr(
-    miri,
-    ignore = "compares released-input and captured-source symlink selection"
-)]
-fn report_does_not_assess_ignored_descendant_redirects() {
-    let fixture = seeded_package();
-    let external = tempdir().unwrap();
-    fixture.write(".gitignore", "packages/demo/src/generated\n");
-    fixture.commit("ignore generated content");
-    let link = fixture.path().join("packages/demo/src/generated");
-    symlink(external.path(), &link).unwrap();
-    fs::write(external.path().join("report.json"), "not a released input").unwrap();
-    let status = report_command(&fixture, external.path()).output().unwrap();
-    assert!(status.status.success(), "{status:?}");
-    let report: Value =
-        serde_json::from_slice(&fs::read(external.path().join("report.json")).unwrap()).unwrap();
-    assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
-    assert_eq!(fs::read_link(&link).unwrap(), external.path());
-
-    // Captured-source commands reject this link rather than assess its descendants.
-    let evidence = fixture.path().join("prepared");
-    run(&RunInput::Prepare {
-        output: evidence.clone(),
-        release_history: Some("HEAD".to_owned()),
-        merge_target: None,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap_err();
-    assert!(!evidence.exists());
-}
-
-#[test]
-#[cfg(unix)]
-#[cfg_attr(
-    miri,
-    ignore = "protects a tracked link entry from native report cleanup"
-)]
-fn report_preserves_tracked_link_entries_outside_packages() {
-    let fixture = seeded_package();
-    let external = tempdir().unwrap();
-    let link = fixture.path().join("evidence/diffs/source-link");
-    fs::create_dir_all(link.parent().unwrap()).unwrap();
-    symlink(external.path(), &link).unwrap();
-    fixture.commit("tracked nonpackage link");
-    fixture.write("evidence/report.json", "previous completion");
-    let status = report_command(&fixture, &fixture.path().join("evidence"))
-        .output()
-        .unwrap();
-    assert!(fs::symlink_metadata(&link).is_ok(), "{status:?}");
-    assert_eq!(fs::read_link(link).unwrap(), external.path());
-    assert_eq!(fixture.read("evidence/report.json"), "previous completion");
-    assert!(!status.status.success());
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "protects the Git index selected by a child environment"
-)]
-fn report_preserves_external_git_index() {
-    let fixture = seeded_package();
-    let external = tempdir().unwrap();
-    let index = external.path().join("report.json");
-    fs::copy(fixture.path().join(".git/index"), &index).unwrap();
-    let before = fs::read(&index).unwrap();
-    let status = report_command(&fixture, external.path())
-        .env("GIT_INDEX_FILE", &index)
-        .output()
-        .unwrap();
-    assert_eq!(fs::read(&index).unwrap(), before, "{status:?}");
-    assert!(!status.status.success());
-    assert!(!external.path().join("diffs").exists());
-    let accepted = report_command(&fixture, &external.path().join("disjoint"))
-        .env("GIT_INDEX_FILE", &index)
-        .output()
-        .unwrap();
-    assert!(accepted.status.success(), "{accepted:?}");
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "protects Git's effective object store before report cleanup"
-)]
-fn report_preserves_external_git_objects() {
-    assert_report_preserves_objects(|_, objects, command| {
-        command.env("GIT_OBJECT_DIRECTORY", objects);
-    });
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "protects Git's effective alternate store before report cleanup"
-)]
-fn report_preserves_external_git_alternates() {
-    assert_report_preserves_objects(|fixture, objects, _| {
-        fixture.write(".git/objects/info/alternates", objects.to_str().unwrap());
-    });
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "protects an environment-selected alternate object store"
-)]
-fn report_preserves_environment_git_alternates() {
-    assert_report_preserves_objects(|fixture, objects, command| {
-        fs::create_dir_all(fixture.path().join(".git/objects")).unwrap();
-        command.env("GIT_ALTERNATE_OBJECT_DIRECTORIES", objects);
-    });
-}
-
-fn assert_report_preserves_objects(configure: impl Fn(&Fixture, &Path, &mut Command)) {
-    let fixture = seeded_package();
-    let external = tempdir().unwrap();
-    let objects = external.path().join("diffs");
-    let head = fixture.sha("HEAD");
-    fs::rename(fixture.path().join(".git/objects"), &objects).unwrap();
-    let (fanout, name) = head.split_at_checked(2).unwrap();
-    let object = objects.join(fanout).join(name);
-    let before = fs::read(&object).unwrap();
-    let mut command = report_command(&fixture, external.path());
-    configure(&fixture, &objects, &mut command);
-    let status = command.output().unwrap();
-    assert!(object.exists(), "{status:?}");
-    assert_eq!(fs::read(&object).unwrap(), before);
-    assert!(!status.status.success());
-    assert!(!external.path().join("report.json").exists());
-
-    let mut command = report_command(&fixture, &external.path().join("accepted"));
-    configure(&fixture, &objects, &mut command);
-    let status = command.output().unwrap();
-    assert!(status.status.success(), "{status:?}");
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "protects Git's configured hooks location before report cleanup"
-)]
-fn report_preserves_external_git_hooks() {
-    let fixture = seeded_package();
-    let external = tempdir().unwrap();
-    let hooks = external.path().join("diffs");
-    fs::create_dir_all(&hooks).unwrap();
-    fs::write(hooks.join("pre-commit"), "hook configuration").unwrap();
-    fixture.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
-    let status = report_command(&fixture, external.path()).output().unwrap();
-    assert!(hooks.join("pre-commit").exists(), "{status:?}");
-    assert_eq!(
-        fs::read(hooks.join("pre-commit")).unwrap(),
-        b"hook configuration"
-    );
-    assert!(!status.status.success());
-    assert!(!external.path().join("report.json").exists());
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "protects Git input aliases with native symlinks or junctions"
-)]
-fn report_preserves_entries_used_to_reach_effective_git_inputs() {
-    for kind in [
-        "index",
-        "objects",
-        "hooks",
-        "alternate",
-        "environment-alternate",
-    ] {
-        let fixture = seeded_package();
-        let external = tempdir().unwrap();
-        let output = fixture.path().join("evidence");
-        let link = output.join("diffs/link");
-        fs::create_dir_all(link.parent().unwrap()).unwrap();
-        directory_alias(external.path(), &link);
-        fs::copy(
-            fixture.path().join(".git/index"),
-            external.path().join("index"),
-        )
-        .unwrap();
-        let object_name = if cfg!(windows) {
-            "objects;quoted"
-        } else {
-            "objects:quoted"
-        };
-        fs::rename(
-            fixture.path().join(".git/objects"),
-            external.path().join(object_name),
-        )
-        .unwrap();
-        fs::create_dir_all(fixture.path().join(".git/objects")).unwrap();
-        let relative = format!("evidence/diffs/link/{object_name}");
-        if kind == "alternate" {
-            // Git resolves file alternates relative to the primary object directory.
-            fixture.write(
-                ".git/objects/info/alternates",
-                &format!("\"../../{relative}\"\n"),
-            );
-            // A cycle is handled by Git's finite store set, not our own traversal.
-            fs::create_dir_all(external.path().join(object_name).join("info")).unwrap();
-            fs::write(
-                external.path().join(object_name).join("info/alternates"),
-                fixture.path().join(".git/objects").to_str().unwrap(),
-            )
-            .unwrap();
-        }
-        if kind == "hooks" {
-            fixture.git(&["config", "core.hooksPath", "evidence/diffs/link/hooks"]);
-        }
-        fixture.write("evidence/report.json", "previous report");
-        for (destination, accepted) in [(&output, false), (&fixture.path().join("accepted"), true)]
-        {
-            let mut command = report_command(&fixture, destination);
-            match kind {
-                "alternate" => {}
-                "environment-alternate" => {
-                    command.env(
-                        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                        format!("\"{relative}\""),
-                    );
-                }
-                _ => {
-                    command.env("GIT_OBJECT_DIRECTORY", external.path().join(object_name));
-                }
-            }
-            if kind == "objects" {
-                command.env("GIT_OBJECT_DIRECTORY", &relative);
-            } else if kind == "index" {
-                command.env("GIT_INDEX_FILE", "evidence/diffs/link/index");
-            }
-            let status = command.output().unwrap();
-            assert_eq!(status.status.success(), accepted, "{kind}: {status:?}");
-            fs::symlink_metadata(&link).unwrap();
-            assert_eq!(fixture.read("evidence/report.json"), "previous report");
-        }
-    }
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "protects active included Git configuration before report reset"
-)]
-fn report_preserves_external_git_configuration() {
-    for (key, contents) in [
-        ("include.path", "[core]\n\tignorecase = false\n"),
-        ("core.attributesFile", "# configured attributes\n"),
-        ("core.excludesFile", "# configured excludes\n"),
-    ] {
-        let fixture = seeded_package();
-        let external = tempdir().unwrap();
-        let config = external.path().join("report.json");
-        fs::write(&config, contents).unwrap();
-        fixture.git(&["config", key, config.to_str().unwrap()]);
-        let status = report_command(&fixture, external.path()).output().unwrap();
-        assert!(!status.status.success(), "{key}: {status:?}");
-        assert_eq!(fs::read_to_string(&config).unwrap(), contents);
-        assert!(!external.path().join("diffs").exists());
-        let accepted = report_command(&fixture, &external.path().join("disjoint"))
-            .output()
-            .unwrap();
-        assert!(accepted.status.success(), "{key}: {accepted:?}");
-    }
-}
-
-#[test]
-#[cfg(unix)]
-#[cfg_attr(
-    miri,
-    ignore = "protects an alternate descriptor reached through a symlink"
-)]
-fn report_preserves_external_alternate_descriptor() {
-    let fixture = seeded_package();
-    let external = tempdir().unwrap();
-    let store = tempdir().unwrap();
-    fs::rename(
-        fixture.path().join(".git/objects"),
-        store.path().join("objects"),
-    )
-    .unwrap();
-    let descriptor = external.path().join("report.json");
-    let contents = store.path().join("objects").to_str().unwrap().to_owned();
-    fs::write(&descriptor, &contents).unwrap();
-    fs::create_dir_all(fixture.path().join(".git/objects/info")).unwrap();
-    symlink(
-        &descriptor,
-        fixture.path().join(".git/objects/info/alternates"),
-    )
-    .unwrap();
-    let status = report_command(&fixture, external.path()).output().unwrap();
-    assert!(!status.status.success(), "{status:?}");
-    assert_eq!(fs::read_to_string(&descriptor).unwrap(), contents);
-}
-
-#[cfg(unix)]
-fn directory_alias(source: &Path, alias: &Path) {
-    symlink(source, alias).unwrap();
-}
-
-#[cfg(windows)]
-fn directory_alias(source: &Path, alias: &Path) {
-    let status = Command::new("pwsh")
-        .args(["-NoProfile", "-NonInteractive", "-Command",
-            "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:CRP_TEST_ALIAS -Target $env:CRP_TEST_SOURCE | Out-Null"])
-        .env("CRP_TEST_SOURCE", source)
-        .env("CRP_TEST_ALIAS", alias)
-        .output()
-        .unwrap();
-    assert!(status.status.success(), "{status:?}");
-}
-
-fn report_command(fixture: &Fixture, output: &Path) -> Command {
+pub(crate) fn report_command(fixture: &Fixture, output: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
     command
         .current_dir(fixture.path())
@@ -400,6 +25,121 @@ fn report_command(fixture: &Fixture, output: &Path) -> Command {
         .args(["report", "--release-history", "HEAD", "--out-dir"])
         .arg(output);
     command
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "writes report artifacts at caller-selected locations")]
+fn report_uses_caller_output_and_only_replaces_owned_artifacts() {
+    let fixture = seeded_package();
+    let output = fixture.path().join("packages/demo/src/evidence");
+    fixture.write(
+        "packages/demo/src/evidence/report.json",
+        "previous completion",
+    );
+    fixture.write("packages/demo/src/evidence/diffs/old.patch", "old patch");
+    fixture.write("packages/demo/src/evidence/notes.txt", "caller-owned notes");
+    run(&RunInput::Report {
+        out_dir: output.clone(),
+        release_history: Some("HEAD".to_owned()),
+        merge_target: None,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let report: Value =
+        serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report.pointer("/packages/0/name").unwrap(), "demo");
+    assert!(!output.join("diffs/old.patch").exists());
+    assert_eq!(
+        fs::read_to_string(output.join("notes.txt")).unwrap(),
+        "caller-owned notes"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "runs the report executable with isolated Git configuration"
+)]
+fn report_output_is_not_restricted_by_git_configuration_placement() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    let marker = output.path().join("report.json");
+    fs::write(&marker, "# caller-selected configuration\n").unwrap();
+    let result = report_command(&fixture, output.path())
+        .env("GIT_CONFIG_GLOBAL", &marker)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let report: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+    assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "publishes a report over abandoned hard-linked staging")]
+fn report_staging_never_truncates_preexisting_shared_file_contents() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    let source = fixture.path().join("packages/demo/src/lib.rs");
+    let before = fs::read(&source).unwrap();
+    fs::hard_link(&source, output.path().join("report.json.tmp")).unwrap();
+    let result = report_command(&fixture, output.path()).output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(fs::read(source).unwrap(), before);
+    assert!(!output.path().join("report.json.tmp").exists());
+    let report: Value =
+        serde_json::from_slice(&fs::read(output.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(miri, ignore = "replaces dangling filesystem report entries")]
+fn report_replaces_dangling_owned_entries() {
+    let fixture = seeded_package();
+    for entry in ["report.json", "diffs"] {
+        let output = tempdir().unwrap();
+        let missing = output.path().join("missing");
+        let marker = output.path().join("report.json");
+        symlink(&missing, output.path().join(entry)).unwrap();
+        if entry == "report.json" {
+            fs::create_dir_all(output.path().join("diffs")).unwrap();
+            fs::write(output.path().join("diffs/old.patch"), "old patch").unwrap();
+        } else {
+            fs::write(&marker, "previous completion").unwrap();
+        }
+
+        let result = report_command(&fixture, output.path()).output().unwrap();
+
+        assert!(result.status.success(), "{result:?}");
+        assert!(fs::symlink_metadata(&marker).unwrap().is_file());
+        assert!(
+            fs::symlink_metadata(output.path().join("diffs"))
+                .unwrap()
+                .is_dir()
+        );
+        assert!(!missing.exists());
+        assert!(!output.path().join("diffs/old.patch").exists());
+        let report: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+        assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "checks native completion marker removal errors")]
+fn report_marker_removal_failure_preserves_previous_patches() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    fs::create_dir_all(output.path().join("report.json")).unwrap();
+    fs::create_dir_all(output.path().join("diffs")).unwrap();
+    let patch = output.path().join("diffs/old.patch");
+    fs::write(&patch, "old patch").unwrap();
+
+    let result = report_command(&fixture, output.path()).output().unwrap();
+
+    assert!(!result.status.success(), "{result:?}");
+    assert!(output.path().join("report.json").is_dir());
+    assert_eq!(fs::read_to_string(patch).unwrap(), "old patch");
 }
 
 /// A compatible edge remains valid inside a transitively derived group.

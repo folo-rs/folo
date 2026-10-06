@@ -32,7 +32,6 @@ pub use observations::*;
 mod live;
 pub use live::*;
 mod filter_attributes;
-mod storage;
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;

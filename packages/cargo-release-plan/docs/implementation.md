@@ -491,7 +491,7 @@ ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
 
 Proposal generation injects artifact operations into its command core.
-Its unit tests retain input-collision checks, acquisition and publication order,
+Its unit tests retain acquisition and publication order,
 plan generation, rendered output, and error propagation without touching files.
 Proposal publication also checks stale-output invalidation and failed-write cleanup.
 Real artifact path interpretation and file access stay in integration coverage.
@@ -846,8 +846,9 @@ then joins this package's own. The sets only grow and are bounded by the
 workspace, so this settles; the bound is asserted rather than assumed.
 
 `report` serializes the full package and group assessment, then writes patches
-only where file differences exist. It removes any earlier `report.json` marker
-before replacing the patch tree and writes the new marker through a same-directory
+only where file differences exist. It removes the earlier `report.json` entry
+without following its referent, accepting absence but propagating removal errors before
+replacing the patch tree, and writes the new marker through a same-directory
 staging file after every patch succeeds. A failed rerun therefore cannot present
 stale JSON and a partial patch set as one complete assessment.
 
@@ -870,9 +871,9 @@ adapters therefore do not maintain another plan-schema validator or rediscover
 publication eligibility from package naming.
 Inspection and compatibility verification share the candidate-location and
 captured-state checks, so metadata cannot direct a caller to an unchecked workspace.
-Proposal and preview output guards resolve existing path ancestors before
-normalizing missing components. Creating an output directory therefore cannot
-turn an accepted destination into an alias of the input evidence.
+Output destinations are caller-owned choices. Proposal, report, preparation, preview
+and compatibility writers perform their normal artifact operations without comparing
+destination paths with source or configuration inputs.
 
 `plan` owns both planning stages and the resolution shared between them. It first
 resolves package and group entries into one target version per tracked version

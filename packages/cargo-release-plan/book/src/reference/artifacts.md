@@ -4,17 +4,26 @@ Local planning and post-merge publication serve different purposes and have
 separate schema lifecycles. Use tool-produced evidence where specified; do not
 fabricate captured inputs, identities or publication outcomes.
 
-Planning evidence directories must be separate from assessed source: tracked and
-reserved input files, recursive source directories and package resources. This includes
-both original source and retained preview source. Excluded locations within the checkout
-or Cargo target directory are permitted when they are disjoint from those inputs.
-Selected link entries and their targets, and effective Git storage and configuration,
-must remain outside evidence output even when located outside the checkout.
-Output admission precedes artifact creation and cleanup. A failed admission leaves
-existing output untouched; preview invalidates its previous completion only after
-admitting the source and output destination. Missing or malformed preparation and
-stale captured inputs therefore leave the previous marker untouched. A retained
-marker alone is not admission: consumers still verify its captured inputs.
+You choose output destinations and are responsible for their placement relative to
+source, configuration, existing evidence and other data. Commands write to the supplied
+locations without checking for input collisions. Each writer manages only its documented
+artifacts and owned workspace directories.
+
+Preview validates captured inputs before invalidating its previous completion marker.
+Missing or malformed preparation and stale captured inputs leave that marker untouched.
+A retained marker alone is not admission: consumers still verify its captured inputs.
+
+## Captured source inputs
+
+Preparation and preview capture declared inputs, Git-tracked files and source-directory
+contents. Source directories include `src` and dedicated custom target or build-script
+directories below each package root, including path dependencies. A target at the package
+root or outside it contributes its declared file without recursively capturing the
+package root or its ancestors.
+
+Supporting modules and other build inputs outside those source directories must be
+Git-tracked. Use `git add`; a commit is not required. The tool does not interpret Rust
+modules or invoke a compiler to discover additional inputs.
 
 ## Local decisions and plans
 
