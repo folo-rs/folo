@@ -460,6 +460,7 @@ pub(crate) fn admit_output<'a>(
             .files
             .iter()
             .chain(&sources.source_directories)
+            .chain(&sources.declared_paths)
             .cloned()
             .chain(work_tree.tracked_paths.iter().map(|path| root.join(path)))
             .chain(resources)
@@ -518,7 +519,23 @@ fn capture_sources(
     paths: &mut BTreeSet<PathBuf>,
 ) -> Result<(), AppError> {
     for path in &sources.files {
-        paths.insert(relative(root, path)?);
+        if path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            // Explicit targets can name a sibling directory. Resolve the parent for
+            // relocation, but keep the file entry so fingerprinting still rejects links.
+            let parent = path.parent().expect("a source file has a parent");
+            let name = path
+                .file_name()
+                .ok_or_else(|| UnsupportedInput::new(path))?;
+            let resolved = artifact_path::resolve_path(parent)?.join(name);
+            #[cfg(windows)]
+            let resolved = ordinary_windows_path(&resolved);
+            paths.insert(relative(root, &resolved)?);
+        } else {
+            paths.insert(relative(root, path)?);
+        }
     }
     for directory in &sources.source_directories {
         collect_sources(root, directory, paths)?;

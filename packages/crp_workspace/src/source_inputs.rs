@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ohno::AppError;
-use toml_edit::{DocumentMut, Item, TableLike};
+use toml_edit::{DocumentMut, Item, TableLike, Value};
 
 use crate::ReadFileError;
 use crate::manifest::{for_each_dependency_table, parse_document};
@@ -19,6 +19,8 @@ use crate::manifest::{for_each_dependency_table, parse_document};
 pub struct SourceInputs {
     pub files: BTreeSet<PathBuf>,
     pub source_directories: BTreeSet<PathBuf>,
+    /// Selected dependency spellings retained separately from relocatable capture identities.
+    pub declared_paths: BTreeSet<PathBuf>,
 }
 
 impl SourceInputs {
@@ -102,12 +104,18 @@ impl SourceInputs {
     ) -> Result<Self, AppError> {
         let mut inputs = Self::default();
         let mut pending: BTreeSet<PathBuf> = manifests.into_iter().cloned().collect();
+        let mut visited = BTreeSet::new();
         while let Some(manifest) = pending.pop_first() {
-            if !inputs.files.insert(manifest.clone()) {
+            if !visited.insert(manifest.clone()) {
                 continue;
             }
+            inputs.files.insert(manifest.clone());
             let document = document(&manifest)?;
             let document = document.borrow();
+            let parent = manifest
+                .parent()
+                .expect("a manifest has a parent directory");
+            inputs.explicit_sources(parent, document);
             let mut dependencies = Vec::new();
             for_each_dependency_table(document.as_table(), &mut |_, table| {
                 dependency_paths(table, &mut dependencies);
@@ -128,12 +136,61 @@ impl SourceInputs {
                 dependency_paths(replacements, &mut dependencies);
             }
             for dependency in dependencies {
+                // Canonical dependency identities bound traversal, but cannot retain the
+                // selected link entries which artifact cleanup must also leave untouched.
+                let declared = parent.join(&dependency);
+                inputs
+                    .declared_paths
+                    .extend([declared.join("Cargo.toml"), declared.join("src")]);
                 let directory = resolve_dependency(&manifest, Path::new(&dependency))?;
                 inputs.source_directories.insert(directory.join("src"));
                 pending.insert(directory.join("Cargo.toml"));
             }
         }
         Ok(inputs)
+    }
+
+    fn explicit_sources(&mut self, directory: &Path, document: &DocumentMut) {
+        if let Some(package) = document.get("package").and_then(Item::as_table_like) {
+            match package.get("build") {
+                Some(build) if build.as_bool() == Some(false) => {}
+                build => {
+                    // Cargo discovers the conventional build script unless disabled or
+                    // redirected explicitly. This also applies to nonmember dependencies.
+                    let path = build.and_then(Item::as_str).unwrap_or("build.rs");
+                    self.files.insert(directory.join(path));
+                }
+            }
+        }
+        if let Some(path) = document
+            .get("lib")
+            .and_then(Item::as_table_like)
+            .and_then(|target| target.get("path"))
+            .and_then(Item::as_str)
+        {
+            self.files.insert(directory.join(path));
+        }
+        for kind in ["bin", "example", "test", "bench"] {
+            let Some(targets) = document.get(kind) else {
+                continue;
+            };
+            if let Some(targets) = targets.as_array_of_tables() {
+                self.files.extend(targets.iter().filter_map(|target| {
+                    target
+                        .get("path")
+                        .and_then(Item::as_str)
+                        .map(|path| directory.join(path))
+                }));
+            } else if let Some(targets) = targets.as_array() {
+                self.files.extend(targets.iter().filter_map(|target| {
+                    target
+                        .as_inline_table()
+                        .and_then(|target| target.get("path"))
+                        .and_then(Value::as_str)
+                        .map(|path| directory.join(path))
+                }));
+            }
+        }
     }
 }
 
@@ -233,6 +290,19 @@ mod tests {
         assert_eq!(reads, manifests);
         assert_eq!(inputs.files, manifests.into());
         assert_eq!(
+            inputs.declared_paths,
+            [
+                "alias/Cargo.toml",
+                "alias/src",
+                "actual/../leaf/Cargo.toml",
+                "actual/../leaf/src",
+                "leaf/../Cargo.toml",
+                "leaf/../src",
+            ]
+            .map(|path| root.join(path))
+            .into()
+        );
+        assert_eq!(
             inputs.source_directories,
             ["src", "actual/src", "leaf/src"]
                 .map(|path| root.join(path))
@@ -308,5 +378,73 @@ mod tests {
             )
             .unwrap_err();
         }
+    }
+
+    #[test]
+    fn explicit_sources_cover_target_forms_without_treating_other_paths_as_sources() {
+        let root = Path::new("root");
+        let document = parse_document(
+            &root.join("Cargo.toml"),
+            "example=[{path='custom/example.rs'},{name='implicit'}]\n\
+             bench=[{path='custom/bench.rs'}]\n\
+             [package]\nbuild='custom/build.rs'\n\
+             [package.metadata]\npath='not-source'\n\
+             [lib]\npath='custom/lib.rs'\n\
+             [[bin]]\npath='custom/main.rs'\n\
+             [[bin]]\nname='implicit'\n\
+             [[test]]\npath='custom/test.rs'\n",
+        )
+        .unwrap();
+        let mut inputs = SourceInputs::default();
+        inputs.explicit_sources(root, &document);
+        assert_eq!(
+            inputs.files,
+            ["build", "lib", "main", "example", "test", "bench"]
+                .map(|name| root.join(format!("custom/{name}.rs")))
+                .into()
+        );
+        assert!(inputs.source_directories.is_empty());
+        let document = parse_document(
+            &root.join("Cargo.toml"),
+            "[package]\nbuild=false\n[lib]\nname='implicit'\n",
+        )
+        .unwrap();
+        let mut inputs = SourceInputs::default();
+        inputs.explicit_sources(root, &document);
+        assert!(inputs.files.is_empty());
+        for text in ["[package]\n", "[package]\nbuild=true\n"] {
+            let mut inputs = SourceInputs::default();
+            inputs.explicit_sources(
+                root,
+                &parse_document(&root.join("Cargo.toml"), text).unwrap(),
+            );
+            assert_eq!(inputs.files, [root.join("build.rs")].into());
+        }
+    }
+
+    #[test]
+    fn a_reserved_target_does_not_suppress_dependency_document_acquisition() {
+        let root = PathBuf::from("root/Cargo.toml");
+        let mut reads = Vec::new();
+        let inputs = SourceInputs::dependencies_with(
+            [&root],
+            |manifest, dependency| Ok(manifest.parent().unwrap().join(dependency)),
+            |path| {
+                reads.push(path.to_path_buf());
+                let text = if path == root {
+                    "[lib]\npath='dependency/Cargo.toml'\n[dependencies]\nlocal={path='dependency'}"
+                } else {
+                    "[package]\nbuild='custom-build.rs'"
+                };
+                parse_document(path, text)
+            },
+        )
+        .unwrap();
+        assert_eq!(reads, [root, PathBuf::from("root/dependency/Cargo.toml")]);
+        assert!(
+            inputs
+                .files
+                .contains(Path::new("root/dependency/custom-build.rs"))
+        );
     }
 }

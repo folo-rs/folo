@@ -96,10 +96,37 @@ impl GitRepo {
                 .into_iter()
                 .map(|path| self.root.join(path)),
         );
-        for key in ["core.attributesFile", "core.excludesFile"] {
+        // Git has no effective-ignore-file query. Its native path-valued configuration
+        // lookup expands this XDG/HOME default only when the key is absent; an explicitly
+        // empty value disables the input rather than selecting the fallback.
+        let global = env::var_os("XDG_CONFIG_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                // Git for Windows supplies HOME at startup. Unix Git selects no home
+                // default when HOME is absent; asking it to expand '~' would be an error.
+                (cfg!(windows) || env::var_os("HOME").is_some()).then(|| PathBuf::from("~/.config"))
+            });
+        for (key, name) in [
+            ("core.attributesFile", "attributes"),
+            ("core.excludesFile", "ignore"),
+        ] {
+            let default = global
+                .as_ref()
+                .map(|directory| directory.join("git").join(name))
+                .unwrap_or_default();
+            let default = default.to_str().ok_or_else(InvalidStoragePath::new)?;
             let output = run_capture_bytes(
                 "git",
-                &["config", "--null", "--path", "--default", "", "--get", key],
+                &[
+                    "config",
+                    "--null",
+                    "--path",
+                    "--default",
+                    default,
+                    "--get",
+                    key,
+                ],
                 &self.root,
             )?;
             let value = output

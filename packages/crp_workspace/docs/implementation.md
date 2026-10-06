@@ -64,7 +64,11 @@ Source-location discovery accepts the same acquisition's documents and reads new
 reached manifests. Native-read and supplied-document entry points share recursive
 discovery and root-alias admission. Versioning adds relocatability constraints and
 fingerprints the selected files, including absent reserved inputs and transitive path
-dependencies outside Cargo's member list.
+dependencies outside Cargo's member list. Explicit build-script and target paths come
+from these same documents, including dependency documents. Dependency traversal deduplicates
+resolved identities independently of reserved files; admission also retains declared
+dependency spellings so resolving an alias does not discard ownership of its entry.
+Nonmember dependencies reserve their conventional build script unless explicitly disabled.
 
 Evidence destination admission resolves existing ancestors and compares source boundaries
 component by component, including missing suffixes. It observes each relevant directory's
@@ -83,6 +87,9 @@ stores' alternate descriptors and the environment list are interpreted to retain
 matching input spellings, including relative paths and Git C quoting. Git owns graph
 traversal and cycle handling; the application does not discover another store graph.
 Normal repositories without alternates do not enumerate their object store.
+Global attributes and ignore defaults follow Git's XDG/HOME selection. Native path-valued
+configuration lookup distinguishes absent keys from explicitly empty values and retains
+declared spelling for entry admission.
 
 Replacement refs, replacement environment and graft contents are observed at each
 classification boundary and invalidate invocation memory when they change. An

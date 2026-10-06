@@ -33,6 +33,8 @@ mod preview_safety;
 mod propose;
 mod publication;
 mod report;
+mod report_git_inputs;
+mod report_selected_inputs;
 mod standalone;
 mod status;
 

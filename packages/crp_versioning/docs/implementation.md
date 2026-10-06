@@ -13,6 +13,9 @@ Plans, proposals, preparation, prospective workspaces, resolved state, preview
 and application stay together. Their captured-input and no-late-resolution invariants
 must not be distributed across independently interpreted artifacts. Report and plan
 producers own the schemas their consumers validate.
+Report completion uses exclusive same-directory staging rather than opening a reusable
+staging filename for truncation. Abandoned staging is removed as an entry, preserving
+contents shared with another hard-linked file.
 
 The skill's semantic decisions use `impact`; a proposal's mechanical version choices
 use `bump` or an explicit version. Proposal generation translates semantic meaning
@@ -118,7 +121,9 @@ metadata; original-workspace observations never stand in for the candidate.
 Source capture reuses the tracked listing and borrows parsed root/member documents acquired by its own
 metadata projection, including during path-dependency traversal. Files reached outside those
 documents are still acquired, and ignored/untracked build-source traversal and index capture
-remain independent. Successful admission returns the acquired workspace, Git identity and
+remain independent. Explicit target paths with parent components resolve their parent for
+relocation while keeping the final entry subject to ordinary-file admission.
+Successful admission returns the acquired workspace, Git identity and
 resolved history to adjacent classification or plan consumers. Preparation uses its original
 acquisition to locate the lockfile, drops it before installing resolved bytes, then captures
 and classifies the resulting source with one acquisition. Application drops its admission

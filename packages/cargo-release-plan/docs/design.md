@@ -350,9 +350,10 @@ Local input stability does not replace current registry and publication observat
 
 Evidence destinations must be disjoint from assessed source locations, including
 reserved input files, recursively captured source directories and manifest-named
-resources. This applies to the original workspace and any retained candidate used
-by the command. Output placement is admitted before creating artifacts or removing
-earlier output. Existing aliases and missing destination suffixes follow the
+resources. Declared dependency links and explicit build-script and target files are
+selected inputs even when ignored by Git. This applies to the original workspace and
+any retained candidate used by the command. Output placement is admitted before
+creating artifacts or removing earlier output. Existing aliases and missing destination suffixes follow the
 filesystem's observed path identity, not operating-system assumptions.
 Both selected link entries and their referents are protected. Effective Git storage
 and configuration are inputs too, including relocated indexes, object stores and

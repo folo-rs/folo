@@ -1,8 +1,10 @@
 // Report publication owns its patch tree and publishes JSON only after all patches.
 
 use std::fs;
+use std::io::{ErrorKind, Write};
 use std::path::Path;
 
+use crp_workspace::artifact_path::write_new;
 use ohno::AppError;
 
 use crate::WriteFileError;
@@ -55,12 +57,17 @@ impl ReportOutput for FileOutput<'_> {
 
     fn complete(&mut self, report: &str) -> Result<(), AppError> {
         let report_path = self.directory.join("report.json");
-        // Same-directory staging prevents partial JSON from becoming the completion marker.
+        // Discard abandoned staging as an entry rather than truncating possibly shared
+        // contents. Exclusive same-directory staging protects hard-linked source files.
         let staged_report_path = report_path.with_extension("json.tmp");
-        fs::write(&staged_report_path, report.as_bytes())
-            .map_err(|error| WriteFileError::caused_by(&staged_report_path, error))?;
-        fs::rename(&staged_report_path, &report_path)
-            .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
-        Ok(())
+        match fs::remove_file(&staged_report_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(WriteFileError::caused_by(&staged_report_path, error).into()),
+        }
+        write_new(&report_path, |file| {
+            file.write_all(report.as_bytes())
+                .map_err(|error| WriteFileError::caused_by(&report_path, error).into())
+        })
     }
 }

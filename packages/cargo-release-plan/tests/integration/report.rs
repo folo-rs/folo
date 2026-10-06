@@ -372,12 +372,12 @@ fn report_preserves_external_alternate_descriptor() {
 }
 
 #[cfg(unix)]
-fn directory_alias(source: &Path, alias: &Path) {
+pub(crate) fn directory_alias(source: &Path, alias: &Path) {
     symlink(source, alias).unwrap();
 }
 
 #[cfg(windows)]
-fn directory_alias(source: &Path, alias: &Path) {
+pub(crate) fn directory_alias(source: &Path, alias: &Path) {
     let status = Command::new("pwsh")
         .args(["-NoProfile", "-NonInteractive", "-Command",
             "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:CRP_TEST_ALIAS -Target $env:CRP_TEST_SOURCE | Out-Null"])
@@ -388,7 +388,7 @@ fn directory_alias(source: &Path, alias: &Path) {
     assert!(status.status.success(), "{status:?}");
 }
 
-fn report_command(fixture: &Fixture, output: &Path) -> Command {
+pub(crate) fn report_command(fixture: &Fixture, output: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
     command
         .current_dir(fixture.path())

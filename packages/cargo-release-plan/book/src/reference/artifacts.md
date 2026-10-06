@@ -6,7 +6,8 @@ fabricate captured inputs, identities or publication outcomes.
 
 Planning evidence directories must be separate from assessed source: tracked and
 reserved input files, recursive source directories and package resources. This includes
-both original source and retained preview source. Excluded locations within the checkout
+explicit build-script and target paths and declared dependency links, even when ignored.
+It covers both original source and retained preview source. Excluded locations within the checkout
 or Cargo target directory are permitted when they are disjoint from those inputs.
 Selected link entries and their targets, and effective Git storage and configuration,
 must remain outside evidence output even when located outside the checkout.
