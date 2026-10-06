@@ -838,8 +838,9 @@ then joins this package's own. The sets only grow and are bounded by the
 workspace, so this settles; the bound is asserted rather than assumed.
 
 `report` serializes the full package and group assessment, then writes patches
-only where file differences exist. It removes any earlier `report.json` marker
-before replacing the patch tree and writes the new marker through a same-directory
+only where file differences exist. It removes the earlier `report.json` entry
+without following its referent, accepting absence but propagating removal errors before
+replacing the patch tree, and writes the new marker through a same-directory
 staging file after every patch succeeds. A failed rerun therefore cannot present
 stale JSON and a partial patch set as one complete assessment.
 

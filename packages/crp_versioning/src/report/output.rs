@@ -34,9 +34,10 @@ impl ReportOutput for FileOutput<'_> {
             .map_err(|error| WriteFileError::caused_by(self.directory, error))?;
         let report_path = self.directory.join("report.json");
         // Invalidate completion before touching the tool-owned patch subtree.
-        if report_path.exists() {
-            fs::remove_file(&report_path)
-                .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
+        match fs::remove_file(&report_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(WriteFileError::caused_by(&report_path, error).into()),
         }
         let diffs_dir = self.directory.join("diffs");
         if diffs_dir.exists() {

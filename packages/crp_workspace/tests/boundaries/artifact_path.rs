@@ -1,10 +1,11 @@
 //! External acquisition for `artifact_path`.
 
-use crp_workspace::artifact_path::*;
 use std::fs;
 use std::io::Write as _;
 #[cfg(unix)]
 use std::io::{Error as IoError, ErrorKind};
+
+use crp_workspace::artifact_path::*;
 use tempfile::tempdir;
 
 #[test]

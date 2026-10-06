@@ -1,6 +1,8 @@
 //! Report and check output: the JSON document and the failure renderings.
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 
@@ -88,6 +90,45 @@ fn report_staging_never_truncates_preexisting_shared_file_contents() {
     let report: Value =
         serde_json::from_slice(&fs::read(output.path().join("report.json")).unwrap()).unwrap();
     assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(miri, ignore = "replaces a dangling filesystem completion marker")]
+fn report_replaces_a_dangling_completion_marker() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    let missing = output.path().join("missing");
+    let marker = output.path().join("report.json");
+    symlink(&missing, &marker).unwrap();
+    fs::create_dir_all(output.path().join("diffs")).unwrap();
+    fs::write(output.path().join("diffs/old.patch"), "old patch").unwrap();
+
+    let result = report_command(&fixture, output.path()).output().unwrap();
+
+    assert!(result.status.success(), "{result:?}");
+    assert!(fs::symlink_metadata(&marker).unwrap().is_file());
+    assert!(!missing.exists());
+    assert!(!output.path().join("diffs/old.patch").exists());
+    let report: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+    assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "checks native completion marker removal errors")]
+fn report_marker_removal_failure_preserves_previous_patches() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    fs::create_dir_all(output.path().join("report.json")).unwrap();
+    fs::create_dir_all(output.path().join("diffs")).unwrap();
+    let patch = output.path().join("diffs/old.patch");
+    fs::write(&patch, "old patch").unwrap();
+
+    let result = report_command(&fixture, output.path()).output().unwrap();
+
+    assert!(!result.status.success(), "{result:?}");
+    assert!(output.path().join("report.json").is_dir());
+    assert_eq!(fs::read_to_string(patch).unwrap(), "old patch");
 }
 
 /// A compatible edge remains valid inside a transitively derived group.

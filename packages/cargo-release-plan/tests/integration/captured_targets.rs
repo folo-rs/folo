@@ -1,11 +1,11 @@
 //! Captured build inputs selected outside conventional member source directories.
 
 use std::fs;
+use std::path::Path;
 
 use cargo_release_plan::{RunInput, run};
 use crp_versioning::preview::Prepared;
 use serde_json::Value;
-use std::path::Path;
 
 use crate::fixture::write_package;
 use crate::harness::seeded_package;
