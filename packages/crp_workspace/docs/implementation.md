@@ -66,6 +66,14 @@ discovery and root-alias admission. Versioning adds relocatability constraints a
 fingerprints the selected files, including absent reserved inputs and transitive path
 dependencies outside Cargo's member list.
 
+Evidence destination admission resolves existing ancestors and compares source boundaries
+component by component, including missing suffixes. It observes each relevant directory's
+case behavior without creating probes in source. Unequal Unicode or undecodable components
+cannot establish disjointness through ASCII case rules. Output-owned children must not
+redirect replacement writes or cleanup into another location; unrelated output children
+do not affect admission. Git's actual administrative and shared storage directories
+remain protected when the assessed repository is a linked worktree.
+
 Replacement refs, replacement environment and graft contents are observed at each
 classification boundary and invalidate invocation memory when they change. An
 unrepresentable replacement namespace is rejected rather than treated as the default
