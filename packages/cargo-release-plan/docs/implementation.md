@@ -176,6 +176,11 @@ unbound report executable. Fresh checks capture inputs for their own read-only
 report and share that acquisition with classification and checker selection. Preview checks use the
 retained prospective manifest and share versioning's typed resolved-state
 verification without producing publication-target JSON.
+After checking the selected inputs, compatibility retains only their original repository
+root alongside the acquired workspace and selected checker manifest. Captured paths and
+resolved file contents are released before checker execution. The original root still
+selects the compiler-cache namespace and anticipated-parent worktree, including for
+checks of a retained candidate.
 
 Each compatibility invocation builds its report and target selection from admitted
 source with current provenance. An adjacent report never supplies admission or targets.

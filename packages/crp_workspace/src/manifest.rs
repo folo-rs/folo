@@ -497,22 +497,11 @@ pub fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, AppErro
         .map_err(|error| ParseTomlError::caused_by(path, error).into())
 }
 
-/// Reads a `[package]` manifest, resolving what it inherits from the root.
+/// Extracts package facts from an already parsed manifest document.
 ///
 /// `manifest_path` is repository-relative and `/`-separated, as Git reports it,
 /// so the parsed manifest is in one path space from the moment it exists rather
 /// than needing a caller to correct it afterwards.
-pub fn parse_package_manifest(
-    content: &str,
-    manifest_path: &str,
-    workspace: &WorkspaceInherit<'_>,
-) -> Result<Option<PackageManifest>, AppError> {
-    let path = Path::new(manifest_path);
-    let doc = parse_document(path, content)?;
-    package_manifest_from_document(&doc, manifest_path, workspace)
-}
-
-/// Extracts package facts from an already parsed manifest document.
 pub fn package_manifest_from_document(
     doc: &DocumentMut,
     manifest_path: &str,
@@ -1541,6 +1530,16 @@ mod tests {
     use std::slice;
 
     use super::*;
+
+    // Keeps string-based fixtures concise while exercising the document interpreter.
+    fn parse_package_manifest(
+        content: &str,
+        manifest_path: &str,
+        workspace: &WorkspaceInherit<'_>,
+    ) -> Result<Option<PackageManifest>, AppError> {
+        let doc = parse_document(Path::new(manifest_path), content)?;
+        package_manifest_from_document(&doc, manifest_path, workspace)
+    }
 
     /// A requirement names a version only when it pins exactly that version.
     ///

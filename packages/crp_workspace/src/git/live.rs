@@ -76,22 +76,18 @@ impl LiveObservations {
         ]
         .iter()
         .all(|name| env::var_os(name).is_none());
-        let relevant_tracked = Rc::clone(&tracked);
         Self::acquire_with(
-            tracked,
+            Rc::clone(&tracked),
             directories,
             resources,
             case,
             standard_pathspecs,
-            |paths| {
+            move |paths| {
                 let scopes: Vec<_> = directories.iter().chain(resources).copied().collect();
-                let relevant = Self::select_paths(
-                    &relevant_tracked,
-                    &scopes,
-                    case,
-                    standard_pathspecs,
-                    || git.tracked_paths(&scopes, case),
-                )?;
+                let relevant =
+                    Self::select_paths(&tracked, &scopes, case, standard_pathspecs, || {
+                        git.tracked_paths(&scopes, case)
+                    })?;
                 let relevant: Vec<_> = relevant.iter().map(String::as_str).collect();
                 // Even a raw diff can execute a clean driver for a racily clean index entry.
                 // Preserve per-package mode-query ordering if any relevant driver is selected.

@@ -93,6 +93,8 @@ impl Assessment {
         self.check_mode(name, "--plan", "preview/plan.json")
     }
 
+    /// Binds checker manifest assertions and source inspection to the selected original
+    /// or retained workspace.
     pub(crate) fn check_mode(&self, name: &str, option: &str, artifact: &str) -> Command {
         let manifest = if option == "--plan" {
             self.evidence_manifest(artifact)
@@ -147,6 +149,8 @@ pub(crate) fn candidate(assessment: &Assessment) -> PathBuf {
         .to_path_buf()
 }
 
+/// Checks equivalent persisted reports, outcomes, checker logs and patches across independent calls,
+/// allowing only the invocation-owned report location to differ.
 pub(crate) fn same_evidence(expected: &Path, actual: &Path) {
     assert_eq!(
         fs::read(expected.join("report.json")).unwrap(),

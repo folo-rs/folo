@@ -11,7 +11,8 @@ artifacts and owned workspace directories.
 
 Preview validates captured inputs before invalidating its previous completion marker.
 Missing or malformed preparation and stale captured inputs leave that marker untouched.
-A retained marker alone is not admission: consumers still verify its captured inputs.
+An existing completion marker does not prove that the captured inputs are still valid;
+consumers still check those inputs.
 
 ## Captured source inputs
 
@@ -146,7 +147,7 @@ Compatibility evidence uses schema `2`:
 | `schema_version` | Compatibility-evidence format revision. |
 | `checker` | Identified checker version, or an explanation when no identity was established. |
 | `report` | Location of the source-bound report generated for this comparison. |
-| `completed` | Whether the required source admission and comparisons completed. |
+| `completed` | Whether the required input checks and comparisons completed. |
 | `findings` | Whether completed comparisons found an insufficient increment. |
 | `packages` | Comparison records containing the fields below. |
 
@@ -165,7 +166,7 @@ establishes no minimum. The author still judges behavioral, CLI, format and
 feature-subset effects.
 
 Do not confuse a completed comparison with a passing merge gate:
-`--deny-findings` additionally rejects insufficient increments. Source is admitted
+`--deny-findings` additionally rejects insufficient increments. Source inputs are checked
 at command entry. Callers and tools invoked for read-only work must keep assessed
 source, configuration and history unchanged during comparison; operational errors
 never become semantic passes.

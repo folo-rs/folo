@@ -16,6 +16,7 @@ pub const BLOB_BATCH_BYTES: NonZero<usize> =
     NonZero::new(1_048_576).expect("the fixed lookahead budget is nonzero");
 
 /// Caps framing and map overhead even when payloads are empty.
+///
 /// This is secondary to the byte budget, not a file-count admission limit.
 const MAX_BATCH_OBJECTS: usize = 1024;
 
