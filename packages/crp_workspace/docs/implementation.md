@@ -71,8 +71,18 @@ component by component, including missing suffixes. It observes each relevant di
 case behavior without creating probes in source. Unequal Unicode or undecodable components
 cannot establish disjointness through ASCII case rules. Output-owned children must not
 redirect replacement writes or cleanup into another location; unrelated output children
-do not affect admission. Git's actual administrative and shared storage directories
-remain protected when the assessed repository is a linked worktree.
+do not affect admission. For supplied source paths, admission also protects each
+ancestor entry at its resolved parent, without treating ordinary ancestor directories
+as recursively selected source or traversing unselected descendants.
+
+Git supplies effective administrative, index, object, hook and configuration locations
+under the subprocess environment. Path queries retain the input spelling rather than
+canonicalizing away link entries; admission protects both entries and referents.
+When alternates are configured, Git supplies their finite active store set. Only those
+stores' alternate descriptors and the environment list are interpreted to retain
+matching input spellings, including relative paths and Git C quoting. Git owns graph
+traversal and cycle handling; the application does not discover another store graph.
+Normal repositories without alternates do not enumerate their object store.
 
 Replacement refs, replacement environment and graft contents are observed at each
 classification boundary and invalidate invocation memory when they change. An

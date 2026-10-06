@@ -27,6 +27,7 @@ mod blob_batch;
 pub use blob_batch::decode_blob_batch;
 mod observations;
 pub use observations::*;
+mod storage;
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
@@ -176,22 +177,6 @@ impl GitRepo {
     #[must_use]
     pub fn prefix(&self) -> &str {
         &self.prefix
-    }
-
-    /// Resolves repository storage, including linked-worktree administration.
-    #[cfg_attr(test, mutants::skip)] // Native Git path queries have output-admission boundary tests.
-    pub fn administrative_paths(&self) -> Result<Vec<PathBuf>, AppError> {
-        ["--absolute-git-dir", "--git-common-dir"]
-            .into_iter()
-            .map(|argument| {
-                let bytes = run_capture_bytes(
-                    "git",
-                    &["rev-parse", "--path-format=absolute", argument],
-                    &self.root,
-                )?;
-                Ok(PathBuf::from(strip_terminator(path_text(&bytes)?)))
-            })
-            .collect()
     }
 
     // Native query only; resolved_revision tests output normalization and failure contextualization.

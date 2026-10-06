@@ -354,10 +354,16 @@ resources. This applies to the original workspace and any retained candidate use
 by the command. Output placement is admitted before creating artifacts or removing
 earlier output. Existing aliases and missing destination suffixes follow the
 filesystem's observed path identity, not operating-system assumptions.
+Both selected link entries and their referents are protected. Effective Git storage
+and configuration are inputs too, including relocated indexes, object stores and
+alternates, hooks and included configuration files.
 
 Excluded output locations inside a checkout or target directory are permitted when
 they do not overlap those inputs. The stable-input requirement does not delegate
 responsibility for the tool's own evidence writes to the caller.
+Standalone reports select released inputs; they do not follow ignored descendant
+links merely because those links are below a source directory. Captured-source
+commands reject symbolic links encountered in their source inventory.
 
 ### Operation-local reuse
 
