@@ -165,8 +165,10 @@ establishes no minimum. The author still judges behavioral, CLI, format and
 feature-subset effects.
 
 Do not confuse a completed comparison with a passing merge gate:
-`--deny-findings` additionally rejects insufficient increments. Captured source
-is verified around comparison; operational errors never become semantic passes.
+`--deny-findings` additionally rejects insufficient increments. Source is admitted
+at command entry. Callers and tools invoked for read-only work must keep assessed
+source, configuration and history unchanged during comparison; operational errors
+never become semantic passes.
 
 ## Artifact-only command output
 
