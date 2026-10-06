@@ -365,7 +365,6 @@ fn check_with_output(
     if output.try_exists()? {
         return Err(CompatibilityDestinationExists::new(output).into());
     }
-    fs::create_dir_all(output)?;
     let mut snapshots = Snapshots::default();
     let (evidence, manifest, acquired) = if let Some(path) = prepared {
         let prepared: Prepared = read_json(path)?;
@@ -374,10 +373,11 @@ fn check_with_output(
             prepared
                 .inputs
                 .verify_with_snapshots(&manifest, None, verbose, &mut snapshots)?;
+        acquired.admit_output(output, [])?;
         (Evidence::Source(prepared.inputs), manifest, acquired)
     } else if let Some(path) = plan {
         let (resolved, acquired) =
-            read_resolved_preview_with_snapshots(path, manifest, verbose, &mut snapshots)?;
+            read_resolved_preview_with_snapshots(path, manifest, output, verbose, &mut snapshots)?;
         let manifest = resolved.evidence_manifest_path.clone();
         (Evidence::Preview(resolved), manifest, acquired)
     } else {
@@ -389,6 +389,7 @@ fn check_with_output(
             verbose,
             &mut snapshots,
         )?;
+        acquired.admit_output(output, [])?;
         (Evidence::Source(inputs), manifest, acquired)
     };
     let classification = classify_acquired(acquired, verbose, &mut snapshots)?;

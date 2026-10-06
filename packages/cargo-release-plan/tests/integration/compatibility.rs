@@ -15,15 +15,38 @@ use std::time::Duration;
 use std::{env, fs, iter};
 
 use cargo_release_plan::{RunInput, RunOutcome, run};
+use crp_versioning::plan::SCHEMA_VERSION;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::resolved_plan;
+use crate::harness::{resolved_plan, seeded_package};
 
 // Git/Cargo startup and checker-fixture compilation normally finish in seconds. This deliberately
 // conservative budget protects infrastructure hangs, never determines an expected failure.
 pub(crate) const CHECKER_WATCHDOG: Duration = Duration::from_mins(5);
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes compatibility admission against a real source directory"
+)]
+fn compatibility_rejects_source_output_before_mutation() {
+    let fixture = seeded_package();
+    let output = fixture.path().join("packages/demo/src/evidence");
+    let result = run(&RunInput::CheckCompatibility {
+        manifest_path: fixture.manifest(),
+        prepared: None,
+        plan: None,
+        release_history: Some("HEAD".to_owned()),
+        merge_target: None,
+        output: output.clone(),
+        deny_findings: true,
+        verbose: false,
+    });
+    assert!(!output.exists(), "{result:?}");
+    result.unwrap_err();
+}
 
 #[test]
 #[cfg_attr(miri, ignore = "Reads real captured source and runs Cargo metadata")]
@@ -59,6 +82,59 @@ fn unchanged_workspace_needs_no_checker_or_registry_and_keeps_fresh_report() {
             .is_empty()
     );
     assert!(path.join("report.json").is_file());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "admits prepared and previewed workspaces before evidence writes"
+)]
+fn compatibility_protects_both_original_and_retained_candidate_sources() {
+    let fixture = seeded_package();
+    let proposal = fixture.path().join("proposal.json");
+    fs::write(
+        &proposal,
+        json!({
+            "schema_version": SCHEMA_VERSION,
+            "increments": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let plan = resolved_plan(&fixture, &proposal);
+    for (prepared, plan, output) in [
+        (
+            Some(fixture.path().join("prepared/prepared.json")),
+            None,
+            fixture.path().join("packages/demo/src/prepared-evidence"),
+        ),
+        (
+            None,
+            Some(plan.clone()),
+            fixture.path().join("packages/demo/src/preview-evidence"),
+        ),
+        (
+            None,
+            Some(plan),
+            fixture
+                .path()
+                .join("preview/workspace/packages/demo/src/evidence"),
+        ),
+    ] {
+        let result = run(&RunInput::CheckCompatibility {
+            manifest_path: fixture.manifest(),
+            prepared,
+            plan,
+            release_history: None,
+            merge_target: None,
+            output: output.clone(),
+            deny_findings: true,
+            verbose: false,
+        });
+        result.unwrap_err();
+        assert!(!output.exists());
+    }
+    assert!(fixture.path().join("preview/plan.json").is_file());
 }
 
 #[test]
