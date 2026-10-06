@@ -63,6 +63,29 @@ fn output_admission_uses_observed_case_for_absent_reserved_directories() {
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "protects directory-link entries and their native referents"
+)]
+fn output_admission_protects_link_entries_and_referents() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("input"), "source").unwrap();
+    let output = directory.path().join("evidence");
+    let nested = output.join("diffs");
+    fs::create_dir_all(&nested).unwrap();
+    let link = nested.join("link");
+    directory_alias(&source, &link);
+    for protected in [link.clone(), link.join("input")] {
+        admit_output(&output, [protected.clone()], ["diffs"]).unwrap_err();
+        admit_output(&source, [protected], ["diffs"]).unwrap_err();
+    }
+    assert_eq!(fs::read(source.join("input")).unwrap(), b"source");
+    admit_output(&directory.path().join("disjoint"), [link], ["diffs"]).unwrap();
+}
+
 #[cfg(unix)]
 fn directory_alias(source: &Path, alias: &Path) {
     symlink(source, alias).unwrap();

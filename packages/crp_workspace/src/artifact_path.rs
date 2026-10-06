@@ -1,6 +1,7 @@
 // Artifact destinations can acquire missing parent directories during generation.
 // Resolve existing ancestors before comparing their eventual filesystem locations.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Error as IoError, ErrorKind};
@@ -24,8 +25,22 @@ pub fn admit_output<'a>(
     owned_entries: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), AppError> {
     let output = resolve_path(output)?;
+    let mut entries = HashSet::new();
     for source in sources {
         require_disjoint_with(&output, &resolve_path(&source)?, creation_case)?;
+        // A selected path can traverse a link whose entry lives inside the output while
+        // its referent does not. Protect entries along supplied paths, not unselected
+        // descendants. Shared ancestors need admission only once in this operation.
+        for entry in source.ancestors() {
+            if !entries.insert(entry.to_path_buf()) {
+                break;
+            }
+            let (Some(parent), Some(name)) = (entry.parent(), entry.file_name()) else {
+                continue;
+            };
+            let location = resolve_path(parent)?.join(name);
+            require_entry_outside_with(&output, &location, creation_case)?;
+        }
     }
     // Writers replace immediate files and owned subtrees. Do not follow an existing output
     // child into another location; nested links are removed as entries by subtree replacement.
@@ -39,6 +54,19 @@ pub fn admit_output<'a>(
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(WriteFileError::caused_by(&path, error).into()),
         }
+    }
+    Ok(())
+}
+
+fn require_entry_outside_with(
+    output: &Path,
+    entry: &Path,
+    case: impl FnMut(&Path) -> Result<PathCase, AppError>,
+) -> Result<(), AppError> {
+    // Ancestor entries are not recursively selected directories: sibling output below
+    // an ordinary ancestor remains valid. Only removing the entry itself is forbidden.
+    if output.components().count() <= entry.components().count() {
+        require_disjoint_with(output, entry, case)?;
     }
     Ok(())
 }
@@ -231,6 +259,21 @@ mod tests {
     use std::os::windows::ffi::OsStringExt as _;
 
     use super::*;
+
+    #[test]
+    fn entry_ownership_allows_siblings_but_not_entry_removal() {
+        for (output, entry, rejected) in [
+            ("root", "root/source", true),
+            ("root/link", "root/link", true),
+            ("root/evidence", "root", false),
+            ("root/evidence", "root/other", false),
+        ] {
+            let result = require_entry_outside_with(Path::new(output), Path::new(entry), |_| {
+                panic!("exact spellings do not need a case observation")
+            });
+            assert_eq!(result.is_err(), rejected);
+        }
+    }
 
     #[test]
     fn output_separation_checks_both_prefixes_and_each_observed_parent() {
