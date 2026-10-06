@@ -184,11 +184,7 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             fixture.read("packages/demo/Cargo.toml")
         ),
     );
-    fixture.write(
-        ".cargo/config.toml",
-        "[build]\ntarget-dir = 'configured-target'\n",
-    );
-    fixture.commit("target configuration");
+    fixture.commit("private API configuration");
     fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
     let prepared = evidence.path().join("prepared");
@@ -300,21 +296,6 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             .unwrap(),
     );
     assert_eq!(acquisitions(&compatibility_trace), (2, 1));
-    assert!(
-        !manifest
-            .parent()
-            .unwrap()
-            .join("configured-target")
-            .join("cargo-release-plan")
-            .join("cache")
-            .exists()
-    );
-    let storage = fixture
-        .path()
-        .join("configured-target")
-        .join("cargo-release-plan")
-        .join("cache");
-    assert!(!storage.exists());
     success(
         command(&fixture)
             .args(["verify-preview", "--plan"])
@@ -342,7 +323,6 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             .count(),
         1
     );
-    assert!(!storage.exists());
 
     // An independent command must admit the current source before consuming retained evidence.
     fixture.write_workspace("[workspace.dependencies]\nunused = { path = 'unavailable' }\n");
@@ -355,7 +335,6 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("stale"));
-    assert!(!storage.exists());
 }
 
 #[test]

@@ -13,6 +13,9 @@ Plans, proposals, preparation, prospective workspaces, resolved state, preview
 and application stay together. Their captured-input and no-late-resolution invariants
 must not be distributed across independently interpreted artifacts. Report and plan
 producers own the schemas their consumers validate.
+Report completion uses exclusive same-directory staging rather than opening a reusable
+staging filename for truncation. Abandoned staging is removed as an entry, preserving
+contents shared with another hard-linked file.
 
 The skill's semantic decisions use `impact`; a proposal's mechanical version choices
 use `bump` or an explicit version. Proposal generation translates semantic meaning
@@ -132,7 +135,13 @@ metadata; original-workspace observations never stand in for the candidate.
 Source capture reuses the tracked listing and borrows parsed root/member documents acquired by its own
 metadata projection, including during path-dependency traversal. Files reached outside those
 documents are still acquired, and ignored/untracked build-source traversal and index capture
-remain independent. Successful admission returns the acquired workspace, Git identity and
+remain independent. Explicit target paths with parent components resolve their parent for
+relocation while keeping the final entry subject to ordinary-file admission.
+Dedicated target directories use the same recursive capture as conventional sources, with
+parent components resolved before recording repository-relative contents. Root-level and
+outside-directory supporting files enter through the acquired Git listing, including
+newly added index entries; capture does not inspect Rust imports or infer additional roots.
+Successful admission returns the acquired workspace, Git identity and
 resolved history to adjacent classification or plan consumers. Its parsed index modes also
 serve classification's baseline without another staged listing when effective filters permit
 shared mode queries. Capture itself does not execute mode overlays or clean filters.
@@ -152,13 +161,9 @@ arguments, real aliases, atomic file promotion and workspace lifetime.
 Workspace owns source-location discovery; versioning
 requires relocatable dependency paths and captures the same reserved files and recursive
 source contents for fingerprints.
-Captured acquisitions retain discovered source-location boundaries for output admission.
-Evidence writers reuse these boundaries and the acquired tracked listing and manifest
-resource declarations rather than repeating source scans. Standalone reports discover
-locations from their own acquired documents without applying prospective relocation rules.
-Compatibility with a preview admits output against both original and candidate acquisitions.
-Workspace's alias-aware destination check runs before output creation, report reset,
-prospective ownership or completion-marker removal. Preview invalidates its prior marker
-only after source and destination admission. Missing or malformed preparation and stale
+Output placement belongs to the caller and does not trigger source or Git configuration
+discovery. Source-location inventories are consumed by capture rather than retained in an
+acquisition for writers. Preview invalidates its prior marker only after validating
+captured inputs. Missing or malformed preparation and stale
 captured inputs preserve the previous marker, whose consumers still require successful
 input admission. Malformed proposals after admission invalidate the previous completion.

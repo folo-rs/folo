@@ -562,6 +562,7 @@ fn capture_includes_workspace_and_replacement_sources() {
         [
             "Cargo.toml",
             "replacement/Cargo.toml",
+            "replacement/build.rs",
             "replacement/src/nested/lib.rs"
         ]
         .into_iter()

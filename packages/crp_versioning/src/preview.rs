@@ -2,10 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf, absolute};
+use std::path::{Path, absolute};
 
 use crp_diag::Verbose;
-use crp_workspace::artifact_path::{resolve_path, same_path};
 use crp_workspace::command::hash_bytes;
 use crp_workspace::manifest::requirement_names_version;
 use crp_workspace::metadata::WorkTree;
@@ -24,7 +23,7 @@ use crate::plan::{
     increment_version, resolve_plan,
 };
 use crate::prospective::Prospective;
-use crate::report::{REPORT_OUTPUTS, write_report};
+use crate::report::write_report;
 use crate::resolved::{
     Artifact, Inputs, ResolvedState, StaleInputs, canonical, read_json, write_json,
 };
@@ -60,12 +59,6 @@ pub fn run_prepare_with_target(
         merge_target,
         verbose,
         &mut cache,
-    )?;
-    acquired.admit_output(
-        &output,
-        REPORT_OUTPUTS
-            .into_iter()
-            .chain(["prepared.json", ".prospective"]),
     )?;
     let lockfile = acquired.work_tree.workspace_root.join("Cargo.lock");
     drop(acquired);
@@ -119,17 +112,11 @@ pub fn run_preview(
 ) -> Result<String, AppError> {
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
     let mut cache = Snapshots::default();
-    let (prepared_input, plan_input) =
-        preview_inputs(plan, prepared, &output, manifest, |inputs| {
-            let (_, acquired) =
-                inputs.verify_with_snapshots(manifest, None, verbose, &mut cache)?;
-            acquired.admit_output(
-                &output,
-                REPORT_OUTPUTS
-                    .into_iter()
-                    .chain(["plan.json", ".prospective", "workspace"]),
-            )
-        })?;
+    let (prepared_input, plan_input) = preview_inputs(plan, prepared, &output, |inputs| {
+        inputs
+            .verify_with_snapshots(manifest, None, verbose, &mut cache)
+            .map(|_| ())
+    })?;
     let prepared = prepared_input;
     let plan = plan_input;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
@@ -262,21 +249,13 @@ pub fn preview_inputs(
     plan: &Path,
     prepared: &Path,
     output: &Path,
-    manifest: &Path,
     verify: impl FnOnce(&Inputs) -> Result<(), AppError>,
 ) -> Result<(Prepared, PlanFile), AppError> {
     let marker = output.join("plan.json");
-    let inputs = [plan, prepared, manifest];
-    for input in inputs {
-        if same_path(input, &marker)? {
-            return Err(OutputInputCollision::new().into());
-        }
-    }
-    guard_output_inputs(output, &inputs)?;
     let prepared: Prepared = read_json(prepared)?;
     verify(&prepared.inputs)?;
-    // Source admission must precede even marker removal. Once the destination is admitted,
-    // a failed proposal read or resolution invalidates its previous completion.
+    // Validate captured evidence before marker removal. A subsequent failed proposal read
+    // or resolution invalidates the previous completion.
     remove_marker(&marker)?;
     let plan: PlanFile = read_json(plan)?;
     plan.validate_schema()?;
@@ -465,44 +444,6 @@ fn remove_marker_with(
     Ok(())
 }
 
-// Native alias acquisition only; collision checks consume resolved observations in process.
-#[cfg_attr(test, mutants::skip)]
-fn guard_output_inputs(output: &Path, inputs: &[&Path]) -> Result<(), AppError> {
-    guard_output_inputs_with(output, inputs, resolve_path)
-}
-
-fn guard_output_inputs_with(
-    output: &Path,
-    inputs: &[&Path],
-    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
-) -> Result<(), AppError> {
-    let output = resolve(output)?;
-    let files = ["report.json", "report.json.tmp"].map(|name| resolve(&output.join(name)));
-    let [report, temporary] = files;
-    let files = [report?, temporary?];
-    for input in inputs {
-        let input = resolve(input)?;
-        validate_output_input(&output, &input, &files)?;
-    }
-    Ok(())
-}
-
-fn validate_output_input(output: &Path, input: &Path, files: &[PathBuf]) -> Result<(), AppError> {
-    if files.iter().any(|file| file == input)
-        || ["diffs", "workspace", ".prospective"]
-            .iter()
-            .any(|directory| input.starts_with(output.join(directory)))
-    {
-        return Err(OutputInputCollision::new().into());
-    }
-    Ok(())
-}
-
-/// Completion artifacts must not replace the invocation's own input documents.
-#[ohno::error]
-#[display("preview output overlaps an input; choose a separate output location")]
-pub(crate) struct OutputInputCollision;
-
 /// Source-level semantic decisions belong to the skill, not the resolver.
 #[ohno::error]
 #[display("package {package} needs a semantic release decision in the proposed plan")]
@@ -530,7 +471,6 @@ struct ResolutionCycle;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-
     use std::collections::HashSet;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -591,53 +531,6 @@ mod tests {
                 assert!(error.find_source::<std::io::Error>().is_some());
             }
         }
-    }
-
-    #[test]
-    fn resolved_output_paths_reject_each_owned_input_location() {
-        let output = Path::new("output");
-        let files = ["report.json", "report.json.tmp"].map(|name| output.join(name));
-        for path in [
-            "report.json",
-            "report.json.tmp",
-            "diffs/plan",
-            "workspace/plan",
-            ".prospective/plan",
-        ] {
-            let error = validate_output_input(output, &output.join(path), &files).unwrap_err();
-            assert!(error.find_source::<OutputInputCollision>().is_some());
-        }
-        validate_output_input(output, Path::new("other/plan"), &files).unwrap();
-    }
-
-    #[test]
-    fn acquired_output_aliases_cannot_replace_inputs() {
-        let output = Path::new("output");
-        for owned in [
-            "report.json",
-            "report.json.tmp",
-            "workspace/plan",
-            "diffs/plan",
-            ".prospective/plan",
-        ] {
-            let error = guard_output_inputs_with(output, &[Path::new("alias")], |path| {
-                Ok(if path == Path::new("alias") {
-                    output.join(owned)
-                } else {
-                    path.into()
-                })
-            })
-            .unwrap_err();
-            assert!(error.find_source::<OutputInputCollision>().is_some());
-        }
-        guard_output_inputs_with(output, &[Path::new("independent")], |path| Ok(path.into()))
-            .unwrap();
-        assert!(
-            guard_output_inputs_with(output, &[Path::new("input")], |_| Err(
-                std::io::Error::other("identity").into()
-            ))
-            .is_err()
-        );
     }
 
     #[test]

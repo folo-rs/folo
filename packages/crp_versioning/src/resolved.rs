@@ -139,7 +139,6 @@ impl Inputs {
             paths,
             digest,
         };
-        acquired.source_inputs = Some(sources);
         Ok((inputs, acquired))
     }
 
@@ -403,76 +402,6 @@ pub fn capture_path_dependencies<'a>(
     capture_sources(root, &sources, paths)
 }
 
-// Output admission consumes the same captured source boundaries, never a second listing,
-// fingerprint or strict source scan. Standalone reports discover locations from their own
-// acquired documents without imposing prospective relocatability on classification.
-#[cfg_attr(test, mutants::skip)]
-pub(crate) fn admit_output<'a>(
-    acquired: &AcquiredWorkspace,
-    output: &Path,
-    owned_entries: impl IntoIterator<Item = &'a str>,
-) -> Result<(), AppError> {
-    let work_tree = &acquired.work_tree;
-    let root = acquired.git.root();
-    let discovered;
-    let sources = match &acquired.source_inputs {
-        Some(sources) => sources,
-        None => {
-            discovered = SourceInputs::discover_with_documents(
-                root,
-                &work_tree.workspace_root,
-                &work_tree.member_manifests,
-                |manifest, dependency| {
-                    canonical(
-                        &manifest
-                            .parent()
-                            .expect("a manifest has a parent")
-                            .join(dependency),
-                    )
-                },
-                |path| {
-                    capture_document(path, &work_tree.manifests.documents, |path| {
-                        fs::read_to_string(path)
-                            .map_err(|error| ReadFileError::caused_by(path, error).into())
-                    })
-                },
-            )?;
-            &discovered
-        }
-    };
-    let resources = work_tree.packages.iter().flat_map(|package| {
-        let directory = package
-            .manifest_path
-            .parent()
-            .expect("a manifest has a parent");
-        package
-            .manifest
-            .resource_paths
-            .iter()
-            .map(|path| directory.join(path))
-            .chain(
-                package
-                    .manifest
-                    .inherited_resource_paths
-                    .iter()
-                    .map(|path| work_tree.workspace_root.join(path)),
-            )
-    });
-    artifact_path::admit_output(
-        output,
-        sources
-            .files
-            .iter()
-            .chain(&sources.source_directories)
-            .cloned()
-            .chain(work_tree.tracked_paths.iter().map(|path| root.join(path)))
-            .chain(resources)
-            .chain([root.join(".git")])
-            .chain(acquired.git.administrative_paths()?),
-        owned_entries,
-    )
-}
-
 // Native dependency identity belongs to the original repository before prospective relocation.
 #[cfg_attr(test, mutants::skip)]
 fn captured_dependency(
@@ -522,10 +451,38 @@ fn capture_sources(
     paths: &mut BTreeSet<PathBuf>,
 ) -> Result<(), AppError> {
     for path in &sources.files {
-        paths.insert(relative(root, path)?);
+        if path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            // Explicit targets can name a sibling directory. Resolve the parent for
+            // relocation, but keep the file entry so fingerprinting still rejects links.
+            let parent = path.parent().expect("a source file has a parent");
+            let name = path
+                .file_name()
+                .ok_or_else(|| UnsupportedInput::new(path))?;
+            let resolved = artifact_path::resolve_path(parent)?.join(name);
+            #[cfg(windows)]
+            let resolved = ordinary_windows_path(&resolved);
+            paths.insert(relative(root, &resolved)?);
+        } else {
+            paths.insert(relative(root, path)?);
+        }
     }
     for directory in &sources.source_directories {
-        collect_sources(root, directory, paths)?;
+        if directory
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            // Dedicated target directories can retain parent components in their declared
+            // spelling. Fingerprints and prospective copies require repository-relative paths.
+            let directory = artifact_path::resolve_path(directory)?;
+            #[cfg(windows)]
+            let directory = ordinary_windows_path(&directory);
+            collect_sources(root, &directory, paths)?;
+        } else {
+            collect_sources(root, directory, paths)?;
+        }
     }
     Ok(())
 }

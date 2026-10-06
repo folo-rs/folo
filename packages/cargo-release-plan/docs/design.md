@@ -348,16 +348,24 @@ live-input admission.
 Source-mutating commands on the same assessed workspace must run separately.
 Local input stability does not replace current registry and publication observations.
 
-Evidence destinations must be disjoint from assessed source locations, including
-reserved input files, recursively captured source directories and manifest-named
-resources. This applies to the original workspace and any retained candidate used
-by the command. Output placement is admitted before creating artifacts or removing
-earlier output. Existing aliases and missing destination suffixes follow the
-filesystem's observed path identity, not operating-system assumptions.
+Callers choose output destinations and own their placement relative to source, Git
+configuration, existing evidence and other data. Commands use those destinations without
+checking for input collisions. Writers manage only their documented artifact files and
+owned workspace directories. Captured-input and resolved-plan validation remains required
+when evidence is consumed.
 
-Excluded output locations inside a checkout or target directory are permitted when
-they do not overlap those inputs. The stable-input requirement does not delegate
-responsibility for the tool's own evidence writes to the caller.
+### Captured source inputs
+
+Preparation and preview capture declared inputs, Git-tracked files and the contents of
+source directories. These include conventional `src` directories and dedicated target or
+build-script directories below a package root, including those of path dependencies.
+A target located at the package root or outside it contributes its declared file, not a
+recursive capture of the package root or its ancestors.
+
+Supporting files outside the captured source directories must be Git-tracked.
+Adding them with `git add` is sufficient; a commit is not required. This requirement
+applies to modules and other build inputs such as included files. Source capture does
+not interpret Rust module declarations or run compilers to discover inputs.
 
 ### Operation-local reuse
 
