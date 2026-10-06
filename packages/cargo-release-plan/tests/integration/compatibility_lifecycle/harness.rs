@@ -94,6 +94,11 @@ impl Assessment {
     }
 
     pub(crate) fn check_mode(&self, name: &str, option: &str, artifact: &str) -> Command {
+        let manifest = if option == "--plan" {
+            self.evidence_manifest(artifact)
+        } else {
+            self.fixture.manifest()
+        };
         let mut command = self.command("check-compatibility");
         command
             .arg(option)
@@ -102,12 +107,26 @@ impl Assessment {
             .arg(self.path(name))
             .env("CRP_FIXTURE_SCENARIO", "anticipated-parent")
             .env("CRP_EXPECTED_PARENT", &self.parent)
+            .env("CRP_EXPECTED_MANIFEST", &manifest)
             .env("CRP_FIXTURE_CALLS", self.path(&format!("{name}.calls")))
             .env(
                 "CRP_FIXTURE_SOURCE",
-                self.fixture.path().join("packages/library/src/lib.rs"),
+                manifest
+                    .parent()
+                    .unwrap()
+                    .join("packages/library/src/lib.rs"),
             );
         command
+    }
+
+    fn evidence_manifest(&self, artifact: &str) -> PathBuf {
+        let plan: Value = from_slice(&fs::read(self.path(artifact)).unwrap()).unwrap();
+        PathBuf::from(
+            plan.pointer("/resolved/evidence_manifest_path")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+        )
     }
 }
 
@@ -121,16 +140,11 @@ pub(crate) fn success(output: Output) -> Output {
 }
 
 pub(crate) fn candidate(assessment: &Assessment) -> PathBuf {
-    let plan: Value = from_slice(&fs::read(assessment.path("preview/plan.json")).unwrap()).unwrap();
-    Path::new(
-        plan.pointer("/resolved/evidence_manifest_path")
-            .unwrap()
-            .as_str()
-            .unwrap(),
-    )
-    .parent()
-    .unwrap()
-    .to_path_buf()
+    assessment
+        .evidence_manifest("preview/plan.json")
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 pub(crate) fn same_evidence(expected: &Path, actual: &Path) {

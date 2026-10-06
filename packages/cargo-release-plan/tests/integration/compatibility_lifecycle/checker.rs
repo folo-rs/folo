@@ -46,6 +46,22 @@ fn compatibility_shares_entry_admission_through_read_only_checker_stages() {
                 }
             }
         }
+        let result = assessment
+            .check("wrong-manifest")
+            .env("CRP_EXPECTED_MANIFEST", assessment.fixture.manifest())
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert_eq!(
+            read_outcome(&assessment.path("wrong-manifest"))
+                .get("completed")
+                .unwrap(),
+            false
+        );
+        assert_eq!(
+            fs::read_to_string(assessment.path("wrong-manifest.calls")).unwrap(),
+            "version\ncanary\ncomparison\n"
+        );
     });
 }
 

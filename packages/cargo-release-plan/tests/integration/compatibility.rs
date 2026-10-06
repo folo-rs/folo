@@ -1294,6 +1294,9 @@ fn main() {
     let baseline = value("--baseline-root");
     if args.iter().any(|arg| arg == "-p") {
         writeln!(calls, "comparison").unwrap();
+        if let Some(expected) = env::var_os("CRP_EXPECTED_MANIFEST") {
+            assert_eq!(fs::canonicalize(&manifest).unwrap(), fs::canonicalize(expected).unwrap());
+        }
         assert_eq!(value("-p"), "library");
         assert!(!args.iter().any(|arg| arg == "--baseline-version"));
         assert!(args.iter().any(|arg| arg == "--all-features"));
