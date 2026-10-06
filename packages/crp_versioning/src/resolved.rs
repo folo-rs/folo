@@ -100,7 +100,7 @@ impl Inputs {
         // Cargo preserves the supplied path spelling, including Windows short names.
         // Normalize the entry point before discovering any paths that will be rebased.
         let manifest = canonical(manifest)?;
-        let mut acquired =
+        let acquired =
             AcquiredWorkspace::acquire(&manifest, release_history, merge_target, verbose, cache)?;
         let work_tree = &acquired.work_tree;
         let git = &acquired.git;
@@ -135,7 +135,6 @@ impl Inputs {
             paths,
             digest,
         };
-        acquired.source_inputs = Some(sources);
         Ok((inputs, acquired))
     }
 
@@ -397,77 +396,6 @@ pub fn capture_path_dependencies<'a>(
         captured_dependency(root, manifest, dependency)
     })?;
     capture_sources(root, &sources, paths)
-}
-
-// Output admission consumes the same captured source boundaries, never a second listing,
-// fingerprint or strict source scan. Standalone reports discover locations from their own
-// acquired documents without imposing prospective relocatability on classification.
-#[cfg_attr(test, mutants::skip)]
-pub(crate) fn admit_output<'a>(
-    acquired: &AcquiredWorkspace,
-    output: &Path,
-    owned_entries: impl IntoIterator<Item = &'a str>,
-) -> Result<(), AppError> {
-    let work_tree = &acquired.work_tree;
-    let root = acquired.git.root();
-    let discovered;
-    let sources = match &acquired.source_inputs {
-        Some(sources) => sources,
-        None => {
-            discovered = SourceInputs::discover_with_documents(
-                root,
-                &work_tree.workspace_root,
-                &work_tree.member_manifests,
-                |manifest, dependency| {
-                    canonical(
-                        &manifest
-                            .parent()
-                            .expect("a manifest has a parent")
-                            .join(dependency),
-                    )
-                },
-                |path| {
-                    capture_document(path, &work_tree.manifests.documents, |path| {
-                        fs::read_to_string(path)
-                            .map_err(|error| ReadFileError::caused_by(path, error).into())
-                    })
-                },
-            )?;
-            &discovered
-        }
-    };
-    let resources = work_tree.packages.iter().flat_map(|package| {
-        let directory = package
-            .manifest_path
-            .parent()
-            .expect("a manifest has a parent");
-        package
-            .manifest
-            .resource_paths
-            .iter()
-            .map(|path| directory.join(path))
-            .chain(
-                package
-                    .manifest
-                    .inherited_resource_paths
-                    .iter()
-                    .map(|path| work_tree.workspace_root.join(path)),
-            )
-    });
-    artifact_path::admit_output(
-        output,
-        sources
-            .files
-            .iter()
-            .chain(&sources.source_directories)
-            .chain(&sources.declared_paths)
-            .cloned()
-            .chain(work_tree.tracked_paths.iter().map(|path| root.join(path)))
-            .chain(resources)
-            .chain([root.join(".git")])
-            .chain(acquired.git.administrative_paths()?),
-        owned_entries,
-    )
 }
 
 // Native dependency identity belongs to the original repository before prospective relocation.

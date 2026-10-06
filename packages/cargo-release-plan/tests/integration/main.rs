@@ -15,6 +15,7 @@ mod acquisitions;
 mod artifact_commands;
 mod baseline;
 mod captured;
+mod captured_targets;
 mod cli_binary;
 mod compatibility;
 mod evidence;
@@ -33,8 +34,6 @@ mod preview_safety;
 mod propose;
 mod publication;
 mod report;
-mod report_git_inputs;
-mod report_selected_inputs;
 mod standalone;
 mod status;
 

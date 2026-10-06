@@ -4,18 +4,14 @@ Local planning and post-merge publication serve different purposes and have
 separate schema lifecycles. Use tool-produced evidence where specified; do not
 fabricate captured inputs, identities or publication outcomes.
 
-Planning evidence directories must be separate from assessed source: tracked and
-reserved input files, recursive source directories and package resources. This includes
-explicit build-script and target paths and declared dependency links, even when ignored.
-It covers both original source and retained preview source. Excluded locations within the checkout
-or Cargo target directory are permitted when they are disjoint from those inputs.
-Selected link entries and their targets, and effective Git storage and configuration,
-must remain outside evidence output even when located outside the checkout.
-Output admission precedes artifact creation and cleanup. A failed admission leaves
-existing output untouched; preview invalidates its previous completion only after
-admitting the source and output destination. Missing or malformed preparation and
-stale captured inputs therefore leave the previous marker untouched. A retained
-marker alone is not admission: consumers still verify its captured inputs.
+You choose output destinations and are responsible for their placement relative to
+source, configuration, existing evidence and other data. Commands write to the supplied
+locations without checking for input collisions. Each writer manages only its documented
+artifacts and owned workspace directories.
+
+Preview validates captured inputs before invalidating its previous completion marker.
+Missing or malformed preparation and stale captured inputs leave that marker untouched.
+A retained marker alone is not admission: consumers still verify its captured inputs.
 
 ## Local decisions and plans
 

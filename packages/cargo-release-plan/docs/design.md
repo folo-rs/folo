@@ -348,23 +348,11 @@ live-input admission.
 Source-mutating commands on the same assessed workspace must run separately.
 Local input stability does not replace current registry and publication observations.
 
-Evidence destinations must be disjoint from assessed source locations, including
-reserved input files, recursively captured source directories and manifest-named
-resources. Declared dependency links and explicit build-script and target files are
-selected inputs even when ignored by Git. This applies to the original workspace and
-any retained candidate used by the command. Output placement is admitted before
-creating artifacts or removing earlier output. Existing aliases and missing destination suffixes follow the
-filesystem's observed path identity, not operating-system assumptions.
-Both selected link entries and their referents are protected. Effective Git storage
-and configuration are inputs too, including relocated indexes, object stores and
-alternates, hooks and included configuration files.
-
-Excluded output locations inside a checkout or target directory are permitted when
-they do not overlap those inputs. The stable-input requirement does not delegate
-responsibility for the tool's own evidence writes to the caller.
-Standalone reports select released inputs; they do not follow ignored descendant
-links merely because those links are below a source directory. Captured-source
-commands reject symbolic links encountered in their source inventory.
+Callers choose output destinations and own their placement relative to source, Git
+configuration, existing evidence and other data. Commands use those destinations without
+checking for input collisions. Writers manage only their documented artifact files and
+owned workspace directories. Captured-input and resolved-plan validation remains required
+when evidence is consumed.
 
 ### Operation-local reuse
 

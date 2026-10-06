@@ -16,24 +16,19 @@ use crate::resolved::{ResolutionRequired, ResolvedState, read_json, validate_app
 /// Admits a resolved preview and retains its candidate observations for read-only work.
 ///
 /// Assessed source, configuration and history must remain unchanged while using
-/// the returned candidate. The output must be a new evidence directory.
-#[cfg_attr(test, mutants::skip)] // Native admission; isolation and reuse have integration coverage.
+/// the returned candidate.
+#[cfg_attr(test, mutants::skip)] // Native input validation and reuse have integration coverage.
 pub fn read_resolved_preview_with_snapshots(
     path: &Path,
     manifest: &Path,
-    output: &Path,
     verbose: Verbose<'_>,
     cache: &mut Snapshots,
 ) -> Result<(ResolvedState, AcquiredWorkspace), AppError> {
     let plan: PlanFile = read_json(path)?;
     validate_expanded(&plan)?;
-    let (_, original) = validate_application(&plan, manifest, verbose, cache)?;
-    original.admit_output(output, [])?;
-    drop(original);
+    _ = validate_application(&plan, manifest, verbose, cache)?;
     resolved_preview(plan, |state| {
-        let acquired = state.acquire_candidate(&state.evidence_manifest_path, verbose, cache)?;
-        acquired.admit_output(output, [])?;
-        Ok(acquired)
+        state.acquire_candidate(&state.evidence_manifest_path, verbose, cache)
     })
 }
 

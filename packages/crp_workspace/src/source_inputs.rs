@@ -19,8 +19,6 @@ use crate::manifest::{for_each_dependency_table, parse_document};
 pub struct SourceInputs {
     pub files: BTreeSet<PathBuf>,
     pub source_directories: BTreeSet<PathBuf>,
-    /// Selected dependency spellings retained separately from relocatable capture identities.
-    pub declared_paths: BTreeSet<PathBuf>,
 }
 
 impl SourceInputs {
@@ -136,12 +134,6 @@ impl SourceInputs {
                 dependency_paths(replacements, &mut dependencies);
             }
             for dependency in dependencies {
-                // Canonical dependency identities bound traversal, but cannot retain the
-                // selected link entries which artifact cleanup must also leave untouched.
-                let declared = parent.join(&dependency);
-                inputs
-                    .declared_paths
-                    .extend([declared.join("Cargo.toml"), declared.join("src")]);
                 let directory = resolve_dependency(&manifest, Path::new(&dependency))?;
                 inputs.source_directories.insert(directory.join("src"));
                 pending.insert(directory.join("Cargo.toml"));
@@ -289,19 +281,6 @@ mod tests {
             ["Cargo.toml", "actual/Cargo.toml", "leaf/Cargo.toml"].map(|path| root.join(path));
         assert_eq!(reads, manifests);
         assert_eq!(inputs.files, manifests.into());
-        assert_eq!(
-            inputs.declared_paths,
-            [
-                "alias/Cargo.toml",
-                "alias/src",
-                "actual/../leaf/Cargo.toml",
-                "actual/../leaf/src",
-                "leaf/../Cargo.toml",
-                "leaf/../src",
-            ]
-            .map(|path| root.join(path))
-            .into()
-        );
         assert_eq!(
             inputs.source_directories,
             ["src", "actual/src", "leaf/src"]

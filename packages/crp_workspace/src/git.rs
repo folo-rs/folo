@@ -27,7 +27,6 @@ mod blob_batch;
 pub use blob_batch::decode_blob_batch;
 mod observations;
 pub use observations::*;
-mod storage;
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
