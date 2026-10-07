@@ -18,6 +18,7 @@ mod captured;
 mod captured_targets;
 mod cli_binary;
 mod compatibility;
+mod compatibility_lifecycle;
 mod evidence;
 mod fixture;
 mod groups;

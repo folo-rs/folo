@@ -518,6 +518,8 @@ before its evidence is relied upon. Findings, a valid empty target set and an
 execution failure remain distinct outcomes. Missing or incomplete comparison
 evidence is never reported as compatibility. Compatibility tooling must preserve
 the assessed source and resolution throughout the comparison.
+Preview admission accepts an original workspace matching the captured initial state
+or the completely applied plan; the retained candidate must match the captured final state.
 The shared workflow uses the result to enforce supported API compatibility;
 the skill uses it as a floor while assessing the complete contract.
 

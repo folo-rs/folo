@@ -126,6 +126,11 @@ An assessed workspace with selected contracts must have a lockfile accepted by C
 default metadata resolution without changes. It never accepts detached `--report` evidence.
 The regenerated report uses report/plan schema `6`.
 
+For a resolved preview, input checks at command entry cover both the original workspace
+and the retained candidate. The original
+workspace must match the captured initial state or the completely applied plan;
+the retained candidate must match the captured final state.
+
 The new output directory contains `compatibility.json`, `semver-checks.log` and
 the read-only report. Evidence records the checker identity, comparison versions
 and sources, completed comparisons and semantic floors. An

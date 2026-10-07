@@ -24,7 +24,7 @@ use crate::harness::{prepare, resolved_plan, seeded_package};
 
 // Git/Cargo startup and checker-fixture compilation normally finish in seconds. This deliberately
 // conservative budget protects infrastructure hangs, never determines an expected failure.
-const CHECKER_WATCHDOG: Duration = Duration::from_mins(5);
+pub(crate) const CHECKER_WATCHDOG: Duration = Duration::from_mins(5);
 
 #[test]
 #[cfg_attr(
@@ -1056,7 +1056,7 @@ fn failed_parent_worktree_add_still_cleans_its_registered_source() {
     });
 }
 
-fn anticipated_parent() -> (Fixture, String, String) {
+pub(crate) fn anticipated_parent() -> (Fixture, String, String) {
     anticipated_parent_in("")
 }
 
@@ -1179,7 +1179,7 @@ fn private_library() -> Fixture {
     fixture
 }
 
-fn read_outcome(output: &Path) -> Value {
+pub(crate) fn read_outcome(output: &Path) -> Value {
     let outcome: Value =
         serde_json::from_slice(&fs::read(output.join("compatibility.json")).unwrap()).unwrap();
     assert_eq!(outcome.get("schema_version").unwrap(), 2);
@@ -1211,7 +1211,7 @@ fn configure_git_shim(command: &mut Command, output: &Path) {
     command.env("PATH", path).env("CRP_REAL_GIT", real_git);
 }
 
-fn checker_command() -> Command {
+pub(crate) fn checker_command() -> Command {
     let path = env::join_paths(
         iter::once(CHECKER.path().to_path_buf())
             .chain(env::split_paths(&env::var_os("PATH").unwrap())),
@@ -1294,6 +1294,9 @@ fn main() {
     let baseline = value("--baseline-root");
     if args.iter().any(|arg| arg == "-p") {
         writeln!(calls, "comparison").unwrap();
+        if let Some(expected) = env::var_os("CRP_EXPECTED_MANIFEST") {
+            assert_eq!(fs::canonicalize(&manifest).unwrap(), fs::canonicalize(expected).unwrap());
+        }
         assert_eq!(value("-p"), "library");
         assert!(!args.iter().any(|arg| arg == "--baseline-version"));
         assert!(args.iter().any(|arg| arg == "--all-features"));
@@ -1322,6 +1325,10 @@ fn main() {
         if scenario.starts_with("parent-comparison-") {
             eprintln!("comparison failure canary");
             process::exit(1);
+        }
+        if scenario == "parent-compatible" {
+            println!("Summary no semver update required");
+            return;
         }
         println!("Summary semver requires new major version");
         process::exit(100);

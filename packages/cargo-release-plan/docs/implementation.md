@@ -182,6 +182,9 @@ resolved file contents are released before checker execution. The original root 
 selects the compiler-cache namespace and anticipated-parent worktree, including for
 checks of a retained candidate.
 
+Each compatibility invocation builds its report and target selection from admitted
+source with current provenance. An adjacent report never supplies admission or targets.
+
 The supported checker performs default full Cargo metadata on its current workspace,
 then resolves and builds separate placeholder projects. Compatibility first admits that
 same default resolution with `cargo metadata --locked`, under the checker environment.
@@ -189,7 +192,9 @@ This prevents an absent or stale assessed lockfile from being installed by the c
 metadata invocation. It does not freeze registry observations or the checker's own
 placeholder resolutions. The identical-source canary owns a separate temporary fixture.
 Read-only stages rely on the stable-input command contract rather than repeating
-source fingerprints around each subprocess.
+source fingerprints around each subprocess. Original admission accepts captured initial
+or completely applied state; candidate admission checks captured final state and supplies
+the classification's acquired workspace for that unchanged interval.
 
 The checker receives all features and one explicit published baseline version per
 consumer contract. A small identical-source library canary validates its ability
@@ -406,6 +411,11 @@ the containing directory's probed alias behavior; it never redirects a distinct
 manifest on a sensitive filesystem. Git lookups continue to use recorded spelling.
 
 ### Test boundaries
+
+`cargo-release-plan/tests/integration/compatibility_lifecycle/` separates the shared
+process harness from captured-input admission, checker execution, independent target selection
+and mutation/relocation scenarios. The topic modules share fixtures and evidence
+assertions without sharing test execution or weakening source verification.
 
 `cargo-release-plan/tests/integration/native_binaries/` owns the unified executable's
 source, build, archive and cancellation contracts. Publication's native boundary
