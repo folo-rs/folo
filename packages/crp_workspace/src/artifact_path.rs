@@ -1,5 +1,4 @@
-// Artifact destinations can acquire missing parent directories during generation.
-// Resolve existing ancestors before comparing their eventual filesystem locations.
+// Shared atomic artifact publication and filesystem path resolution.
 
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -33,20 +32,6 @@ pub fn write_new(
     file.persist_noclobber(path)
         .map_err(|error| WriteFileError::caused_by(path, error))?;
     Ok(())
-}
-
-// Alias identity requires filesystem resolution; resolve_path_with tests the resolution policy.
-#[cfg_attr(test, mutants::skip)]
-pub fn same_path(left: &Path, right: &Path) -> Result<bool, AppError> {
-    same_path_with(left, right, resolve_path)
-}
-
-fn same_path_with(
-    left: &Path,
-    right: &Path,
-    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
-) -> Result<bool, AppError> {
-    Ok(resolve(left)? == resolve(right)?)
 }
 
 // Acquires the absolute path and native observations for the in-process resolver.
@@ -127,27 +112,6 @@ mod tests {
     use std::mem;
 
     use super::*;
-
-    #[test]
-    fn aliases_compare_resolved_identity_and_propagate_resolution_errors() {
-        for same in [false, true] {
-            assert_eq!(
-                same_path_with(Path::new("first"), Path::new("second"), |path| {
-                    Ok(if same {
-                        PathBuf::from("actual")
-                    } else {
-                        path.into()
-                    })
-                })
-                .unwrap(),
-                same
-            );
-        }
-        same_path_with(Path::new("first"), Path::new("second"), |_| {
-            Err(IoError::other("identity").into())
-        })
-        .unwrap_err();
-    }
 
     #[test]
     fn missing_suffixes_require_directory_ancestors() {

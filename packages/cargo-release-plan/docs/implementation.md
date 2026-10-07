@@ -69,25 +69,24 @@ build the work-tree model, `git` owns repository facts, `anchor` resolves releas
 history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
 
-## Observation caching
+## Operation-owned acquisition reuse
 
-Classification command dispatch resolves storage from the selected original workspace
-before prospective cloning or checker environment changes. Workspace owns Cargo's
-effective target-directory acquisition and cache path admission. The resolved location
-is passed explicitly through versioning operations; it is never serialized into
-prepared or resolved evidence. Compatibility resolves it from the admitted evidence's
-original source rather than the retained candidate.
-Compatibility also admits the cache against the retained candidate's entire Git root,
-not merely its possibly nested workspace manifest or the resolved-plan file.
-Preview dispatch passes cache options to versioning so collision-safe completion-marker
-invalidation precedes metadata acquisition. Cache advisories bypass deferred checker
-diagnostic failures; checker output and supporting publication diagnostics retain their
-strict delivery policy.
+Adjacent consumers explicitly share an acquisition's workspace, selected history,
+root/member documents and tracked listing. Capture hands these observations to
+classification without repeating metadata or ref resolution. Each independent entry
+acquires new observations. The owning call site consumes or drops observations before
+edits, resolution or relocation. Preview reads artifact contents freshly; preparation
+retains its separate prospective acquisition.
 
-The workspace component publishes typed immutable observations atomically. Versioning
-retains the full historical tree and its lookup indexes with each committed snapshot,
-and retains raw commit-parent facts separately from fresh history-availability decisions.
-Candidate observations and classification decisions are not persistent cache entries.
+Versioning retains the full historical tree and lookup indexes with each committed
+snapshot, and raw commit-parent facts separately from fresh history-availability
+decisions. Complete manifest text identifies operation-owned parsed syntax. Current bytes
+are acquired before syntax reuse, and historical workspace reconstruction remains lazy
+and context-bound. Parsed lockfiles serve multiple binary closures within a pass;
+committed graphs can be shared across passes under the same interpretation.
+No observation storage backend or command-line cache controls participate in dispatch.
+Compatibility's Cargo build-directory configuration remains independent of these
+acquisition lifetimes. See the component guides for ownership and invalidation.
 
 ## Executable identity
 
@@ -165,10 +164,24 @@ group size, canonical naming, ordering and uniqueness.
 Compatibility is a separate explicit operation, not part of offline classification.
 Prepared inputs and resolved previews already carry source identity, so the checker
 consumes those artifacts rather than extending report schema solely to make an
-unbound report executable. Fresh checks capture inputs around their own read-only
-report and verify them again after external comparison. Preview checks use the
+unbound report executable. Fresh checks capture inputs for their own read-only
+report and share that acquisition with classification and checker selection. Preview checks use the
 retained prospective manifest and share versioning's typed resolved-state
 verification without producing publication-target JSON.
+After checking the selected inputs, compatibility retains only their original repository
+root alongside the acquired workspace and selected checker manifest. Captured paths and
+resolved file contents are released before checker execution. The original root still
+selects the compiler-cache namespace and anticipated-parent worktree, including for
+checks of a retained candidate.
+
+The supported checker performs default full Cargo metadata on its current workspace,
+then resolves and builds separate placeholder projects. Compatibility first admits that
+same default resolution with `cargo metadata --locked`, under the checker environment.
+This prevents an absent or stale assessed lockfile from being installed by the checker's
+metadata invocation. It does not freeze registry observations or the checker's own
+placeholder resolutions. The identical-source canary owns a separate temporary fixture.
+Read-only stages rely on the stable-input command contract rather than repeating
+source fingerprints around each subprocess.
 
 The checker receives all features and one explicit published baseline version per
 consumer contract. A small identical-source library canary validates its ability
@@ -189,10 +202,9 @@ checker invocation assertions rather than library mutation runs.
 New decisions belong outside the excluded acquisition adapters so they retain
 in-process mutation coverage.
 
-Each baseline comes from one registry-history observation. Source verification
-runs after comparison even when the checker fails, and incomplete evidence is
-persisted before errors propagate. Simultaneous checker and source-verification
-failures retain both diagnostics.
+Each baseline comes from one registry-history observation. Incomplete evidence is
+persisted before checker errors propagate. Simultaneous comparison, diagnostic
+delivery and persistence failures retain their independent diagnostics.
 
 The identical-source canary requires a recognized unchanged summary from the
 same checker protocol used for real comparisons. Updating the configured checker
@@ -202,7 +214,7 @@ unknown output remains an operational failure rather than a compatible result.
 For an anticipated parent release, the report identifies packages whose comparison
 anchor is the parent's final commit. Their API comparison uses that source rather
 than an older registry version. The checker owns a detached parent worktree for the
-comparison and preserves source-verification and cleanup failures in its outcome.
+comparison, admits its source after creation and preserves cleanup failures in its outcome.
 Historical anchors retain the registry comparison path.
 
 Registry preflight reuses exact registry observations and resolved-plan inspection.
@@ -476,7 +488,7 @@ ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
 
 Proposal generation injects artifact operations into its command core.
-Its unit tests retain input-collision checks, acquisition and publication order,
+Its unit tests retain acquisition and publication order,
 plan generation, rendered output, and error propagation without touching files.
 Proposal publication also checks stale-output invalidation and failed-write cleanup.
 Real artifact path interpretation and file access stay in integration coverage.
@@ -580,7 +592,7 @@ release assessment. Each tracked current member manifest is loaded and parsed
 once per work-tree snapshot; its parsed document and derived package facts are
 shared by version-target construction, exact-dependency discovery, and the
 publishable projection. Historical workspaces cannot use Cargo without checking
-out each commit, so `SnapshotCache` reconstructs them from tracked manifests.
+out each commit, so `Snapshots` reconstructs them from tracked manifests.
 
 The reconstruction starts from the root package and declared member patterns,
 then follows in-workspace path dependencies to a fixed point while honoring
@@ -831,8 +843,9 @@ then joins this package's own. The sets only grow and are bounded by the
 workspace, so this settles; the bound is asserted rather than assumed.
 
 `report` serializes the full package and group assessment, then writes patches
-only where file differences exist. It removes any earlier `report.json` marker
-before replacing the patch tree and writes the new marker through a same-directory
+only where file differences exist. It removes the earlier `report.json` entry
+without following its referent, accepting absence but propagating removal errors before
+replacing the patch tree, and writes the new marker through a same-directory
 staging file after every patch succeeds. A failed rerun therefore cannot present
 stale JSON and a partial patch set as one complete assessment.
 
@@ -855,9 +868,9 @@ adapters therefore do not maintain another plan-schema validator or rediscover
 publication eligibility from package naming.
 Inspection and compatibility verification share the candidate-location and
 captured-state checks, so metadata cannot direct a caller to an unchecked workspace.
-Proposal and preview output guards resolve existing path ancestors before
-normalizing missing components. Creating an output directory therefore cannot
-turn an accepted destination into an alias of the input evidence.
+Output destinations are caller-owned choices. Proposal, report, preparation, preview
+and compatibility writers perform their normal artifact operations without comparing
+destination paths with source or configuration inputs.
 
 `plan` owns both planning stages and the resolution shared between them. It first
 resolves package and group entries into one target version per tracked version
@@ -925,8 +938,9 @@ drive successive resolver outputs through this same loop, including changing
 files with unchanged version decisions, before any final evidence verification.
 The loop returns the stable artifacts; the callback retains that pass's
 classification in the caller for both readiness validation and report emission.
-No resolver or candidate edit occurs between those consumers. Original source/history
-and retained candidate verification still guard publication of the completed plan.
+No resolver or candidate edit occurs between those consumers. Original source and history
+are admitted at command entry. Relocating the completed prospective workspace discards
+its observations and requires a new captured-state admission before publishing the plan.
 
 Cycle history retains a Git object digest for each complete version/artifact
 state rather than retaining serialized lockfiles and manifests for every pass.

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crp_workspace::git::testing::unopened;
 use crp_workspace::lockfile::InstallationGraph;
 use crp_workspace::manifest::PathCase;
-use crp_workspace::metadata::{VersionTarget, WorkTree};
+use crp_workspace::metadata::{ManifestSnapshot, VersionTarget, WorkTree};
 use semver::Version;
 
 use crate::anchor::Anchor;
@@ -32,6 +32,8 @@ pub(crate) fn classification(packages: Vec<PackageClass>) -> Classification {
         groups: BTreeMap::new(),
         membership: Groups::default(),
         work_tree: WorkTree {
+            manifests: ManifestSnapshot::default(),
+            tracked_paths: Vec::new(),
             workspace_root: PathBuf::from("workspace"),
             packages: Vec::new(),
             version_targets,

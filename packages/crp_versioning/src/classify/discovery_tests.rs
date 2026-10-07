@@ -362,12 +362,12 @@ fn captured_manifests_cache_recorded_paths_and_bound_implicit_members_to_the_wor
     let mut source = GitManifestSource {
         read: |path: &str| {
             reads.push(path.to_owned());
-            Ok(Some(if path == "nested/Member/Cargo.toml" {
+            parse_document(Path::new(path), if path == "nested/Member/Cargo.toml" {
                             "[package]\nname='member'\nversion='1.0.0'\n[dependencies]\nlocal={path='../helper'}\nroot={path='..'}\nparent={path='../..'}\noutside={path='../../outside'}\nbeyond={path='../../../absent'}\nshared.workspace=true\n"
                         } else {
                             assert_eq!(path, "nested/Cargo.toml");
                             "[workspace]\n"
-                        }.into()))
+                        }).map(Some)
         },
         workspace_prefix: "nested/",
         workspace: WorkspaceInherit::from_root(&root),

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::git::testing::unopened;
-use crate::manifest::{DependencySource, InstallationDependencies, parse_package_manifest};
+use crate::manifest::{DependencySource, InstallationDependencies};
 
 #[test]
 fn only_tracked_manifests_are_workspace_members() {
@@ -20,16 +20,54 @@ fn only_tracked_manifests_are_workspace_members() {
 }
 
 #[test]
+fn projection_moves_the_acquired_listing_into_the_work_tree() {
+    let root = Path::new("workspace");
+    let git = unopened(root);
+    let tracked = TrackedMetadata {
+        git: &git,
+        workspace_root: root,
+        paths: vec!["Cargo.toml".to_owned()],
+        case: PathCase::Sensitive,
+    };
+    let allocation = tracked.paths.as_ptr();
+    let metadata = MetadataJson {
+        packages: Vec::new(),
+        workspace_members: Vec::new(),
+        workspace_root: root.to_string_lossy().into_owned(),
+        metadata: Value::Null,
+    };
+    let work_tree = work_tree_from_metadata_parsed_with(
+        &metadata,
+        tracked,
+        |path| {
+            if path == root.join("Cargo.toml") {
+                Ok("[workspace]".to_owned())
+            } else {
+                Err(io::ErrorKind::NotFound.into())
+            }
+        },
+        |path| Ok(path.to_owned()),
+        |_| Ok(false),
+        parse_document,
+    )
+    .unwrap();
+    assert_eq!(work_tree.tracked_paths, ["Cargo.toml"]);
+    assert_eq!(work_tree.tracked_paths.as_ptr(), allocation);
+}
+
+#[test]
 fn lockfile_relevance_uses_present_regular_binary_sources_not_examples() {
     let root = Path::new("workspace");
     let git = unopened(root);
-    let manifest = parse_package_manifest(
+    let document = parse_document(
+        Path::new("pkg/Cargo.toml"),
         "[package]\nname='pkg'\nversion='1.0.0'\n",
-        "pkg/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let manifest =
+        package_manifest_from_document(&document, "pkg/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     for path in [
         "pkg/src/main.rs",
         "pkg/examples/main.rs",
@@ -329,13 +367,15 @@ fn installation_acquisition_uses_tracked_spelling_and_distinguishes_missing_from
         documents: BTreeMap::new(),
         packages: BTreeMap::new(),
     };
-    let package = parse_package_manifest(
+    let document = parse_document(
+        Path::new("tool/Cargo.toml"),
         "[package]\nname='tool'\nversion='1.0.0'\n[dependencies]\nhelper={path='../helper'}\n",
-        "tool/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let package =
+        package_manifest_from_document(&document, "tool/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     for failure in [
         None,
         Some(io::ErrorKind::NotFound),

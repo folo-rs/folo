@@ -38,22 +38,6 @@ fn artifact_promotion_preserves_existing_files_and_discards_failed_writes() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "resolves filesystem paths with missing ancestors")]
-fn missing_parent_components_cannot_hide_an_input_alias() {
-    let directory = tempdir().unwrap();
-    let input = directory.path().join("report.json");
-    fs::write(&input, "evidence").unwrap();
-    let alias = directory
-        .path()
-        .join("missing")
-        .join("..")
-        .join("report.json");
-    assert!(same_path(&input, &alias).unwrap());
-    assert!(!same_path(&input, &directory.path().join("new").join("plan.json")).unwrap());
-    assert!(!directory.path().join("missing").exists());
-}
-
-#[test]
 #[cfg_attr(miri, ignore = "checks filesystem errors for a non-directory ancestor")]
 fn an_unusable_ancestor_is_an_error_not_a_different_path() {
     let directory = tempdir().unwrap();

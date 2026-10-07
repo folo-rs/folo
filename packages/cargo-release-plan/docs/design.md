@@ -329,29 +329,53 @@ Changed inputs require fresh preparation and assessment.
 
 ## Commands
 
-### Disposable observation cache
+### Stable inputs within a command
 
-Classification commands use a tool-owned cache by default under Cargo's effective
-target directory, in `cargo-release-plan/cache`. Cargo configuration and
-`CARGO_TARGET_DIR` determine that target directory. The location belongs to the
-selected original workspace and remains the same during prospective resolution
-and external compatibility checking.
+Callers and tools invoked for read-only work must leave assessed source,
+configuration and history unchanged during each command, except for the tool's
+explicit editing and dependency-resolution operations. Build output outside those
+inputs is permitted. Git object additions and index stat refreshes do not change
+semantic source or staged identities.
 
-`report`, `check`, `prepare`, `preview` and `check-compatibility` accept
-`--cache <directory>` to choose another location, or `--no-cache` to bypass cache
-reads and writes. These options conflict. Relative override paths are resolved
-from the initial invocation working directory. Cache locations must be separate
-from source inputs and workflow evidence, including Git administration, retained candidate repositories
-and reserved input locations whose files do not yet exist.
+Each independent command admits current inputs. Within a command, admitted
+observations may be reused until an explicit mutation. Preparation installs a
+resolved lockfile, preview edits and resolves each candidate, and application
+installs captured bytes; each operation acquires the resulting state before
+using it. Newly created or relocated workspaces are admitted at their actual
+location. Separate commands and intervening semantic assessment do not share a
+live-input admission.
 
-The cache is expendable acceleration, not evidence or workflow state. Removing
-only the cache leaves prepared evidence and resolved plans usable. A full `cargo clean`
-removes Cargo's entire target directory; evidence intended to survive that cleanup
-belongs outside the target directory.
-Cached observations never replace live source, candidate or history admission.
-Corrupt entries and cache I/O failures produce advisory diagnostics and fresh acquisition.
-Unavailable cache locations or incomplete cache-safety inventories disable storage.
-This does not relax the inputs required for classification or prepared evidence.
+Source-mutating commands on the same assessed workspace must run separately.
+Local input stability does not replace current registry and publication observations.
+
+Callers choose output destinations and own their placement relative to source, Git
+configuration, existing evidence and other data. Commands use those destinations without
+checking for input collisions. Writers manage only their documented artifact files and
+owned workspace directories. Captured-input and resolved-plan validation remains required
+when evidence is consumed.
+
+### Captured source inputs
+
+Preparation and preview capture declared inputs, Git-tracked files and the contents of
+source directories. These include conventional `src` directories and dedicated target or
+build-script directories below a package root, including those of path dependencies.
+A target located at the package root or outside it contributes its declared file, not a
+recursive capture of the package root or its ancestors.
+
+Supporting files outside the captured source directories must be Git-tracked.
+Adding them with `git add` is sufficient; a commit is not required. This requirement
+applies to modules and other build inputs such as included files. Source capture does
+not interpret Rust module declarations or run compilers to discover inputs.
+
+### Operation-local reuse
+
+Commands reuse admitted observations within their unchanged input intervals and share
+immutable historical observations within the operation. There is no optional persistent
+observation cache. Commands do not read or remove previously stored observation files.
+Ordinary Cargo/compiler caches and compatibility checker build-directory settings remain
+independent of release evidence.
+
+Evidence intended to survive a full `cargo clean` belongs outside Cargo's target directory.
 
 ### Standalone planning
 
@@ -478,20 +502,22 @@ the supported API compatibility checker. The operation records comparison inputs
 checker identity, findings and diagnostics; it does not replace the author's
 semantic impacts.
 
-Prepared execution explicitly selects a workspace and verifies its captured
-source, selected history, merge target and resolution. Fresh execution captures those inputs around
-its own report generation. A matching HEAD
-alone is insufficient for a dirty work tree. The tool verifies those inputs before
-and after the comparison, as it does for a retained preview. Artifact-only target
+Prepared execution explicitly selects a workspace and admits its captured
+source, selected history, merge target and resolution. Fresh execution acquires those
+inputs for its own report generation. A matching HEAD alone is insufficient for
+a dirty work tree. A retained preview is admitted at its retained location.
+Read-only comparison uses those same admitted observations. Artifact-only target
 selection does not by itself establish that the selected checkout matches a report.
+An assessed workspace with selected consumer contracts must have a lockfile accepted
+by Cargo's default metadata resolution without changes.
 The comparison versions and any anticipated-parent source are recorded with the
 result; an unavailable comparison is not silently replaced with a different one.
 
 A self-comparison canary checks that the installed checker can perform a comparison
 before its evidence is relied upon. Findings, a valid empty target set and an
 execution failure remain distinct outcomes. Missing or incomplete comparison
-evidence is never reported as compatibility. When checking a preview, the tool
-verifies that evidence collection left its captured source and resolution intact.
+evidence is never reported as compatibility. Compatibility tooling must preserve
+the assessed source and resolution throughout the comparison.
 The shared workflow uses the result to enforce supported API compatibility;
 the skill uses it as a floor while assessing the complete contract.
 

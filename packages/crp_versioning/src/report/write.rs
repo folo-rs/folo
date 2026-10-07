@@ -4,14 +4,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crp_diag::{Verbose, quote_path};
-use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::metadata::ReportedDep;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
 use crate::classify::{
-    AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus, SnapshotCache,
-    classify_with_cache,
+    AcquiredWorkspace, AnchorJson, ChangedItem, Classification, DiffStat, PackageClass,
+    PackageStatus, Snapshots, classify_acquired,
 };
 use crate::plan::SCHEMA_VERSION;
 use crate::report::output::{FileOutput, ReportOutput};
@@ -80,47 +79,27 @@ pub fn run_report_with_target(
     manifest_path: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
-    run_report_with_cache(
-        out_dir,
-        release_history,
-        merge_target,
-        manifest_path,
-        verbose,
-        Cache::resolve(manifest_path, &CacheOptions::Default, verbose)?,
-    )
-}
-
-#[cfg_attr(test, mutants::skip)] // Native acquisition and report publication.
-pub fn run_report_with_cache(
-    out_dir: &Path,
-    release_history: Option<&str>,
-    merge_target: Option<&str>,
-    manifest_path: &Path,
-    verbose: Verbose<'_>,
-    cache: Cache,
-) -> Result<String, AppError> {
-    cache.protect(out_dir)?;
     create_report(
         out_dir,
         || {
-            classify_with_cache(
+            let mut snapshots = Snapshots::default();
+            let acquired = AcquiredWorkspace::acquire(
                 manifest_path,
                 release_history,
                 merge_target,
                 verbose,
-                &mut SnapshotCache::new(cache),
-            )
+                &mut snapshots,
+            )?;
+            classify_acquired(acquired, verbose, &mut snapshots)
         },
         &mut FileOutput { directory: out_dir },
     )
 }
 
 // Preview already has a classification; this adapter supplies the real publication operations.
+/// Writes a report and its patches to the caller-selected output directory.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn write_report(
-    out_dir: &Path,
-    classification: &Classification,
-) -> Result<String, AppError> {
+pub fn write_report(out_dir: &Path, classification: &Classification) -> Result<String, AppError> {
     emit_report(
         out_dir,
         classification,

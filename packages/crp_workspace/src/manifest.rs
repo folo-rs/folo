@@ -497,23 +497,12 @@ pub fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, AppErro
         .map_err(|error| ParseTomlError::caused_by(path, error).into())
 }
 
-/// Reads a `[package]` manifest, resolving what it inherits from the root.
+/// Extracts package facts from an already parsed manifest document.
 ///
 /// `manifest_path` is repository-relative and `/`-separated, as Git reports it,
 /// so the parsed manifest is in one path space from the moment it exists rather
 /// than needing a caller to correct it afterwards.
-pub fn parse_package_manifest(
-    content: &str,
-    manifest_path: &str,
-    workspace: &WorkspaceInherit<'_>,
-) -> Result<Option<PackageManifest>, AppError> {
-    let path = Path::new(manifest_path);
-    let doc = parse_document(path, content)?;
-    package_manifest_from_document(&doc, manifest_path, workspace)
-}
-
-/// Extracts package facts from an already parsed manifest document.
-pub(crate) fn package_manifest_from_document(
+pub fn package_manifest_from_document(
     doc: &DocumentMut,
     manifest_path: &str,
     workspace: &WorkspaceInherit<'_>,
@@ -705,7 +694,7 @@ fn is_visible_target_name(name: &str) -> bool {
 ///
 /// Cargo rewrites both to a bare file name when it normalises a manifest for
 /// packaging, and packs the named file regardless of `include` and `exclude`.
-pub(crate) const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
+const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
 
 /// The `[package]` key naming the README.
 ///
@@ -729,7 +718,7 @@ pub const DEFAULT_README_FILES: &[&str] = &[PRIMARY_README, "README.txt", "READM
 /// element reports whether Cargo picks the README by probing the package
 /// directory, which it does only when the key is absent altogether: `readme =
 /// false` deliberately names no file.
-pub(crate) fn resource_paths(
+fn resource_paths(
     package: &dyn TableLike,
     workspace: &WorkspaceInherit<'_>,
 ) -> (Vec<String>, Vec<String>, bool) {
@@ -1262,6 +1251,14 @@ pub fn parse_workspace_members(
     case: PathCase,
 ) -> Result<WorkspaceMembers, AppError> {
     let doc = parse_document(path, content)?;
+    workspace_members_from_document(&doc, case)
+}
+
+/// Interprets member selection using the same root document as inheritance.
+pub fn workspace_members_from_document(
+    doc: &DocumentMut,
+    case: PathCase,
+) -> Result<WorkspaceMembers, AppError> {
     let Some(workspace) = doc.get("workspace").and_then(Item::as_table_like) else {
         return Ok(WorkspaceMembers::default());
     };
@@ -1533,6 +1530,16 @@ mod tests {
     use std::slice;
 
     use super::*;
+
+    // Keeps string-based fixtures concise while exercising the document interpreter.
+    fn parse_package_manifest(
+        content: &str,
+        manifest_path: &str,
+        workspace: &WorkspaceInherit<'_>,
+    ) -> Result<Option<PackageManifest>, AppError> {
+        let doc = parse_document(Path::new(manifest_path), content)?;
+        package_manifest_from_document(&doc, manifest_path, workspace)
+    }
 
     /// A requirement names a version only when it pins exactly that version.
     ///

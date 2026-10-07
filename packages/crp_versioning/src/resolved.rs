@@ -5,6 +5,7 @@
     reason = "The subject module owns captured state; child modules own path logic and test matrices."
 )]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -13,15 +14,17 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use crp_diag::Verbose;
+use crp_workspace::artifact_path;
 use crp_workspace::command::{hash_bytes, run_capture};
 use crp_workspace::git::GitRepo;
-use crp_workspace::manifest::PathCase;
-use crp_workspace::metadata::load_tracked_work_tree;
+use crp_workspace::manifest::{PathCase, parse_document};
 use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
+use toml_edit::DocumentMut;
 
 use self::paths::PathIdentity;
+use crate::classify::{AcquiredWorkspace, Snapshots};
 use crate::groups::Groups;
 use crate::history::AssessmentHistory;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
@@ -66,41 +69,73 @@ impl Inputs {
         release_history: Option<&str>,
         merge_target: Option<&str>,
     ) -> Result<Self, AppError> {
-        // Cargo preserves the supplied path spelling, including Windows short names.
-        // Normalize the entry point before discovering any paths that will be rebased.
-        let manifest = canonical(manifest)?;
-        let (work_tree, git) = load_tracked_work_tree(&manifest)?;
-        let root = canonical(git.root())?;
-        let manifest = relative(&root, &manifest)?;
-        let history = AssessmentHistory::resolve(
-            &git,
+        Self::capture_workspace(manifest, release_history, merge_target).map(|(inputs, _)| inputs)
+    }
+
+    fn capture_workspace(
+        manifest: &Path,
+        release_history: Option<&str>,
+        merge_target: Option<&str>,
+    ) -> Result<(Self, AcquiredWorkspace), AppError> {
+        Self::capture_with_snapshots(
+            manifest,
             release_history,
             merge_target,
             Verbose::new(false, &crp_diag::Discard),
-        )?;
+            &mut Snapshots::default(),
+        )
+    }
+
+    /// Captures inputs and retains their workspace observations for adjacent consumers.
+    ///
+    /// Assessed source, configuration and history must remain unchanged during capture
+    /// and while using the returned observation.
+    pub fn capture_with_snapshots(
+        manifest: &Path,
+        release_history: Option<&str>,
+        merge_target: Option<&str>,
+        verbose: Verbose<'_>,
+        cache: &mut Snapshots,
+    ) -> Result<(Self, AcquiredWorkspace), AppError> {
+        // Cargo preserves the supplied path spelling, including Windows short names.
+        // Normalize the entry point before discovering any paths that will be rebased.
+        let manifest = canonical(manifest)?;
+        let acquired =
+            AcquiredWorkspace::acquire(&manifest, release_history, merge_target, verbose, cache)?;
+        let work_tree = &acquired.work_tree;
+        let git = &acquired.git;
+        let root = canonical(git.root())?;
+        let manifest = relative(&root, &manifest)?;
+        let history = &acquired.history;
         let mut paths: BTreeSet<PathBuf> =
-            git.ls_files("")?.into_iter().map(PathBuf::from).collect();
-        let sources = SourceInputs::discover(
+            work_tree.tracked_paths.iter().map(PathBuf::from).collect();
+        let sources = SourceInputs::discover_with_documents(
             &root,
             &work_tree.workspace_root,
             &work_tree.member_manifests,
             |manifest, dependency| captured_dependency(&root, manifest, dependency),
+            |path| {
+                capture_document(path, &work_tree.manifests.documents, |path| {
+                    fs::read_to_string(path)
+                        .map_err(|error| ReadFileError::caused_by(path, error).into())
+                })
+            },
         )?;
-        capture_sources(&root, sources, &mut paths)?;
+        capture_sources(&root, &sources, &mut paths)?;
         let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
-        history.verify(&git)?;
-        Ok(Self {
+        let inputs = Self {
             root,
             manifest,
-            head: git.head()?,
-            release_history: history.release_history,
-            release_history_revision: history.release_history_revision,
-            merge_target: history.merge_target,
-            merge_target_revision: history.merge_target_revision,
+            head: acquired.head.clone(),
+            release_history: history.release_history.clone(),
+            release_history_revision: history.release_history_revision.clone(),
+            merge_target: history.merge_target.clone(),
+            merge_target_revision: history.merge_target_revision.clone(),
             index: run_capture("git", &["ls-files", "--stage", "-z"], git.root())?,
             paths,
             digest,
-        })
+        };
+        Ok((inputs, acquired))
     }
 
     #[must_use]
@@ -117,13 +152,35 @@ impl Inputs {
     // Connects captured-input acquisition to the unit-tested verification protocol.
     #[cfg_attr(test, mutants::skip)]
     pub fn verify_candidate(&self, manifest: &Path, final_digest: &str) -> Result<(), AppError> {
+        self.verify_history()?;
+        self.capture_candidate(
+            manifest,
+            final_digest,
+            Verbose::new(false, &crp_diag::Discard),
+            &mut Snapshots::default(),
+        )
+        .map(|_| ())
+    }
+
+    /// Checks candidate contents against frozen commits after original-source validation.
+    ///
+    /// The returned observations belong to this unchanged command interval; original refs
+    /// are checked by the caller. See docs/implementation.md, "Anticipated squash predecessors".
+    pub(crate) fn capture_candidate(
+        &self,
+        manifest: &Path,
+        final_digest: &str,
+        verbose: Verbose<'_>,
+        cache: &mut Snapshots,
+    ) -> Result<AcquiredWorkspace, AppError> {
         self.verify_candidate_with(
             manifest,
             final_digest,
-            Self::capture_with_target,
+            |manifest, history, target| {
+                Self::capture_with_snapshots(manifest, history, target, verbose, cache)
+            },
             |current, digest| self.compare_candidate(current, digest),
-        )?;
-        self.verify_history()
+        )
     }
 
     /// Rechecks the originally captured history refs without reacquiring workspace content.
@@ -158,21 +215,22 @@ impl Inputs {
         Ok(())
     }
 
-    fn verify_candidate_with(
+    fn verify_candidate_with<T>(
         &self,
         manifest: &Path,
         final_digest: &str,
-        capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<Self, AppError>,
+        capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<(Self, T), AppError>,
         compare: impl FnOnce(&Self, &str) -> Result<(), AppError>,
-    ) -> Result<(), AppError> {
+    ) -> Result<T, AppError> {
         self.validate_history_fields()?;
-        let current = capture(
+        let (current, acquired) = capture(
             manifest,
             Some(&self.release_history),
             self.merge_target.as_deref(),
         )
         .map_err(StaleInputs::caused_by)?;
-        compare(&current, final_digest)
+        compare(&current, final_digest)?;
+        Ok(acquired)
     }
 
     // Native path-identity and fingerprint acquisition; the comparison protocol has pure tests.
@@ -216,20 +274,48 @@ impl Inputs {
         self.verify_with(manifest, final_digest, Self::capture_with_target)
     }
 
+    /// Admits current captured inputs and retains the same acquired workspace.
+    ///
+    /// The returned observation belongs only to the current unchanged command interval.
+    #[cfg_attr(test, mutants::skip)] // Native capture; verification policy remains in verify_observed.
+    pub fn verify_with_snapshots(
+        &self,
+        manifest: &Path,
+        final_digest: Option<&str>,
+        verbose: Verbose<'_>,
+        cache: &mut Snapshots,
+    ) -> Result<(bool, AcquiredWorkspace), AppError> {
+        self.verify_observed(manifest, final_digest, |manifest, history, target| {
+            Self::capture_with_snapshots(manifest, history, target, verbose, cache)
+        })
+    }
+
     fn verify_with(
         &self,
         manifest: &Path,
         final_digest: Option<&str>,
         capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<Self, AppError>,
     ) -> Result<bool, AppError> {
+        self.verify_observed(manifest, final_digest, |manifest, history, target| {
+            capture(manifest, history, target).map(|inputs| (inputs, ()))
+        })
+        .map(|(applied, ())| applied)
+    }
+
+    fn verify_observed<T>(
+        &self,
+        manifest: &Path,
+        final_digest: Option<&str>,
+        capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<(Self, T), AppError>,
+    ) -> Result<(bool, T), AppError> {
         self.validate_history_fields()?;
-        let current = capture(
+        let (current, observations) = capture(
             manifest,
             Some(&self.release_history_revision),
             self.merge_target_revision.as_deref(),
         )
         .map_err(StaleInputs::caused_by)?;
-        self.compare(&current, final_digest)
+        Ok((self.compare(&current, final_digest)?, observations))
     }
 
     pub fn compare(&self, current: &Self, final_digest: Option<&str>) -> Result<bool, AppError> {
@@ -313,7 +399,7 @@ pub fn capture_path_dependencies<'a>(
     let sources = SourceInputs::dependencies(manifests, |manifest, dependency| {
         captured_dependency(root, manifest, dependency)
     })?;
-    capture_sources(root, sources, paths)
+    capture_sources(root, &sources, paths)
 }
 
 // Native dependency identity belongs to the original repository before prospective relocation.
@@ -346,18 +432,57 @@ fn captured_dependency_with(
     Ok(directory)
 }
 
+fn capture_document<'a>(
+    path: &Path,
+    documents: &'a BTreeMap<PathBuf, DocumentMut>,
+    read: impl FnOnce(&Path) -> Result<String, AppError>,
+) -> Result<Cow<'a, DocumentMut>, AppError> {
+    match documents.get(path) {
+        Some(document) => Ok(Cow::Borrowed(document)),
+        None => parse_document(path, &read(path)?).map(Cow::Owned),
+    }
+}
+
 // Source directory contents are acquired by collect_sources; discovery also reserves absent files.
 #[cfg_attr(test, mutants::skip)]
 fn capture_sources(
     root: &Path,
-    sources: SourceInputs,
+    sources: &SourceInputs,
     paths: &mut BTreeSet<PathBuf>,
 ) -> Result<(), AppError> {
-    for path in sources.files {
-        paths.insert(relative(root, &path)?);
+    for path in &sources.files {
+        if path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            // Explicit targets can name a sibling directory. Resolve the parent for
+            // relocation, but keep the file entry so fingerprinting still rejects links.
+            let parent = path.parent().expect("a source file has a parent");
+            let name = path
+                .file_name()
+                .ok_or_else(|| UnsupportedInput::new(path))?;
+            let resolved = artifact_path::resolve_path(parent)?.join(name);
+            #[cfg(windows)]
+            let resolved = ordinary_windows_path(&resolved);
+            paths.insert(relative(root, &resolved)?);
+        } else {
+            paths.insert(relative(root, path)?);
+        }
     }
-    for directory in sources.source_directories {
-        collect_sources(root, &directory, paths)?;
+    for directory in &sources.source_directories {
+        if directory
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            // Dedicated target directories can retain parent components in their declared
+            // spelling. Fingerprints and prospective copies require repository-relative paths.
+            let directory = artifact_path::resolve_path(directory)?;
+            #[cfg(windows)]
+            let directory = ordinary_windows_path(&directory);
+            collect_sources(root, &directory, paths)?;
+        } else {
+            collect_sources(root, directory, paths)?;
+        }
     }
     Ok(())
 }
@@ -376,13 +501,41 @@ impl ResolvedState {
     // Native identity/captured-input acquisition; validate_candidate_location owns isolation policy.
     #[cfg_attr(test, mutants::skip)]
     pub fn verify_candidate(&self, manifest: &Path) -> Result<(), AppError> {
+        let manifest = self.candidate_manifest(manifest)?;
+        self.inputs.verify_history()?;
+        self.inputs
+            .capture_candidate(
+                &manifest,
+                &self.final_digest,
+                Verbose::new(false, &crp_diag::Discard),
+                &mut Snapshots::default(),
+            )
+            .map(|_| ())
+    }
+
+    /// Selects and checks the retained candidate after command-entry source validation.
+    ///
+    /// This shares the caller's original-ref checks, unlike independent `verify_candidate`.
+    /// See docs/implementation.md, "Anticipated squash predecessors".
+    pub(crate) fn acquire_candidate(
+        &self,
+        manifest: &Path,
+        verbose: Verbose<'_>,
+        cache: &mut Snapshots,
+    ) -> Result<AcquiredWorkspace, AppError> {
+        let manifest = self.candidate_manifest(manifest)?;
+        self.inputs
+            .capture_candidate(&manifest, &self.final_digest, verbose, cache)
+    }
+
+    fn candidate_manifest(&self, manifest: &Path) -> Result<PathBuf, AppError> {
         let manifest = canonical(manifest)?;
         Self::validate_candidate_location(
             &manifest,
             &canonical(&self.evidence_manifest_path)?,
             &canonical(&self.inputs.root.join(&self.inputs.manifest))?,
         )?;
-        self.inputs.verify_candidate(&manifest, &self.final_digest)
+        Ok(manifest)
     }
 
     fn validate_candidate_location(
@@ -468,7 +621,11 @@ pub fn run_verify_preview(
             )
             .map(|_| ())
         },
-        |state| state.verify_candidate(manifest),
+        |state| {
+            state
+                .acquire_candidate(manifest, verbose, &mut Snapshots::default())
+                .map(|_| ())
+        },
     )
 }
 
@@ -489,17 +646,56 @@ pub(crate) fn apply_resolved(
     dry_run: bool,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
+    let (already_applied, acquired) =
+        validate_application(plan, manifest, verbose, &mut Snapshots::default())?;
+    let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
+    drop(acquired);
+    if already_applied {
+        return Ok("Resolved state is already applied; no files changed.".to_owned());
+    }
+    if dry_run {
+        return Ok(format!(
+            "Dry run: would install {} captured files; no Cargo resolution is performed.",
+            state.files.len()
+        ));
+    }
+    for file in &state.files {
+        let path = state.inputs.root().join(&file.path);
+        fs::write(&path, &file.contents)
+            .map_err(|error| WriteFileError::caused_by(&path, error))?;
+    }
+    state.inputs.verify(manifest, Some(&state.final_digest))?;
+    Ok(format!(
+        "Installed {} captured files without Cargo resolution.",
+        state.files.len()
+    ))
+}
+
+/// Validates live source and plan artifacts without installing files.
+///
+/// Returns whether the final state is already installed and the workspace observations
+/// for the current unchanged interval. Drop those observations before writing.
+/// See docs/implementation.md, "Shared operation and tests".
+pub(crate) fn validate_application(
+    plan: &PlanFile,
+    manifest: &Path,
+    verbose: Verbose<'_>,
+    cache: &mut Snapshots,
+) -> Result<(bool, AcquiredWorkspace), AppError> {
     let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
     if plan.schema_version != SCHEMA_VERSION || plan.stage() != PlanStage::Expanded {
         return Err(ResolutionRequired::new().into());
     }
     plan.validate_history(&state.inputs)?;
     let manifest = canonical(manifest)?;
-    let already_applied = state.inputs.verify(&manifest, Some(&state.final_digest))?;
-    let (work_tree, _) = load_tracked_work_tree(&manifest)?;
+    let (already_applied, acquired) =
+        state
+            .inputs
+            .verify_with_snapshots(&manifest, Some(&state.final_digest), verbose, cache)?;
+    let work_tree = &acquired.work_tree;
     let resolved = resolve_plan(
         plan,
-        &Groups::from_workspace(&work_tree),
+        &Groups::from_workspace(work_tree),
         &work_tree.target_versions(),
         verbose,
     )?;
@@ -516,25 +712,7 @@ pub(crate) fn apply_resolved(
         .map(|path| relative(state.inputs.root(), path))
         .collect::<Result<_, _>>()?;
     state.validate_artifacts(&versions, &allowed)?;
-    if already_applied {
-        return Ok("Resolved state is already applied; no files changed.".to_owned());
-    }
-    if dry_run {
-        return Ok(format!(
-            "Dry run: would install {} captured files; no Cargo resolution is performed.",
-            state.files.len()
-        ));
-    }
-    for file in &state.files {
-        let path = state.inputs.root().join(&file.path);
-        fs::write(&path, &file.contents)
-            .map_err(|error| WriteFileError::caused_by(&path, error))?;
-    }
-    state.inputs.verify(&manifest, Some(&state.final_digest))?;
-    Ok(format!(
-        "Installed {} captured files without Cargo resolution.",
-        state.files.len()
-    ))
+    Ok((already_applied, acquired))
 }
 
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {

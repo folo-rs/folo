@@ -4,15 +4,65 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
+use std::path::Path;
 
 use crp_diag::{Discard, Verbose};
 use crp_versioning::classify::*;
 use crp_workspace::git::{GitRepo, WorkTreeModes};
-use crp_workspace::manifest::{PathCase, WorkspaceInherit, parse_package_manifest};
+use crp_workspace::manifest::{
+    PathCase, WorkspaceInherit, package_manifest_from_document, parse_document,
+};
 use crp_workspace::metadata::WorkPackage;
 use crp_workspace::packaging::PackagingRules;
 
 use crate::git_fixture::Repository;
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "classifies Git replacement changes across fresh acquisitions"
+)]
+fn reused_snapshots_follow_changed_git_interpretation() {
+    let fixture = Repository::new();
+    fixture.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['member']\nresolver='3'\n",
+    );
+    let package = "[package]\nname='member'\nversion='1.0.0'\nedition='2024'\n";
+    fixture.write("member/Cargo.toml", package.as_bytes());
+    fixture.write("member/src/lib.rs", b"pub fn value() {}\n");
+    fixture.command(&["add", "-A"]);
+    fixture.command(&["commit", "--quiet", "-m", "root"]);
+    let git = fixture.repo();
+    let root = git.rev_parse("HEAD").unwrap();
+    fixture.write(
+        "member/Cargo.toml",
+        package.replace("1.0.0", "1.1.0").as_bytes(),
+    );
+    fixture.command(&["add", "-A"]);
+    fixture.command(&["commit", "--quiet", "-m", "release"]);
+    let head = git.rev_parse("HEAD").unwrap();
+    let manifest = fixture.path().join("Cargo.toml");
+    let mut snapshots = Snapshots::default();
+    let mut observe = || {
+        classify_with_snapshots(
+            &manifest,
+            Some(&head),
+            None,
+            Verbose::new(false, &Discard),
+            &mut snapshots,
+        )
+        .unwrap()
+        .packages
+        .remove(0)
+        .status()
+    };
+    assert_eq!(observe(), PackageStatus::Unchanged);
+    fixture.command(&["replace", &head, &root]);
+    assert_eq!(observe(), PackageStatus::PendingRelease);
+    fixture.command(&["replace", "-d", &head]);
+    assert_eq!(observe(), PackageStatus::Unchanged);
+}
 
 #[test]
 #[cfg_attr(
@@ -141,13 +191,15 @@ fn work_tree_selection_and_untracked_advice_share_packaging_boundaries() {
         ("NOTICE".to_string(), "shared/NOTICE".to_string()),
         ("MISSING".to_string(), "shared/MISSING".to_string()),
     ]);
-    let manifest = parse_package_manifest(
+    let document = parse_document(
+        Path::new("pkg/Cargo.toml"),
         "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\ninclude = [\"src/\"]\n",
-        "pkg/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let manifest =
+        package_manifest_from_document(&document, "pkg/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     let package = WorkPackage {
         manifest,
         manifest_path: fixture.path().join("pkg/Cargo.toml"),

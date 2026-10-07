@@ -3,9 +3,60 @@
 use std::fs;
 
 use cargo_release_plan::{RunInput, run};
+use crp_versioning::plan::SCHEMA_VERSION;
+use serde_json::json;
 use tempfile::tempdir;
 
-use crate::harness::seeded_package;
+use crate::harness::{prepare, seeded_package};
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "prepares evidence in a caller-selected source directory"
+)]
+fn preparation_uses_the_caller_selected_output() {
+    let fixture = seeded_package();
+    let output = fixture.path().join("packages/demo/src/evidence");
+    run(&RunInput::Prepare {
+        output: output.clone(),
+        release_history: Some("HEAD".to_owned()),
+        merge_target: None,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    assert!(output.join("prepared.json").is_file());
+    assert!(output.join("report.json").is_file());
+    assert!(!output.join(".prospective").exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "previews evidence in a caller-selected source directory"
+)]
+fn preview_uses_the_caller_selected_output() {
+    let fixture = seeded_package();
+    let prepared = prepare(&fixture);
+    let proposal = fixture.path().join("proposal.json");
+    fs::write(
+        &proposal,
+        json!({"schema_version": SCHEMA_VERSION, "increments": []}).to_string(),
+    )
+    .unwrap();
+    let output = fixture.path().join("packages/demo/src/evidence");
+    run(&RunInput::Preview {
+        plan: proposal,
+        prepared,
+        output: output.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    assert!(output.join("plan.json").is_file());
+    assert!(output.join("workspace/Cargo.toml").is_file());
+    assert!(!output.join(".prospective").exists());
+}
 
 #[test]
 #[cfg_attr(
@@ -29,31 +80,17 @@ fn preparation_preserves_an_occupied_prospective_directory() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "uses owned preview artifact files")]
-fn preview_output_cannot_destroy_an_input_document() {
-    let directory = tempdir().unwrap();
-    let plan = directory.path().join("plan.json");
-    let before = r#"{"schema_version":6,"increments":[]}"#;
-    fs::write(&plan, before).unwrap();
-    // Collision checks precede reads, so neither a repository nor prepared evidence is needed.
-    run(&RunInput::Preview {
-        plan: plan.clone(),
-        prepared: directory.path().join("absent-prepared.json"),
-        output: directory.path().to_owned(),
-        manifest_path: directory.path().join("absent-Cargo.toml"),
-        verbose: false,
-    })
-    .unwrap_err();
-    assert_eq!(fs::read_to_string(plan).unwrap(), before);
-}
-
-#[test]
 #[cfg_attr(
     miri,
-    ignore = "invalidates a real preview marker before source acquisition"
+    ignore = "preserves a real preview marker when source admission fails"
 )]
-fn unavailable_source_cannot_preserve_a_previous_preview_completion() {
+fn unavailable_source_cannot_authorize_removing_a_previous_output() {
     let fixture = seeded_package();
+    let prepared = prepare(&fixture);
+    fixture.write(
+        "proposal.json",
+        &json!({"schema_version": SCHEMA_VERSION, "increments": []}).to_string(),
+    );
     let evidence = tempdir().unwrap();
     for contents in [Some("["), None] {
         if let Some(contents) = contents {
@@ -63,15 +100,84 @@ fn unavailable_source_cannot_preserve_a_previous_preview_completion() {
         }
         let marker = evidence.path().join("plan.json");
         fs::write(&marker, "previous completion").unwrap();
-        run(&RunInput::Preview {
+        let error = run(&RunInput::Preview {
             plan: fixture.path().join("proposal.json"),
-            prepared: fixture.path().join("prepared.json"),
+            prepared: prepared.clone(),
             output: evidence.path().to_owned(),
             manifest_path: fixture.manifest(),
             verbose: false,
         })
         .unwrap_err();
-        assert!(!marker.exists());
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("stale"));
+        assert!(diagnostic.contains("Cargo.toml"));
+        assert_eq!(fs::read_to_string(marker).unwrap(), "previous completion");
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "prepares, previews and applies retained evidence in excluded directories"
+)]
+fn excluded_outputs_retain_applicable_evidence() {
+    for directory in ["target/release-evidence", "packages/demo/evidence"] {
+        let fixture = seeded_package();
+        fixture.write(
+            "packages/demo/Cargo.toml",
+            "[package]\nname='demo'\nversion='0.1.0'\nedition='2021'\n\
+             exclude=['evidence/**']\n[package.metadata.release-plan]\nprivate-api=true\n",
+        );
+        fixture.commit("excluded output policy");
+        let output = fixture.path().join(directory);
+        let prepared = output.join("prepared");
+        run(&RunInput::Prepare {
+            output: prepared.clone(),
+            release_history: Some("HEAD".to_owned()),
+            merge_target: None,
+            manifest_path: fixture.manifest(),
+            verbose: false,
+        })
+        .unwrap();
+        let proposal = fixture.path().join("proposal.json");
+        fs::write(
+            &proposal,
+            json!({
+                "schema_version": SCHEMA_VERSION,
+                "increments": [{"name": "demo", "bump": "patch"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let preview = output.join("preview");
+        run(&RunInput::Preview {
+            plan: proposal,
+            prepared: prepared.join("prepared.json"),
+            output: preview.clone(),
+            manifest_path: fixture.manifest(),
+            verbose: false,
+        })
+        .unwrap();
+        run(&RunInput::CheckCompatibility {
+            manifest_path: fixture.manifest(),
+            prepared: None,
+            plan: Some(preview.join("plan.json")),
+            release_history: None,
+            merge_target: None,
+            output: output.join("compatibility"),
+            deny_findings: true,
+            verbose: false,
+        })
+        .unwrap();
+        run(&RunInput::Apply {
+            plan: preview.join("plan.json"),
+            dry_run: false,
+            manifest_path: fixture.manifest(),
+            verbose: false,
+        })
+        .unwrap();
+        assert!(fixture.read("packages/demo/Cargo.toml").contains("0.1.1"));
+        assert!(preview.join("workspace/Cargo.toml").is_file());
     }
 }
 

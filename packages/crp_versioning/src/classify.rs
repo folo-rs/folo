@@ -8,12 +8,12 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
 use std::{fs, io, mem, str};
 
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
-use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::git::{
     CommitHeaders, GitObjectContext, GitRepo, HistoricalTree, TreeEntry, WorkTreeModes,
     decode_file, join_git_rel, tree_mode,
@@ -21,14 +21,18 @@ use crp_workspace::git::{
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
 };
+#[cfg(test)]
+use crp_workspace::manifest::parse_workspace_members;
 use crp_workspace::manifest::{
     DEFAULT_README_FILES, PackageIdentity, PackageManifest, PathCase, WorkspaceInherit,
     WorkspaceMembers, cargo_config_paths, collect_registry_indices, installation_error,
-    installation_patches, is_workspace_excluded, is_workspace_member, parse_document,
-    parse_package_manifest, parse_workspace_members, path_package_identity, to_git_separators,
+    installation_patches, is_workspace_excluded, is_workspace_member,
+    package_manifest_from_document, parse_document, path_package_identity, to_git_separators,
+    workspace_members_from_document,
 };
+use crp_workspace::manifest_document::ManifestDocuments;
 use crp_workspace::metadata::{
-    ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree,
+    ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree_with_documents,
 };
 use crp_workspace::packaging::{PackagingRules, relativize};
 use ohno::AppError;
@@ -83,6 +87,45 @@ pub struct Classification {
     /// Carried so a later packaging probe resolves paths exactly as
     /// classification did.
     pub case: PathCase,
+}
+
+/// Workspace and history observations belonging to one unchanged input interval.
+///
+/// Assessed source, configuration and history must remain unchanged until the
+/// observation is consumed. Acquire another observation after edits, resolution
+/// or relocation, and on every independent command.
+#[derive(Debug)]
+pub struct AcquiredWorkspace {
+    pub(crate) work_tree: WorkTree,
+    pub(crate) git: GitRepo,
+    pub(crate) history: AssessmentHistory,
+    pub(crate) head: String,
+}
+
+// The observation owns complete values, not guarded caller data. Deferred manifest errors
+// are immutable diagnostic trait objects; unwinding cannot expose a partial acquisition.
+impl UnwindSafe for AcquiredWorkspace {}
+impl RefUnwindSafe for AcquiredWorkspace {}
+
+impl AcquiredWorkspace {
+    pub(crate) fn acquire(
+        manifest_path: &Path,
+        release_history: Option<&str>,
+        merge_target: Option<&str>,
+        verbose: Verbose<'_>,
+        cache: &mut Snapshots,
+    ) -> Result<Self, AppError> {
+        let (work_tree, git) =
+            load_tracked_work_tree_with_documents(manifest_path, &mut cache.documents)?;
+        let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
+        let head = git.head()?;
+        Ok(Self {
+            work_tree,
+            git,
+            history,
+            head,
+        })
+    }
 }
 
 /// Per-package classification: its status and the evidence behind it.
@@ -428,36 +471,53 @@ pub fn classify_with_target(
     merge_target: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<Classification, AppError> {
-    classify_with_cache(
+    classify_with_snapshots(
         manifest_path,
         release_history,
         merge_target,
         verbose,
-        &mut SnapshotCache::new(Cache::resolve(
-            manifest_path,
-            &CacheOptions::Default,
-            verbose,
-        )?),
+        &mut Snapshots::default(),
     )
 }
 
-/// Reacquires candidate observations while reusing only context-bound committed snapshots.
-pub fn classify_with_cache(
+/// Acquires current inputs and classifies them with operation-owned committed observations.
+///
+/// Assessed source, configuration and history must remain unchanged during the call.
+pub fn classify_with_snapshots(
     manifest_path: &Path,
     release_history: Option<&str>,
     merge_target: Option<&str>,
     verbose: Verbose<'_>,
-    cache: &mut SnapshotCache,
+    cache: &mut Snapshots,
 ) -> Result<Classification, AppError> {
-    let (mut work_tree, git) = load_tracked_work_tree(manifest_path)?;
-    let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
+    classify_acquired(
+        AcquiredWorkspace::acquire(manifest_path, release_history, merge_target, verbose, cache)?,
+        verbose,
+        cache,
+    )
+}
+
+/// Consumes observations admitted earlier in the same unchanged input interval.
+///
+/// Assessed source, configuration and history must remain unchanged from acquisition
+/// through this call.
+pub fn classify_acquired(
+    acquired: AcquiredWorkspace,
+    verbose: Verbose<'_>,
+    cache: &mut Snapshots,
+) -> Result<Classification, AppError> {
+    let AcquiredWorkspace {
+        mut work_tree,
+        git,
+        history,
+        head,
+    } = acquired;
     let release_history_revision = history.release_history_revision.clone();
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
         package.resources =
             resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
-    let head = git.head()?;
     let history_commit = &history.release_history;
     verbose.note(|| {
         format!(
@@ -476,10 +536,10 @@ pub fn classify_with_cache(
         PathCase::probe(&work_tree.workspace_root),
         work_tree.installation.registries.clone(),
     );
-    let history_snapshot = cache.snapshot(&git, history_commit, verbose)?;
+    let history_snapshot = cache.snapshot(&git, history_commit)?;
     let target_snapshot = history
         .effective_target()
-        .map(|target| cache.snapshot(&git, target, verbose))
+        .map(|target| cache.snapshot(&git, target))
         .transpose()?;
     let projected = target_snapshot.as_ref().map(|snapshot| {
         let target = history
@@ -493,12 +553,7 @@ pub fn classify_with_cache(
         });
         (target, snapshot.as_ref())
     });
-    let work_root_path = work_tree.workspace_root.join("Cargo.toml");
-    let work_root_doc = parse_document(
-        &work_root_path,
-        &fs::read_to_string(&work_root_path)
-            .map_err(|error| ReadFileError::caused_by(&work_root_path, error))?,
-    )?;
+    let work_root_doc = work_tree.manifests.root(&work_tree.workspace_root);
 
     let commits = git.first_parent_manifest_commits(history_commit, cache.case())?;
     let mut classes = Vec::new();
@@ -516,7 +571,7 @@ pub fn classify_with_cache(
         })
         .map(|target| target.name.clone())
         .collect();
-    let mut lockfiles = LockfileCache {
+    let mut lockfiles = Lockfiles {
         case: cache.case(),
         work: None,
         anchors: mem::take(&mut cache.lockfiles),
@@ -532,7 +587,7 @@ pub fn classify_with_cache(
             &commits,
             &history_snapshot,
             projected,
-            &work_root_doc,
+            work_root_doc,
             cache,
             &mut lockfiles,
             verbose,
@@ -561,7 +616,6 @@ pub fn classify_with_cache(
         });
     }
 
-    history.verify(&git)?;
     Ok(Classification {
         head,
         release_history_revision,
@@ -590,8 +644,8 @@ fn classify_one(
     history_snapshot: &CommitSnapshot,
     projected: Option<(&str, &CommitSnapshot)>,
     work_root_doc: &DocumentMut,
-    cache: &mut SnapshotCache,
-    lockfiles: &mut LockfileCache,
+    cache: &mut Snapshots,
+    lockfiles: &mut Lockfiles,
     verbose: Verbose<'_>,
 ) -> Result<PackageClass, AppError> {
     let name = &package.manifest.name;
@@ -614,7 +668,7 @@ fn classify_one(
     let anchor = if let Some(anchor) = anticipated {
         anchor
     } else if history_snapshot.packages.contains_key(name) {
-        let timeline = build_timeline(git, name, commits, cache, verbose)?;
+        let timeline = build_timeline(git, name, commits, cache)?;
         resolve_anchor(name, &timeline)?
     } else {
         // A package the baseline does not publish has no released version to
@@ -667,7 +721,7 @@ fn classify_one(
         package.manifest.version
     ));
 
-    let anchor_snapshot = cache.snapshot(git, &anchor.commit, verbose)?;
+    let anchor_snapshot = cache.snapshot(git, &anchor.commit)?;
     let anchor_pkg = anchor_snapshot
         .packages
         .get(name)
@@ -773,22 +827,20 @@ fn build_timeline(
     git: &GitRepo,
     name: &str,
     commits: &[String],
-    cache: &mut SnapshotCache,
-    verbose: Verbose<'_>,
+    cache: &mut Snapshots,
 ) -> Result<Vec<TimelineEntry>, AppError> {
     // Header memory has a separate lifetime from live boundary verdicts. Split ownership
     // for the callbacks and restore it even when snapshot or history acquisition fails.
     let mut headers = mem::take(&mut cache.headers);
-    let storage = cache.storage.clone();
     let objects = cache.objects.clone();
     let result = build_timeline_with(
         commits,
         |commit| {
-            let snapshot = cache.snapshot(git, commit, verbose)?;
+            let snapshot = cache.snapshot(git, commit)?;
             Ok(snapshot_presence(&snapshot, name))
         },
         |commit| {
-            let parent = headers.has_parent(git, commit, &objects, &storage, verbose)?;
+            let parent = headers.has_parent(git, commit, &objects)?;
             git.parent_boundary_with_header(commit, parent)
         },
     );
@@ -1621,14 +1673,14 @@ struct CommitSnapshot {
 ///
 /// Ref: docs/implementation.md, "Shared operation and tests".
 #[derive(Debug, Default)]
-pub struct SnapshotCache {
+pub struct Snapshots {
     inner: HashMap<String, Rc<CommitSnapshot>>,
-    // Only committed lockfiles survive a pass; candidate lockfiles must be reparsed.
+    // Only committed identities survive a pass; candidate bytes must be reacquired.
     lockfiles: HashMap<String, Lockfile>,
     context: Option<SnapshotContext>,
-    storage: Cache,
     objects: GitObjectContext,
     headers: CommitHeaders,
+    documents: ManifestDocuments,
 }
 
 /// Repository and interpretation inputs under which a commit snapshot is reusable.
@@ -1641,19 +1693,13 @@ struct SnapshotContext {
     registries: BTreeMap<String, String>,
 }
 
-impl SnapshotCache {
-    #[must_use]
-    pub fn new(storage: Cache) -> Self {
-        Self {
-            storage,
-            ..Self::default()
-        }
-    }
-
+impl Snapshots {
     fn clear(&mut self) {
         self.inner.clear();
         self.lockfiles.clear();
         self.headers.clear();
+        // Parsed syntax is keyed by complete content, independent of repository interpretation.
+        // Keep it when rebinding so the freshly acquired work tree can share it with history.
     }
 
     fn bind_objects(&mut self, objects: GitObjectContext) {
@@ -1693,20 +1739,16 @@ impl SnapshotCache {
 
     // Native acquisition only on a cache miss; snapshot_with owns reuse and error handling.
     #[cfg_attr(test, mutants::skip)]
-    fn snapshot(
-        &mut self,
-        git: &GitRepo,
-        commit: &str,
-        verbose: Verbose<'_>,
-    ) -> Result<Rc<CommitSnapshot>, AppError> {
-        self.snapshot_with(commit, |context, storage, objects| {
-            let tree = HistoricalTree::load(git, commit, objects, storage, verbose)?;
+    fn snapshot(&mut self, git: &GitRepo, commit: &str) -> Result<Rc<CommitSnapshot>, AppError> {
+        self.snapshot_with(commit, |context, objects, documents| {
+            let tree = HistoricalTree::load(git, commit, objects)?;
             load_snapshot(
                 git,
                 commit,
                 context.case,
                 &context.registries,
                 &Rc::new(tree),
+                documents,
             )
         })
     }
@@ -1716,8 +1758,8 @@ impl SnapshotCache {
         commit: &str,
         load: impl FnOnce(
             &SnapshotContext,
-            &Cache,
             &GitObjectContext,
+            &mut ManifestDocuments,
         ) -> Result<CommitSnapshot, AppError>,
     ) -> Result<Rc<CommitSnapshot>, AppError> {
         if let Some(existing) = self.inner.get(commit) {
@@ -1727,13 +1769,13 @@ impl SnapshotCache {
             .context
             .as_ref()
             .expect("classification binds its observation context before using snapshots");
-        let built = Rc::new(load(context, &self.storage, &self.objects)?);
+        let built = Rc::new(load(context, &self.objects, &mut self.documents)?);
         self.inner.insert(commit.to_string(), Rc::clone(&built));
         Ok(built)
     }
 }
 
-// Git acquisitions are native; load_snapshot_with reconstructs members from captured observations.
+// Git acquisitions are native; load_snapshot_documents reconstructs captured observations.
 #[cfg_attr(test, mutants::skip)]
 fn load_snapshot(
     git: &GitRepo,
@@ -1741,6 +1783,7 @@ fn load_snapshot(
     case: PathCase,
     registries: &BTreeMap<String, String>,
     tree: &Rc<HistoricalTree>,
+    documents: &mut ManifestDocuments,
 ) -> Result<CommitSnapshot, AppError> {
     let manifests: Vec<_> = tree
         .entries()
@@ -1757,15 +1800,27 @@ fn load_snapshot(
         .map(|entry| entry.path.as_str())
         .zip(blobs)
         .collect();
-    load_snapshot_with(git, case, registries, Rc::clone(tree), |path| {
-        match blobs.get(path) {
+    load_snapshot_documents(git, case, registries, Rc::clone(tree), |path| {
+        let content = match blobs.get(path) {
             // Decoding stays lazy: unrelated manifests need not be valid TOML or UTF-8.
             Some(bytes) => decode_file(Some(bytes.clone()), commit, path),
             None => git.show_file(commit, path),
-        }
+        }?;
+        content
+            .map(|content| {
+                if case.is_manifest(path) {
+                    documents.parse(Path::new(path), &content)
+                } else {
+                    // Cargo configuration can contain credentials; it is interpreted freshly.
+                    parse_document(Path::new(path), &content)
+                }
+            })
+            .transpose()
     })
 }
 
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn load_snapshot_with(
     git: &GitRepo,
     case: PathCase,
@@ -1773,19 +1828,31 @@ fn load_snapshot_with(
     tree: Rc<HistoricalTree>,
     mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
 ) -> Result<CommitSnapshot, AppError> {
+    load_snapshot_documents(git, case, registries, tree, |path| {
+        read(path)?
+            .map(|content| parse_document(Path::new(path), &content))
+            .transpose()
+    })
+}
+
+fn load_snapshot_documents(
+    git: &GitRepo,
+    case: PathCase,
+    registries: &BTreeMap<String, String>,
+    tree: Rc<HistoricalTree>,
+    mut read: impl FnMut(&str) -> Result<Option<DocumentMut>, AppError>,
+) -> Result<CommitSnapshot, AppError> {
     let tree_paths = tree.paths();
     let requested_root = root_manifest_rel(git);
     let root_rel = case.recorded_path(tree_paths, &requested_root);
-    // History before the workspace existed has no root manifest. An empty
-    // `[workspace]` reproduces that state exactly: no members, so every current
-    // package is absent from the snapshot and classified as newly created.
-    let root_content = match root_rel {
+    // History before the workspace existed has no root manifest. An empty document has no
+    // members or inheritance, so every current package is absent from that snapshot.
+    let root_doc = match root_rel {
         Some(path) => read(path)?,
         None => None,
     }
-    .unwrap_or_else(|| "[workspace]\n".to_string());
-    let root_doc = parse_document(Path::new(&requested_root), &root_content)?;
-    let members = parse_workspace_members(&root_content, Path::new(&requested_root), case)?;
+    .unwrap_or_default();
+    let members = workspace_members_from_document(&root_doc, case)?;
     // `members` globs are written relative to the workspace root, which need not be
     // the git root, while Git yields git-root-relative paths. Rebase before
     // matching, or a nested workspace would find no members and silently classify
@@ -1848,12 +1915,13 @@ fn load_snapshot_with(
         );
     }
     if packages.values().any(|package| package.has_lockfile_target) {
-        match historical_registries_with(git.prefix(), registries, tree_paths, case, &mut read) {
+        match historical_registries_documents(git.prefix(), registries, tree_paths, case, &mut read)
+        {
             Ok(registries) => installation.registries = registries,
             Err(error) => installation.registry_error = Some(installation_error(error)),
         }
         installation.patches = installation_patches(&root_doc);
-        resolve_historical_installation_paths_with(
+        resolve_historical_installation_documents(
             &mut installation,
             path_identities,
             git,
@@ -1871,13 +1939,14 @@ fn load_snapshot_with(
     })
 }
 
-pub fn resolve_historical_installation_paths_with(
+/// Resolves historical dependency identities from lazily acquired documents.
+pub fn resolve_historical_installation_documents(
     installation: &mut InstallationGraph,
     mut identities: BTreeMap<String, Option<PackageIdentity>>,
     git: &GitRepo,
     tree_paths: &[String],
     case: PathCase,
-    mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
+    mut read: impl FnMut(&str) -> Result<Option<DocumentMut>, AppError>,
 ) {
     let mut documents = BTreeMap::<String, Option<DocumentMut>>::new();
     installation.resolve_paths(|reference| {
@@ -1901,9 +1970,7 @@ pub fn resolve_historical_installation_paths_with(
             if let Some(document) = documents.get(path) {
                 return Ok(document.clone());
             }
-            let document = read(path)?
-                .map(|content| parse_document(Path::new(path), &content))
-                .transpose()?;
+            let document = read(path)?;
             documents.insert(path.clone(), document.clone());
             Ok(document)
         })?;
@@ -1916,12 +1983,12 @@ pub fn resolve_historical_installation_paths_with(
 ///
 /// Cargo loads ancestor configurations from outermost to innermost and prefers
 /// the extensionless filename when both names exist in the same directory.
-pub fn historical_registries_with(
+pub fn historical_registries_documents(
     prefix: &str,
     ambient: &BTreeMap<String, String>,
     tree_paths: &[String],
     case: PathCase,
-    mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
+    mut read: impl FnMut(&str) -> Result<Option<DocumentMut>, AppError>,
 ) -> Result<BTreeMap<String, String>, AppError> {
     let mut registries = ambient.clone();
     for candidates in cargo_config_paths(prefix) {
@@ -1929,10 +1996,9 @@ pub fn historical_registries_with(
             let Some(path) = case.recorded_path(tree_paths, &path) else {
                 continue;
             };
-            let Some(content) = read(path)? else {
+            let Some(doc) = read(path)? else {
                 continue;
             };
-            let doc = parse_document(Path::new(&path), &content)?;
             collect_registry_indices(&doc, &mut registries);
             break;
         }
@@ -1995,7 +2061,7 @@ pub struct GitManifestSource<'a, F> {
     pub case: PathCase,
 }
 
-impl<F: FnMut(&str) -> Result<Option<String>, AppError>> ManifestSource
+impl<F: FnMut(&str) -> Result<Option<DocumentMut>, AppError>> ManifestSource
     for GitManifestSource<'_, F>
 {
     fn candidate_dirs(&self) -> Vec<String> {
@@ -2014,7 +2080,9 @@ impl<F: FnMut(&str) -> Result<Option<String>, AppError>> ManifestSource
         if !self.parsed.contains_key(&dir) {
             let parsed = match self.paths.get(&dir) {
                 Some(path) => match (self.read)(path)? {
-                    Some(content) => parse_package_manifest(&content, path, &self.workspace)?,
+                    Some(document) => {
+                        package_manifest_from_document(&document, path, &self.workspace)?
+                    }
                     None => None,
                 },
                 None => None,
@@ -2118,13 +2186,13 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
 /// reparsing workspace-sized lockfiles for every binary package.
 /// Ref: packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
 #[derive(Debug)]
-pub struct LockfileCache {
+pub struct Lockfiles {
     pub work: Option<Lockfile>,
     pub anchors: HashMap<String, Lockfile>,
     pub case: PathCase,
 }
 
-impl LockfileCache {
+impl Lockfiles {
     // Acquires tracked bytes only on a cache miss; anchor_with tests cache identity and parsing.
     #[cfg_attr(test, mutants::skip)]
     pub fn anchor<'a>(
@@ -2206,7 +2274,7 @@ impl LockfileCache {
     reason = "each endpoint supplies its target, lockfile and installation declarations"
 )]
 pub fn lockfile_closure_changes(
-    cache: &mut LockfileCache,
+    cache: &mut Lockfiles,
     git: &GitRepo,
     work_tree: &WorkTree,
     name: &str,
@@ -2412,10 +2480,12 @@ mod installation_tests;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::ptr;
 
     use static_assertions::assert_impl_all;
 
-    assert_impl_all!(SnapshotCache: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Snapshots: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(AcquiredWorkspace: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn absent_binary_closure_is_not_an_empty_successful_assessment() {
@@ -2441,7 +2511,7 @@ mod tests {
     #[test]
     fn snapshot_case_controls_path_identity() {
         for case in [PathCase::Sensitive, PathCase::Insensitive] {
-            let mut cache = SnapshotCache::default();
+            let mut cache = Snapshots::default();
             cache.bind(
                 &unopened(Path::new("repository")),
                 Path::new("workspace"),
@@ -2466,9 +2536,36 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_misses_borrow_the_owners_context_and_documents() {
+        let mut cache = Snapshots::default();
+        cache.bind(
+            &unopened(Path::new("repository")),
+            Path::new("workspace"),
+            PathCase::Sensitive,
+            BTreeMap::new(),
+        );
+        let context = ptr::from_ref(cache.context.as_ref().unwrap());
+        let objects = ptr::from_ref(&cache.objects);
+        let documents = ptr::from_ref(&cache.documents);
+        for commit in ["first", "second"] {
+            cache
+                .snapshot_with(
+                    commit,
+                    |actual_context, actual_objects, actual_documents| {
+                        assert!(ptr::eq(actual_context, context));
+                        assert!(ptr::eq(actual_objects, objects));
+                        assert!(ptr::eq(actual_documents, documents));
+                        Ok(empty_snapshot())
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
     fn snapshots_reuse_only_successful_observations_of_the_requested_commit() {
         let git = unopened(Path::new("repository"));
-        let mut cache = SnapshotCache::default();
+        let mut cache = Snapshots::default();
         cache.bind(
             &git,
             Path::new("workspace"),
@@ -2506,34 +2603,6 @@ mod tests {
     }
 
     #[test]
-    fn git_interpretation_changes_invalidate_every_retained_observation() {
-        let mut context = serde_json::to_value(GitObjectContext::default()).unwrap();
-        *context.get_mut("format").unwrap() = "sha1".into();
-        let context: GitObjectContext = serde_json::from_value(context).unwrap();
-        let mut cache = SnapshotCache::default();
-        cache
-            .inner
-            .insert("commit".into(), Rc::new(empty_snapshot()));
-        cache.lockfiles.insert(
-            "commit".into(),
-            Lockfile::parse("version = 4", "lock").unwrap(),
-        );
-        cache.headers.parent_with("commit", || Ok(false)).unwrap();
-        cache.bind_objects(context.clone());
-        assert_eq!(cache.objects, context);
-        assert!(cache.inner.is_empty());
-        assert!(cache.lockfiles.is_empty());
-        assert!(cache.headers.parent_with("commit", || Ok(true)).unwrap());
-
-        cache
-            .inner
-            .insert("commit".into(), Rc::new(empty_snapshot()));
-        cache.bind_objects(context);
-        assert_eq!(cache.inner.len(), 1);
-        assert!(cache.headers.parent_with("commit", || panic!()).unwrap());
-    }
-
-    #[test]
     fn every_snapshot_interpretation_input_invalidates_reuse() {
         let git = unopened(Path::new("repository"));
         let workspace = Path::new("workspace");
@@ -2564,7 +2633,7 @@ mod tests {
             (git.clone(), workspace, PathCase::Insensitive, registries),
             (git, workspace, PathCase::Sensitive, BTreeMap::new()),
         ] {
-            let mut cache = SnapshotCache::default();
+            let mut cache = Snapshots::default();
             cache.bind(
                 &unopened(Path::new("repository")),
                 Path::new("workspace"),
@@ -3413,10 +3482,14 @@ mod tests {
                 .iter()
                 .map(|(dir, content)| {
                     let path = format!("{dir}/Cargo.toml");
-                    let parsed =
-                        parse_package_manifest(content, &path, &WorkspaceInherit::default())
-                            .unwrap()
-                            .unwrap();
+                    let document = parse_document(Path::new(&path), content).unwrap();
+                    let parsed = package_manifest_from_document(
+                        &document,
+                        &path,
+                        &WorkspaceInherit::default(),
+                    )
+                    .unwrap()
+                    .unwrap();
                     ((*dir).to_string(), parsed)
                 })
                 .collect();

@@ -5,12 +5,9 @@ use std::env::VarError;
 use std::path::PathBuf;
 use std::{env, fs, io};
 
-use crp_diag::Verbose;
 use ohno::AppError;
-use serde::{Deserialize, Serialize};
 
 use crate::ReadFileError;
-use crate::cache::{Cache, CacheEntry};
 use crate::command::{run_capture, run_capture_bytes};
 use crate::git::{GitRepo, TreeEntry, path_text, strip_terminator};
 
@@ -55,30 +52,17 @@ impl HistoricalTree {
         &self.paths
     }
 
-    #[cfg_attr(test, mutants::skip)] // Native acquisition and storage; typed admission is pure.
-    pub fn load(
-        git: &GitRepo,
-        commit: &str,
-        context: &GitObjectContext,
-        cache: &Cache,
-        verbose: Verbose<'_>,
-    ) -> Result<Self, AppError> {
-        let key = context.key(commit)?;
-        let acquire = || Ok(TreeObservation(git.ls_tree(commit, &[])?));
-        let tree = if context.portable() {
-            cache.get(&key, verbose, acquire)?
-        } else {
-            acquire()?
-        };
-        Ok(Self::new(tree.0))
+    #[cfg_attr(test, mutants::skip)] // Native tree acquisition; shared lookup is tested in process.
+    pub fn load(git: &GitRepo, commit: &str, context: &GitObjectContext) -> Result<Self, AppError> {
+        context.validate_identity(commit)?;
+        Ok(Self::new(git.ls_tree(commit, &[])?))
     }
 }
 
 /// Fresh interpretation inputs binding invocation memory to Git's effective object view.
 ///
-/// Replacements and grafts can refer to unavailable objects. Their availability is not
-/// immutable, so those histories retain invocation reuse but bypass persistent observations.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+/// Replacements and grafts participate in identity; parent availability stays a fresh query.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GitObjectContext {
     format: String,
     replacements: String,
@@ -123,20 +107,8 @@ impl GitObjectContext {
         })
     }
 
-    fn portable(&self) -> bool {
-        self.replacements.is_empty() && self.grafts.is_empty()
-    }
-
-    fn key(&self, commit: &str) -> Result<ObjectKey, AppError> {
-        self.validate_identity(commit)?;
-        Ok(ObjectKey {
-            commit: commit.to_owned(),
-            context: self.clone(),
-        })
-    }
-
     fn validate_identity(&self, commit: &str) -> Result<(), AppError> {
-        // Full Git object names are the cache identity, never refs or revision expressions.
+        // Sharing immutable observations requires resolved objects, not moving ref expressions.
         let valid_length = match self.format.trim() {
             "sha1" => commit.len() == 40,
             "sha256" => commit.len() == 64,
@@ -164,13 +136,6 @@ fn replacement_namespace(value: Result<String, VarError>) -> Result<Option<Strin
 #[display("GIT_REPLACE_REF_BASE cannot be represented as UTF-8")]
 struct InvalidReplacementNamespace;
 
-/// Exact object identity plus the interpretation in which its facts were acquired.
-#[derive(Debug, Serialize)]
-pub struct ObjectKey {
-    commit: String,
-    context: GitObjectContext,
-}
-
 /// Retained parent-presence facts, separate from parent identities and availability.
 #[derive(Debug, Default)]
 pub struct CommitHeaders {
@@ -188,19 +153,9 @@ impl CommitHeaders {
         git: &GitRepo,
         commit: &str,
         context: &GitObjectContext,
-        cache: &Cache,
-        verbose: Verbose<'_>,
     ) -> Result<bool, AppError> {
         context.validate_identity(commit)?;
-        self.parent_with(commit, || {
-            let acquire = || git.commit_has_parent_header(commit).map(ParentObservation);
-            let parent = if context.portable() {
-                cache.get(&context.key(commit)?, verbose, acquire)?
-            } else {
-                acquire()?
-            };
-            Ok(parent.0)
-        })
+        self.parent_with(commit, || git.commit_has_parent_header(commit))
     }
 
     /// Shares a successful header observation from the caller's acquisition boundary.
@@ -218,28 +173,8 @@ impl CommitHeaders {
     }
 }
 
-/// Persisted raw tree records; derived indexes are reconstructed once per acquired snapshot.
-#[derive(Deserialize, Serialize)]
-struct TreeObservation(Vec<TreeEntry>);
-
-impl CacheEntry for TreeObservation {
-    const SUBJECT: &'static str = "git-trees";
-    const REVISION: u32 = 1;
-    type Key = ObjectKey;
-}
-
-/// Whether the immutable commit header contains a parent, not whether that parent is available.
-#[derive(Deserialize, Serialize)]
-struct ParentObservation(bool);
-
-impl CacheEntry for ParentObservation {
-    const SUBJECT: &'static str = "git-parent-headers";
-    const REVISION: u32 = 1;
-    type Key = ObjectKey;
-}
-
 #[ohno::error]
-#[display("immutable cache observations require a full resolved Git object identity: {commit}")]
+#[display("immutable observations require a full resolved Git object identity: {commit}")]
 struct UnresolvedObjectIdentity {
     commit: String,
 }
@@ -297,28 +232,23 @@ mod tests {
     }
 
     #[test]
-    fn interpretation_changes_change_identity_and_nonportable_views_bypass_disk() {
+    fn interpretation_changes_change_identity_and_only_full_object_names_are_admitted() {
         let context = GitObjectContext {
             format: "sha1".into(),
             ..GitObjectContext::default()
         };
         let commit = "a".repeat(40);
-        assert!(context.portable());
-        let key = serde_json::to_string(&context.key(&commit).unwrap()).unwrap();
-        assert_ne!(
-            key,
-            serde_json::to_string(&context.key(&"b".repeat(40)).unwrap()).unwrap()
-        );
+        context.validate_identity(&commit).unwrap();
         for invalid in ["HEAD", "main", "", "bad"] {
             assert!(
                 context
-                    .key(invalid)
+                    .validate_identity(invalid)
                     .unwrap_err()
                     .find_source::<UnresolvedObjectIdentity>()
                     .is_some()
             );
         }
-        context.key(&"z".repeat(40)).unwrap_err();
+        context.validate_identity(&"z".repeat(40)).unwrap_err();
         for changed in [
             GitObjectContext {
                 replacements: "replacement".into(),
@@ -337,22 +267,17 @@ mod tests {
                 ..context.clone()
             },
         ] {
-            assert_ne!(
-                key,
-                serde_json::to_string(&changed.key(&commit).unwrap()).unwrap()
-            );
-            assert_eq!(
-                changed.portable(),
-                changed.replacements.is_empty() && changed.grafts.is_empty()
-            );
+            assert_ne!(context, changed);
         }
         let sha256 = GitObjectContext {
             format: "sha256".into(),
             ..context
         };
-        sha256.key(&commit).unwrap_err();
-        sha256.key(&"a".repeat(64)).unwrap();
-        GitObjectContext::default().key(&commit).unwrap_err();
+        sha256.validate_identity(&commit).unwrap_err();
+        sha256.validate_identity(&"a".repeat(64)).unwrap();
+        GitObjectContext::default()
+            .validate_identity(&commit)
+            .unwrap_err();
     }
 
     #[test]

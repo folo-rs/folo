@@ -7,7 +7,6 @@ use crp_diag::{Discard, Verbose};
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::preview::*;
 use crp_versioning::resolved::read_json;
-use crp_workspace::cache::Cache;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -24,18 +23,17 @@ fn prepared_document() -> String {
 
 #[test]
 #[cfg_attr(miri, ignore = "uses owned preview artifact files")]
-fn failed_input_reads_and_verification_invalidate_the_previous_completion_marker() {
+fn marker_invalidation_requires_source_admission_and_precedes_proposal_reads() {
     let directory = tempdir().unwrap();
     let output = directory.path();
     let marker = output.join("plan.json");
     let prepared = output.join("prepared.json");
     let proposal = output.join("proposal.json");
-    let manifest = output.join("Cargo.toml");
     let verified = Cell::new(false);
     fs::write(&proposal, "{ invalid plan").unwrap();
     fs::write(&prepared, "{ invalid preparation").unwrap();
     fs::write(&marker, "previous completion").unwrap();
-    let error = preview_inputs(&proposal, &prepared, output, &manifest, |_| {
+    let error = preview_inputs(&proposal, &prepared, output, |_| {
         verified.set(true);
         Ok(())
     })
@@ -43,12 +41,12 @@ fn failed_input_reads_and_verification_invalidate_the_previous_completion_marker
     .unwrap();
     assert!(error.find_source::<serde_json::Error>().is_some());
     assert!(!verified.get());
-    assert!(!marker.exists());
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "previous completion");
 
     fs::write(&prepared, prepared_document()).unwrap();
     fs::write(&marker, "previous completion").unwrap();
-    let error = preview_inputs(&proposal, &prepared, output, &manifest, |inputs| {
-        assert!(!marker.exists());
+    let error = preview_inputs(&proposal, &prepared, output, |inputs| {
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "previous completion");
         verified.set(true);
         let mut changed = inputs.clone();
         changed.head.push_str("-changed");
@@ -59,11 +57,11 @@ fn failed_input_reads_and_verification_invalidate_the_previous_completion_marker
     // Staleness wins over the malformed proposal, preserving input acquisition order.
     assert!(error.find_source::<serde_json::Error>().is_none());
     assert!(verified.get());
-    assert!(!marker.exists());
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "previous completion");
 
     fs::write(&marker, "previous completion").unwrap();
-    let error = preview_inputs(&proposal, &prepared, output, &manifest, |inputs| {
-        assert!(!marker.exists());
+    let error = preview_inputs(&proposal, &prepared, output, |inputs| {
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "previous completion");
         assert_eq!(inputs.head, "head");
         Ok(())
     })
@@ -73,59 +71,9 @@ fn failed_input_reads_and_verification_invalidate_the_previous_completion_marker
     assert!(!marker.exists());
 
     fs::write(&proposal, r#"{"schema_version":6,"increments":[]}"#).unwrap();
-    let (_, plan) = preview_inputs(&proposal, &prepared, output, &manifest, |_| Ok(())).unwrap();
+    let (_, plan) = preview_inputs(&proposal, &prepared, output, |_| Ok(())).unwrap();
     assert!(plan.increments.is_empty());
     assert!(!marker.exists());
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "checks owned filesystem output aliases")]
-fn preview_collisions_preserve_inputs_and_never_acquire_repository_state() {
-    let directory = tempdir().unwrap();
-    let output = directory.path().join("preview");
-    fs::create_dir_all(&output).unwrap();
-    for relative in [
-        "plan.json",
-        "report.json",
-        "report.json.tmp",
-        "diffs/proposal.json",
-        "workspace/proposal.json",
-        ".prospective/proposal.json",
-    ] {
-        let input = output.join(relative);
-        fs::create_dir_all(input.parent().unwrap()).unwrap();
-        fs::write(&input, "input document").unwrap();
-        for position in 0..3 {
-            let unrelated = directory.path().join("unrelated");
-            let mut inputs = [&unrelated, &unrelated, &unrelated];
-            *inputs.get_mut(position).unwrap() = &input;
-            let error = preview_inputs(inputs[0], inputs[1], &output, inputs[2], |_| {
-                panic!("input collisions must be rejected before repository acquisition")
-            })
-            .err()
-            .unwrap();
-            assert!(
-                error
-                    .to_string()
-                    .contains("preview output overlaps an input")
-            );
-            assert_eq!(fs::read_to_string(&input).unwrap(), "input document");
-        }
-    }
-    let input = output.join("plan.json");
-    fs::write(&input, "input document").unwrap();
-    let alias = directory.path().join("missing/../preview");
-    let error = preview_inputs(&input, &input, &alias, &input, |_| {
-        panic!("output aliases must be rejected before repository acquisition")
-    })
-    .err()
-    .unwrap();
-    assert!(
-        error
-            .to_string()
-            .contains("preview output overlaps an input")
-    );
-    assert_eq!(fs::read_to_string(input).unwrap(), "input document");
 }
 
 #[test]
@@ -145,14 +93,14 @@ fn preparation_does_not_accept_alternative_resolution_artifacts() {
 
 #[test]
 #[cfg_attr(miri, ignore = "checks an owned preview marker directory")]
-fn occupied_completion_marker_precedes_input_acquisition() {
+fn occupied_completion_marker_survives_failed_admission() {
     let directory = tempdir().unwrap();
     let marker = directory.path().join("plan.json/keep");
     fs::create_dir_all(marker.parent().unwrap()).unwrap();
     fs::write(&marker, "not a completion file").unwrap();
     let absent = directory.path().join("absent");
-    let error = preview_inputs(&absent, &absent, directory.path(), &absent, |_| {
-        panic!("an occupied marker must fail before repository acquisition")
+    let error = preview_inputs(&absent, &absent, directory.path(), |_| {
+        panic!("missing preparation must fail before repository acquisition")
     })
     .err()
     .unwrap();
@@ -165,7 +113,7 @@ fn occupied_completion_marker_precedes_input_acquisition() {
     miri,
     ignore = "checks default preview admission with missing native inputs"
 )]
-fn default_preview_invalidates_before_cache_resolution_without_deleting_aliases() {
+fn unavailable_preview_inputs_never_authorize_marker_or_alias_removal() {
     let directory = tempdir().unwrap();
     let marker = directory.path().join("plan.json");
     let absent = directory.path().join("absent");
@@ -178,7 +126,7 @@ fn default_preview_invalidates_before_cache_resolution_without_deleting_aliases(
         Verbose::new(false, &Discard),
     )
     .unwrap_err();
-    assert!(!marker.exists());
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "previous completion");
 
     fs::write(&marker, "input document").unwrap();
     run_preview(
@@ -190,26 +138,4 @@ fn default_preview_invalidates_before_cache_resolution_without_deleting_aliases(
     )
     .unwrap_err();
     assert_eq!(fs::read_to_string(marker).unwrap(), "input document");
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "checks injected-cache preview admission with real files"
-)]
-fn injected_cache_preview_also_invalidates_before_reading_inputs() {
-    let directory = tempdir().unwrap();
-    let marker = directory.path().join("plan.json");
-    let absent = directory.path().join("absent");
-    fs::write(&marker, "previous completion").unwrap();
-    run_preview_with_cache(
-        &absent,
-        &absent,
-        directory.path(),
-        &absent,
-        Verbose::new(false, &Discard),
-        Cache::default(),
-    )
-    .unwrap_err();
-    assert!(!marker.exists());
 }

@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::ptr;
 
 use super::*;
 
@@ -100,6 +101,80 @@ fn live_verification_distinguishes_original_final_and_stale_inputs() {
             .find_source::<CandidateFailure>()
             .is_some()
     );
+}
+
+#[test]
+fn successful_verification_returns_its_own_observations_and_never_reuses_the_verdict() {
+    let inputs = inputs();
+    let mut acquisitions = 0;
+    for (digest, admitted) in [("initial", true), ("final", true), ("stale", false)] {
+        let result =
+            inputs.verify_observed(Path::new("root/Cargo.toml"), Some("final"), |_, _, _| {
+                acquisitions += 1;
+                Ok((
+                    Inputs {
+                        digest: digest.into(),
+                        ..inputs.clone()
+                    },
+                    acquisitions,
+                ))
+            });
+        if admitted {
+            let (applied, observation) = result.unwrap();
+            assert_eq!(applied, digest == "final");
+            assert_eq!(observation, acquisitions);
+        } else {
+            assert!(result.unwrap_err().find_source::<StaleInputs>().is_some());
+        }
+    }
+    assert_eq!(acquisitions, 3);
+}
+
+#[test]
+fn captured_documents_read_only_paths_absent_from_this_acquisition() {
+    let root = Path::new("root/Cargo.toml");
+    let member = Path::new("root/member/Cargo.toml");
+    let text = "[dependencies]\nexact='= 1.2.3'\n";
+    let documents = [root, member]
+        .map(|path| (path.to_owned(), parse_document(path, text).unwrap()))
+        .into();
+    for path in [root, member] {
+        let shared =
+            capture_document(path, &documents, |_| panic!("document already acquired")).unwrap();
+        let original = documents.get(path).unwrap();
+        assert!(matches!(&shared, Cow::Borrowed(document) if ptr::eq(*document, original)));
+        assert_eq!(
+            shared
+                .get("dependencies")
+                .unwrap()
+                .get("exact")
+                .unwrap()
+                .as_str(),
+            Some("= 1.2.3")
+        );
+    }
+    let transitive = Path::new("root/transitive/Cargo.toml");
+    for current in ["=1.2.4", "=1.2.5"] {
+        let mut reads = 0;
+        let fresh = capture_document(transitive, &documents, |path| {
+            assert_eq!(path, transitive);
+            reads += 1;
+            Ok(format!("exact='{current}'"))
+        })
+        .unwrap();
+        assert!(matches!(fresh, Cow::Owned(_)));
+        assert_eq!(reads, 1);
+        assert_eq!(fresh.get("exact").unwrap().as_str(), Some(current));
+    }
+    let empty = BTreeMap::new();
+    let fresh = capture_document(root, &empty, |_| Ok("changed=true".into())).unwrap();
+    assert_eq!(fresh.get("changed").unwrap().as_bool(), Some(true));
+    let error = capture_document(transitive, &documents, |_| {
+        Err(CandidateFailure::new().into())
+    })
+    .unwrap_err();
+    assert!(error.find_source::<CandidateFailure>().is_some());
+    capture_document(transitive, &documents, |_| Ok("[".into())).unwrap_err();
 }
 
 #[test]
@@ -277,7 +352,7 @@ fn retained_acquisition_pins_history_and_target_and_propagates_both_failures() {
                     if fail_capture {
                         Err(CandidateFailure::new().into())
                     } else {
-                        Ok(inputs.clone())
+                        Ok((inputs.clone(), "acquired"))
                     }
                 },
                 |current, digest| {
@@ -292,14 +367,15 @@ fn retained_acquisition_pins_history_and_target_and_propagates_both_failures() {
         assert!(error.find_source::<CandidateFailure>().is_some());
         assert_eq!(error.find_source::<StaleInputs>().is_some(), fail_capture);
     }
-    inputs
+    let acquired = inputs
         .verify_candidate_with(
             Path::new("candidate"),
             "final",
-            |_, _, _| Ok(inputs.clone()),
+            |_, _, _| Ok((inputs.clone(), "acquired")),
             |_, _| Ok(()),
         )
         .unwrap();
+    assert_eq!(acquired, "acquired");
 }
 
 #[test]

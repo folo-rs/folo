@@ -4,6 +4,28 @@ Local planning and post-merge publication serve different purposes and have
 separate schema lifecycles. Use tool-produced evidence where specified; do not
 fabricate captured inputs, identities or publication outcomes.
 
+You choose output destinations and are responsible for their placement relative to
+source, configuration, existing evidence and other data. Commands write to the supplied
+locations without checking for input collisions. Each writer manages only its documented
+artifacts and owned workspace directories.
+
+Preview validates captured inputs before invalidating its previous completion marker.
+Missing or malformed preparation and stale captured inputs leave that marker untouched.
+An existing completion marker does not prove that the captured inputs are still valid;
+consumers still check those inputs.
+
+## Captured source inputs
+
+Preparation and preview capture declared inputs, Git-tracked files and source-directory
+contents. Source directories include `src` and dedicated custom target or build-script
+directories below each package root, including path dependencies. A target at the package
+root or outside it contributes its declared file without recursively capturing the
+package root or its ancestors.
+
+Supporting modules and other build inputs outside those source directories must be
+Git-tracked. Use `git add`; a commit is not required. The tool does not interpret Rust
+modules or invoke a compiler to discover additional inputs.
+
 ## Local decisions and plans
 
 A decisions document is caller-authored literal JSON:
@@ -125,7 +147,7 @@ Compatibility evidence uses schema `2`:
 | `schema_version` | Compatibility-evidence format revision. |
 | `checker` | Identified checker version, or an explanation when no identity was established. |
 | `report` | Location of the source-bound report generated for this comparison. |
-| `completed` | Whether the required comparisons and source verification completed. |
+| `completed` | Whether the required input checks and comparisons completed. |
 | `findings` | Whether completed comparisons found an insufficient increment. |
 | `packages` | Comparison records containing the fields below. |
 
@@ -144,8 +166,10 @@ establishes no minimum. The author still judges behavioral, CLI, format and
 feature-subset effects.
 
 Do not confuse a completed comparison with a passing merge gate:
-`--deny-findings` additionally rejects insufficient increments. Captured source
-is verified around comparison; operational errors never become semantic passes.
+`--deny-findings` additionally rejects insufficient increments. Source inputs are checked
+at command entry. Callers and tools invoked for read-only work must keep assessed
+source, configuration and history unchanged during comparison; operational errors
+never become semantic passes.
 
 ## Artifact-only command output
 

@@ -5,7 +5,6 @@
 use crp_workspace::testing as git_fixture;
 
 mod artifact_path;
-mod cache;
 mod command;
 mod git;
 mod git_history_tests;
@@ -14,6 +13,7 @@ mod metadata;
 mod metadata_dependency_tests;
 mod metadata_discovery_tests;
 mod metadata_installation_tests;
+mod observations;
 mod snapshot;
 mod snapshot_command;
 

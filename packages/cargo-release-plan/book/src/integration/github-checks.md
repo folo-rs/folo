@@ -81,8 +81,10 @@ cargo release-plan check-compatibility @AssessmentArguments `
 ```
 
 Use a new output directory. `check-compatibility` acquires a read-only report
-from the selected source and checks its identity around the comparison; it does
-not accept a detached report as permission to check another checkout.
+from source checked at command entry. Callers and tools invoked for read-only
+work must keep assessed source, configuration and history unchanged during
+comparison. It does not accept a detached report as permission to check another
+checkout.
 
 The compatibility stage must distinguish a valid empty selection from a broken
 checker or unavailable comparison. Run the checker on the assessed source with

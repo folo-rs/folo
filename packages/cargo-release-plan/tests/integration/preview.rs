@@ -347,7 +347,7 @@ fn source_changes_after_preparation_invalidate_preview() {
     write_package(&fixture, "library", "0.1.0", "");
     fixture.commit("released package");
     let prepared = prepare(&fixture);
-    // Completion invalidation is independent of the old plan's contents.
+    // Failed source admission cannot authorize any output removal.
     fixture.write("preview/plan.json", "previous completion");
     fixture.write("packages/library/src/lib.rs", "pub fn new_evidence() {}\n");
     fixture.write(
@@ -362,5 +362,5 @@ fn source_changes_after_preparation_invalidate_preview() {
         verbose: false,
     })
     .unwrap_err();
-    assert!(!fixture.path().join("preview/plan.json").exists());
+    assert_eq!(fixture.read("preview/plan.json"), "previous completion");
 }

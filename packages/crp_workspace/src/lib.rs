@@ -14,7 +14,6 @@
 pub(crate) use errors::*;
 
 pub mod artifact_path;
-pub mod cache;
 pub mod command;
 mod errors;
 pub mod git;
@@ -22,6 +21,7 @@ pub mod identity;
 pub mod inherited;
 pub mod lockfile;
 pub mod manifest;
+pub mod manifest_document;
 pub mod metadata;
 pub mod packaging;
 pub mod snapshot;

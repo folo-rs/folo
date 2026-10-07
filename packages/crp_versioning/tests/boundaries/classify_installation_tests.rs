@@ -8,9 +8,9 @@ use crp_workspace::git::GitRepo;
 use crp_workspace::lockfile::{ClosureChange, InstallationGraph};
 use crp_workspace::manifest::{
     DependencySource, PackageIdentity, PathCase, WorkspaceInherit, installation_patches,
-    parse_document, parse_package_manifest,
+    package_manifest_from_document, parse_document,
 };
-use crp_workspace::metadata::{WorkPackage, WorkTree};
+use crp_workspace::metadata::{ManifestSnapshot, WorkPackage, WorkTree};
 use semver::Version;
 
 use crate::git_fixture::Repository;
@@ -50,12 +50,15 @@ fn historical_registry_configuration_overlays_ambient_using_recorded_files() {
         ),
     ]);
     assert_eq!(
-        historical_registries_with(
+        historical_registries_documents(
             git.prefix(),
             &ambient,
             &paths,
             PathCase::Sensitive,
-            |path| git.show_file("HEAD", path)
+            |path| git
+                .show_file("HEAD", path)?
+                .map(|text| parse_document(Path::new(path), &text))
+                .transpose()
         )
         .unwrap(),
         BTreeMap::from([
@@ -74,8 +77,11 @@ fn historical_registry_configuration_overlays_ambient_using_recorded_files() {
         ])
     );
     assert_eq!(
-        historical_registries_with(git.prefix(), &ambient, &[], PathCase::Sensitive, |path| git
-            .show_file("HEAD", path))
+        historical_registries_documents(git.prefix(), &ambient, &[], PathCase::Sensitive, |path| {
+            git.show_file("HEAD", path)?
+                .map(|text| parse_document(Path::new(path), &text))
+                .transpose()
+        })
         .unwrap(),
         ambient
     );
@@ -100,12 +106,15 @@ fn historical_registry_configuration_preserves_parse_errors() {
     let git = fixture.repo();
     let paths = git.ls_tree_paths("HEAD").unwrap();
     assert!(
-        historical_registries_with(
+        historical_registries_documents(
             git.prefix(),
             &BTreeMap::new(),
             &paths,
             PathCase::Sensitive,
-            |path| git.show_file("HEAD", path)
+            |path| git
+                .show_file("HEAD", path)?
+                .map(|text| parse_document(Path::new(path), &text))
+                .transpose()
         )
         .unwrap_err()
         .find_source::<toml_edit::TomlError>()
@@ -142,13 +151,17 @@ fn historical_paths_read_target_versions_from_their_own_workspace() {
         patches: installation_patches(&root),
         ..InstallationGraph::default()
     };
-    resolve_historical_installation_paths_with(
+    resolve_historical_installation_documents(
         &mut installation,
         BTreeMap::new(),
         &git,
         &paths,
         PathCase::Sensitive,
-        |path| git.show_file("HEAD", path),
+        |path| {
+            git.show_file("HEAD", path)?
+                .map(|text| parse_document(Path::new(path), &text))
+                .transpose()
+        },
     );
     assert_eq!(
         installation
@@ -266,8 +279,8 @@ fn anchor_lockfiles_are_selected_by_commit_not_current_work_tree() {
     }
 }
 
-fn lockfile_cache() -> LockfileCache {
-    LockfileCache {
+fn lockfile_cache() -> Lockfiles {
+    Lockfiles {
         work: None,
         anchors: HashMap::new(),
         case: PathCase::Sensitive,
@@ -287,13 +300,15 @@ fn endpoints(
     anchor_binary: bool,
     work_binary: bool,
 ) -> (WorkTree, WorkPackage, HistoricalPackage) {
-    let manifest = parse_package_manifest(
+    let document = parse_document(
+        Path::new("Cargo.toml"),
         "[package]\nname = 'tool'\nversion = '1.0.0'\n",
-        "Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let manifest =
+        package_manifest_from_document(&document, "Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     let anchor = HistoricalPackage {
         directory: manifest.directory.clone(),
         version: manifest.version.clone(),
@@ -311,6 +326,8 @@ fn endpoints(
         resources: BTreeMap::new(),
     };
     let work_tree = WorkTree {
+        manifests: ManifestSnapshot::default(),
+        tracked_paths: Vec::new(),
         workspace_root: root.to_path_buf(),
         packages: vec![work_package.clone()],
         version_targets: Vec::new(),

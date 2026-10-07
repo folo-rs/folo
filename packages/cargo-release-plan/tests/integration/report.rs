@@ -1,12 +1,146 @@
 //! Report and check output: the JSON document and the failure renderings.
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::process::Command;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 use serde_json::{Value, json};
+use tempfile::tempdir;
 
-use crate::fixture::{Fixture, write_package};
+use crate::fixture::{Fixture, GLOBAL_CONFIG, write_package};
 use crate::harness::{check, report_json, seeded_package};
+
+pub(crate) fn report_command(fixture: &Fixture, output: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
+    command
+        .current_dir(fixture.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", GLOBAL_CONFIG.path().join("config"))
+        .env_remove("GIT_CONFIG")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .args(["report", "--release-history", "HEAD", "--out-dir"])
+        .arg(output);
+    command
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "writes report artifacts at caller-selected locations")]
+fn report_uses_caller_output_and_only_replaces_owned_artifacts() {
+    let fixture = seeded_package();
+    let output = fixture.path().join("packages/demo/src/evidence");
+    fixture.write(
+        "packages/demo/src/evidence/report.json",
+        "previous completion",
+    );
+    fixture.write("packages/demo/src/evidence/diffs/old.patch", "old patch");
+    fixture.write("packages/demo/src/evidence/notes.txt", "caller-owned notes");
+    run(&RunInput::Report {
+        out_dir: output.clone(),
+        release_history: Some("HEAD".to_owned()),
+        merge_target: None,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let report: Value =
+        serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report.pointer("/packages/0/name").unwrap(), "demo");
+    assert!(!output.join("diffs/old.patch").exists());
+    assert_eq!(
+        fs::read_to_string(output.join("notes.txt")).unwrap(),
+        "caller-owned notes"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "runs the report executable with isolated Git configuration"
+)]
+fn report_output_is_not_restricted_by_git_configuration_placement() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    let marker = output.path().join("report.json");
+    fs::write(&marker, "# caller-selected configuration\n").unwrap();
+    let result = report_command(&fixture, output.path())
+        .env("GIT_CONFIG_GLOBAL", &marker)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let report: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+    assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "publishes a report over abandoned hard-linked staging")]
+fn report_staging_never_truncates_preexisting_shared_file_contents() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    let source = fixture.path().join("packages/demo/src/lib.rs");
+    let before = fs::read(&source).unwrap();
+    fs::hard_link(&source, output.path().join("report.json.tmp")).unwrap();
+    let result = report_command(&fixture, output.path()).output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(fs::read(source).unwrap(), before);
+    assert!(!output.path().join("report.json.tmp").exists());
+    let report: Value =
+        serde_json::from_slice(&fs::read(output.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(miri, ignore = "replaces dangling filesystem report entries")]
+fn report_replaces_dangling_owned_entries() {
+    let fixture = seeded_package();
+    for entry in ["report.json", "diffs"] {
+        let output = tempdir().unwrap();
+        let missing = output.path().join("missing");
+        let marker = output.path().join("report.json");
+        symlink(&missing, output.path().join(entry)).unwrap();
+        if entry == "report.json" {
+            fs::create_dir_all(output.path().join("diffs")).unwrap();
+            fs::write(output.path().join("diffs/old.patch"), "old patch").unwrap();
+        } else {
+            fs::write(&marker, "previous completion").unwrap();
+        }
+
+        let result = report_command(&fixture, output.path()).output().unwrap();
+
+        assert!(result.status.success(), "{result:?}");
+        assert!(fs::symlink_metadata(&marker).unwrap().is_file());
+        assert!(
+            fs::symlink_metadata(output.path().join("diffs"))
+                .unwrap()
+                .is_dir()
+        );
+        assert!(!missing.exists());
+        assert!(!output.path().join("diffs/old.patch").exists());
+        let report: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+        assert_eq!(report.pointer("/packages/0/status").unwrap(), "unchanged");
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "checks native completion marker removal errors")]
+fn report_marker_removal_failure_preserves_previous_patches() {
+    let fixture = seeded_package();
+    let output = tempdir().unwrap();
+    fs::create_dir_all(output.path().join("report.json")).unwrap();
+    fs::create_dir_all(output.path().join("diffs")).unwrap();
+    let patch = output.path().join("diffs/old.patch");
+    fs::write(&patch, "old patch").unwrap();
+
+    let result = report_command(&fixture, output.path()).output().unwrap();
+
+    assert!(!result.status.success(), "{result:?}");
+    assert!(output.path().join("report.json").is_dir());
+    assert_eq!(fs::read_to_string(patch).unwrap(), "old patch");
+}
 
 /// A compatible edge remains valid inside a transitively derived group.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

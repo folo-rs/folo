@@ -2,14 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf, absolute};
+use std::path::{Path, absolute};
 
 use crp_diag::Verbose;
-use crp_workspace::artifact_path::{resolve_path, same_path};
-use crp_workspace::cache::{Cache, CacheOptions};
 use crp_workspace::command::hash_bytes;
 use crp_workspace::manifest::requirement_names_version;
-use crp_workspace::metadata::{WorkTree, load_tracked_work_tree};
+use crp_workspace::metadata::WorkTree;
 use ohno::AppError;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -17,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::apply::{ManifestEdit, compute_edits};
 use crate::check::{check_classification, releases_breaking_change};
 use crate::classify::{
-    ChangedItem, PackageClass, PackageStatus, SnapshotCache, classify_with_cache,
+    ChangedItem, PackageClass, PackageStatus, Snapshots, classify_acquired, classify_with_snapshots,
 };
 use crate::groups::{GroupVerdict, Groups};
 use crate::plan::{
@@ -52,36 +50,22 @@ pub fn run_prepare_with_target(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
-    run_prepare_with_cache(
-        output,
-        release_history,
-        merge_target,
-        manifest,
-        verbose,
-        Cache::resolve(manifest, &CacheOptions::Default, verbose)?,
-    )
-}
-
-#[cfg_attr(test, mutants::skip)] // Native source capture, resolution and evidence publication.
-pub fn run_prepare_with_cache(
-    output: &Path,
-    release_history: Option<&str>,
-    merge_target: Option<&str>,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    cache: Cache,
-) -> Result<String, AppError> {
-    cache.protect(output)?;
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
     let manifest = canonical(manifest)?;
-    let inputs = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
+    let mut cache = Snapshots::default();
+    let (inputs, acquired) = Inputs::capture_with_snapshots(
+        &manifest,
+        release_history,
+        merge_target,
+        verbose,
+        &mut cache,
+    )?;
+    let lockfile = acquired.work_tree.workspace_root.join("Cargo.lock");
+    drop(acquired);
     let prospective = Prospective::new(&output, &inputs)?;
     remove_marker(&output.join("prepared.json"))?;
     prospective.resolve(verbose)?;
     let files = prospective.artifacts(&inputs)?;
-    inputs.verify(&manifest, None)?;
-    let (work_tree, _) = load_tracked_work_tree(&manifest)?;
-    let lockfile = work_tree.workspace_root.join("Cargo.lock");
     validate_preparation_files(inputs.root(), &lockfile, &files)?;
     // Preparation is the explicit mutation boundary. Install only the successfully resolved
     // lockfile before capturing evidence so semantic checks run against this same live state.
@@ -89,19 +73,18 @@ pub fn run_prepare_with_cache(
         fs::write(&lockfile, file.contents)
             .map_err(|error| WriteFileError::caused_by(&lockfile, error))?;
     }
-    let refreshed = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
+    let (refreshed, acquired) = Inputs::capture_with_snapshots(
+        &manifest,
+        release_history,
+        merge_target,
+        verbose,
+        &mut cache,
+    )?;
     if !inputs.same_history(&refreshed) {
         return Err(StaleInputs::new().into());
     }
     let inputs = refreshed;
-    let classification = classify_with_cache(
-        &manifest,
-        Some(&inputs.release_history),
-        inputs.merge_target.as_deref(),
-        verbose,
-        &mut SnapshotCache::new(cache),
-    )?;
-    inputs.verify(&manifest, None)?;
+    let classification = classify_acquired(acquired, verbose, &mut cache)?;
     write_report(&output, &classification)?;
     write_json(
         &output.join("prepared.json"),
@@ -127,67 +110,17 @@ pub fn run_preview(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
-    run_preview_with_options(
-        plan,
-        prepared,
-        output,
-        manifest,
-        verbose,
-        &CacheOptions::Default,
-    )
-}
-
-#[cfg_attr(test, mutants::skip)] // Resolves original-workspace storage after preview admission.
-pub fn run_preview_with_options(
-    plan: &Path,
-    prepared: &Path,
-    output: &Path,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    options: &CacheOptions,
-) -> Result<String, AppError> {
-    run_preview_acquiring_cache(plan, prepared, output, manifest, verbose, || {
-        Cache::resolve(manifest, options, verbose)
-    })
-}
-
-#[cfg_attr(test, mutants::skip)] // Native prospective lifetime and resolution.
-pub fn run_preview_with_cache(
-    plan: &Path,
-    prepared: &Path,
-    output: &Path,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    cache: Cache,
-) -> Result<String, AppError> {
-    run_preview_acquiring_cache(plan, prepared, output, manifest, verbose, || Ok(cache))
-}
-
-#[cfg_attr(test, mutants::skip)] // Native prospective lifetime and resolution.
-fn run_preview_acquiring_cache(
-    plan: &Path,
-    prepared: &Path,
-    output: &Path,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-    acquire_cache: impl FnOnce() -> Result<Cache, AppError>,
-) -> Result<String, AppError> {
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
-    let (prepared_input, plan_input) =
-        preview_inputs(plan, prepared, &output, manifest, |inputs| {
-            inputs.verify(manifest, None).map(|_| ())
-        })?;
-    // Collision-safe completion invalidation precedes even cache metadata acquisition.
-    // The selected original-workspace location is still fixed before prospective creation.
-    let cache = acquire_cache()?;
-    cache.protect(plan)?;
-    cache.protect(prepared)?;
-    cache.protect(&output)?;
+    let mut cache = Snapshots::default();
+    let (prepared_input, plan_input) = preview_inputs(plan, prepared, &output, |inputs| {
+        inputs
+            .verify_with_snapshots(manifest, None, verbose, &mut cache)
+            .map(|_| ())
+    })?;
     let prepared = prepared_input;
     let plan = plan_input;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
-    let mut cache = SnapshotCache::new(cache);
-    let mut classification = classify_with_cache(
+    let classification = classify_with_snapshots(
         &prospective.manifest,
         Some(&prepared.inputs.release_history),
         prepared.inputs.merge_target.as_deref(),
@@ -201,47 +134,62 @@ fn run_preview_acquiring_cache(
         verbose,
     )?;
     require_semantic_decisions(&classification.packages, &resolved)?;
+    let mut classification = Some(classification);
 
     let (resolved, files) = resolve_until_stable(
         resolved,
         |bytes| hash_bytes(bytes, &prospective.root),
         |resolved| {
-            let (work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
-            install_preview_edits(compute_edits(&work_tree, resolved, verbose)?, |edit| {
+            let preceding = classification
+                .take()
+                .expect("each successful pass supplies a classification");
+            let edits = compute_edits(&preceding.work_tree, resolved, verbose)?;
+            drop(preceding);
+            install_preview_edits(edits, |edit| {
                 fs::write(&edit.path, &edit.updated)
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
             })?;
             prospective.resolve(verbose)?;
-            classification = classify_with_cache(
+            let current = classify_with_snapshots(
                 &prospective.manifest,
                 Some(&prepared.inputs.release_history),
                 prepared.inputs.merge_target.as_deref(),
                 verbose,
                 &mut cache,
             )?;
-            let files = prospective.artifacts(&prepared.inputs)?;
+            let files = prospective.artifacts_from_workspace(
+                &prepared.inputs,
+                &current.work_tree.workspace_root,
+                &current.work_tree.member_manifests,
+            )?;
             let mut expanded = resolved.clone();
             add_consequences(
-                &classification.packages,
-                &classification.groups,
-                &classification.membership,
-                &classification.work_tree,
+                &current.packages,
+                &current.groups,
+                &current.membership,
+                &current.work_tree,
                 &mut expanded,
             )?;
+            classification = Some(current);
             Ok((expanded, files))
         },
     )?;
     // Convergence leaves the candidate unchanged after this classification. Keep the readiness
-    // verdict and report on those same observations; source/history verification still follows.
+    // verdict and report on those same observations before relocation requires new admission.
     // Ref: packages/cargo-release-plan/docs/implementation.md, "Prepared and prospective resolution".
+    let classification = classification.expect("convergence follows a successful classification");
     let (passed, message) = check_classification(&classification, CheckFormat::Text);
     require_complete_preview(passed, message)?;
-    prepared.inputs.verify(manifest, None)?;
     let final_digest = prepared.inputs.final_digest(&files)?;
+    write_report(&output, &classification)?;
+    drop(classification);
     let evidence_manifest_path = prospective.retain(&output, prepared.inputs.root())?;
-    prepared
-        .inputs
-        .verify_candidate(&evidence_manifest_path, &final_digest)?;
+    prepared.inputs.capture_candidate(
+        &evidence_manifest_path,
+        &final_digest,
+        verbose,
+        &mut cache,
+    )?;
     let mut plan = explicit_plan(&resolved);
     plan.release_history = Some(prepared.inputs.release_history.clone());
     plan.merge_target.clone_from(&prepared.inputs.merge_target);
@@ -256,7 +204,6 @@ fn run_preview_acquiring_cache(
         files,
         evidence_manifest_path,
     });
-    write_report(&output, &classification)?;
     write_json(&output.join("plan.json"), &plan)?;
     Ok(format!(
         "Wrote complete resolved plan to {}",
@@ -302,22 +249,14 @@ pub fn preview_inputs(
     plan: &Path,
     prepared: &Path,
     output: &Path,
-    manifest: &Path,
     verify: impl FnOnce(&Inputs) -> Result<(), AppError>,
 ) -> Result<(Prepared, PlanFile), AppError> {
     let marker = output.join("plan.json");
-    let inputs = [plan, prepared, manifest];
-    for input in inputs {
-        if same_path(input, &marker)? {
-            return Err(OutputInputCollision::new().into());
-        }
-    }
-    // The completion marker belongs to this invocation from its first fallible input read.
-    // A failed standalone rerun must not leave an earlier resolved plan looking current.
-    remove_marker(&marker)?;
-    guard_output_inputs(output, &inputs)?;
     let prepared: Prepared = read_json(prepared)?;
     verify(&prepared.inputs)?;
+    // Validate captured evidence before marker removal. A subsequent failed proposal read
+    // or resolution invalidates the previous completion.
+    remove_marker(&marker)?;
     let plan: PlanFile = read_json(plan)?;
     plan.validate_schema()?;
     plan.validate_history(&prepared.inputs)?;
@@ -505,44 +444,6 @@ fn remove_marker_with(
     Ok(())
 }
 
-// Native alias acquisition only; collision checks consume resolved observations in process.
-#[cfg_attr(test, mutants::skip)]
-fn guard_output_inputs(output: &Path, inputs: &[&Path]) -> Result<(), AppError> {
-    guard_output_inputs_with(output, inputs, resolve_path)
-}
-
-fn guard_output_inputs_with(
-    output: &Path,
-    inputs: &[&Path],
-    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
-) -> Result<(), AppError> {
-    let output = resolve(output)?;
-    let files = ["report.json", "report.json.tmp"].map(|name| resolve(&output.join(name)));
-    let [report, temporary] = files;
-    let files = [report?, temporary?];
-    for input in inputs {
-        let input = resolve(input)?;
-        validate_output_input(&output, &input, &files)?;
-    }
-    Ok(())
-}
-
-fn validate_output_input(output: &Path, input: &Path, files: &[PathBuf]) -> Result<(), AppError> {
-    if files.iter().any(|file| file == input)
-        || ["diffs", "workspace", ".prospective"]
-            .iter()
-            .any(|directory| input.starts_with(output.join(directory)))
-    {
-        return Err(OutputInputCollision::new().into());
-    }
-    Ok(())
-}
-
-/// Completion artifacts must not replace the invocation's own input documents.
-#[ohno::error]
-#[display("preview output overlaps an input; choose a separate output location")]
-pub(crate) struct OutputInputCollision;
-
 /// Source-level semantic decisions belong to the skill, not the resolver.
 #[ohno::error]
 #[display("package {package} needs a semantic release decision in the proposed plan")]
@@ -570,7 +471,6 @@ struct ResolutionCycle;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-
     use std::collections::HashSet;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -578,7 +478,9 @@ mod tests {
     use std::path::PathBuf;
 
     use crp_workspace::lockfile::InstallationGraph;
-    use crp_workspace::metadata::{DepKind, ExactDependency, ReportedDep, VersionTarget};
+    use crp_workspace::metadata::{
+        DepKind, ExactDependency, ManifestSnapshot, ReportedDep, VersionTarget,
+    };
     use serde_json::Value;
 
     use super::*;
@@ -628,53 +530,6 @@ mod tests {
                 assert!(error.find_source::<std::io::Error>().is_some());
             }
         }
-    }
-
-    #[test]
-    fn resolved_output_paths_reject_each_owned_input_location() {
-        let output = Path::new("output");
-        let files = ["report.json", "report.json.tmp"].map(|name| output.join(name));
-        for path in [
-            "report.json",
-            "report.json.tmp",
-            "diffs/plan",
-            "workspace/plan",
-            ".prospective/plan",
-        ] {
-            let error = validate_output_input(output, &output.join(path), &files).unwrap_err();
-            assert!(error.find_source::<OutputInputCollision>().is_some());
-        }
-        validate_output_input(output, Path::new("other/plan"), &files).unwrap();
-    }
-
-    #[test]
-    fn acquired_output_aliases_cannot_replace_inputs() {
-        let output = Path::new("output");
-        for owned in [
-            "report.json",
-            "report.json.tmp",
-            "workspace/plan",
-            "diffs/plan",
-            ".prospective/plan",
-        ] {
-            let error = guard_output_inputs_with(output, &[Path::new("alias")], |path| {
-                Ok(if path == Path::new("alias") {
-                    output.join(owned)
-                } else {
-                    path.into()
-                })
-            })
-            .unwrap_err();
-            assert!(error.find_source::<OutputInputCollision>().is_some());
-        }
-        guard_output_inputs_with(output, &[Path::new("independent")], |path| Ok(path.into()))
-            .unwrap();
-        assert!(
-            guard_output_inputs_with(output, &[Path::new("input")], |_| Err(
-                std::io::Error::other("identity").into()
-            ))
-            .is_err()
-        );
     }
 
     #[test]
@@ -850,6 +705,8 @@ mod tests {
 
     fn work_tree(packages: &[PackageClass]) -> WorkTree {
         WorkTree {
+            manifests: ManifestSnapshot::default(),
+            tracked_paths: Vec::new(),
             workspace_root: PathBuf::new(),
             packages: Vec::new(),
             version_targets: packages
@@ -1275,7 +1132,8 @@ mod tests {
         record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap();
         files[0].path = "Cargo.toml".into();
         record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap();
-        files[0].contents = "resolved dependency\n".repeat(1024);
+        // The exact retained token proves compact history independently of payload size.
+        files[0].contents = "resolved dependency\n".to_owned();
         let token = "digest supplied by the acquisition boundary";
         record_state(&mut visited, &resolved, &files, |bytes| {
             let state: Value = serde_json::from_slice(bytes).unwrap();

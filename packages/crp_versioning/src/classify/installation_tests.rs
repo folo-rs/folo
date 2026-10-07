@@ -33,20 +33,26 @@ fn historical_registry_overlay_prefers_recorded_extensionless_and_inner_configur
         ("shared".into(), "ambient-index".into()),
     ]);
     let mut reads = Vec::new();
-    let indices =
-        historical_registries_with("nested", &ambient, &paths, PathCase::Insensitive, |path| {
+    let indices = historical_registries_documents(
+        "nested",
+        &ambient,
+        &paths,
+        PathCase::Insensitive,
+        |path| {
             reads.push(path.to_owned());
-            Ok(Some(
+            parse_document(
+                Path::new(path),
                 if path == ".cargo/CONFIG" {
                     "[registries.shared]\nindex='outer'\n[registries.outer]\nindex='outer'\n"
                 } else {
                     assert_eq!(path, "nested/.cargo/config.toml");
                     "[registries.shared]\nindex='inner'\n"
-                }
-                .into(),
-            ))
-        })
-        .unwrap();
+                },
+            )
+            .map(Some)
+        },
+    )
+    .unwrap();
     assert_eq!(
         indices,
         BTreeMap::from([
@@ -56,7 +62,7 @@ fn historical_registry_overlay_prefers_recorded_extensionless_and_inner_configur
         ])
     );
     assert_eq!(reads, [".cargo/CONFIG", "nested/.cargo/config.toml"]);
-    historical_registries_with("", &ambient, &paths, PathCase::Insensitive, |_| {
+    historical_registries_documents("", &ambient, &paths, PathCase::Insensitive, |_| {
         Err(io::Error::other("git").into())
     })
     .unwrap_err();
@@ -69,13 +75,15 @@ fn historical_path_acquisition_resolves_recorded_identity_and_retains_operationa
         prefix: String::new(),
     };
     let paths = ["Helper/Cargo.toml".to_owned()];
-    let package = parse_package_manifest(
+    let document = parse_document(
+        Path::new("tool/Cargo.toml"),
         "[package]\nname='tool'\nversion='1.0.0'\n[dependencies]\nhelper={path='../helper'}\n",
-        "tool/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let package =
+        package_manifest_from_document(&document, "tool/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     for failure in [false, true] {
         let mut graph = InstallationGraph::default();
         graph.insert(
@@ -83,7 +91,7 @@ fn historical_path_acquisition_resolves_recorded_identity_and_retains_operationa
             Version::new(1, 0, 0),
             package.installation_dependencies.clone(),
         );
-        resolve_historical_installation_paths_with(
+        resolve_historical_installation_documents(
             &mut graph,
             BTreeMap::new(),
             &git,
@@ -94,7 +102,11 @@ fn historical_path_acquisition_resolves_recorded_identity_and_retains_operationa
                 if failure {
                     Err(io::Error::other("git").into())
                 } else {
-                    Ok(Some("[package]\nname='helper'\nversion='2.0.0'\n".into()))
+                    parse_document(
+                        Path::new(path),
+                        "[package]\nname='helper'\nversion='2.0.0'\n",
+                    )
+                    .map(Some)
                 }
             },
         );
@@ -115,7 +127,7 @@ fn historical_path_acquisition_resolves_recorded_identity_and_retains_operationa
 
 #[test]
 fn anchor_lockfiles_are_acquired_once_per_commit_and_missing_is_an_error() {
-    let mut cache = LockfileCache {
+    let mut cache = Lockfiles {
         work: None,
         anchors: HashMap::new(),
         case: PathCase::Sensitive,
@@ -157,19 +169,21 @@ fn binary_endpoints_independently_contribute_locked_closures() {
         prefix: String::new(),
     };
     let mut work = fixture::classification(vec![]).work_tree;
-    let manifest = parse_package_manifest(
+    let document = parse_document(
+        Path::new("tool/Cargo.toml"),
         "[package]\nname='tool'\nversion='1.0.0'\n[dependencies]\ndependency='*'\n",
-        "tool/Cargo.toml",
-        &WorkspaceInherit::default(),
     )
-    .unwrap()
     .unwrap();
+    let manifest =
+        package_manifest_from_document(&document, "tool/Cargo.toml", &WorkspaceInherit::default())
+            .unwrap()
+            .unwrap();
     work.installation.insert(
         "tool".into(),
         manifest.version.clone(),
         manifest.installation_dependencies.clone(),
     );
-    let mut cache = LockfileCache {
+    let mut cache = Lockfiles {
         work: Some(lock("2.0.0")),
         anchors: HashMap::from([("anchor".into(), lock("1.0.0"))]),
         case: PathCase::Sensitive,

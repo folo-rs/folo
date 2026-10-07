@@ -13,6 +13,9 @@ Plans, proposals, preparation, prospective workspaces, resolved state, preview
 and application stay together. Their captured-input and no-late-resolution invariants
 must not be distributed across independently interpreted artifacts. Report and plan
 producers own the schemas their consumers validate.
+Report completion uses exclusive same-directory staging rather than opening a reusable
+staging filename for truncation. Abandoned staging is removed as an entry, preserving
+contents shared with another hard-linked file.
 
 The skill's semantic decisions use `impact`; a proposal's mechanical version choices
 use `bump` or an explicit version. Proposal generation translates semantic meaning
@@ -53,8 +56,9 @@ Captured inputs retain `release_history` and `release_history_revision`, plus
 `merge_target` for a distinct predecessor and `merge_target_revision` whenever supplied.
 Live verification resolves
 the original refs and rejects movement. Prospective and retained workspaces use
-the frozen commits, independently of the clone's ref names; after candidate
-verification, the original captured refs are checked again at the source repository.
+the frozen commits, independently of the clone's ref names. Independent candidate
+verification also admits the original captured refs at the source repository;
+adjacent candidate consumers share the command-entry admission.
 Preparation retains
 the context across lockfile refresh; every fixed-point classification uses it.
 
@@ -94,26 +98,55 @@ resolved commit and invalidated by repository, workspace, case-rule or registry-
 Git object interpretation changes invalidate those snapshots and retained parent-presence facts too.
 Each snapshot retains its full historical tree and shared path/mode/object indexes, so package
 comparisons select from already acquired facts rather than querying the anchor again.
-Workspace's typed persistent cache supplies immutable trees and facts indicating whether a
-commit header records a parent. Parent identities and complete header contents are not retained.
-These facts never substitute for fresh parent availability or shallow-boundary checks, and
-first-parent traversals are not retained. Invocation hits borrow the retained snapshot and
-avoid constructing persistent keys or copying acquisition context.
-The original workspace's resolved cache location is carried through prospective passes;
-it remains outside captured source and evidence and is not part of a plan's validity.
-Candidate observations and lockfiles are never retained across passes, and history refs
-are still resolved and verified. The converged classification supplies both the final
-readiness verdict and report, followed by the original source and candidate checks.
+Raw commit-header facts are retained separately from fresh parent availability and
+shallow-boundary checks; first-parent traversals are not retained. Invocation hits borrow
+the retained snapshot. Miss loaders borrow the owner's repository context, Git
+interpretation and content-keyed documents directly; parsed-document ownership is not
+moved out on hits or misses.
+Candidate metadata and lockfile bytes are reacquired at each pass. Manifest syntax is
+reused only for equal complete text. Historical workspaces are reconstructed from lazily
+requested parsed documents under the bound context. Current lockfile graphs serve all
+binary classifications in that pass; committed graphs follow snapshot context invalidation.
+History refs are resolved at acquisition. The converged classification supplies both
+the final readiness verdict and report; relocation requires fresh candidate admission.
+
+Preview computes the next edits from its preceding classification's workspace root, member
+manifest paths and member directory identities. These remain raw Cargo-relative observations,
+independent of the package directories normalized into Git's path space for comparison. Edits
+and offline resolution precede fresh classification. Artifact selection then uses that
+post-resolution classification's workspace/member paths while reading artifact contents freshly.
+Preparation has no preceding prospective classification and acquires its own prospective
+metadata; original-workspace observations never stand in for the candidate.
+
+Source capture reuses the tracked listing and borrows parsed root/member documents acquired by its own
+metadata projection, including during path-dependency traversal. Files reached outside those
+documents are still acquired, and ignored/untracked build-source traversal and index capture
+remain independent. Explicit target paths with parent components resolve their parent for
+relocation while keeping the final entry subject to ordinary-file admission.
+Dedicated target directories use the same recursive capture as conventional sources, with
+parent components resolved before recording repository-relative contents. Root-level and
+outside-directory supporting files enter through the acquired Git listing, including
+newly added index entries; capture does not inspect Rust imports or infer additional roots.
+Successful admission returns the acquired workspace, Git identity and
+resolved history to adjacent classification or plan consumers. Preparation uses its original
+acquisition to locate the lockfile, drops it before installing resolved bytes, then captures
+and classifies the resulting source with one acquisition. Application drops its admission
+before writing and verifies the resulting state with a new capture. Preview consumes the
+preceding classification before edits/resolution and reacquires after each pass.
+Independent commands never reuse a prior live-input admission. The stable-input contract
+permits read-only stages to share acquired values without repeated fingerprints or ref checks.
 
 Captured-source traversal, artifact admission and prospective evidence ownership use
 injected observations and effects. This keeps transitive membership, original/final
 fingerprints, retained isolation, foreign-owner rejection and marker invalidation within
 unit mutation coverage. Native adapters retain integration coverage for subprocess
 arguments, real aliases, atomic file promotion and workspace lifetime.
-Workspace owns the source-location inventory shared with cache admission; versioning
+Workspace owns source-location discovery; versioning
 requires relocatable dependency paths and captures the same reserved files and recursive
 source contents for fingerprints.
-Preview admits its output and invalidates any previous completion marker before acquiring
-cache metadata. Both the default wrapper and the application's options-based entry point
-share that ordering; input aliases are rejected before removal. Storage is still resolved
-from the original workspace before constructing the prospective workspace.
+Output placement belongs to the caller and does not trigger source or Git configuration
+discovery. Source-location inventories are consumed by capture rather than retained in an
+acquisition for writers. Preview invalidates its prior marker only after validating
+captured inputs. Missing or malformed preparation and stale
+captured inputs preserve the previous marker, whose consumers still require successful
+input admission. Malformed proposals after admission invalidate the previous completion.

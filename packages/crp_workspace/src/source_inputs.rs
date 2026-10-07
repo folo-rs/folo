@@ -1,19 +1,21 @@
-//! Source locations shared by captured evidence and disposable-cache admission.
+//! Source locations included in captured evidence.
 
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use ohno::AppError;
-use toml_edit::{Item, TableLike};
+use toml_edit::{DocumentMut, Item, TableLike, Value};
 
 use crate::ReadFileError;
+use crate::artifact_path::resolve_path;
 use crate::manifest::{for_each_dependency_table, parse_document};
 
 /// Discovers reserved files and recursively acquired source directories.
 ///
 /// Paths retain their acquired spelling. Callers add Git-tracked files and decide whether
-/// dependency locations are relocatable; cache admission also protects nonrelocatable sources.
+/// dependency locations are relocatable.
 #[derive(Debug, Default)]
 pub struct SourceInputs {
     pub files: BTreeSet<PathBuf>,
@@ -21,17 +23,21 @@ pub struct SourceInputs {
 }
 
 impl SourceInputs {
-    // Connects native manifest acquisition to the unit-tested workspace inventory.
+    /// Shares freshly acquired documents without retaining mutable workspace observations.
+    // Native root alias resolution is exercised by boundary tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn discover(
+    pub fn discover_with_documents<D: Borrow<DocumentMut>>(
         root: &Path,
         workspace_root: &Path,
         manifests: &[PathBuf],
         resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
+        document: impl FnMut(&Path) -> Result<D, AppError>,
     ) -> Result<Self, AppError> {
-        let inputs = Self::dependencies(
+        let inputs = Self::dependencies_with(
             manifests.iter().chain([&workspace_root.join("Cargo.toml")]),
             resolve_dependency,
+            document,
+            resolve_path,
         )?;
         // Cargo and Git may report different aliases of the same directory. Ancestor
         // membership needs resolved identities, not those independently acquired spellings.
@@ -71,24 +77,29 @@ impl SourceInputs {
         manifests: impl IntoIterator<Item = &'a PathBuf>,
         resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
     ) -> Result<Self, AppError> {
-        Self::dependencies_with(manifests, resolve_dependency, |path| {
-            fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error).into())
-        })
+        Self::dependencies_with(manifests, resolve_dependency, read_document, resolve_path)
     }
 
-    pub(crate) fn dependencies_with<'a>(
+    fn dependencies_with<'a, D: Borrow<DocumentMut>>(
         manifests: impl IntoIterator<Item = &'a PathBuf>,
         mut resolve_dependency: impl FnMut(&Path, &Path) -> Result<PathBuf, AppError>,
-        mut read: impl FnMut(&Path) -> Result<String, AppError>,
+        mut document: impl FnMut(&Path) -> Result<D, AppError>,
+        mut resolve_directory: impl FnMut(&Path) -> Result<PathBuf, AppError>,
     ) -> Result<Self, AppError> {
         let mut inputs = Self::default();
         let mut pending: BTreeSet<PathBuf> = manifests.into_iter().cloned().collect();
+        let mut visited = BTreeSet::new();
         while let Some(manifest) = pending.pop_first() {
-            if !inputs.files.insert(manifest.clone()) {
+            if !visited.insert(manifest.clone()) {
                 continue;
             }
-            let text = read(&manifest)?;
-            let document = parse_document(&manifest, &text)?;
+            inputs.files.insert(manifest.clone());
+            let document = document(&manifest)?;
+            let document = document.borrow();
+            let parent = manifest
+                .parent()
+                .expect("a manifest has a parent directory");
+            inputs.explicit_sources(parent, document, &mut resolve_directory)?;
             let mut dependencies = Vec::new();
             for_each_dependency_table(document.as_table(), &mut |_, table| {
                 dependency_paths(table, &mut dependencies);
@@ -116,6 +127,86 @@ impl SourceInputs {
         }
         Ok(inputs)
     }
+
+    fn explicit_sources(
+        &mut self,
+        directory: &Path,
+        document: &DocumentMut,
+        resolve_directory: &mut impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    ) -> Result<(), AppError> {
+        if let Some(package) = document.get("package").and_then(Item::as_table_like) {
+            match package.get("build") {
+                Some(build) if build.as_bool() == Some(false) => {}
+                build => {
+                    // Cargo discovers the conventional build script unless disabled or
+                    // redirected explicitly. This also applies to nonmember dependencies.
+                    let path = build.and_then(Item::as_str).unwrap_or("build.rs");
+                    self.target_source(directory, path, resolve_directory)?;
+                }
+            }
+        }
+        if let Some(path) = document
+            .get("lib")
+            .and_then(Item::as_table_like)
+            .and_then(|target| target.get("path"))
+            .and_then(Item::as_str)
+        {
+            self.target_source(directory, path, resolve_directory)?;
+        }
+        for kind in ["bin", "example", "test", "bench"] {
+            let Some(targets) = document.get(kind) else {
+                continue;
+            };
+            if let Some(targets) = targets.as_array_of_tables() {
+                for target in targets {
+                    if let Some(path) = target.get("path").and_then(Item::as_str) {
+                        self.target_source(directory, path, resolve_directory)?;
+                    }
+                }
+            } else if let Some(targets) = targets.as_array() {
+                for target in targets {
+                    if let Some(path) = target
+                        .as_inline_table()
+                        .and_then(|target| target.get("path"))
+                        .and_then(Value::as_str)
+                    {
+                        self.target_source(directory, path, resolve_directory)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Selects declared files and dedicated descendant directories for source capture.
+    fn target_source(
+        &mut self,
+        directory: &Path,
+        path: &str,
+        resolve_directory: &mut impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    ) -> Result<(), AppError> {
+        let path = directory.join(path);
+        let parent = path.parent().ok_or_else(|| ReadFileError::new(&path))?;
+        if parent != directory {
+            let package = resolve_directory(directory)?;
+            let source = resolve_directory(parent)?;
+            // Capture only dedicated directories below the package, never its root or
+            // ancestors. Other support files must be tracked. See the owning application's
+            // docs/design.md, "Captured source inputs".
+            if source != package && source.starts_with(&package) {
+                self.source_directories.insert(parent.to_owned());
+            }
+        }
+        self.files.insert(path);
+        Ok(())
+    }
+}
+
+// Dependency discovery acquires complete current bytes before parsing.
+#[cfg_attr(test, mutants::skip)]
+fn read_document(path: &Path) -> Result<DocumentMut, AppError> {
+    let text = fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error))?;
+    parse_document(path, &text)
 }
 
 fn dependency_paths(table: &dyn TableLike, paths: &mut Vec<String>) {
@@ -133,6 +224,8 @@ fn dependency_paths(table: &dyn TableLike, paths: &mut Vec<String>) {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::borrow::Cow;
+    use std::iter;
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::assert_impl_all;
@@ -190,15 +283,16 @@ mod tests {
             |path| {
                 assert!(!reads.contains(&path.to_path_buf()));
                 reads.push(path.to_path_buf());
-                Ok(if path == root.join("Cargo.toml") {
+                parse_document(path, if path == root.join("Cargo.toml") {
                     "[dependencies]\nlocal={path='alias'}\n[target.'cfg(unix)'.build-dependencies]\nlocal={path='alias'}\n[workspace.dependencies]\nlocal={path='alias'}\n[patch.crates-io]\nlocal={path='alias'}\n[replace]\n'local:1.0.0'={path='alias'}\n"
                 } else if path == root.join("actual/Cargo.toml") {
                     "[dependencies]\nleaf={path='../leaf'}\n"
                 } else {
                     assert_eq!(path, root.join("leaf/Cargo.toml"));
                     "[dependencies]\nroot={path='..'}\n"
-                }.into())
+                })
             },
+            |path| Ok(path.to_path_buf()),
         ).unwrap();
         let manifests =
             ["Cargo.toml", "actual/Cargo.toml", "leaf/Cargo.toml"].map(|path| root.join(path));
@@ -210,7 +304,7 @@ mod tests {
                 .map(|path| root.join(path))
                 .into()
         );
-        let table: toml_edit::DocumentMut =
+        let table: DocumentMut =
             "a = { path = 'first' }\nb = '1'\nc = { git = 'url' }\nd = { path = 'second' }\n"
                 .parse()
                 .unwrap();
@@ -220,17 +314,222 @@ mod tests {
     }
 
     #[test]
+    fn dependencies_share_acquired_documents_but_reacquire_new_inputs_each_pass() {
+        let root = PathBuf::from("root/Cargo.toml");
+        let captured = parse_document(&root, "[dependencies]\nlocal={path='external'}\n").unwrap();
+        for leaf in ["first", "second"] {
+            let mut shared = 0;
+            let mut reads = Vec::new();
+            let inputs = SourceInputs::dependencies_with(
+                [&root],
+                |_, dependency| Ok(Path::new("root").join(dependency)),
+                |path| {
+                    if path == root {
+                        shared += 1;
+                        return Ok(Cow::Borrowed(&captured));
+                    }
+                    assert!(!reads.contains(&path.to_path_buf()));
+                    reads.push(path.to_path_buf());
+                    if path == Path::new("root/external/Cargo.toml") {
+                        parse_document(path, &format!("[dependencies]\nleaf={{path='{leaf}'}}\n"))
+                            .map(Cow::Owned)
+                    } else {
+                        assert_eq!(path, Path::new("root").join(leaf).join("Cargo.toml"));
+                        Ok(Cow::Owned(DocumentMut::new()))
+                    }
+                },
+                |path| Ok(path.to_path_buf()),
+            )
+            .unwrap();
+            assert_eq!(shared, 1);
+            let acquired = [
+                PathBuf::from("root/external/Cargo.toml"),
+                Path::new("root").join(leaf).join("Cargo.toml"),
+            ];
+            assert_eq!(reads, acquired);
+            assert_eq!(
+                inputs.files,
+                iter::once(root.clone()).chain(acquired).collect()
+            );
+            assert_eq!(
+                inputs.source_directories,
+                [
+                    PathBuf::from("root/external/src"),
+                    Path::new("root").join(leaf).join("src"),
+                ]
+                .into()
+            );
+        }
+    }
+
+    #[test]
     fn manifest_and_dependency_errors_are_not_empty_inventory() {
         for text in [None, Some("["), Some("[dependencies]\nx={path='local'}")] {
             SourceInputs::dependencies_with(
                 [&PathBuf::from("Cargo.toml")],
                 |_, _| Err(ReadFileError::new(Path::new("local")).into()),
-                |_| {
-                    text.map(str::to_owned)
-                        .ok_or_else(|| ReadFileError::new(Path::new("Cargo.toml")).into())
+                |path| {
+                    let text = text.ok_or_else(|| ReadFileError::new(path))?;
+                    parse_document(path, text)
                 },
+                |path| Ok(path.to_path_buf()),
             )
             .unwrap_err();
         }
+    }
+
+    #[test]
+    fn explicit_sources_cover_target_forms_without_treating_other_paths_as_sources() {
+        let root = Path::new("root");
+        let document = parse_document(
+            &root.join("Cargo.toml"),
+            "example=[{path='custom/example.rs'},{name='implicit'}]\n\
+             bench=[{path='custom/bench.rs'}]\n\
+             [package]\nbuild='custom/build.rs'\n\
+             [package.metadata]\npath='not-source'\n\
+             [lib]\npath='custom/lib.rs'\n\
+             [[bin]]\npath='custom/main.rs'\n\
+             [[bin]]\nname='implicit'\n\
+             [[test]]\npath='custom/test.rs'\n",
+        )
+        .unwrap();
+        let mut inputs = SourceInputs::default();
+        inputs
+            .explicit_sources(root, &document, &mut |path| Ok(path.to_path_buf()))
+            .unwrap();
+        assert_eq!(
+            inputs.files,
+            ["build", "lib", "main", "example", "test", "bench"]
+                .map(|name| root.join(format!("custom/{name}.rs")))
+                .into()
+        );
+        assert_eq!(inputs.source_directories, [root.join("custom")].into());
+        let document = parse_document(
+            &root.join("Cargo.toml"),
+            "[package]\nbuild=false\n[lib]\nname='implicit'\n",
+        )
+        .unwrap();
+        let mut inputs = SourceInputs::default();
+        inputs
+            .explicit_sources(root, &document, &mut |_| panic!("no explicit directory"))
+            .unwrap();
+        assert!(inputs.files.is_empty());
+        for text in ["[package]\n", "[package]\nbuild=true\n"] {
+            let mut inputs = SourceInputs::default();
+            inputs
+                .explicit_sources(
+                    root,
+                    &parse_document(&root.join("Cargo.toml"), text).unwrap(),
+                    &mut |_| panic!("a package-root build script needs no directory acquisition"),
+                )
+                .unwrap();
+            assert_eq!(inputs.files, [root.join("build.rs")].into());
+        }
+    }
+
+    #[test]
+    fn a_reserved_target_does_not_suppress_dependency_document_acquisition() {
+        let root = PathBuf::from("root/Cargo.toml");
+        let mut reads = Vec::new();
+        let inputs = SourceInputs::dependencies_with(
+            [&root],
+            |manifest, dependency| Ok(manifest.parent().unwrap().join(dependency)),
+            |path| {
+                reads.push(path.to_path_buf());
+                let text = if path == root {
+                    "[lib]\npath='dependency/Cargo.toml'\n[dependencies]\nlocal={path='dependency'}"
+                } else {
+                    "[package]\nbuild='custom-build.rs'"
+                };
+                parse_document(path, text)
+            },
+            |path| Ok(path.to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(reads, [root, PathBuf::from("root/dependency/Cargo.toml")]);
+        assert!(
+            inputs
+                .files
+                .contains(Path::new("root/dependency/custom-build.rs"))
+        );
+    }
+
+    #[test]
+    fn target_directories_require_resolved_descendant_identity() {
+        let package = Path::new("root/package");
+        for (spelling, resolved, captured) in [
+            ("custom/lib.rs", "root/package/custom", true),
+            ("custom/nested/../lib.rs", "root/package/custom", true),
+            ("custom/../lib.rs", "root/package", false),
+            ("../lib.rs", "root", false),
+            ("../support/lib.rs", "root/support", false),
+            ("alias/lib.rs", "root", false),
+        ] {
+            let mut inputs = SourceInputs::default();
+            let target = package.join(spelling);
+            let mut reads = Vec::new();
+            inputs
+                .target_source(package, spelling, &mut |path| {
+                    reads.push(path.to_owned());
+                    Ok(if path == package {
+                        package.into()
+                    } else {
+                        assert_eq!(path, target.parent().unwrap());
+                        resolved.into()
+                    })
+                })
+                .unwrap();
+            assert_eq!(reads, [package, target.parent().unwrap()]);
+            assert_eq!(inputs.files, [target.clone()].into());
+            assert_eq!(
+                inputs.source_directories,
+                if captured {
+                    [target.parent().unwrap().to_owned()].into()
+                } else {
+                    BTreeSet::new()
+                },
+            );
+        }
+        let mut inputs = SourceInputs::default();
+        inputs
+            .target_source(package, "lib.rs", &mut |_| {
+                panic!("a root is not recursive")
+            })
+            .unwrap();
+        assert_eq!(inputs.files, [package.join("lib.rs")].into());
+        assert!(inputs.source_directories.is_empty());
+    }
+
+    #[test]
+    fn target_directory_acquisition_errors_propagate() {
+        for failing in [Path::new("root"), Path::new("root/custom")] {
+            let mut inputs = SourceInputs::default();
+            let mut reads = Vec::new();
+            inputs
+                .target_source(Path::new("root"), "custom/lib.rs", &mut |path| {
+                    reads.push(path.to_owned());
+                    if path == failing {
+                        Err(ReadFileError::new(path).into())
+                    } else {
+                        Ok(path.to_owned())
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(reads.last().unwrap(), failing);
+        }
+    }
+
+    #[test]
+    fn root_only_target_is_an_input_error_without_directory_acquisition() {
+        #[cfg(windows)]
+        let root = r"C:\";
+        #[cfg(not(windows))]
+        let root = "/";
+        let error = SourceInputs::default()
+            .target_source(Path::new("package"), root, &mut |_| {
+                panic!("a root-only target cannot select a source directory")
+            })
+            .unwrap_err();
+        assert!(error.find_source::<ReadFileError>().is_some());
     }
 }
