@@ -41,7 +41,7 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 if ("{{MODE}}" -notin @("configured", "standalone")) { throw "Select an explicit planning mode." }
 $Identity = & "{{TOOL}}" version | ConvertFrom-Json
-$Expected = @{ plan = 6; report = 6; prepared = 6; decisions = 2; compatibility = 2 }
+$Expected = @{ plan = 7; report = 7; prepared = 7; decisions = 2; compatibility = 2 }
 if ("{{MODE}}" -eq "configured") { $Expected.release_context = 2 }
 foreach ($Name in $Expected.Keys) {
     if ($Identity.schemas.$Name -ne $Expected[$Name]) {

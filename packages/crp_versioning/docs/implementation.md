@@ -17,6 +17,13 @@ Report completion uses exclusive same-directory staging rather than opening a re
 staging filename for truncation. Abandoned staging is removed as an entry, preserving
 contents shared with another hard-linked file.
 
+Workspace observations supply public-origin closures separately from ordinary
+dependencies. Reports retain those sorted defining identities for artifact-only
+proposal generation. Proposal invariants, preview consequences and readiness use
+the same origin relationships and compatibility keys; preview shares the semantic
+breaking minimum with proposal generation. Cargo dependency edges continue to own
+requirement rewrites and do not infer exposure.
+
 The skill's semantic decisions use `impact`; a proposal's mechanical version choices
 use `bump` or an explicit version. Proposal generation translates semantic meaning
 into version arithmetic before preview expands groups and dependency consequences

@@ -85,11 +85,26 @@ impl ReportFile {
                 .dependencies
                 .iter()
                 .map(|dependency| &dependency.name)
+                .chain(&package.public_origins)
                 .chain(&package.dependents)
             {
                 if !targets.contains_key(reference) {
                     return Err(InvalidReportReference::new(&package.name, reference).into());
                 }
+            }
+            if !package
+                .public_origins
+                .iter()
+                .is_sorted_by(|left, right| left < right)
+                || package.public_origins.iter().any(|origin| {
+                    origin == &package.name
+                        || !self
+                            .packages
+                            .iter()
+                            .any(|candidate| candidate.name == *origin)
+                })
+            {
+                return Err(InvalidPublicOrigins::new(&package.name).into());
             }
         }
 
@@ -172,6 +187,13 @@ fn parse_version(name: &str, version: &str) -> Result<Version, AppError> {
 #[ohno::error]
 #[display("Invalid package identity or group reference in report: {}", name.quoted())]
 struct InvalidReportPackage {
+    name: String,
+}
+
+/// Exposure evidence is a canonical set of other publishable workspace identities.
+#[ohno::error]
+#[display("Report package {} has invalid public origins", name.quoted())]
+struct InvalidPublicOrigins {
     name: String,
 }
 
@@ -258,7 +280,7 @@ mod tests {
         let mut data = grouped();
         let package = data.packages.first_mut().unwrap();
         package.dependencies = serde_json::from_value(json!([
-            {"name": "absent", "req": "1.0.0", "public": true, "exact_pin": false}
+            {"name": "absent", "req": "1.0.0", "exact_pin": false}
         ]))
         .unwrap();
         let error = data.validate().unwrap_err();
@@ -271,6 +293,45 @@ mod tests {
             .unwrap()
             .name = "helper".to_owned();
         data.validate().unwrap();
+    }
+
+    #[test]
+    fn public_origins_are_sorted_distinct_publishable_identities() {
+        let original = report(vec![
+            package("api", "unchanged", true),
+            package("core", "unchanged", true),
+            package("owner", "unchanged", false),
+        ]);
+        for origins in [vec!["api"], vec!["owner", "core"], vec!["core", "core"]] {
+            let mut data = original.clone();
+            data.packages.first_mut().unwrap().public_origins =
+                origins.into_iter().map(str::to_owned).collect();
+            assert!(
+                data.validate()
+                    .unwrap_err()
+                    .find_source::<InvalidPublicOrigins>()
+                    .is_some()
+            );
+        }
+        let mut data = original;
+        data.packages.first_mut().unwrap().public_origins =
+            vec!["core".to_owned(), "owner".to_owned()];
+        data.validate().unwrap();
+        data.packages.first_mut().unwrap().public_origins = vec!["absent".to_owned()];
+        assert!(
+            data.validate()
+                .unwrap_err()
+                .find_source::<InvalidReportReference>()
+                .is_some()
+        );
+        let mut data = grouped();
+        data.packages.first_mut().unwrap().public_origins = vec!["helper".to_owned()];
+        assert!(
+            data.validate()
+                .unwrap_err()
+                .find_source::<InvalidPublicOrigins>()
+                .is_some()
+        );
     }
 
     #[test]
@@ -386,6 +447,7 @@ mod tests {
             "status",
             "changed",
             "dependencies",
+            "public_origins",
             "dependents",
             "stat",
             "consumer_contract",
@@ -411,10 +473,8 @@ mod tests {
         for (key, invalid) in [
             ("status", json!("Needs-Increment")),
             ("changed", json!([{"source": "unknown"}])),
-            (
-                "dependencies",
-                json!([{"name": "api", "req": "1.0.0", "exact_pin": false}]),
-            ),
+            ("dependencies", json!([{"name": "api", "req": "1.0.0"}])),
+            ("public_origins", json!([false])),
             ("consumer_contract", json!("true")),
         ] {
             let mut value = original.clone();

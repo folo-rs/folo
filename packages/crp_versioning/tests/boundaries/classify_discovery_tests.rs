@@ -253,6 +253,7 @@ fn work_tree_selection_and_untracked_advice_share_packaging_boundaries() {
             .unwrap()
             .unwrap();
     let package = WorkPackage {
+        public_origins: Vec::new(),
         manifest,
         manifest_path: fixture.path().join("pkg/Cargo.toml"),
         resources,

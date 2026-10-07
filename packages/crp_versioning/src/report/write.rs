@@ -43,6 +43,7 @@ pub struct ReportPackage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) diff_path: Option<String>,
     pub(crate) dependencies: Vec<ReportedDep>,
+    pub(crate) public_origins: Vec<String>,
     pub(crate) dependents: Vec<String>,
     /// Whether the package's library is what consumers are meant to use.
     ///
@@ -217,6 +218,7 @@ fn report_package(package: &PackageClass, diff_path: Option<String>) -> ReportPa
         stat: package.stat.clone(),
         diff_path,
         dependencies: package.dependencies.clone(),
+        public_origins: package.public_origins.clone(),
         dependents: package.dependents.clone(),
         consumer_contract: package.consumer_contract,
         untracked: package.untracked.clone(),
@@ -248,8 +250,8 @@ mod tests {
             req: "1.0.1".to_owned(),
             exact_pin: false,
             kind: DepKind::Normal,
-            public: true,
         }];
+        api.public_origins = vec!["pending".to_owned()];
         let mut pending = package(
             "pending",
             PackageStatus::PendingRelease,
@@ -312,7 +314,8 @@ mod tests {
                 "changed": [{"source": "package", "path": "src/lib.rs", "change": "modified"}],
                 "stat": {"files": 1, "insertions": 1, "deletions": 1},
                 "diff_path": "diffs/api.patch",
-                "dependencies": [{"name": "pending", "req": "1.0.1", "exact_pin": false, "public": true}],
+                "dependencies": [{"name": "pending", "req": "1.0.1", "exact_pin": false}],
+                "public_origins": ["pending"],
                 "dependents": [], "consumer_contract": true, "untracked": ["untracked.rs"]
             })
         );

@@ -43,12 +43,12 @@ A decisions document is caller-authored literal JSON:
 `changes[].impact` is semantic: `breaking`, `nonbreaking` or `patch`.
 Non-publishable packages have no semantic impacts.
 
-The proposed-plan format uses report/plan schema revision `6`. This is a literal
+The proposed-plan format uses report/plan schema revision `7`. This is a literal
 example of that format:
 
 ```json
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "increments": [
     { "name": "widget", "bump": "minor" },
     { "name": "widget-cli", "version": "2.0.1" }
@@ -70,7 +70,7 @@ regenerate unsupported or stale evidence with `prepare` and `preview`.
 
 ## Reports
 
-The revision-6 report's top level contains:
+The revision-7 report's top level contains:
 
 | Field | Content |
 | --- | --- |
@@ -83,7 +83,7 @@ The revision-6 report's top level contains:
 | `groups` | Complete group membership across both package arrays. |
 
 Each publishable entry includes `name`, `declared_version`, `status`, `changed`,
-`stat`, `dependencies`, `dependents` and `consumer_contract`. Optional evidence
+`stat`, `dependencies`, `public_origins`, `dependents` and `consumer_contract`. Optional evidence
 includes its group, anchor, patch path and advisory untracked files. An anchor can
 identify a release-history version change or the final snapshot of an anticipated
 parent version; the report's history/target fields identify that context.
@@ -96,7 +96,10 @@ Changed entries distinguish:
 | `inherited` | Changed inherited workspace field. |
 | `lockfile` | Changed binary installation dependency identity. |
 
-Dependencies record `name`, `req`, `exact_pin` and `public`. Consumer-contract
+Dependencies record `name`, `req` and `exact_pin`. `public_origins` is the sorted
+set of defining workspace package names exposed directly or through another
+exposed owner's API. It is independent of the dependency paths supplying the
+types and is required even when empty. Consumer-contract
 flags select public library comparisons; they do not claim that binaries or
 private implementation changes lack behavioral consequences.
 

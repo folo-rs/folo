@@ -70,7 +70,7 @@ fn marker_invalidation_requires_source_admission_and_precedes_proposal_reads() {
     assert!(error.find_source::<serde_json::Error>().is_some());
     assert!(!marker.exists());
 
-    fs::write(&proposal, r#"{"schema_version":6,"increments":[]}"#).unwrap();
+    fs::write(&proposal, r#"{"schema_version":7,"increments":[]}"#).unwrap();
     let (_, plan) = preview_inputs(&proposal, &prepared, output, |_| Ok(())).unwrap();
     assert!(plan.increments.is_empty());
     assert!(!marker.exists());

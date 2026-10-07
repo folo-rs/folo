@@ -31,7 +31,7 @@ use crate::{
 /// Only a captured preview is an applicable plan.
 /// Command and JSON incompatibilities require a breaking semantic decision even
 /// when comparison of the public Rust API finds no incompatible signatures.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// On-disk plan file.
 ///

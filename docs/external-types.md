@@ -78,10 +78,11 @@ Canonical paths are not a complete inventory of the types reachable through
 each exported item. The checker
 [does not recursively inspect external re-export internals](https://github.com/awslabs/cargo-check-external-types/blob/705a0941997ebeb3bfb1a7f14070ba342f79d879/src/visitor.rs#L202-L250),
 so naming an external type does not necessarily name the other crates used by
-that type's public methods. The release process therefore retains
+that type's public methods. The release process follows each defining workspace
+package's own allow-list transitively, retaining
 [conservative breaking-change propagation](release-versioning.md#conservative-breaking-change-propagation)
-through private implementation packages rather than treating a dependent's
-allow-list as sufficient evidence to skip them.
+through private implementation packages. Shared origins alone do not expose the
+identity of an intermediate supplier.
 
 ## The dedicated nightly toolchain
 

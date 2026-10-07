@@ -103,7 +103,7 @@ fn dangling_workspace_dependencies_fail_every_report_consumer() {
     let path = directory.path().join("report.json");
     let mut report: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     *report.pointer_mut("/packages/0/dependencies").unwrap() = json!([
-        {"name": "missing", "req": "1.0.0", "public": true, "exact_pin": false}
+        {"name": "missing", "req": "1.0.0", "exact_pin": false}
     ]);
     fs::write(&path, report.to_string()).unwrap();
     for subcommand in ["analysis-order", "semver-targets"] {
@@ -149,13 +149,13 @@ fn write_report(directory: &Path) {
     fs::write(
         directory.join("report.json"),
         json!({
-            "schema_version": 6, "head": "captured", "release_history": "released",
+            "schema_version": 7, "head": "captured", "release_history": "released",
             "packages": [{
                 "name": "api", "declared_version": "1.0.0", "status": "needs-increment",
                 "anchor": {"commit": "anchor", "version": "1.0.0"},
                 "changed": [{"source": "package", "path": "src/lib.rs", "change": "modified"}],
                 "stat": {"files": 1, "insertions": 1, "deletions": 1},
-                "dependencies": [], "dependents": [], "consumer_contract": true
+                "dependencies": [], "public_origins": [], "dependents": [], "consumer_contract": true
             }],
             "non_publishable_packages": [], "groups": {}
         })
@@ -238,7 +238,7 @@ fn proposal_writes_a_usable_plan_without_workspace_discovery() {
     );
     let plan: Value =
         serde_json::from_slice(&fs::read(directory.path().join("proposal.json")).unwrap()).unwrap();
-    assert_eq!(plan.get("schema_version").unwrap(), 6);
+    assert_eq!(plan.get("schema_version").unwrap(), 7);
     assert_eq!(plan.get("increments").unwrap().as_array().unwrap().len(), 1);
     assert_eq!(plan.pointer("/increments/0/name").unwrap(), "api");
     assert!(plan.get("resolved").is_none());

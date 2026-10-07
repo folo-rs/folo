@@ -33,7 +33,7 @@ fn anchorless_dependents_and_helpers_do_not_invent_decisions() {
         vec![
             package("lib", "2.0.0", Some("1.0.0")),
             depends(package("new", "0.1.0", None), "lib", true),
-            depends(package("other", "1.0.0", Some("1.0.0")), "helper", true),
+            depends(package("other", "1.0.0", Some("1.0.0")), "helper", false),
         ],
         vec![helper("helper", "1.0.0")],
         &[],

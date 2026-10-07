@@ -116,9 +116,10 @@ crate reaches it through. Where `foo` re-exports a type from `bar` that
 re-exports it from `baz`, every crate along the chain lists `baz::Something`,
 including the one that only ever names `foo` in its dependency table.
 
-That indirection is why the release decision follows re-export declarations
-rather than matching the list against the dependency table directly: a crate's
-allow-list frequently names a crate it has no edge to. It also makes the
-propagation self-consistent — because each crate in the chain must list
-`baz::Something` to pass the external-types check, a breaking release of `baz`
-reaches every one of them rather than stopping at the first.
+The release decision therefore follows defining packages reachable through normal
+dependencies, not just direct dependency entries. Each defining package's own
+allow-list is followed transitively to cover nested APIs on exposed items.
+A breaking release of `baz` reaches its consumers without attributing the
+identity of `foo` or `bar` merely because they supply `baz::Something`.
+See [the propagation policy](release-versioning.md#conservative-breaking-change-propagation)
+for the retained package-level over-approximation and intentional ambiguity exception.

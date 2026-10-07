@@ -124,7 +124,7 @@ It checks the selected inputs and regenerates a report from those same observati
 Assessed source, configuration and history must remain unchanged during checking.
 An assessed workspace with selected contracts must have a lockfile accepted by Cargo's
 default metadata resolution without changes. It never accepts detached `--report` evidence.
-The regenerated report uses report/plan schema `6`.
+The regenerated report uses report/plan schema `7`.
 
 For a resolved preview, input checks at command entry cover both the original workspace
 and the retained candidate. The original

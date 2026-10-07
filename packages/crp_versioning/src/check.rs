@@ -341,11 +341,8 @@ fn render_workspace_diagnostics(
         if package.anchor().is_none() || releases_breaking_change(package) {
             continue;
         }
-        for dependency in &package.dependencies {
-            if !dependency.public {
-                continue;
-            }
-            let Some(broken) = by_name.get(dependency.name.as_str()) else {
+        for origin in &package.public_origins {
+            let Some(broken) = by_name.get(origin.as_str()) else {
                 continue;
             };
             if !releases_breaking_change(broken) {
@@ -361,10 +358,10 @@ fn render_workspace_diagnostics(
                 "only a package that releases a breaking change reaches here, which requires an anchor to compare against",
             );
             let text = format!(
-                "{}: exposes {} in its public API and must release a breaking change of its own, because {} moves from {} to an incompatible {}. {}",
+                "{}: exposes types from defining package {} directly or through an exposed owner's API and must release a breaking change of its own, because {} moves from {} to an incompatible {}. {}",
                 quote_path(&package.name),
-                quote_path(&dependency.name),
-                quote_path(&dependency.name),
+                quote_path(origin),
+                quote_path(origin),
                 anchor.version,
                 broken.declared_version,
                 remedy(release_history)
@@ -821,7 +818,7 @@ mod tests {
         name: &str,
         declared: Version,
         anchor: Version,
-        dependencies: Vec<ReportedDep>,
+        dependencies: Vec<(ReportedDep, bool)>,
     ) -> PackageClass {
         let mut package = PackageClass::unchanged(
             name,
@@ -832,18 +829,28 @@ mod tests {
             },
             PathBuf::from(format!("packages/{name}/Cargo.toml")),
         );
-        package.dependencies = dependencies;
+        package.public_origins = dependencies
+            .iter()
+            .filter(|(_, exposed)| *exposed)
+            .map(|(dependency, _)| dependency.name.clone())
+            .collect();
+        package.dependencies = dependencies
+            .into_iter()
+            .map(|(dependency, _)| dependency)
+            .collect();
         package
     }
 
-    fn dependency(name: &str, req: &str, public: bool) -> ReportedDep {
-        ReportedDep {
-            name: name.to_string(),
-            req: req.to_string(),
-            exact_pin: req.starts_with('='),
-            kind: DepKind::Normal,
+    fn dependency(name: &str, req: &str, public: bool) -> (ReportedDep, bool) {
+        (
+            ReportedDep {
+                name: name.to_string(),
+                req: req.to_string(),
+                exact_pin: req.starts_with('='),
+                kind: DepKind::Normal,
+            },
             public,
-        }
+        )
     }
 
     /// Builds an unchanged package in a version group, carrying the given dependencies.
@@ -851,7 +858,7 @@ mod tests {
         name: &str,
         group: &str,
         declared: Version,
-        dependencies: Vec<ReportedDep>,
+        dependencies: Vec<(ReportedDep, bool)>,
     ) -> PackageClass {
         let mut package = with_dependencies(name, declared.clone(), declared, dependencies);
         package.group = Some(group.to_string());
@@ -1134,7 +1141,8 @@ mod tests {
             Version::new(0, 1, 0),
             PathBuf::from("packages/app/Cargo.toml"),
         );
-        newcomer.dependencies = vec![dependency("lib", "=2.0.0", true)];
+        newcomer.dependencies = vec![dependency("lib", "=2.0.0", true).0];
+        newcomer.public_origins = vec!["lib".to_owned()];
 
         let text = render_diagnostics(
             &[newcomer, library],

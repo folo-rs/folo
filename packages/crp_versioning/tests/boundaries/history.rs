@@ -134,7 +134,7 @@ fn final_parent_anchors_new_and_incremented_packages_without_hiding_history_catc
     assert_eq!(consumer.dependencies.len(), 1);
     let edge = consumer.dependencies.first().unwrap();
     assert_eq!(edge.name, "api");
-    assert!(edge.public);
+    assert_eq!(consumer.public_origins, ["api"]);
     assert_eq!(classified(&initial, "api").dependents, ["consumer"]);
 
     fixture

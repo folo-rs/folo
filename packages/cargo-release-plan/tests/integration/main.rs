@@ -33,6 +33,7 @@ mod path_case;
 mod preview;
 mod preview_safety;
 mod propose;
+mod public_origins;
 mod publication;
 mod report;
 mod standalone;

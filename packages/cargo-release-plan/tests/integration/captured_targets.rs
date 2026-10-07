@@ -115,7 +115,7 @@ fn dependency_default_build_script_is_captured_and_verified() {
     .unwrap();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":6,"increments":[{"name":"demo","bump":"minor"}]}"#,
+        r#"{"schema_version":7,"increments":[{"name":"demo","bump":"minor"}]}"#,
     );
     let preview = fixture.path().join("preview");
     run(&RunInput::Preview {
@@ -301,7 +301,7 @@ fn check_retained_targets(fixture: &Fixture) -> Prepared {
     let plan = output.path().join("proposal.json");
     fs::write(
         &plan,
-        r#"{"schema_version":6,"increments":[{"name":"demo","bump":"minor"}]}"#,
+        r#"{"schema_version":7,"increments":[{"name":"demo","bump":"minor"}]}"#,
     )
     .unwrap();
     let preview = output.path().join("preview");

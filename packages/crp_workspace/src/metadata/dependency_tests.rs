@@ -293,6 +293,7 @@ fn development_versions_ignore_other_kinds_and_retain_any_versioned_target() {
 
 fn work_package(name: &str, dependencies: Vec<ReportedDep>) -> WorkPackage {
     WorkPackage {
+        public_origins: Vec::new(),
         manifest: PackageManifest {
             name: name.to_string(),
             version: Version::new(1, 2, 3),
@@ -322,7 +323,6 @@ fn edge(name: &str, kind: DepKind) -> ReportedDep {
         req: "=1.2.3".to_string(),
         exact_pin: true,
         kind,
-        public: false,
     }
 }
 
@@ -368,15 +368,120 @@ fn assert_exposure_chain(relay_kind: DepKind) {
         .map(|name| (name, name.to_string()))
         .into();
 
-    mark_public_dependencies(&mut packages, &exposed, &libraries);
+    collect_public_origins(&mut packages, &exposed, &libraries);
 
     assert_eq!(
-        packages[0].dependencies.first().unwrap().public,
+        packages[0]
+            .public_origins
+            .contains(&IMPLEMENTATION.to_owned()),
         relay_kind == DepKind::Normal
     );
     assert_eq!(
-        packages[1].dependencies.first().unwrap().public,
+        packages[1].public_origins.contains(&FACADE.to_owned()),
         relay_kind == DepKind::Normal
     );
-    assert!(packages[2].dependencies.first().unwrap().public);
+    assert_eq!(packages[2].public_origins, [IMPLEMENTATION]);
+}
+
+/// A diamond's shared origin does not attribute either supplier's identity to the consumer.
+#[test]
+fn shared_origins_do_not_expose_suppliers() {
+    let mut packages = [
+        work_package(
+            "clock",
+            vec![
+                edge("facade", DepKind::Normal),
+                edge("sync", DepKind::Normal),
+            ],
+        ),
+        work_package("facade", vec![edge("core", DepKind::Normal)]),
+        work_package("sync", vec![edge("core", DepKind::Normal)]),
+        work_package("core", vec![]),
+        work_package("unrelated", vec![]),
+    ];
+    let exposed = ["clock", "facade", "sync"]
+        .map(|name| {
+            (
+                name.to_owned(),
+                vec!["core".to_owned(), "unrelated".to_owned()],
+            )
+        })
+        .into();
+    let libraries = packages
+        .iter()
+        .map(|package| (package.manifest.name.clone(), package.manifest.name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let libraries = libraries
+        .iter()
+        .map(|(name, library)| (name.as_str(), library.clone()))
+        .collect();
+    for _ in 0..packages.len() {
+        collect_public_origins(&mut packages, &exposed, &libraries);
+        for package in &packages {
+            let expected = if ["clock", "facade", "sync"].contains(&package.manifest.name.as_str())
+            {
+                vec!["core".to_owned()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(package.public_origins, expected);
+        }
+        packages.rotate_left(1);
+    }
+}
+
+/// Whole-owner declarations retain nested exposure even through private API packages.
+#[test]
+fn named_owners_relay_nested_origins_without_exposing_transport_packages() {
+    let mut packages = [
+        work_package("outer", vec![edge("facade", DepKind::Normal)]),
+        work_package("facade", vec![edge("adapter", DepKind::Normal)]),
+        work_package("adapter", vec![edge("core", DepKind::Normal)]),
+        work_package("core", vec![]),
+    ];
+    packages[2].consumer_contract = false;
+    let exposed = [
+        ("outer".to_owned(), vec!["adapter_lib".to_owned()]),
+        ("facade".to_owned(), vec!["adapter_lib".to_owned()]),
+        ("adapter".to_owned(), vec!["core*".to_owned()]),
+    ]
+    .into();
+    let libraries = [
+        ("outer", "outer".to_owned()),
+        ("facade", "facade".to_owned()),
+        ("adapter", "adapter_lib".to_owned()),
+        ("core", "core".to_owned()),
+    ]
+    .into();
+    collect_public_origins(&mut packages, &exposed, &libraries);
+    assert_eq!(packages[0].public_origins, ["adapter", "core"]);
+    assert_eq!(packages[1].public_origins, ["adapter", "core"]);
+    assert_eq!(packages[2].public_origins, ["core"]);
+}
+
+/// Closure is sorted, excludes the root and terminates for cyclic declaration graphs.
+#[test]
+fn reachability_handles_cycles_and_unknown_packages() {
+    let graph = [
+        (
+            "a".to_owned(),
+            BTreeSet::from(["b".to_owned(), "absent".to_owned()]),
+        ),
+        (
+            "b".to_owned(),
+            BTreeSet::from(["a".to_owned(), "c".to_owned()]),
+        ),
+        ("c".to_owned(), BTreeSet::new()),
+    ]
+    .into();
+    assert_eq!(
+        reachable_packages("a", &graph),
+        BTreeSet::from(["b".to_owned(), "c".to_owned()])
+    );
+    assert_eq!(
+        reachable_packages("b", &graph),
+        BTreeSet::from(["a".to_owned(), "c".to_owned()])
+    );
+    assert!(reachable_packages("c", &graph).is_empty());
+    assert!(reachable_packages("absent", &graph).is_empty());
 }

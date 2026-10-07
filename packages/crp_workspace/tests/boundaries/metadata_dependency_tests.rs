@@ -72,7 +72,15 @@ fn canonical_manifest_preserves_workspace_dependency_graph() {
     let edge = expected.first().unwrap();
     assert_eq!(edge.name, "dependency");
     assert!(edge.exact_pin);
-    assert!(edge.public);
+    assert_eq!(
+        ordinary
+            .packages
+            .iter()
+            .find(|package| package.manifest.name == "consumer")
+            .unwrap()
+            .public_origins,
+        ["dependency"]
+    );
     assert_eq!(consumer(&canonical), expected);
     assert_eq!(
         dependents_of(&canonical.packages, "dependency"),
@@ -317,5 +325,5 @@ fn released_dependency_edges_resolve_member_path_aliases() {
     assert_eq!(consumer.dependencies.len(), 1);
     let dependency = consumer.dependencies.first().unwrap();
     assert_eq!(dependency.name, "member");
-    assert!(dependency.public);
+    assert_eq!(consumer.public_origins, ["member"]);
 }

@@ -22,6 +22,7 @@ use crate::plan::{
     PlanFile, PlanIncrement, PlanStage, ResolvedVersions, SCHEMA_VERSION, VersionBump,
     increment_version, resolve_plan,
 };
+use crate::propose::SemanticImpact;
 use crate::prospective::Prospective;
 use crate::report::write_report;
 use crate::resolved::{
@@ -353,7 +354,9 @@ fn add_consequences(
                 // Explicitly retaining the target version also schedules its requirement rewrites.
                 raise(membership, &versions, resolved, &dependency.name, version);
             }
-            if !dependency.public || releases_breaking_change(package) {
+        }
+        for origin in &package.public_origins {
+            if releases_breaking_change(package) {
                 continue;
             }
             let Some(anchor) = package.anchor() else {
@@ -361,19 +364,14 @@ fn add_consequences(
             };
             if packages
                 .iter()
-                .any(|target| target.name == dependency.name && releases_breaking_change(target))
+                .any(|target| target.name == *origin && releases_breaking_change(target))
             {
-                let bump = if anchor.version.major == 0 {
-                    VersionBump::Minor
-                } else {
-                    VersionBump::Major
-                };
                 raise(
                     membership,
                     &versions,
                     resolved,
                     &package.name,
-                    &increment_version(&anchor.version, bump)?,
+                    &SemanticImpact::Breaking.minimum(&anchor.version)?,
                 );
             }
         }
@@ -767,6 +765,14 @@ mod tests {
             ("1.0.0", "2.0.0", None, "1.0.0", true, None),
             ("0.1.0", "0.2.0", Some("0.1.0"), "0.1.0", false, None),
             ("0.1.0", "0.1.1", Some("0.1.0"), "0.1.0", true, None),
+            (
+                "0.0.1",
+                "0.0.2",
+                Some("0.0.1"),
+                "0.0.1",
+                true,
+                Some("0.0.2"),
+            ),
         ] {
             let core_package = package("core", Some(old_core), core);
             let mut facade_package = package("facade", old_facade, facade);
@@ -775,8 +781,10 @@ mod tests {
                 req: core.to_owned(),
                 exact_pin: false,
                 kind: DepKind::Normal,
-                public,
             });
+            if public {
+                facade_package.public_origins.push("core".to_owned());
+            }
             let packages = [core_package, facade_package];
             let mut resolved = ResolvedVersions {
                 packages: BTreeMap::from([("core".to_owned(), Version::parse(core).unwrap())]),
@@ -1003,7 +1011,6 @@ mod tests {
             req: "0.1".to_owned(),
             exact_pin: false,
             kind: DepKind::Normal,
-            public: false,
         });
         let initial = [core.clone(), facade];
         let mut resolved = ResolvedVersions {
@@ -1064,8 +1071,8 @@ mod tests {
             req: "0.1.1".to_owned(),
             exact_pin: false,
             kind: DepKind::Normal,
-            public: true,
         });
+        dependent.public_origins.push("core".to_owned());
         let packages = [core, dependent];
         let mut resolved = ResolvedVersions {
             packages: BTreeMap::new(),

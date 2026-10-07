@@ -12,6 +12,13 @@ the package. Classification, version-group decisions and publication eligibility
 belong to callers. Workspace observations retain validated exact dependency edges;
 versioning derives their groups.
 
+Public exposure is a separate observation from dependency delivery. Canonical
+allow-list crate names resolve to defining packages reachable through normal
+workspace dependencies. Following those owners' declarations produces a sorted
+transitive origin set; sharing an origin does not expose the suppliers themselves.
+Whole-owner declarations conservatively retain nested exposure through private
+implementation packages without compiling during classification.
+
 Git observations can resolve commits and test ancestor relationships without
 rewriting history. Whether a descendant snapshot represents an anticipated squash
 predecessor is versioning policy, not a workspace acquisition rule.
