@@ -199,6 +199,7 @@ fn binary_endpoints_independently_contribute_locked_closures() {
                 has_lockfile_target: anchor_binary,
             };
             let package = WorkPackage {
+                public_origins: Vec::new(),
                 manifest: manifest.clone(),
                 manifest_path: "tool/Cargo.toml".into(),
                 dependencies: vec![],

@@ -62,10 +62,17 @@ Folo validates its external-type allow-lists through
 [the external-types gate](external-types.md). Those declarations support the
 book's [public-dependency propagation rule](https://folo-rs.github.io/folo/cargo-release-plan/concepts/versions.html).
 An unchecked allow-list is not evidence that a public dependency exposes no types.
-Whole-group over-propagation is an accepted safety trade-off: safely exempting
-unaffected exports requires complete, validated, item-specific transitive exposure
-evidence. Its implementation and maintenance cost is not justified here.
-See the [recorded decision](https://github.com/folo-rs/folo/issues/531).
+Propagation follows defining packages transitively, not every dependency supplying
+their types. Each defining package's whole allow-list participates, so unrelated
+items and exact-version groups can still cause conservative increments. Exempting
+those unaffected exports would require item-specific evidence; its implementation
+and maintenance cost is not justified here. See the
+[nested exposure discussion](https://github.com/folo-rs/folo/issues/531) and
+[shared-origin distinction](https://github.com/folo-rs/folo/issues/867).
+
+Inference or method-call ambiguity caused solely by coexisting dependency versions'
+trait implementations is intentionally nonbreaking. Explicitly exposed type and
+trait identities remain part of propagation.
 
 ## Repository CI
 

@@ -334,7 +334,7 @@ fn report_records_group_verdicts() {
     let report = report_json(&fixture, &base);
 
     let report: Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(report.get("schema_version"), Some(&json!(6)));
+    assert_eq!(report.get("schema_version"), Some(&json!(7)));
     assert_eq!(
         report.pointer("/groups/alpha"),
         Some(&json!({
@@ -424,8 +424,7 @@ path_only_helper = { path = "../path_only_helper" }
         &json!([{
             "name": "wildcard_helper",
             "req": "*",
-            "exact_pin": false,
-            "public": false
+            "exact_pin": false
         }])
     );
 }

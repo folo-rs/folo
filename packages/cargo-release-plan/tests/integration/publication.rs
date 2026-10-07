@@ -145,7 +145,7 @@ fn publication_preflight_does_not_query_or_change_nonpublishable_members() {
     let fixture = Fixture::new("");
     write_package(&fixture, "helper", "1.0.0", "publish = false\n");
     fixture.commit("local-only workspace");
-    fixture.write("proposal.json", r#"{"schema_version":6,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":7,"increments":[]}"#);
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let manifest = fs::read(fixture.manifest()).unwrap();
     let lockfile = fixture.read("Cargo.lock");

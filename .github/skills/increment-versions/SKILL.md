@@ -32,7 +32,7 @@ the caller's applicable permission. Fetching a private configured repository als
 requires GitHub CLI authentication.
 
 Check the schema revisions reported by `cargo release-plan version` before
-modifying source. This skill consumes plan/report/prepared schema `6`,
+modifying source. This skill consumes plan/report/prepared schema `7`,
 semantic-decision schema `2` and compatibility schema `2`. Configured mode also
 consumes release-context schema `2`. Matching package version numbers are not a prerequisite.
 

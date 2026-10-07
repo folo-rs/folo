@@ -31,6 +31,7 @@ pub(crate) fn package(name: &str, version: &str, anchor: Option<&str>) -> Report
             deletions: 0,
         },
         dependencies: Vec::new(),
+        public_origins: Vec::new(),
         dependents: Vec::new(),
         consumer_contract: true,
         untracked: Vec::new(),
@@ -53,8 +54,10 @@ pub(crate) fn depends(mut package: ReportPackage, dependency: &str, public: bool
         req: "^1.0.0".to_owned(),
         exact_pin: false,
         kind: DepKind::Normal,
-        public,
     });
+    if public {
+        package.public_origins.push(dependency.to_owned());
+    }
     package
 }
 

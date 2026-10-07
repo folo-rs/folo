@@ -295,25 +295,24 @@ impl<'a> Proposal<'a> {
                 {
                     continue;
                 }
-                if let Some(dependency) = package
-                    .dependencies
+                if let Some(origin) = package
+                    .public_origins
                     .iter()
-                    .filter(|dependency| dependency.public)
-                    .filter(|dependency| self.packages.contains_key(dependency.name.as_str()))
-                    .find(|dependency| self.breaks(&dependency.name, &versions))
+                    .filter(|origin| self.packages.contains_key(origin.as_str()))
+                    .find(|origin| self.breaks(origin, &versions))
                 {
                     verbose.note(|| {
                         format!(
                             "Package {} is raised to semantic impact 'breaking' because its public \
-                             API exposes {}, whose resolved version {} is incompatible with \
-                             anchor {}. Exposed dependency types are part of the consumer contract.",
+                             API exposes defining package {} directly or through an exposed \
+                             owner's API, whose resolved version {} is incompatible with anchor {}.",
                             quote_path(name),
-                            quote_path(&dependency.name),
+                            quote_path(origin),
                             versions
-                                .get(&dependency.name)
+                                .get(origin)
                                 .expect("predicted versions include every tracked dependency"),
                             self.anchors
-                                .get(dependency.name.as_str())
+                                .get(origin.as_str())
                                 .expect("breaking dependency releases have a published anchor")
                         )
                     });
@@ -434,10 +433,8 @@ impl<'a> Proposal<'a> {
         for (name, package) in &self.packages {
             if self.anchors.contains_key(name)
                 && !self.breaks(name, &versions)
-                && package.dependencies.iter().any(|dependency| {
-                    dependency.public
-                        && self.packages.contains_key(dependency.name.as_str())
-                        && self.breaks(&dependency.name, &versions)
+                && package.public_origins.iter().any(|origin| {
+                    self.packages.contains_key(origin.as_str()) && self.breaks(origin, &versions)
                 })
             {
                 return Err(UnpropagatedPublicDependency::new(*name).into());

@@ -25,6 +25,7 @@ pub(crate) fn package(name: &str, status: &str, consumer_contract: bool) -> Valu
         "changed": changed,
         "stat": {"files": count, "insertions": count, "deletions": count},
         "dependencies": [],
+        "public_origins": [],
         "dependents": [],
         "consumer_contract": consumer_contract
     })

@@ -188,10 +188,14 @@ mod tests {
                 .iter()
                 .map(|(name, dependencies)| {
                     let mut package = package(name, "unchanged", true);
-                    *package.get_mut("dependencies").unwrap() =
-                        json!(dependencies.iter().map(|name| json!({
-                "name": name, "req": "1.0.0", "exact_pin": false, "public": false
-            })).collect::<Vec<_>>());
+                    *package.get_mut("dependencies").unwrap() = json!(
+                        dependencies
+                            .iter()
+                            .map(|name| json!({
+                                "name": name, "req": "1.0.0", "exact_pin": false
+                            }))
+                            .collect::<Vec<_>>()
+                    );
                     package
                 })
                 .collect(),

@@ -169,6 +169,7 @@ pub struct PackageClass {
     pub stat: DiffStat,
     pub untracked: Vec<String>,
     pub dependencies: Vec<ReportedDep>,
+    pub public_origins: Vec<String>,
     pub dependents: Vec<String>,
     /// Whether the package's library is documented for consumers.
     ///
@@ -312,6 +313,7 @@ impl PackageClass {
             },
             untracked: Vec::new(),
             dependencies: Vec::new(),
+            public_origins: Vec::new(),
             dependents: Vec::new(),
             consumer_contract: true,
             manifest_path,
@@ -756,6 +758,7 @@ fn classify_one(
             },
             untracked,
             dependencies: package.dependencies.clone(),
+            public_origins: package.public_origins.clone(),
             dependents,
             consumer_contract: package.consumer_contract,
             manifest_path: package.manifest_path.clone(),
@@ -844,6 +847,7 @@ fn classify_one(
         stat,
         untracked,
         dependencies: package.dependencies.clone(),
+        public_origins: package.public_origins.clone(),
         dependents,
         consumer_contract: package.consumer_contract,
         manifest_path: package.manifest_path.clone(),

@@ -109,22 +109,30 @@ When `widget_impl` changes, compatibility selection reaches the public `widget`
 contract through their group. Re-exported items are compared where consumers use
 them, rather than demanding compatibility for every private implementation item.
 
-A **public dependency** supplies types exposed by a dependent's public API.
-Its incompatible version movement requires an incompatible release of the
-dependent too. This is based on the version relationship, not a guess that the
+A **public origin** is a workspace package defining types exposed by another
+package's public API, directly or through another exposed owner's API. Its
+incompatible version movement requires an incompatible release of the exposing
+package too. This is based on the version relationship, not a guess that the
 particular exposed types were unaffected.
 
 Exposure comes from each package's externally verified
 `allowed_external_types` declarations. Defining crate names can differ from the
-direct dependency through which a type is re-exported; the declarations are
-followed transitively to attribute that dependency. Only normal dependencies
-supply public API types.
+direct dependency through which a type is re-exported. The declarations are
+followed transitively through the defining packages, reachable through normal
+workspace dependencies. Sharing a third package's origin does not make a
+dependency's own types part of the consumer's API.
 
 Private implementation packages do not interrupt breaking-change propagation.
 A re-exported type can expose another dependency through its methods without
-the outer library's allow-list enumerating every such type. Conservatively
-propagating through the implementation package preserves that consumer contract.
-It can move a whole group even when one public member is unaffected.
+the outer library's allow-list enumerating every such type. Following the defining implementation package's own allow-list preserves that
+consumer contract. Using its whole allow-list can propagate changes from unrelated
+items, and exact-version groups can move an unaffected public member.
+
+Inference or method-call ambiguity introduced by coexisting dependency versions'
+trait implementations is intentionally considered nonbreaking. Implementation
+contributors are not tracked solely to prevent that ambiguity. Explicitly exposed
+trait and type identities, bounds and associated types still participate in
+propagation; other behavioral and API changes still require semantic assessment.
 
 This model requires a real
 [external-type validation gate](../integration/repository.md#verify-external-type-exposure).

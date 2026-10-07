@@ -250,13 +250,24 @@ unknown. The public integration guide includes this check alongside the
 repository's build and test gates, without relying on a Folo Just recipe.
 
 The allow-list names the crate that *defines* a type, which is not always the
-dependency that supplies it: a package usually reaches an implementation crate's
-types re-exported through the public crate in front of it. The re-exporting
-crate closes that gap, because it must declare the crate it re-exports in its
-own allow-list. Following those declarations transitively attributes a named
-crate to the direct dependency that actually supplies it. Only a normal
-dependency qualifies, since a build or development dependency cannot supply
-types to a library's public API.
+dependency that supplies it. A **public origin** is a defining workspace package
+named by the allow-list, or named transitively by another public origin's
+allow-list. Origins must be reachable through normal workspace dependencies;
+build and development dependencies cannot supply a library's public API.
+
+Breaking propagation follows public origins rather than their suppliers. If a
+clock library and a synchronization library independently expose the same core
+types, their shared origin does not expose synchronization's own identity through
+clock. An unrelated breaking synchronization release therefore imposes no breaking
+clock release. Returning a synchronization-defined mutex does expose that identity.
+
+The transitive rule preserves nested exposure. If an outer package re-exports an
+intermediary-defined `Adapter` whose method accepts a core-defined value, the outer
+package has both intermediary and core as public origins, even when its own
+allow-list names only `Adapter`. Private API declarations do not interrupt this
+relationship. Each defining package's whole allow-list participates, so unrelated
+items in that package can still cause conservative propagation. This accepted
+over-approximation avoids requiring an item-specific API analyzer.
 
 Two consequences follow, and the tool enforces both:
 
@@ -264,7 +275,7 @@ Two consequences follow, and the tool enforces both:
   A requirement that merely admits the target's version lets a consumer resolve
   a combination the workspace never built. A path-only development dependency
   escapes packaging and is not assessed by this release rule.
-* A package whose public dependency releases a semver-incompatible version
+* A package whose public origin releases a semver-incompatible version
   must release one as well. Such a release changes the identity of the exposed
   types, so a consumer holding the older dependency can no longer hand its
   types to the dependent. This follows from the version move alone, however
@@ -272,6 +283,18 @@ Two consequences follow, and the tool enforces both:
 
 Only the second is a release decision. A requirement whose form is wrong is
 corrected by editing the requirement, not by incrementing anything.
+
+#### Intentional nonbreaking trait ambiguity
+
+Inference or method-call ambiguity caused by coexisting versions of a dependency
+contributing trait implementations is considered nonbreaking. A dependency can
+implement a foreign trait for a foreign receiver using a local trait argument;
+loading another version can add competing implementations without changing the
+receiver's defining identity. Release propagation intentionally does not track
+those implementation contributors solely to prevent ambiguity.
+
+This exception does not exempt exposed trait identities, bounds, generic arguments
+or associated types, nor does it exempt other API or behavioral incompatibilities.
 
 ### The release decision is offline and reproducible
 

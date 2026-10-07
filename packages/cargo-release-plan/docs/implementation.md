@@ -644,9 +644,9 @@ and exposure decisions. Tracked-member selection uses an inert repository handle
 and recorded paths, without initializing Git. Real Git and historical path
 acquisition belong in integration fixtures. Canonical fallback integration tests
 use equivalent filesystem paths without requiring symlink privileges.
-Exposure tests retain propagation through private intermediaries, revisit
-earlier dependents until closure settles, and distinguish normal edges from
-build and development edges at every hop.
+Exposure tests retain defining origins through private intermediaries, distinguish
+shared origins from their suppliers, and exclude build and development edges at
+every hop. Closure is independent of package visitation order.
 
 ## Classification
 
@@ -853,12 +853,18 @@ itself uses, against library target names taken from the target rather than
 derived from the package name, so a `[lib] name` override cannot silently break
 it.
 
-An allow-list names the crate defining a type, while the release decision needs
-the direct dependency supplying it. The two are bridged by growing each
-package's exposed set to a fixed point: a dependency edge is public when what
-that dependency exposes intersects what this package names, and its exposed set
-then joins this package's own. The sets only grow and are bounded by the
-workspace, so this settles; the bound is asserted rather than assumed.
+Allow-list names resolve to defining workspace packages reachable through normal
+dependencies. A separate transitive closure follows those owners' declarations,
+conservatively including their entire declared public surface. Delivery paths do
+not contribute identities merely by sharing an origin. Both traversals visit each
+package once, exclude the root and tolerate cycles with a bounded work list.
+
+Classification and reports retain the sorted public-origin closure separately from
+ordinary dependency edges. Proposal generation, its invariant checks, prospective
+classification and readiness all consume that closure with the same compatibility
+key. Preview uses the semantic breaking minimum, including patch movement for
+the zero-major, zero-minor series. Requirement rewriting and exact-version groups
+continue to use Cargo dependency edges, independently of exposure.
 
 `report` serializes the full package and group assessment, then writes patches
 only where file differences exist. It removes the earlier `report.json` entry

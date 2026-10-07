@@ -157,7 +157,10 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
         consumer.pointer("/dependencies/0/name").unwrap(),
         "dependency"
     );
-    assert_eq!(consumer.pointer("/dependencies/0/public").unwrap(), true);
+    assert_eq!(
+        consumer.get("public_origins").unwrap(),
+        &json!(["dependency"])
+    );
     let dependency = packages
         .iter()
         .find(|package| package.get("name").unwrap() == "dependency")
@@ -349,7 +352,7 @@ fn preview_check_uses_final_source_and_rejects_drift_in_either_workspace() {
     let fixture = private_library();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":6,"increments":[{"name":"library","bump":"patch"}]}"#,
+        r#"{"schema_version":7,"increments":[{"name":"library","bump":"patch"}]}"#,
     );
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let output = TempDir::new().unwrap();
@@ -412,7 +415,7 @@ fn compatibility_requires_resolved_plan_evidence() {
     let fixture = private_library();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":6,"increments":[{"name":"library","bump":"patch"}]}"#,
+        r#"{"schema_version":7,"increments":[{"name":"library","bump":"patch"}]}"#,
     );
     let output = TempDir::new().unwrap();
     let evidence = output.path().join("evidence");
@@ -820,7 +823,7 @@ fn moved_anticipated_parent_invalidates_captured_compatibility_before_checker() 
         let proposal = output.path().join("proposal.json");
         fs::write(
             &proposal,
-            r#"{"schema_version":6,"increments":[{"name":"library","bump":"major"}]}"#,
+            r#"{"schema_version":7,"increments":[{"name":"library","bump":"major"}]}"#,
         )
         .unwrap();
         let preview = output.path().join("preview");

@@ -109,6 +109,11 @@ pub struct WorkPackage {
     pub manifest: PackageManifest,
     pub manifest_path: PathBuf,
     pub dependencies: Vec<ReportedDep>,
+    /// Defining workspace packages exposed directly or through another exposed owner's API.
+    ///
+    /// This sorted closure is independent of the dependencies supplying those types.
+    /// Ref: packages/cargo-release-plan/docs/design.md, "Public dependencies".
+    pub public_origins: Vec<String>,
     /// Whether the package presents a library API contract to consumers.
     ///
     /// True when the package has a library target and has not declared
@@ -147,19 +152,6 @@ pub struct ReportedDep {
     /// decision reads the judgement rather than repeating it.
     #[serde(skip)]
     pub kind: DepKind,
-    /// Whether the dependent's public API exposes types from this dependency.
-    ///
-    /// Read from the dependent's `allowed_external_types` allow-list, which
-    /// names every type outside the crate that its public API may expose. The
-    /// allow-list is a declaration rather than an observation, but
-    /// `check-external-types` fails on an exposed type the list omits, so a
-    /// passing workspace makes it a superset of what is genuinely exposed.
-    /// Erring wide is the safe direction here: a dependency wrongly called
-    /// public over-states a change's semantic impact, while a missed one would publish a
-    /// broken contract.
-    /// Ref: docs/external-types.md; packages/cargo-release-plan/docs/design.md, "Public
-    /// dependencies".
-    pub public: bool,
 }
 
 /// The dependency kinds Cargo distinguishes, as they matter to a release.
@@ -749,14 +741,13 @@ fn work_tree_from_metadata_parsed_with(
                 req: dep.req.clone(),
                 exact_pin: dep.req.starts_with('='),
                 kind: DepKind::from_metadata(dep.kind.as_deref()),
-                // Resolved once every package's allow-list is known, below.
-                public: false,
             });
         }
 
         exposed_crates_by_package.insert(package.name.clone(), exposed_crates);
 
         packages.push(WorkPackage {
+            public_origins: Vec::new(),
             has_lockfile_target: tracked.has_lockfile_target_with(&manifest, &mut regular)?,
             consumer_contract: is_consumer_contract(package),
             manifest,
@@ -787,7 +778,7 @@ fn work_tree_from_metadata_parsed_with(
         .collect();
     member_manifests.sort();
 
-    mark_public_dependencies(
+    collect_public_origins(
         &mut packages,
         &exposed_crates_by_package,
         &library_crate_names,
@@ -1328,40 +1319,18 @@ fn glob_matches(pattern: &str, candidate: &str) -> bool {
         .is_some_and(|rest| rest.iter().all(|entry| *entry == '*'))
 }
 
-/// Marks the dependency edges through which each package exposes another crate's types.
+/// Separates defining identities from the normal dependency paths supplying them.
 ///
-/// A package names the crates its public API may expose, but it does not
-/// necessarily depend on them directly: an implementation crate's types
-/// normally reach consumers re-exported through the public crate in front of
-/// it, so `region_local` names `many_cpus_impl` while depending on `many_cpus`.
-/// The re-exporting crate closes that gap, because it must itself declare the
-/// crate it re-exports. Following those declarations transitively is what
-/// attributes a named crate to the direct dependency that actually supplies it.
-///
-/// Only a normal dependency can supply types to a library's public API, so a
-/// build or development dependency is never public however the allow-lists read.
+/// An exposed owner's whole allow-list conservatively covers nested signatures,
+/// including methods on external re-exports. Shared origins do not expose the
+/// suppliers themselves. Private API declarations do not interrupt this closure.
 /// Ref: packages/cargo-release-plan/docs/design.md, "Public dependencies".
-fn mark_public_dependencies(
+fn collect_public_origins(
     packages: &mut [WorkPackage],
     exposed_crates_by_package: &BTreeMap<String, Vec<String>>,
     library_crate_names: &BTreeMap<&str, String>,
 ) {
-    // The workspace packages each package's allow-list names outright.
-    let mut named: BTreeMap<String, HashSet<String>> = BTreeMap::new();
-    for (package, patterns) in exposed_crates_by_package {
-        let matched = library_crate_names
-            .iter()
-            .filter(|(_, library)| {
-                patterns
-                    .iter()
-                    .any(|pattern| glob_matches(pattern, library))
-            })
-            .map(|(name, _)| (*name).to_string())
-            .collect();
-        named.insert(package.clone(), matched);
-    }
-
-    let normal_dependencies: BTreeMap<String, Vec<String>> = packages
+    let normal_dependencies: BTreeMap<String, BTreeSet<String>> = packages
         .iter()
         .map(|package| {
             (
@@ -1376,64 +1345,57 @@ fn mark_public_dependencies(
         })
         .collect();
 
-    // What each package publicly exposes, including what it re-exports from further down. A
-    // package exposes itself, so a direct dependency is caught by the same intersection test.
-    let mut exposes: BTreeMap<String, HashSet<String>> = normal_dependencies
+    // A defining package with no external exposure is still a reachable origin.
+    let mut named: BTreeMap<String, BTreeSet<String>> = normal_dependencies
         .keys()
-        .map(|name| {
-            let mut own: HashSet<String> = named.get(name).cloned().unwrap_or_default();
-            own.insert(name.clone());
-            (name.clone(), own)
-        })
+        .map(|name| (name.clone(), BTreeSet::new()))
         .collect();
+    for (package, patterns) in exposed_crates_by_package {
+        // Reachability admits a canonical origin, not every supplier on its path.
+        // Allowlists are supersets, so unrelated workspace matches must be excluded.
+        let reachable = reachable_packages(package, &normal_dependencies);
+        let matched = library_crate_names
+            .iter()
+            .filter(|(name, library)| {
+                reachable.contains(**name)
+                    && normal_dependencies.contains_key(**name)
+                    && patterns
+                        .iter()
+                        .any(|pattern| glob_matches(pattern, library))
+            })
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        named.insert(package.clone(), matched);
+    }
+    for package in packages {
+        package.public_origins = reachable_packages(&package.manifest.name, &named)
+            .into_iter()
+            .collect();
+    }
+}
 
-    // An edge admitted in one pass can widen what its dependent exposes, which can admit a
-    // further edge, so the sets are grown until they stop changing. They only ever grow and are
-    // bounded by the workspace, so this settles; the bound is asserted rather than assumed.
-    let mut remaining_passes = normal_dependencies.len().saturating_add(1);
-    let mut settled = false;
-    while !settled {
+/// Computes a bounded graph closure without revisiting cyclic relationships.
+fn reachable_packages(root: &str, edges: &BTreeMap<String, BTreeSet<String>>) -> BTreeSet<String> {
+    let mut visited = BTreeSet::from([root.to_owned()]);
+    let mut pending = vec![root];
+    // Each visited package schedules its outgoing edges once, even in a cycle.
+    let mut remaining = edges.len().saturating_add(1);
+    while let Some(name) = pending.pop() {
         assert!(
-            remaining_passes > 0,
-            "public-dependency closure did not settle; this is a defect in the exposure model"
+            remaining > 0,
+            "each package can enter the traversal only once"
         );
-        remaining_passes = remaining_passes.saturating_sub(1);
-        settled = true;
-        for (name, dependencies) in &normal_dependencies {
-            let wanted = named.get(name).cloned().unwrap_or_default();
-            let mut added: HashSet<String> = HashSet::new();
+        remaining = remaining.saturating_sub(1);
+        if let Some(dependencies) = edges.get(name) {
             for dependency in dependencies {
-                let Some(reachable) = exposes.get(dependency) else {
-                    continue;
-                };
-                if reachable.is_disjoint(&wanted) {
-                    continue;
+                if edges.contains_key(dependency) && visited.insert(dependency.clone()) {
+                    pending.push(dependency);
                 }
-                added.extend(reachable.iter().cloned());
-            }
-            let own = exposes
-                .get_mut(name)
-                .expect("every package was seeded above");
-            let before = own.len();
-            own.extend(added);
-            if own.len() != before {
-                settled = false;
             }
         }
     }
-
-    for package in packages.iter_mut() {
-        let wanted = named
-            .get(&package.manifest.name)
-            .cloned()
-            .unwrap_or_default();
-        for dependency in &mut package.dependencies {
-            dependency.public = dependency.kind == DepKind::Normal
-                && exposes
-                    .get(&dependency.name)
-                    .is_some_and(|reachable| !reachable.is_disjoint(&wanted));
-        }
-    }
+    visited.remove(root);
+    visited
 }
 
 fn is_intra_workspace_released(
@@ -2032,16 +1994,12 @@ mod tests {
         assert!(glob_matches("a*é", "abcé"));
     }
 
-    /// Exposure follows re-exports to the dependency that actually supplies the named crate.
-    ///
-    /// `outer` names `impl` in its allow-list but depends on `facade`, which re-exports it. The
-    /// edge that must be marked is `outer -> facade`, because that is the requirement whose
-    /// version moves when `impl` breaks. A crate no one names stays private, and a build or
-    /// development edge never counts because neither can supply types to a library's API.
+    /// Re-exports retain the defining identity, without promoting their supplier to an origin.
     #[test]
-    fn exposure_follows_re_exports_to_the_supplying_dependency() {
+    fn exposure_follows_re_exports_to_the_defining_package() {
         fn work_package(name: &str, dependencies: Vec<ReportedDep>) -> WorkPackage {
             WorkPackage {
+                public_origins: Vec::new(),
                 manifest: PackageManifest {
                     name: name.to_string(),
                     version: "0.1.0".parse().unwrap(),
@@ -2070,20 +2028,13 @@ mod tests {
                 req: "0.1.0".to_string(),
                 exact_pin: false,
                 kind,
-                public: false,
             }
         }
-        fn is_public(packages: &[WorkPackage], from: &str, to: &str) -> bool {
+        fn is_origin(packages: &[WorkPackage], from: &str, to: &str) -> bool {
             packages
                 .iter()
                 .find(|package| package.manifest.name == from)
-                .and_then(|package| {
-                    package
-                        .dependencies
-                        .iter()
-                        .find(|dependency| dependency.name == to)
-                })
-                .is_some_and(|dependency| dependency.public)
+                .is_some_and(|package| package.public_origins.iter().any(|origin| origin == to))
         }
 
         let mut packages = vec![
@@ -2116,19 +2067,19 @@ mod tests {
             ("harness", "harness".to_string()),
         ]);
 
-        mark_public_dependencies(&mut packages, &exposed, &libraries);
+        collect_public_origins(&mut packages, &exposed, &libraries);
 
-        // The re-export chain is public at every hop.
-        assert!(is_public(&packages, "outer", "facade"));
-        assert!(is_public(&packages, "facade", "implementation"));
+        assert!(is_origin(&packages, "outer", "implementation"));
+        assert!(!is_origin(&packages, "outer", "facade"));
+        assert!(is_origin(&packages, "facade", "implementation"));
 
         // A crate `outer` never names is private even though it is a normal dependency.
-        assert!(!is_public(&packages, "outer", "private"));
+        assert!(!is_origin(&packages, "outer", "private"));
 
         // Neither non-normal kind can supply types to a library's public API, so neither is
         // public even though both reach a package naming the exposed crate.
-        assert!(!is_public(&packages, "outer", "tool"));
-        assert!(!is_public(&packages, "outer", "harness"));
+        assert!(!is_origin(&packages, "outer", "tool"));
+        assert!(!is_origin(&packages, "outer", "harness"));
     }
 
     /// An absent allow-list permits no external type, so it exposes no crate.
@@ -2356,6 +2307,7 @@ mod tests {
     fn dependents_of_lists_packages_that_depend_on_the_name() {
         fn package(name: &str, dependencies: Vec<ReportedDep>) -> WorkPackage {
             WorkPackage {
+                public_origins: Vec::new(),
                 manifest: PackageManifest {
                     name: name.to_string(),
                     version: "0.1.0".parse().unwrap(),
@@ -2386,7 +2338,6 @@ mod tests {
                 req: "0.1.0".to_string(),
                 exact_pin: false,
                 kind: DepKind::Normal,
-                public: false,
             }],
         );
         let foo = package("foo", Vec::new());

@@ -104,16 +104,8 @@ fn assert_public_dependencies(
     anchor: &Version,
     version: &Version,
 ) {
-    for dependency in package
-        .dependencies
-        .iter()
-        .filter(|dependency| dependency.public)
-    {
-        let Some(target) = report
-            .packages
-            .iter()
-            .find(|target| target.name == dependency.name)
-        else {
+    for origin in &package.public_origins {
+        let Some(target) = report.packages.iter().find(|target| target.name == *origin) else {
             continue;
         };
         if let Some(target_anchor) = &target.anchor {

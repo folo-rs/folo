@@ -55,19 +55,21 @@ features disabled loses the item. Removing a feature is breaking when it withdra
 or public items a consumer could reach. Adding a new opt-in feature is not breaking; it is a
 compatible capability.
 
-A package also takes `breaking` when one of its **public dependencies** does, whatever its own
-diff shows. The report marks such a dependency `"public": true`, meaning this package's public
-API exposes types from it. An incompatible release of that dependency changes the identity of
-those types for consumers: code holding the older dependency can no longer hand its values
-across, so the exposure itself becomes incompatible even when the dependency's breaking change
-touched nothing this package re-exports. Read the flag rather than judging the exposure from
-source; it is derived from the `allowed_external_types` allow-list that the repository's
-external-type check verifies, and `cargo release-plan check` rejects a tree where a public
-dependency breaks alone.
+A package also takes `breaking` when a defining package in its `public_origins`
+releases an incompatible version, whatever its own diff shows. This report field
+follows verified allow-list declarations transitively through exposed owners,
+including private implementation packages. It does not attribute the identity of
+every dependency transporting those types.
 
-The flag follows re-exports, so a package exposing an implementation crate's types carries the
-flag on the public crate it actually depends on — the one whose version moves with the
-implementation crate's.
+An incompatible origin version changes the identity of its types for consumers,
+even when its breaking source change touches an unrelated item. Conversely,
+sharing a compatible third package's types does not make an unrelated dependency
+break propagate. Use the report's origins rather than inferring public exposure
+from ordinary dependency edges.
+
+Inference or method-call ambiguity caused solely by coexisting dependency versions'
+trait implementations is intentionally considered nonbreaking. This exception does
+not cover explicitly exposed trait/type identities or other contract changes.
 
 Only a `breaking` dependency propagates this way. A dependency that adds API compatibly leaves
 the exposure intact, so it establishes no more than the `patch` its requirement rewrite already

@@ -319,6 +319,7 @@ fn endpoints(
         has_lockfile_target: anchor_binary,
     };
     let work_package = WorkPackage {
+        public_origins: Vec::new(),
         manifest,
         manifest_path: root.join("Cargo.toml"),
         dependencies: Vec::new(),
