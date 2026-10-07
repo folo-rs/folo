@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf, absolute};
+use std::rc::Rc;
 use std::{fs, io};
 
 use crp_diag::Quotable as _;
@@ -51,7 +52,7 @@ pub struct WorkTree {
     /// Parsed documents from this acquisition, before any edits or Cargo resolution.
     pub manifests: ManifestSnapshot,
     /// The same live index listing used to select this acquisition's tracked members.
-    pub tracked_paths: Vec<String>,
+    pub tracked_paths: Rc<[String]>,
     pub packages: Vec<WorkPackage>,
     /// Every Git-tracked member whose declared version a plan may set.
     pub version_targets: Vec<VersionTarget>,
@@ -795,7 +796,7 @@ fn work_tree_from_metadata_parsed_with(
     Ok(WorkTree {
         workspace_root,
         manifests,
-        tracked_paths: tracked.paths,
+        tracked_paths: tracked.paths.into(),
         packages,
         version_targets,
         exact_dependencies,

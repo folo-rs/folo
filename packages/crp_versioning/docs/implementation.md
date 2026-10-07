@@ -91,7 +91,21 @@ dependencies remain part of benchmark-enabled builds.
 
 Released-content comparison consumes acquired archive paths, object identities and modes.
 It requests bytes lazily only for content changes, independently of mode-only changes.
-Historical member discovery reads recorded paths through the same cache and membership
+Comparison first identifies changes in deterministic archive-path order, then renders them
+from exact blob identities. Historical paths resolve through the retained tree; current IDs
+name the objects written by the original clean conversion, never a second filter execution.
+Workspace's bounded reader shares duplicate identities within each batch and releases content
+as rendering advances. The existing content and mode renderers still own patch semantics.
+Each admitted classification owns workspace's scoped Git observations and shares its metadata
+tracked listing without copying the paths. Adjacent read-only packaging checks select from
+that same handle rather than querying tracked paths again. Resource selection overlaps across
+packages and the existing packaging/presence helpers
+interpret each selection. Symlink and presence checks precede that package's hashes. Hashing
+keeps per-package ordering and process boundaries, including for shared resources selected by
+stateful clean filters; mutable listings never enter the committed snapshots.
+When effective attributes select any relevant filter driver, mode observations also retain
+per-package acquisition because Git's raw diff can perform clean conversion.
+Historical member discovery reads recorded paths through the same snapshot and membership
 logic whether observations come from Git or an in-process fixture.
 Preview retains committed snapshots and parsed lockfiles across fixed-point passes, keyed by
 resolved commit and invalidated by repository, workspace, case-rule or registry-context changes.
@@ -128,7 +142,10 @@ parent components resolved before recording repository-relative contents. Root-l
 outside-directory supporting files enter through the acquired Git listing, including
 newly added index entries; capture does not inspect Rust imports or infer additional roots.
 Successful admission returns the acquired workspace, Git identity and
-resolved history to adjacent classification or plan consumers. Preparation uses its original
+resolved history to adjacent classification or plan consumers. Its parsed index modes also
+serve classification's baseline without another staged listing when effective filters permit
+shared mode queries. Capture itself does not execute mode overlays or clean filters.
+Preparation uses its original
 acquisition to locate the lockfile, drops it before installing resolved bytes, then captures
 and classifies the resulting source with one acquisition. Application drops its admission
 before writing and verifies the resulting state with a new capture. Preview consumes the

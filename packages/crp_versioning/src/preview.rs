@@ -476,6 +476,7 @@ mod tests {
     use std::hash::{Hash, Hasher};
     use std::iter;
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     use crp_workspace::lockfile::InstallationGraph;
     use crp_workspace::metadata::{
@@ -706,7 +707,7 @@ mod tests {
     fn work_tree(packages: &[PackageClass]) -> WorkTree {
         WorkTree {
             manifests: ManifestSnapshot::default(),
-            tracked_paths: Vec::new(),
+            tracked_paths: Rc::default(),
             workspace_root: PathBuf::new(),
             packages: Vec::new(),
             version_targets: packages

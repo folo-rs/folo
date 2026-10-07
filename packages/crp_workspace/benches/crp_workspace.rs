@@ -10,7 +10,7 @@ use std::hint::black_box;
 use std::path::Path;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use crp_workspace::git::decode_blob_batch;
+use crp_workspace::git::{BLOB_BATCH_BYTES, BlobReader, decode_blob_batch};
 use crp_workspace::lockfile::benchmark_lockfile_closures;
 use crp_workspace::manifest_document::ManifestDocuments;
 
@@ -27,9 +27,40 @@ criterion_group!(
     benches,
     lockfile_closure,
     historical_blob_batch,
+    bounded_blob_reader,
     manifest_reuse
 );
 criterion_main!(benches);
+
+// Consecutive duplicates exercise shared retention. Compact payloads keep both cases in one
+// batch, isolating in-process reader bookkeeping rather than Git latency or budget turnover.
+fn bounded_blob_reader(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crp_workspace/bounded_blob_reader");
+    for (name, count) in [("low", LOW_PACKAGE_COUNT), ("high", HIGH_PACKAGE_COUNT)] {
+        let ids: Vec<_> = (0..count).map(|index| format!("{index:040x}")).collect();
+        let ids: Vec<_> = ids
+            .iter()
+            .flat_map(|id| [id.as_str(), id.as_str()])
+            .collect();
+        let body = b"ordinary source contents\n";
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let mut reader = BlobReader::new(black_box(&ids), BLOB_BATCH_BYTES, |ids| {
+                    Ok(vec![body.len(); ids.len()])
+                })
+                .expect("the fixture supplies one size per unique object");
+                for id in &ids {
+                    black_box(
+                        reader
+                            .read(id, |ids| Ok(vec![body.to_vec(); ids.len()]))
+                            .expect("the fixture supplies one payload per requested object"),
+                    );
+                }
+            });
+        });
+    }
+    group.finish();
+}
 
 fn manifest_reuse(c: &mut Criterion) {
     let mut group = c.benchmark_group("crp_workspace/manifest_reuse");

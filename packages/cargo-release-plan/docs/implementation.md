@@ -88,6 +88,14 @@ No observation storage backend or command-line cache controls participate in dis
 Compatibility's Cargo build-directory configuration remains independent of these
 acquisition lifetimes. See the component guides for ownership and invalidation.
 
+Patch generation requests only differing objects, resolving both endpoints to exact identities
+before rendering. Workspace supplies byte-bounded batches and shares duplicate payloads within
+each batch; the renderer retains only its current comparison in addition to that lookahead.
+The admitted interval owns the shared tracked listing and scoped mode/untracked observations.
+Classification retains this handle for adjacent read-only consumers, including packaging probes.
+Each package applies the existing resource and packaging rules independently; sharing never
+partitions shared resources or extends admission across edits, resolution or another command.
+
 ## Executable identity
 
 Executable identity is handled by CLI parsing before workspace acquisition.

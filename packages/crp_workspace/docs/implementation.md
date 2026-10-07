@@ -86,6 +86,58 @@ unrepresentable replacement namespace is rejected rather than treated as the def
 namespace. There is no persistent observation store, cache-location discovery or
 serialized interpretation. Ordinary Cargo/compiler caches remain owned by their tools.
 
+## Patch content acquisition
+
+Patch readers receive ordered, exact object identities, not historical paths or raw worktree
+bytes. A shared length-framed size query plans byte-budgeted lookahead; repeated identities
+within a batch share one payload. Advancing releases that batch, while the renderer can retain
+the endpoints of its current comparison. A single oversized object is accepted alone rather
+than turning the lookahead budget into a content limit. A single distinct object needs no size
+query. A secondary object-count bound limits framing and retained-map overhead even for empty
+blobs. Request identity, blob type, exact length and framing remain checked, and subprocess
+stdin is written concurrently with output draining.
+Shared vector ownership preserves each acquired payload allocation rather than copying it into
+a reference-counted slice. Per-object headers and spare capacity stay with that allocation.
+
+Every rendering pass acquires its required objects from Git. The size query rejects unavailable
+objects before a multi-object read; the content protocol checks each response against its
+requested identity, type and length. Singleton batches use a direct blob read. No missing object
+becomes an empty file, and no payload is retained beyond its rendering consumers.
+
+## Fresh classification listings
+
+Each admitted interval shares ownership of its metadata acquisition's complete tracked listing.
+Index modes, their worktree overlay and untracked candidates are acquired over the union of
+relevant literal pathspecs, splitting arguments at the native command-line budget. Untracked
+queries do not expand to unrelated repository paths. Packages select overlapping scopes, so
+shared resources and outer/nested consumers retain independent packaging interpretation.
+Synchronous scoped queries borrow arguments from the fixed prefix and retained pathspec strings;
+batch assembly does not duplicate their owned contents.
+Source capture can supply already acquired index modes; live acquisition still obtains the
+worktree overlay only after effective-filter admission. Without capture, acquisition reads the
+index itself. Neither path executes mode queries merely to capture source evidence.
+
+Selection follows Git's literal component boundaries and ASCII byte case comparison, not the
+filesystem's Unicode case model. Noncanonical scopes, non-ASCII insensitive scopes, overridden
+pathspec environments and requests outside acquired scopes use the narrow native query.
+Presence, nested-manifest removal, symlink admission and packaging rules remain in their
+existing owners. Effective modes retain the index baseline followed by worktree changes.
+The observation value can serve adjacent read-only consumers of the admitted classification,
+including packaging selection. It is dropped before edits, resolution or relocation and is
+never reused by an independent command or stored with committed snapshots.
+
+An index entry is racily clean when its cached filesystem metadata can appear unchanged despite
+a recent content change, requiring Git to compare content. Raw mode diffs can therefore execute
+clean filters for such entries. Effective filter attributes are therefore acquired for the
+relevant tracked paths before sharing mode queries.
+If Git reports a filter attribute, the entire pass retains per-package mode-query ordering; no
+assumption about driver statelessness or configuration absence permits sharing. Attribute
+query failures propagate. This gate never executes a driver, does not widen to unrelated
+paths, and does not change the independently shared tracked and untracked listings.
+The all-attributes query distinguishes absent attributes from a driver literally named
+`unspecified`; an `unset` response conservatively retains narrow acquisition because it
+can also name a driver.
+
 ## Observation boundaries and tests
 
 Pure parsing and graph tests remain in process. Real Git/Cargo/filesystem tests

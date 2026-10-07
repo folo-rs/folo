@@ -15,8 +15,8 @@ use std::path::{Component, Path, PathBuf};
 
 use crp_diag::Verbose;
 use crp_workspace::artifact_path;
-use crp_workspace::command::{hash_bytes, run_capture};
-use crp_workspace::git::GitRepo;
+use crp_workspace::command::{hash_bytes, run_capture_bytes};
+use crp_workspace::git::{GitRepo, WorkTreeModes};
 use crp_workspace::manifest::{PathCase, parse_document};
 use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
@@ -100,7 +100,7 @@ impl Inputs {
         // Cargo preserves the supplied path spelling, including Windows short names.
         // Normalize the entry point before discovering any paths that will be rebased.
         let manifest = canonical(manifest)?;
-        let acquired =
+        let mut acquired =
             AcquiredWorkspace::acquire(&manifest, release_history, merge_target, verbose, cache)?;
         let work_tree = &acquired.work_tree;
         let git = &acquired.git;
@@ -123,6 +123,10 @@ impl Inputs {
         )?;
         capture_sources(&root, &sources, &mut paths)?;
         let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
+        let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root())?;
+        acquired.index_modes = Some(WorkTreeModes::from_index(&index)?);
+        let index = String::from_utf8(index)
+            .expect("index mode interpretation strictly decoded every NUL-delimited record");
         let inputs = Self {
             root,
             manifest,
@@ -131,7 +135,7 @@ impl Inputs {
             release_history_revision: history.release_history_revision.clone(),
             merge_target: history.merge_target.clone(),
             merge_target_revision: history.merge_target_revision.clone(),
-            index: run_capture("git", &["ls-files", "--stage", "-z"], git.root())?,
+            index,
             paths,
             digest,
         };

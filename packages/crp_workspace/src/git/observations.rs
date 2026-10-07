@@ -72,6 +72,16 @@ pub struct GitObjectContext {
 }
 
 impl GitObjectContext {
+    // Synthetic observations for cross-crate unit tests; native capture is exercised separately.
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(test, mutants::skip)]
+    pub(crate) fn for_test(format: &str) -> Self {
+        Self {
+            format: format.to_owned(),
+            ..Self::default()
+        }
+    }
+
     #[cfg_attr(test, mutants::skip)] // Acquires Git/environment/filesystem interpretation inputs.
     pub fn capture(git: &GitRepo) -> Result<Self, AppError> {
         let replacement_base = replacement_namespace(env::var("GIT_REPLACE_REF_BASE"))?;

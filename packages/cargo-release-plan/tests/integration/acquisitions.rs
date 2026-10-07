@@ -7,6 +7,7 @@ use std::fs;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, SystemTime};
 
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::resolved::Inputs;
@@ -91,6 +92,33 @@ fn independent_reports_reacquire_inputs_and_share_each_immutable_snapshot() {
         let trace = evidence.path().join(format!("{name}.trace"));
         report(&fixture, &evidence.path().join(name), &trace);
         assert_eq!(acquisitions(&trace), (1, 1));
+        let trace = fs::read_to_string(&trace).unwrap();
+        for operation in [
+            "git ls-files -z -- ",
+            "git ls-files -s -z -- ",
+            "git diff-files --raw -z --no-renames -- ",
+            "git ls-files -z --others --exclude-standard -- ",
+            "git cat-file --batch-check",
+        ] {
+            assert_eq!(
+                trace
+                    .lines()
+                    .filter(|line| line.contains(operation))
+                    .count(),
+                1,
+                "{trace}"
+            );
+        }
+        // Historical manifests use one batch, and the changed patch uses another.
+        // Independent commands reacquire both; repeated endpoints share each bounded batch.
+        assert_eq!(
+            trace
+                .lines()
+                .filter(|line| line.ends_with("git cat-file --batch"))
+                .count(),
+            2,
+            "{trace}"
+        );
     }
     assert_reports_equal(
         &evidence.path().join("first"),
@@ -153,11 +181,7 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             fixture.read("packages/demo/Cargo.toml")
         ),
     );
-    fixture.write(
-        ".cargo/config.toml",
-        "[build]\ntarget-dir = 'configured-target'\n",
-    );
-    fixture.commit("target configuration");
+    fixture.commit("private API configuration");
     fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     let evidence = TempDir::new().unwrap();
     let prepared = evidence.path().join("prepared");
@@ -173,13 +197,34 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
     // Original entry, resolved temporary workspace, and
     // original post-install capture.
     // The post-install classification consumes that capture rather than acquiring again.
+    let prepare_trace = fs::read_to_string(prepare_trace).unwrap();
     assert_eq!(
-        fs::read_to_string(prepare_trace)
-            .unwrap()
+        prepare_trace
             .lines()
             .filter(|line| line.ends_with("git ls-files -z -- ':(literal).'"))
             .count(),
         3,
+    );
+    assert_eq!(
+        prepare_trace
+            .lines()
+            .filter(|line| line.contains("git ls-files --stage -z"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        prepare_trace
+            .lines()
+            .filter(|line| line.contains("git ls-files -s -z -- "))
+            .count(),
+        0
+    );
+    assert_eq!(
+        prepare_trace
+            .lines()
+            .filter(|line| line.contains("git diff-files --raw"))
+            .count(),
+        1
     );
     let plan = evidence.path().join("proposal.json");
     fs::write(
@@ -229,6 +274,13 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             .as_str()
             .unwrap(),
     );
+    let candidate_manifest =
+        fs::read_to_string(manifest.parent().unwrap().join("packages/demo/Cargo.toml")).unwrap();
+    assert!(candidate_manifest.contains("0.1.1"), "{candidate_manifest}");
+    assert_eq!(
+        fs::read_to_string(manifest.parent().unwrap().join("packages/demo/src/lib.rs")).unwrap(),
+        "pub fn changed() {}\n"
+    );
     let compatibility_trace = evidence.path().join("compatibility.trace");
     success(
         command(&fixture)
@@ -241,21 +293,6 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             .unwrap(),
     );
     assert_eq!(acquisitions(&compatibility_trace), (2, 1));
-    assert!(
-        !manifest
-            .parent()
-            .unwrap()
-            .join("configured-target")
-            .join("cargo-release-plan")
-            .join("cache")
-            .exists()
-    );
-    let storage = fixture
-        .path()
-        .join("configured-target")
-        .join("cargo-release-plan")
-        .join("cache");
-    assert!(!storage.exists());
     success(
         command(&fixture)
             .args(["verify-preview", "--plan"])
@@ -283,7 +320,6 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             .count(),
         1
     );
-    assert!(!storage.exists());
 
     // An independent command must admit the current source before consuming retained evidence.
     fixture.write_workspace("[workspace.dependencies]\nunused = { path = 'unavailable' }\n");
@@ -296,5 +332,145 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("stale"));
-    assert!(!storage.exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes independent checks and real Cargo packaging probes"
+)]
+fn packaging_probes_reuse_their_classification_listing_but_commands_reacquire() {
+    let fixture = Fixture::new("[workspace.package]\nreadme='README.md'\n");
+    for name in ["first", "second"] {
+        write_package(&fixture, name, "0.1.0", "readme.workspace=true\n");
+    }
+    fixture.write("README.md", "shared\n");
+    fixture.cargo(&["generate-lockfile", "--offline"]);
+    fixture.commit("packaging baseline");
+    let evidence = TempDir::new().unwrap();
+    for pass in 0..2 {
+        let trace = evidence.path().join(format!("check-{pass}.trace"));
+        let output = success(
+            command(&fixture)
+                .args(["check", "--release-history", "HEAD", "--verify-packaging"])
+                .env("GIT_TRACE", &trace)
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace = fs::read_to_string(trace).unwrap();
+        for operation in [
+            "git ls-files -z -- ",
+            "git ls-files -s -z -- ",
+            "git diff-files --raw -z --no-renames -- ",
+        ] {
+            assert_eq!(
+                trace
+                    .lines()
+                    .filter(|line| line.contains(operation))
+                    .count(),
+                1,
+                "{trace}"
+            );
+        }
+        // Each independent command must see the staged addition; Cargo's real package list
+        // includes it, so retaining the preceding command's listing would produce a mismatch.
+        fixture.write("packages/first/src/new.rs", "pub fn added() {}\n");
+        fixture.write(
+            "packages/first/Cargo.toml",
+            &fixture
+                .read("packages/first/Cargo.toml")
+                .replace("0.1.0", "0.1.1"),
+        );
+        fixture.git(&["add", "packages/first"]);
+        fixture.cargo(&["generate-lockfile", "--offline"]);
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "executes a stateful Git clean filter and the application"
+)]
+fn shared_resource_filters_keep_each_packages_original_conversion_and_process_boundary() {
+    let fixture = Fixture::new("[workspace.package]\nreadme='README.md'\n");
+    for name in ["first", "second"] {
+        write_package(&fixture, name, "0.1.0", "readme.workspace=true\n");
+    }
+    fixture.write("README.md", "original\n");
+    fixture.commit("shared resource");
+    fixture.git(&["update-index", "--refresh"]);
+    // A synthetic old index timestamp forces Git's racy-clean content check without a clock
+    // or sleep. Even raw mode queries then execute the filter, before each package's hash.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(fixture.path().join(".git/index"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    fixture.write(".git/info/attributes", "README.md filter=count\n");
+    // Git owns invoking this fixture; rendering must not repeat its stateful conversion.
+    fixture.write(
+        ".git/clean.ps1",
+        r#"#requires -Version 7.6
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+# Git clean fixture: count each conversion of a shared released resource.
+$null = [Console]::In.ReadToEnd()
+$path = '.git/filter-count'
+$count = if (Test-Path -LiteralPath $path) { [int][IO.File]::ReadAllText($path) } else { 0 }
+$count += 1
+[IO.File]::WriteAllText($path, [string]$count)
+[Console]::Write("converted-$count`n")
+"#,
+    );
+    fixture.git(&[
+        "config",
+        "filter.count.clean",
+        "pwsh -NoProfile -File .git/clean.ps1",
+    ]);
+    fixture.git(&["config", "filter.count.required", "true"]);
+    let evidence = TempDir::new().unwrap();
+    for pass in 0..2 {
+        let output = evidence.path().join(format!("pass-{pass}"));
+        let trace = evidence.path().join(format!("pass-{pass}.trace"));
+        report(&fixture, &output, &trace);
+        let trace = fs::read_to_string(trace).unwrap();
+        let hashes: Vec<_> = trace
+            .lines()
+            .filter(|line| line.contains("git hash-object -w --"))
+            .collect();
+        assert_eq!(hashes.len(), 2, "{trace}");
+        assert_eq!(
+            trace
+                .lines()
+                .filter(|line| line.contains("git diff-files --raw"))
+                .count(),
+            2,
+            "{trace}"
+        );
+        // Discovery need not enumerate package directories in alphabetical order.
+        // Each patch uses the conversion from that package's own hash process.
+        for (index, command) in hashes.iter().enumerate() {
+            let name = ["first", "second"]
+                .into_iter()
+                .find(|name| command.contains(&format!("{name}/Cargo.toml")))
+                .unwrap();
+            let patch = fs::read_to_string(output.join(format!("diffs/{name}.patch"))).unwrap();
+            assert!(
+                patch.contains(&format!("+converted-{}\n", pass * 4 + index * 2 + 2)),
+                "pass {pass}, package {name}, count {}\n{patch}\n{trace}",
+                fixture.read(".git/filter-count")
+            );
+        }
+        assert_eq!(
+            fixture.read(".git/filter-count"),
+            (pass * 4 + 4).to_string()
+        );
+    }
 }

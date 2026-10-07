@@ -15,7 +15,6 @@ use semver::Version;
 
 use crate::classify::{
     ChangedItem, Classification, PackageClass, PackageStatus, Snapshots, classify_with_snapshots,
-    released_work_tree_paths,
 };
 use crate::groups::GroupVerdict;
 use crate::{quote_path, short_commit};
@@ -496,8 +495,7 @@ fn verify_packaging_rules(classification: &Classification) -> String {
         // rebuilding it from `include` and `exclude` would miss a README Cargo
         // detects for itself and take in a nested package's files, warning about a
         // package whose rules are right.
-        let tool = match released_work_tree_paths(&classification.git, package, classification.case)
-        {
+        let tool = match classification.released_work_tree_paths(package) {
             Ok(paths) => paths,
             Err(error) => {
                 writeln!(

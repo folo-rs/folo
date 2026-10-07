@@ -25,8 +25,13 @@ use crate::{
 
 mod blob_batch;
 pub use blob_batch::decode_blob_batch;
+mod blob_reader;
+pub use blob_reader::*;
 mod observations;
 pub use observations::*;
+mod live;
+pub use live::*;
+mod filter_attributes;
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod testing;
@@ -387,73 +392,84 @@ impl GitRepo {
         })
     }
 
+    /// Overlays current work-tree modes on an index admitted in this unchanged interval.
+    ///
+    /// The index, configuration and work-tree inputs must remain unchanged since admission.
+    #[cfg_attr(test, mutants::skip)] // Native overlay; parsing and precedence have pure tests.
+    fn work_tree_modes_from_index(
+        &self,
+        mut modes: WorkTreeModes,
+        pathspecs: &[&str],
+        case: PathCase,
+    ) -> Result<WorkTreeModes, AppError> {
+        if pathspecs.is_empty() {
+            return Ok(WorkTreeModes::default());
+        }
+        let diff = Self::scoped_outputs(
+            &["diff-files", "--raw", "-z", "--no-renames", "--"],
+            pathspecs,
+            case,
+            |args| run_capture_os_bytes("git", args, &self.root),
+        )?;
+        overlay_work_tree_modes(&diff, &mut modes)?;
+        Ok(modes)
+    }
+
     fn tracked_paths_with(
         paths: &[&str],
         case: PathCase,
-        run: impl FnOnce(&[String]) -> Result<Vec<u8>, AppError>,
+        run: impl FnMut(&[&str]) -> Result<Vec<u8>, AppError>,
     ) -> Result<Vec<String>, AppError> {
         if paths.is_empty() {
             return Ok(Vec::new());
         }
-        let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
-        args.extend(paths.iter().map(|path| cased_pathspec(path, case)));
-        let stdout = run(&args)?;
-        split_z(&stdout)
+        let stdout = Self::scoped_outputs(&["ls-files", "-z", "--"], paths, case, run)?;
+        let mut paths = split_z(&stdout)?;
+        paths.sort_unstable();
+        paths.dedup();
+        Ok(paths)
     }
 
     fn work_tree_modes_with(
         pathspecs: &[&str],
         case: PathCase,
-        mut run: impl FnMut(&[String]) -> Result<Vec<u8>, AppError>,
+        mut run: impl FnMut(&[&str]) -> Result<Vec<u8>, AppError>,
     ) -> Result<WorkTreeModes, AppError> {
         if pathspecs.is_empty() {
             return Ok(WorkTreeModes::default());
         }
-        let mut args = vec![
-            "ls-files".to_string(),
-            "-s".to_string(),
-            "-z".to_string(),
-            "--".to_string(),
-        ];
-        args.extend(
-            pathspecs
-                .iter()
-                .map(|pathspec| cased_pathspec(pathspec, case)),
-        );
-        let index = run(&args)?;
-
-        let mut args = vec![
-            "diff-files".to_string(),
-            "--raw".to_string(),
-            "-z".to_string(),
-            "--no-renames".to_string(),
-            "--".to_string(),
-        ];
-        args.extend(
-            pathspecs
-                .iter()
-                .map(|pathspec| cased_pathspec(pathspec, case)),
-        );
-        work_tree_modes_from_outputs(&index, || run(&args))
+        let index =
+            Self::scoped_outputs(&["ls-files", "-s", "-z", "--"], pathspecs, case, &mut run)?;
+        work_tree_modes_from_outputs(&index, || {
+            Self::scoped_outputs(
+                &["diff-files", "--raw", "-z", "--no-renames", "--"],
+                pathspecs,
+                case,
+                run,
+            )
+        })
     }
 
     /// Untracked, non-ignored paths under `pathspec`.
     // Advisory-only listing; classification does not fail on untracked files.
     #[cfg_attr(test, mutants::skip)]
     pub fn ls_untracked(&self, pathspec: &str, case: PathCase) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture_bytes(
-            "git",
-            &[
-                "ls-files",
-                "-z",
-                "--others",
-                "--exclude-standard",
-                "--",
-                &cased_pathspec(pathspec, case),
-            ],
-            &self.root,
+        self.untracked_paths(&[pathspec], case)
+    }
+
+    /// Untracked paths in a union of literal scopes, without querying unrelated directories.
+    #[cfg_attr(test, mutants::skip)] // Native adapter; scoped_outputs owns bounded arguments.
+    pub fn untracked_paths(&self, paths: &[&str], case: PathCase) -> Result<Vec<String>, AppError> {
+        let stdout = Self::scoped_outputs(
+            &["ls-files", "-z", "--others", "--exclude-standard", "--"],
+            paths,
+            case,
+            |args| run_capture_os_bytes("git", args, &self.root),
         )?;
-        split_z(&stdout)
+        let mut paths = split_z(&stdout)?;
+        paths.sort_unstable();
+        paths.dedup();
+        Ok(paths)
     }
 
     /// Tree entries under `pathspecs` at `commit`.
@@ -480,6 +496,26 @@ impl GitRepo {
             .iter()
             .filter_map(|record| TreeEntry::parse(record))
             .collect())
+    }
+
+    /// Applies a scoped NUL-delimited query without exceeding the native command-line budget.
+    fn scoped_outputs(
+        prefix: &[&str],
+        paths: &[&str],
+        case: PathCase,
+        mut run: impl FnMut(&[&str]) -> Result<Vec<u8>, AppError>,
+    ) -> Result<Vec<u8>, AppError> {
+        let paths: Vec<_> = paths
+            .iter()
+            .map(|path| cased_pathspec(path, case))
+            .collect();
+        let paths: Vec<_> = paths.iter().map(String::as_str).collect();
+        let mut output = Vec::new();
+        for batch in command_line_batches(&paths, PATH_ARG_BUDGET)? {
+            let args: Vec<_> = prefix.iter().copied().chain(batch).collect();
+            output.extend(run(&args)?);
+        }
+        Ok(output)
     }
 
     /// Object ids the work-tree files at `rel_paths` would be stored under.
@@ -520,6 +556,18 @@ impl GitRepo {
     #[cfg_attr(test, mutants::skip)]
     pub fn show_blob_batch(&self, ids: &[&str]) -> Result<Vec<Vec<u8>>, AppError> {
         blob_batch::read(ids, &self.root)
+    }
+
+    /// Sizes of required blob identities, acquired together before bounded content reads.
+    #[cfg_attr(test, mutants::skip)] // Native adapter; header admission is covered in process.
+    pub fn blob_sizes(&self, ids: &[&str]) -> Result<Vec<usize>, AppError> {
+        blob_batch::sizes(ids, &self.root)
+    }
+
+    /// Whether effective attributes might select a filter driver for any requested path.
+    #[cfg_attr(test, mutants::skip)] // Native adapter; response admission is tested in process.
+    pub fn may_have_filter_drivers(&self, paths: &[&str]) -> Result<bool, AppError> {
+        filter_attributes::read(paths, &self.root)
     }
 
     /// Every path at `commit`, used to reconstruct historical package metadata.
@@ -624,12 +672,7 @@ fn work_tree_modes_from_outputs(
     index: &[u8],
     diff: impl FnOnce() -> Result<Vec<u8>, AppError>,
 ) -> Result<WorkTreeModes, AppError> {
-    let mut modes = WorkTreeModes::default();
-    for record in split_z(index)? {
-        if let Some((mode, path)) = staged_path_mode(&record) {
-            modes.set(path, mode);
-        }
-    }
+    let mut modes = WorkTreeModes::from_index(index)?;
     overlay_work_tree_modes(&diff()?, &mut modes)?;
     Ok(modes)
 }
@@ -642,7 +685,7 @@ fn strip_terminator(value: &str) -> &str {
     value.strip_suffix('\n').unwrap_or(value)
 }
 
-/// Command-line budget one `git hash-object` invocation may spend on paths.
+/// Command-line budget one scoped Git invocation may spend on paths.
 ///
 /// Windows renders a child's arguments into a single command line that
 /// `CreateProcessW` caps at 32,767 UTF-16 code units, which is the smallest
@@ -762,6 +805,17 @@ pub struct WorkTreeModes {
 }
 
 impl WorkTreeModes {
+    /// Extracts artifact-relevant modes from an already acquired staged listing.
+    pub fn from_index(index: &[u8]) -> Result<Self, AppError> {
+        let mut modes = Self::default();
+        for record in index.split(|byte| *byte == 0) {
+            if let Some((mode, path)) = staged_path_mode(path_text(record)?) {
+                modes.set(path, mode);
+            }
+        }
+        Ok(modes)
+    }
+
     /// Whether Git considers `path` an executable regular file.
     #[must_use]
     pub fn is_executable(&self, path: &str) -> bool {
@@ -1055,6 +1109,29 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "native-scale argument limit; small command_line_batches tests retain coverage"
+    )]
+    fn overlapping_tracked_scopes_remain_unique_across_argument_batches() {
+        // Worst-case escaping plus pathspec magic lets each scope fit, but not their union.
+        let path = "a".repeat(PATH_ARG_BUDGET.div_ceil(4));
+        let mut calls = 0;
+        let paths = GitRepo::tracked_paths_with(
+            &[path.as_str(), path.as_str()],
+            PathCase::Sensitive,
+            |args| {
+                calls += 1;
+                assert_eq!(args.len(), 4);
+                Ok(b"overlapping/file\0".to_vec())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(paths, ["overlapping/file"]);
+    }
+
+    #[test]
     fn acquired_revision_output_is_normalized_and_failures_keep_their_cause() {
         assert_eq!(
             resolved_revision("main", Ok("  full-hash\n".into())).unwrap(),
@@ -1313,6 +1390,19 @@ mod tests {
         );
         // Not a record at all: no field separator.
         assert_eq!(staged_path_mode("100755 abc 0 packages/foo"), None);
+    }
+
+    #[test]
+    fn captured_index_modes_reject_non_utf8_paths_and_empty_scopes_select_nothing() {
+        let error = WorkTreeModes::from_index(b"100755 abc 0\tbad-\xff\0").unwrap_err();
+        assert!(error.find_source::<NonUtf8PathError>().is_some());
+        let modes = WorkTreeModes::from_index(b"100755 abc 0\tpkg/file\0").unwrap();
+        let git = testing::unopened(Path::new("unopened"));
+        assert_eq!(
+            git.work_tree_modes_from_index(modes, &[], PathCase::Sensitive)
+                .unwrap(),
+            WorkTreeModes::default()
+        );
     }
 
     /// A regular file's mode is chosen by its executable bit.

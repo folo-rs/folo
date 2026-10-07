@@ -172,6 +172,7 @@ struct ExpandedPlanRequired;
 mod tests {
     use std::cell::Cell;
     use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     use crp_workspace::lockfile::InstallationGraph;
     use crp_workspace::metadata::{ManifestSnapshot, VersionTarget};
@@ -387,7 +388,7 @@ mod tests {
     fn work_tree(targets: &[(&str, bool)]) -> WorkTree {
         WorkTree {
             manifests: ManifestSnapshot::default(),
-            tracked_paths: Vec::new(),
+            tracked_paths: Rc::default(),
             workspace_root: PathBuf::from("workspace"),
             packages: Vec::new(),
             version_targets: targets

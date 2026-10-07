@@ -15,8 +15,8 @@ use std::{fs, io, mem, str};
 
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
 use crp_workspace::git::{
-    CommitHeaders, GitObjectContext, GitRepo, HistoricalTree, TreeEntry, WorkTreeModes,
-    decode_file, join_git_rel, tree_mode,
+    BLOB_BATCH_BYTES, BlobReader, CommitHeaders, GitObjectContext, GitRepo, HistoricalTree,
+    LiveObservations, TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode,
 };
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
@@ -64,6 +64,10 @@ pub const MANIFEST_FILE_NAME: &str = "Cargo.toml";
 ///
 /// This is the result the `report` and `check` commands render.
 #[derive(Debug)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "Read-only consumers access classification results, not its coupled live acquisition"
+)]
 pub struct Classification {
     pub head: String,
     /// The caller's revision naming actual committed release history.
@@ -87,6 +91,19 @@ pub struct Classification {
     /// Carried so a later packaging probe resolves paths exactly as
     /// classification did.
     pub case: PathCase,
+    pub(crate) observations: LiveObservations,
+}
+
+impl Classification {
+    /// Selects released paths using this interval's admitted Git observations.
+    ///
+    /// Assessed inputs must remain unchanged since classification.
+    pub fn released_work_tree_paths(
+        &self,
+        package: &WorkPackage,
+    ) -> Result<BTreeSet<String>, AppError> {
+        observed_released_work_tree_paths(&self.git, package, self.case, Some(&self.observations))
+    }
 }
 
 /// Workspace and history observations belonging to one unchanged input interval.
@@ -100,6 +117,9 @@ pub struct AcquiredWorkspace {
     pub(crate) git: GitRepo,
     pub(crate) history: AssessmentHistory,
     pub(crate) head: String,
+    // Capture already reads the complete staged index for evidence. Classification consumes
+    // its parsed modes lazily, after filter admission, rather than issuing a second listing.
+    pub(crate) index_modes: Option<WorkTreeModes>,
 }
 
 // The observation owns complete values, not guarded caller data. Deferred manifest errors
@@ -124,6 +144,7 @@ impl AcquiredWorkspace {
             git,
             history,
             head,
+            index_modes: None,
         })
     }
 }
@@ -511,6 +532,7 @@ pub fn classify_acquired(
         git,
         history,
         head,
+        index_modes,
     } = acquired;
     let release_history_revision = history.release_history_revision.clone();
     for package in &mut work_tree.packages {
@@ -577,12 +599,29 @@ pub fn classify_acquired(
         anchors: mem::take(&mut cache.lockfiles),
     };
 
+    let observations = LiveObservations::acquire_with_index(
+        &git,
+        Rc::clone(&work_tree.tracked_paths),
+        &work_tree
+            .packages
+            .iter()
+            .map(|package| package.manifest.directory.as_str())
+            .collect::<Vec<_>>(),
+        &work_tree
+            .packages
+            .iter()
+            .flat_map(|package| package.resources.values().map(String::as_str))
+            .collect::<Vec<_>>(),
+        cache.case(),
+        index_modes,
+    )?;
     for package in &work_tree.packages {
         let class = classify_one(
             package,
             &work_tree,
             &groups,
             &git,
+            &observations,
             history_commit,
             &commits,
             &history_snapshot,
@@ -627,6 +666,7 @@ pub fn classify_acquired(
         work_tree,
         git,
         case: cache.case(),
+        observations,
     })
 }
 
@@ -639,6 +679,7 @@ fn classify_one(
     work_tree: &WorkTree,
     groups: &Groups,
     git: &GitRepo,
+    observations: &LiveObservations,
     history_commit: &str,
     commits: &[String],
     history_snapshot: &CommitSnapshot,
@@ -687,13 +728,21 @@ fn classify_one(
         });
         let side = work_tree_side(package, cache.case());
         let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-        let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
+        let tracked_paths = observations.tracked_paths(&resource_paths, || {
+            git.tracked_paths(&resource_paths, side.case)
+        })?;
         let tracked_resources = tracked_resources(&side, &tracked_paths);
-        let content = released_in_work_tree(git, &side, &tracked_resources)?;
-        let work_modes = work_tree_modes(git, &side, &tracked_resources)?;
+        let content = released_in_work_tree(git, &side, &tracked_resources, Some(observations))?;
+        let work_modes =
+            observed_work_tree_modes(git, &side, &tracked_resources, Some(observations))?;
         _ = validated_work_tree_files(git, name, &content.released, &work_modes)?;
-        let untracked =
-            untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
+        let untracked = observed_untracked_released(
+            git,
+            &side,
+            &tracked_resources,
+            &content.present_tracked,
+            Some(observations),
+        )?;
         log_untracked(&verbose, name, untracked.len());
         return Ok(PackageClass {
             name: name.clone(),
@@ -730,7 +779,6 @@ fn classify_one(
     let (changed_files, patch, stat, untracked) = diff_package_with_tree(
         git,
         name,
-        &anchor.commit,
         &PackageSide {
             dir: &anchor_pkg.directory,
             rules: &anchor_pkg.packaging,
@@ -740,6 +788,7 @@ fn classify_one(
         },
         &work_tree_side(package, cache.case()),
         &anchor_snapshot.tree,
+        Some(observations),
     )?;
 
     let mut changed = changed_files;
@@ -979,17 +1028,17 @@ pub fn diff_package(
     work_side: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     let tree = HistoricalTree::new(git.ls_tree(anchor_commit, &[])?);
-    diff_package_with_tree(git, name, anchor_commit, anchor, work_side, &tree)
+    diff_package_with_tree(git, name, anchor, work_side, &tree, None)
 }
 
 #[cfg_attr(test, mutants::skip)] // Native current-input acquisition and blob reads.
 fn diff_package_with_tree(
     git: &GitRepo,
     name: &str,
-    anchor_commit: &str,
     anchor: &PackageSide<'_>,
     work_side: &PackageSide<'_>,
     anchor_tree: &HistoricalTree,
+    observations: Option<&LiveObservations>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
     // resource may sit outside the package directory or outside its packaging
@@ -997,11 +1046,15 @@ fn diff_package_with_tree(
     // paths keeps an untracked README from being read off disk and reported as
     // a content change. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
     let resource_paths: Vec<&str> = work_side.resources.values().map(String::as_str).collect();
-    let tracked_paths = git.tracked_paths(&resource_paths, work_side.case)?;
+    let narrow = || git.tracked_paths(&resource_paths, work_side.case);
+    let tracked_paths = match observations {
+        Some(observations) => observations.tracked_paths(&resource_paths, narrow)?,
+        None => narrow()?,
+    };
     let tracked_resources = tracked_resources(work_side, &tracked_paths);
 
     let anchor_files = released_at_commit(anchor_tree, anchor);
-    let work = released_in_work_tree(git, work_side, &tracked_resources)?;
+    let work = released_in_work_tree(git, work_side, &tracked_resources, observations)?;
     let work_files = &work.released;
 
     reject_anchor_symlinks(name, anchor_tree, &anchor_files)?;
@@ -1012,22 +1065,36 @@ fn diff_package_with_tree(
     // representation Git itself compares by, which is what keeps an LFS-tracked
     // asset or a line-ending rule from making an untouched package look
     // changed. Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
-    let work_modes = work_tree_modes(git, work_side, &tracked_resources)?;
+    let work_modes = observed_work_tree_modes(git, work_side, &tracked_resources, observations)?;
     let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
 
-    let (changed, patch, stat) = PackageDiff {
+    let identified = PackageDiff {
         anchor_files: &anchor_files,
         work_files,
         anchor_tree,
         work_modes: &work_modes,
         work_ids: &work_ids,
     }
-    .render(
-        |path| git.show_file_bytes(anchor_commit, path),
-        |id| git.show_blob_bytes(id),
+    .identify();
+    let ids = identified.blob_ids();
+    let mut reader = BlobReader::new(&ids, BLOB_BATCH_BYTES, |ids| git.blob_sizes(ids))?;
+    let (changed, patch, stat) =
+        identified.render(|id| reader.read(id, |ids| read_patch_blobs(git, ids)))?;
+    let untracked = observed_untracked_released(
+        git,
+        work_side,
+        &tracked_resources,
+        &work.present_tracked,
+        observations,
     )?;
-    let untracked = untracked_released(git, work_side, &tracked_resources, &work.present_tracked)?;
     Ok((changed, patch, stat, untracked))
+}
+
+fn read_patch_blobs(git: &GitRepo, ids: &[&str]) -> Result<Vec<Vec<u8>>, AppError> {
+    match ids {
+        [id] => git.show_blob_bytes(id).map(|blob| vec![blob]),
+        _ => git.show_blob_batch(ids),
+    }
 }
 
 /// Acquired endpoint identities for one package's released-content comparison.
@@ -1042,12 +1109,8 @@ struct PackageDiff<'a> {
     work_ids: &'a HashMap<String, String>,
 }
 
-impl PackageDiff<'_> {
-    fn render(
-        &self,
-        mut old_bytes: impl FnMut(&str) -> Result<Option<Vec<u8>>, AppError>,
-        mut new_bytes: impl FnMut(&str) -> Result<Vec<u8>, AppError>,
-    ) -> Result<(Vec<ChangedItem>, String, DiffStat), AppError> {
+impl<'a> PackageDiff<'a> {
+    fn identify(&self) -> IdentifiedDiff<'a> {
         let Self {
             anchor_files,
             work_files,
@@ -1064,11 +1127,7 @@ impl PackageDiff<'_> {
             .map(String::as_str)
             .collect();
 
-        let mut changed = Vec::new();
-        let mut patch = String::new();
-        let mut insertions = 0_usize;
-        let mut deletions = 0_usize;
-
+        let mut entries = Vec::new();
         for rel in rels {
             let old_id = anchor_files
                 .get(rel)
@@ -1091,47 +1150,80 @@ impl PackageDiff<'_> {
             if old_id == new_id && mode_change.is_none() {
                 continue;
             }
-            let kind = match (old_id.is_some(), new_id.is_some()) {
+            entries.push(ChangedFile {
+                path: rel,
+                old_id,
+                new_id,
+                old_mode: tree_mode(anchor_files.get(rel).is_some_and(|path| {
+                    anchor_tree
+                        .entry(path)
+                        .is_some_and(TreeEntry::is_executable)
+                })),
+                new_mode: tree_mode(
+                    work_files
+                        .get(rel)
+                        .is_some_and(|path| work_modes.is_executable(path)),
+                ),
+                mode_change,
+            });
+        }
+        IdentifiedDiff { entries }
+    }
+}
+
+/// Deterministically ordered changes; no content acquisition or live path lookup remains.
+struct IdentifiedDiff<'a> {
+    entries: Vec<ChangedFile<'a>>,
+}
+
+impl IdentifiedDiff<'_> {
+    fn blob_ids(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.old_id != entry.new_id)
+            .flat_map(|entry| [entry.old_id, entry.new_id].into_iter().flatten())
+            .collect()
+    }
+
+    fn render(
+        &self,
+        mut bytes: impl FnMut(&str) -> Result<Rc<Vec<u8>>, AppError>,
+    ) -> Result<(Vec<ChangedItem>, String, DiffStat), AppError> {
+        let mut changed = Vec::new();
+        let mut patch = String::new();
+        let mut insertions = 0_usize;
+        let mut deletions = 0_usize;
+        for entry in &self.entries {
+            let kind = match (entry.old_id.is_some(), entry.new_id.is_some()) {
                 (false, true) => "added",
                 (true, false) => "deleted",
                 _ => "modified",
             };
             changed.push(ChangedItem::Package {
-                path: rel.to_string(),
+                path: entry.path.to_string(),
                 change: kind.to_string(),
             });
-            if let Some((old_mode, new_mode)) = mode_change {
-                patch.push_str(&mode_change_diff(rel, old_mode, new_mode).text);
+            if let Some((old_mode, new_mode)) = entry.mode_change {
+                patch.push_str(&mode_change_diff(entry.path, old_mode, new_mode).text);
             }
             // Equal object ids prove the bytes are unchanged. This check comes after
             // mode rendering so a mode-only binary change cannot gain a false
             // "Binary files differ" line from the content renderer.
-            if old_id == new_id {
+            if entry.old_id == entry.new_id {
                 continue;
             }
             // The content itself is only needed to render an identity change.
-            let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
-                Some(path) => old_bytes(path)?,
-                None => None,
-            };
-            let new = new_id.map(&mut new_bytes).transpose()?;
+            let old = entry.old_id.map(&mut bytes).transpose()?;
+            let new = entry.new_id.map(&mut bytes).transpose()?;
             let old_side = old.as_deref().map(|content| FileVersion {
                 content,
-                mode: tree_mode(anchor_files.get(rel).is_some_and(|path| {
-                    anchor_tree
-                        .entry(path)
-                        .is_some_and(TreeEntry::is_executable)
-                })),
+                mode: entry.old_mode,
             });
             let new_side = new.as_deref().map(|content| FileVersion {
                 content,
-                mode: tree_mode(
-                    work_files
-                        .get(rel)
-                        .is_some_and(|path| work_modes.is_executable(path)),
-                ),
+                mode: entry.new_mode,
             });
-            let file_diff = file_diff(rel, old_side, new_side);
+            let file_diff = file_diff(entry.path, old_side, new_side);
             insertions = insertions.saturating_add(file_diff.insertions);
             deletions = deletions.saturating_add(file_diff.deletions);
             patch.push_str(&file_diff.text);
@@ -1144,6 +1236,16 @@ impl PackageDiff<'_> {
         };
         Ok((changed, patch, stat))
     }
+}
+
+/// Presence, immutable content identities and archive modes for one changed path.
+struct ChangedFile<'a> {
+    path: &'a str,
+    old_id: Option<&'a str>,
+    new_id: Option<&'a str>,
+    old_mode: &'static str,
+    new_mode: &'static str,
+    mode_change: Option<(&'static str, &'static str)>,
 }
 
 /// Git modes for released work-tree paths.
@@ -1159,9 +1261,22 @@ pub fn work_tree_modes(
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
 ) -> Result<WorkTreeModes, AppError> {
+    observed_work_tree_modes(git, side, tracked_resources, None)
+}
+
+fn observed_work_tree_modes(
+    git: &GitRepo,
+    side: &PackageSide<'_>,
+    tracked_resources: &BTreeMap<String, String>,
+    observations: Option<&LiveObservations>,
+) -> Result<WorkTreeModes, AppError> {
     let mut pathspecs = vec![side.dir];
     pathspecs.extend(tracked_resources.values().map(String::as_str));
-    git.work_tree_modes(&pathspecs, side.case)
+    let narrow = || git.work_tree_modes(&pathspecs, side.case);
+    match observations {
+        Some(observations) => observations.modes(&pathspecs, narrow),
+        None => narrow(),
+    }
 }
 
 /// Object ids the released work-tree files would be stored under.
@@ -1346,7 +1461,21 @@ pub fn untracked_released(
     tracked_resources: &BTreeMap<String, String>,
     tracked: &[String],
 ) -> Result<Vec<String>, AppError> {
-    let listed: Vec<String> = git.ls_untracked(side.dir, side.case)?;
+    observed_untracked_released(git, side, tracked_resources, tracked, None)
+}
+
+fn observed_untracked_released(
+    git: &GitRepo,
+    side: &PackageSide<'_>,
+    tracked_resources: &BTreeMap<String, String>,
+    tracked: &[String],
+    observations: Option<&LiveObservations>,
+) -> Result<Vec<String>, AppError> {
+    let narrow = || git.ls_untracked(side.dir, side.case);
+    let listed = match observations {
+        Some(observations) => observations.untracked_paths(side.dir, narrow)?,
+        None => narrow()?,
+    };
     Ok(untracked_released_with(
         side,
         tracked_resources,
@@ -1422,11 +1551,24 @@ pub fn released_work_tree_paths(
     package: &WorkPackage,
     case: PathCase,
 ) -> Result<BTreeSet<String>, AppError> {
+    observed_released_work_tree_paths(git, package, case, None)
+}
+
+fn observed_released_work_tree_paths(
+    git: &GitRepo,
+    package: &WorkPackage,
+    case: PathCase,
+    observations: Option<&LiveObservations>,
+) -> Result<BTreeSet<String>, AppError> {
     let side = work_tree_side(package, case);
     let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-    let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
+    let narrow = || git.tracked_paths(&resource_paths, side.case);
+    let tracked_paths = match observations {
+        Some(observations) => observations.tracked_paths(&resource_paths, narrow)?,
+        None => narrow()?,
+    };
     let tracked_resources = tracked_resources(&side, &tracked_paths);
-    let content = released_in_work_tree(git, &side, &tracked_resources)?;
+    let content = released_in_work_tree(git, &side, &tracked_resources, observations)?;
     Ok(content.released.into_keys().collect())
 }
 
@@ -1455,8 +1597,13 @@ fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
+    observations: Option<&LiveObservations>,
 ) -> Result<WorkTreeContent, AppError> {
-    let tracked = git.tracked_paths(&[side.dir], side.case)?;
+    let narrow = || git.tracked_paths(&[side.dir], side.case);
+    let tracked = match observations {
+        Some(observations) => observations.tracked_paths(&[side.dir], narrow)?,
+        None => narrow()?,
+    };
     let present = present_in_work_tree(git, &tracked)?;
     let mut released = released_from_paths(&tracked, &present, side);
     add_resources(&mut released, tracked_resources.iter());
@@ -2502,7 +2649,7 @@ mod tests {
         );
     }
 
-    use crp_workspace::git::testing::unopened;
+    use crp_workspace::git::testing::{object_context, unopened};
     use crp_workspace::inherited::InheritedKeys;
     use crp_workspace::manifest::{InstallationDependencies, TargetDiscovery};
 
@@ -2600,6 +2747,50 @@ mod tests {
             .unwrap();
         assert!(!Rc::ptr_eq(&first, &second));
         assert_eq!(cache.inner.len(), 2);
+    }
+
+    #[test]
+    fn git_interpretation_changes_invalidate_every_retained_observation() {
+        let context = object_context("sha1");
+        let mut snapshots = Snapshots::default();
+        snapshots
+            .inner
+            .insert("commit".into(), Rc::new(empty_snapshot()));
+        snapshots.lockfiles.insert(
+            "commit".into(),
+            Lockfile::parse("version = 4", "lock").unwrap(),
+        );
+        snapshots
+            .headers
+            .parent_with("commit", || Ok(false))
+            .unwrap();
+        snapshots.bind_objects(context.clone());
+        assert_eq!(snapshots.objects, context);
+        assert!(snapshots.inner.is_empty());
+        assert!(snapshots.lockfiles.is_empty());
+        assert!(
+            snapshots
+                .headers
+                .parent_with("commit", || Ok(true))
+                .unwrap()
+        );
+
+        snapshots
+            .inner
+            .insert("commit".into(), Rc::new(empty_snapshot()));
+        snapshots.lockfiles.insert(
+            "commit".into(),
+            Lockfile::parse("version = 4", "lock").unwrap(),
+        );
+        snapshots.bind_objects(context);
+        assert_eq!(snapshots.inner.len(), 1);
+        assert!(snapshots.lockfiles.contains_key("commit"));
+        assert!(
+            snapshots
+                .headers
+                .parent_with("commit", || panic!())
+                .unwrap()
+        );
     }
 
     #[test]
