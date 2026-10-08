@@ -2,6 +2,8 @@
 
 Mechanisms for high-performance hardware-aware programming in Rust.
 
+**[Read the published books](https://folo-rs.github.io/folo/)** for in-depth guides to Folo's tools.
+
 # Getting started
 
 Folo is a collection of libraries and command-line tools. Choose the packages you need;
