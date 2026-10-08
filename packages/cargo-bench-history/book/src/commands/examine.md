@@ -41,3 +41,44 @@ chart history-mode `analyze` draws — one column per first-parent commit over t
 observations, so a data-less commit is a gap. The chart trims its own leading gap, so a
 late-starting set draws a chart that begins after its table does: the table is the complete
 commit listing, the chart is the shape of the series.
+
+## Example output
+
+This example reads Folo's configured Azure history from a checkout of
+[`folo-rs/folo`](https://github.com/folo-rs/folo) with access to that store. The explicit
+discriminants select one machine's Criterion measurements; `--since` and `--context` keep
+the example to a short, fixed commit range.
+
+```console
+cargo bench-history examine \
+    --benchmark nm_rendering/histogram/low --metric wall_time \
+    --engine criterion --target-triple x86_64-unknown-linux-gnu \
+    --machine-key 76110f7cbbb5a5e0 \
+    --context 9d8a0e9fecb4 --since 2026-10-04
+```
+
+The command's standard output is:
+
+```text
+Data points for nm_rendering/histogram/low metric wall_time (ns) in project folo
+
+criterion/x86_64-unknown-linux-gnu/76110f7cbbb5a5e0
+ 318 ┤╭─
+ 318 ┤│
+ 317 ┼╯
+ 317 ┤
+ 317 ┤      ─
+
+  fa46c688294e  317.5  cbh_render: cover benchmark fixture and assertion
+  28ea10960d65  318.4  cargo-release-plan: add disposable immutable Git c
+  b20d4fb8c9a9    n/a  cargo-bench-history: cover snapshot handoff guards
+  55826362cbe5    n/a  cargo-release-plan: retain acquisition reuse witho
+  72317eb2fcc4    n/a  cargo-release-plan: retain bounded batching and ad
+  6680f32591c1    n/a  cargo-release-plan: retain reuse without decision
+  5a114314c8e1    n/a  cargo-release-plan: cover storage-free compatibili
+  9d8a0e9fecb4  316.6  cargo-release-plan: propagate breaks through defin
+```
+
+The values are wall time in nanoseconds. The `n/a` rows have no measurement in this
+selection, not a zero value; the matching gap remains visible in the chart. Selection
+diagnostics go to standard error and are not part of this listing.

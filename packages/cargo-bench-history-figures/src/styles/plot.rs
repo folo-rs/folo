@@ -1,13 +1,13 @@
 //! The core value-against-commit-position plot every data figure is built from.
 //!
-//! Most of what the appendix has to show is one shape: a metric's values laid out along
+//! Most of what the book has to show is one shape: a metric's values laid out along
 //! a stretch of first-parent history, with some of those values called out — removed by
 //! a filter, collapsed into one, selected as a window, or fitted by a model. Giving that
 //! shape one implementation is what keeps fifty figures looking like one document, and
 //! it is why a style module composes a [`Plot`] rather than driving `plotters` directly.
 //!
 //! The x axis is a **commit position**, not a time and not an index into the observed
-//! values. That distinction is itself one of the appendix's lessons: a commit with no
+//! values. That distinction is itself one of the book's lessons: a commit with no
 //! observation leaves an empty column, and the detectors never see how wide that gap is.
 //! Laying every figure out this way means the pictures cannot accidentally imply
 //! otherwise.
@@ -26,7 +26,7 @@ use crate::{coord, theme};
 
 /// How a single observation should read against the rest of its series.
 ///
-/// The appendix's teaching method is to show an operation acting on data — which points
+/// The book's teaching method is to show an operation acting on data — which points
 /// it dropped, which it kept, which it created — so a plotted point almost always
 /// carries a role beyond its value. Encoding that role here rather than as a colour at
 /// the call site is what makes "removed" look the same in every chapter.

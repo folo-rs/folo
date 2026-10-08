@@ -111,7 +111,7 @@ book-serve NAME:
     mdbook serve $bookDir --open
 
 # Regenerates the figures, tables and report excerpts embedded in the cargo-bench-history book's
-# data pipeline appendix. The appendix quotes concrete numbers throughout and none of them is typed
+# Data pipeline chapters. These chapters quote concrete numbers throughout and none of them is typed
 # by hand, so this is how a change in analysis behaviour reaches the prose that describes it. Review
 # the resulting diff: a figure that moved means the pipeline now behaves differently.
 [group('book')]
@@ -123,7 +123,7 @@ book-figures:
 
     cargo run --package cargo-bench-history-figures --bin cbh-figures -- write
 
-# Verifies the checked-in appendix assets match freshly generated content. Also asserted by a test
+# Verifies the checked-in book assets match freshly generated content. Also asserted by a test
 # in the cargo-bench-history package, so a stale figure fails `just test` whether or not anyone
 # remembers this recipe; it exists as the direct way to ask the question.
 [group('book')]
@@ -135,7 +135,7 @@ book-figures-check:
 
     cargo run --package cargo-bench-history-figures --bin cbh-figures -- check
 
-# Writes a page showing every appendix figure on mdBook's default Light and Navy
+# Writes a page showing every book figure on mdBook's default Light and Navy
 # background/text-color pairs, for checking legibility without building and re-theming
 # the whole book.
 [group('book')]

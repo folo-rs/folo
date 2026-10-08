@@ -78,7 +78,10 @@ findings or re-derives analysis vocabulary.
 ## Standard reporting
 
 Reports use a shared message catalogue, including advisory wording and the public
-[cargo-bench-history guide](https://folo-rs.github.io/folo/cargo-bench-history/).
+[report-reading guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
+Partial-series warnings locate the counts and reasons in the full Markdown report's final
+Coverage section or the JSON report's `census`, rather than implying that the embedded condensed
+summary carries those details.
 Regression issues use `Benchmark history findings for <project> (updated YYYY-MM-DD)`.
 The project-qualified prefix identifies the rolling issue; the suffix is the UTC date of
 the companion's last body update, not the last measurement. For example, repeating an identical

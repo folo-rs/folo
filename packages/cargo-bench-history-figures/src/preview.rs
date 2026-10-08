@@ -26,7 +26,7 @@ const DARK: (&str, &str) = ("#161923", "#bcbdd0");
 /// Builds the preview page for `assets`.
 ///
 /// Non-SVG assets are listed as text blocks: a generated Markdown table or report
-/// excerpt is content the appendix embeds too, and seeing it beside the figures is how a
+/// excerpt is content the book embeds too, and seeing it beside the figures is how a
 /// reader of this page checks a whole chapter's evidence at once.
 #[must_use]
 pub fn page(assets: &[Asset]) -> String {
@@ -34,7 +34,7 @@ pub fn page(assets: &[Asset]) -> String {
     html.push_str(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>cargo-bench-history appendix figures</title>\n<style>\n\
+         <title>cargo-bench-history Data pipeline figures</title>\n<style>\n\
          body { font-family: sans-serif; margin: 0; padding: 24px; background: #f4f4f4; }\n\
          h1 { font-size: 20px; }\n\
          .asset { margin: 0 0 32px; }\n\
@@ -42,7 +42,7 @@ pub fn page(assets: &[Asset]) -> String {
          .themes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }\n\
          .theme { padding: 12px; border-radius: 6px; }\n\
          pre { white-space: pre-wrap; font-size: 12px; margin: 0; }\n\
-         </style>\n</head>\n<body>\n<h1>Appendix figures</h1>\n",
+         </style>\n</head>\n<body>\n<h1>Data pipeline figures</h1>\n",
     );
 
     for asset in assets {

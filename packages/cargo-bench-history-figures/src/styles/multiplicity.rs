@@ -16,7 +16,7 @@ use crate::{canvas, coord, theme};
 /// One candidate's place in the step-up procedure.
 #[derive(Clone, Debug)]
 pub struct Candidate {
-    /// How the appendix names the series.
+    /// How the book names the series.
     pub label: String,
 
     /// The candidate's chance level.

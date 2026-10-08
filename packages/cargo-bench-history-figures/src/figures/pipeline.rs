@@ -252,7 +252,7 @@ impl RemovedBy {
 
 /// One discriminant set in the worked store, and what it holds along the analyzed line.
 struct Partition {
-    /// How the appendix names the partition, abbreviating `engine / target triple /
+    /// How the book names the partition, abbreviating `engine / target triple /
     /// machine key` to what fits a row label.
     label: &'static str,
 
