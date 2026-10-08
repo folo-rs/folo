@@ -262,9 +262,65 @@ mod linux {
 A complete worked example lives in
 [`packages/nm_impl/benches/nm_performance_cg.rs`](../packages/nm_impl/benches/nm_performance_cg.rs).
 
-#### Why `expect` instead of `allow`?
+### Warm the allocator with the actual workload
 
-The three lints in the `expect` block are spuriously triggered by Gungraun's
+Every Callgrind case executes in a separate process and measures one invocation.
+Allocator initialization must not obscure the recurring cost of an operation.
+Keep the [workspace allocator](testing.md#executable-allocators), and prime its
+relevant paths in Gungraun setup, outside the measured region.
+
+Run one complete unmeasured iteration of the same workload, including cleanup,
+before preparing the measured input. Match the types, sizes, alignment, live
+allocation population, reallocation growth, allocator instance and thread.
+Allocators have separate size classes and thread-local state: allocating an
+arbitrary buffer, warming only the initial size of a reallocation, or running
+another benchmark process does not establish the required state. Low and high
+cases each warm their own workload.
+
+Prefer an ordinary, unannotated operation helper shared by setup and the
+`#[library_benchmark]` body. Gungraun's generated benchmark wrappers select the
+counted region; do not invoke those wrappers as warmup. A read-only operation can
+warm against the same input if it leaves that input unchanged. An existing
+setup-time correctness check that runs the exact operation can also supply this
+warmup.
+
+```rust
+use std::hint::black_box;
+
+fn setup() -> Input {
+    drop(black_box(run_operation(make_input())));
+    make_input()
+}
+
+#[library_benchmark]
+#[bench::case(setup())]
+fn operation(input: Input) -> Output {
+    run_operation(input)
+}
+```
+
+Preserve the scenario's logical starting state. Warmup must not consume the
+measured future, make a dirty registry clean, change a positive delta to zero,
+or give a supposedly empty pool a reusable slab. Use a separate equivalent
+object, then recreate the required input. First-touch statics use a separate
+static of the same type for warmup; the measured static remains untouched.
+Shared process infrastructure may consequently be initialized already, so these
+cases measure first use of an object, not a cold process.
+
+Warmup does not remove allocator work from the measured operation: allocation,
+growth and release that the operation requires stay inside the counted region.
+Allocation-free bodies need no artificial allocator warmup. Cases that already
+exercise the relevant path during setup should reuse it rather than add redundant
+work. Deliberate cold-process initialization measurements require a separately
+documented purpose and must not stand in for steady-state library overhead.
+
+Verify the boundary with before/after instruction profiles and the measured
+input's invariants. A warmup iteration is not a guarantee that every allocator
+path is permanently hot; inspect any remaining initialization in the call graph.
+
+### Why `expect` instead of `allow`?
+
+The lints in the `expect` block are spuriously triggered by Gungraun's
 macro expansions and cannot be fixed in our code. We use `expect` rather
 than `allow` so that when an upstream fix lands (in either Gungraun or
 Clippy), our build immediately surfaces the now-unfulfilled expectation and
@@ -292,6 +348,10 @@ These are easy to get wrong on the first attempt:
   form (`setup = || ...`) is not supported.
 * Doc comments (`///`) on `#[library_benchmark]` functions are rejected.
   Use plain `//` comments instead.
+* A standalone `#[library_benchmark(setup = ...)]` whose setup returns `()`
+  generates a unit binding inside the macro. Add `unit_bindings` to that file's
+  Linux-only, justified Gungraun lint expectations rather than introduce an
+  artificial input type or rename the benchmark merely to avoid the expansion.
 
 ### Pairing with Criterion
 

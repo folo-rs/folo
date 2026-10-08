@@ -8,7 +8,7 @@
 //! Scenarios isolate the per-call cost of acquiring and using thread-
 //! local handles so each can be tracked at instruction-level granularity:
 //!
-//! * `acquire_first_touch` — first acquire on the thread; allocates the
+//! * `acquire_first_touch` — first acquire of a fresh owner; allocates the
 //!   thread-local instance.
 //! * `acquire_cached` — subsequent acquire; hits the thread-local cache.
 //! * `acquire_clone` — clone an existing `Ref<T>`.
@@ -27,6 +27,7 @@
     expect(
         clippy::exit,
         clippy::missing_docs_in_private_items,
+        unit_bindings,
         unused_qualifications,
         reason = "These lints originate in Gungraun macro expansion and cannot be addressed in \
           this benchmark."
@@ -95,6 +96,9 @@ mod linux {
     }
 
     fn make_fresh() -> InstancePerThread<TestSubject> {
+        // Exercise the same acquire/release workload, then use a different owner so its
+        // instance is still uninitialized while allocator size classes are already warm.
+        drop(acquire_fresh(InstancePerThread::new(TestSubject::new())));
         InstancePerThread::new(TestSubject::new())
     }
 
@@ -134,16 +138,25 @@ mod linux {
 
     thread_local! {
         static STD_THREAD_LOCAL: ComparisonSubject = ComparisonSubject::new();
+        static WARMUP_STD_THREAD_LOCAL: ComparisonSubject = ComparisonSubject::new();
     }
 
-    // ---------- Acquire paths ----------
+    /// Primes matching TLS initialization without accessing the measured static.
+    fn warm_std_thread_local_allocator() {
+        _ = black_box(WARMUP_STD_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state)));
+    }
 
-    // Setup creates a fresh InstancePerThread but does NOT acquire — so the
-    // bench's acquire is the first one on this thread and pays the
-    // initialization cost.
+    // Setup leaves this owner unacquired; only the allocator and shared infrastructure are warm.
     #[library_benchmark]
     #[bench::fresh(make_fresh())]
     fn acquire_first_touch(
+        per_thread: InstancePerThread<TestSubject>,
+    ) -> (InstancePerThread<TestSubject>, Ref<TestSubject>) {
+        acquire_fresh(per_thread)
+    }
+
+    /// Keeps the first-acquire workload identical in warmup and measurement.
+    fn acquire_fresh(
         per_thread: InstancePerThread<TestSubject>,
     ) -> (InstancePerThread<TestSubject>, Ref<TestSubject>) {
         let handle = black_box(&per_thread).acquire();
@@ -182,8 +195,8 @@ mod linux {
         _ = STD_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state));
     }
 
-    #[library_benchmark]
-    fn access_vs_std_thread_local_first_touch() -> usize {
+    #[library_benchmark(setup = warm_std_thread_local_allocator)]
+    fn access_vs_std_thread_local_first_touch(_: ()) -> usize {
         STD_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
     }
 

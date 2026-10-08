@@ -8,6 +8,23 @@ for one failure type does not apply to unrelated failures.
 For scheduled failure reporting, issue ownership and repair handoffs, see
 [scheduled validation](scheduled-validation.md).
 
+## Benchmark history findings
+
+Read the full report and the actual per-commit observations before assigning a
+cause. A history finding's post-split median is not necessarily its tip value.
+Allocator-sensitive Callgrind cases follow the
+[workload-matched warmup pattern](callgrind-benchmarks.md#warm-the-allocator-with-the-actual-workload).
+Additional scenarios in the same binary can change inlining of shared code even
+when the measured case and library source are unchanged; compare generated call
+graphs before treating an instruction-count change as a library regression.
+
+[Issue #726](https://github.com/folo-rs/folo/issues/726) tracks the allocator-warmup
+work and follow-up dispositions. Its Group C runner variation is intentionally
+left to accumulate more history without a filtering change. Work on the groups
+outside A, B and D is deferred to that issue. The idle bulk-push findings in
+Group D require allocator and memory-locality evidence, not an assumption that
+untimed allocation cannot affect a later read-only traversal.
+
 ## Codecov verification-key import failures
 
 ### Workflow policy
