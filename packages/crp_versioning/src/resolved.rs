@@ -532,7 +532,18 @@ impl ResolvedState {
             .capture_candidate(&manifest, &self.final_digest, verbose, cache)
     }
 
+    // Native path identity forwarding; boundary tests retain canonical aliases and I/O errors.
+    #[cfg_attr(test, mutants::skip)]
     fn candidate_manifest(&self, manifest: &Path) -> Result<PathBuf, AppError> {
+        self.candidate_manifest_with(manifest, canonical)
+    }
+
+    /// Admits acquired identities and returns the canonical retained manifest to its consumers.
+    fn candidate_manifest_with(
+        &self,
+        manifest: &Path,
+        mut canonical: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    ) -> Result<PathBuf, AppError> {
         let manifest = canonical(manifest)?;
         Self::validate_candidate_location(
             &manifest,
@@ -1000,6 +1011,78 @@ mod tests {
         for (actual, recorded) in [(Path::new("other/Cargo.toml"), evidence), (live, live)] {
             let error =
                 ResolvedState::validate_candidate_location(actual, recorded, live).unwrap_err();
+            assert!(error.find_source::<WrongEvidenceWorkspace>().is_some());
+        }
+    }
+
+    #[test]
+    fn candidate_acquisition_returns_the_canonical_evidence_and_propagates_each_failure() {
+        let state = ResolvedState {
+            inputs: inputs(),
+            files: Vec::new(),
+            final_digest: "final".to_owned(),
+            versions: BTreeMap::new(),
+            evidence_manifest_path: "recorded/Cargo.toml".into(),
+        };
+        let requested = Path::new("alias/Cargo.toml");
+        let evidence = Path::new("canonical-candidate/Cargo.toml");
+        let live = Path::new("canonical-source/Cargo.toml");
+        let queries = [
+            requested.to_owned(),
+            state.evidence_manifest_path.clone(),
+            state.inputs.root.join(&state.inputs.manifest),
+        ];
+        for failed in [None, Some(0), Some(1), Some(2)] {
+            let mut acquired = Vec::new();
+            let result = state.candidate_manifest_with(requested, |path| {
+                let index = acquired.len();
+                assert_eq!(path, queries.get(index).unwrap());
+                acquired.push(path.to_owned());
+                if failed == Some(index) {
+                    return Err(io::Error::from(ErrorKind::PermissionDenied).into());
+                }
+                Ok(if index == 2 { live } else { evidence }.to_owned())
+            });
+            if let Some(index) = failed {
+                assert_eq!(
+                    result
+                        .unwrap_err()
+                        .find_source::<io::Error>()
+                        .unwrap()
+                        .kind(),
+                    ErrorKind::PermissionDenied
+                );
+                assert_eq!(acquired, queries.get(..=index).unwrap());
+            } else {
+                assert_eq!(result.unwrap(), evidence);
+                assert_eq!(acquired, queries);
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_acquisition_applies_isolation_to_resolved_identities() {
+        let mut state = ResolvedState {
+            inputs: inputs(),
+            files: Vec::new(),
+            final_digest: "final".to_owned(),
+            versions: BTreeMap::new(),
+            evidence_manifest_path: "recorded/Cargo.toml".into(),
+        };
+        let requested = Path::new("alias/Cargo.toml");
+        for recorded in ["recorded/Cargo.toml", "repository/Cargo.toml"] {
+            state.evidence_manifest_path = recorded.into();
+            let error = state
+                .candidate_manifest_with(requested, |path| {
+                    Ok(if path == requested {
+                        PathBuf::from("canonical-source/Cargo.toml")
+                    } else if path == Path::new("recorded/Cargo.toml") {
+                        PathBuf::from("canonical-candidate/Cargo.toml")
+                    } else {
+                        PathBuf::from("canonical-source/Cargo.toml")
+                    })
+                })
+                .unwrap_err();
             assert!(error.find_source::<WrongEvidenceWorkspace>().is_some());
         }
     }

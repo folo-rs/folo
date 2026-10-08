@@ -1,5 +1,7 @@
 //! Released-content acquisition tests without full Cargo workspace classification.
 
+use std::slice;
+
 use crp_workspace::git::testing::tree_entry;
 
 use super::*;
@@ -220,25 +222,38 @@ fn check_acquired_diff(old_present: bool, new_present: bool) {
                 modes.set("new/file", tree_mode(new_executable));
                 let content_changed = old_present != new_present || (old_present && !same_content);
                 let mode_changed = old_present && new_present && old_executable != new_executable;
-                let (changes, patch, stat) = PackageDiff {
+                let identified = PackageDiff {
                     anchor_files: &anchor,
                     work_files: &work,
                     anchor_tree: &tree,
                     work_modes: &modes,
                     work_ids: &ids,
                 }
-                .identify()
-                .render(|id| {
-                    assert!(content_changed);
-                    if old_present && id == "old-id" {
-                        Ok(Rc::new(b"old\n".to_vec()))
-                    } else {
-                        assert!(new_present);
-                        assert_eq!(id, new_id);
-                        Ok(Rc::new(b"new\n".to_vec()))
-                    }
-                })
-                .unwrap();
+                .identify();
+                let expected_ids: Vec<_> = if content_changed {
+                    [
+                        old_present.then_some("old-id"),
+                        new_present.then_some(new_id),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(identified.blob_ids(), expected_ids);
+                let (changes, patch, stat) = identified
+                    .render(|id| {
+                        assert!(content_changed);
+                        if old_present && id == "old-id" {
+                            Ok(Rc::new(b"old\n".to_vec()))
+                        } else {
+                            assert!(new_present);
+                            assert_eq!(id, new_id);
+                            Ok(Rc::new(b"new\n".to_vec()))
+                        }
+                    })
+                    .unwrap();
                 let changed = content_changed || mode_changed;
                 assert_eq!(changes.len(), usize::from(changed));
                 assert_eq!(stat.files, usize::from(changed));
@@ -263,6 +278,102 @@ fn check_acquired_diff(old_present: bool, new_present: bool) {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn ordered_blob_requests_share_payloads_without_changing_render_order() {
+    let entries = [
+        ("added", None, Some("shared")),
+        ("changed", Some("old"), Some("shared")),
+        ("deleted", Some("old"), None),
+        ("mode-only", Some("unchanged"), Some("unchanged")),
+    ]
+    .map(|(path, old_id, new_id)| ChangedFile {
+        path,
+        old_id,
+        new_id,
+        old_mode: tree_mode(false),
+        new_mode: tree_mode(true),
+        mode_change: (path == "mode-only").then_some((tree_mode(false), tree_mode(true))),
+    });
+    let identified = IdentifiedDiff {
+        entries: entries.into(),
+    };
+    let ids = identified.blob_ids();
+    assert_eq!(ids, ["shared", "old", "shared", "old"]);
+    let mut reader = BlobReader::new(&ids, BLOB_BATCH_BYTES, |requested| {
+        assert_eq!(requested, ["shared", "old"]);
+        Ok(vec![b"new\n".len(), b"old\n".len()])
+    })
+    .unwrap();
+    let mut acquisitions = Vec::new();
+    let mut reads = Vec::new();
+    let (changed, patch, stat) = identified
+        .render(|id| {
+            reads.push(id.to_owned());
+            reader.read(id, |requested| {
+                acquisitions.push(
+                    requested
+                        .iter()
+                        .map(|id| (*id).to_owned())
+                        .collect::<Vec<_>>(),
+                );
+                Ok(vec![b"new\n".to_vec(), b"old\n".to_vec()])
+            })
+        })
+        .unwrap();
+    assert_eq!(reads, ids);
+    assert_eq!(acquisitions, [vec!["shared", "old"]]);
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (4, 2, 2));
+    assert_eq!(changed.len(), stat.files);
+    assert!(patch.contains("-old\n+new\n"));
+    assert!(patch.contains("old mode 100644\nnew mode 100755"));
+}
+
+#[test]
+fn patch_blob_acquisition_selects_singletons_and_preserves_payloads_and_errors() {
+    let payload = b"\0binary\xff\n".to_vec();
+    let actual = read_patch_blobs_with(
+        &["one"],
+        |id| {
+            assert_eq!(id, "one");
+            Ok(payload.clone())
+        },
+        |_| panic!("a singleton must not use the batch protocol"),
+    )
+    .unwrap();
+    assert_eq!(actual, slice::from_ref(&payload));
+    for ids in [&[][..], &["two", "one", "two"][..]] {
+        let expected = vec![payload.clone(); ids.len()];
+        assert_eq!(
+            read_patch_blobs_with(
+                ids,
+                |_| panic!("only a singleton uses direct acquisition"),
+                |requested| {
+                    assert_eq!(requested, ids);
+                    Ok(expected.clone())
+                },
+            )
+            .unwrap(),
+            expected
+        );
+    }
+    for ids in [&["one"][..], &["one", "two"][..]] {
+        let error = read_patch_blobs_with(
+            ids,
+            |_| Err(io::Error::from(io::ErrorKind::PermissionDenied).into()),
+            |_| Err(io::Error::from(io::ErrorKind::InvalidData).into()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            if ids.len() == 1 {
+                io::ErrorKind::PermissionDenied
+            } else {
+                io::ErrorKind::InvalidData
+            }
+        );
     }
 }
 

@@ -98,6 +98,9 @@ impl Classification {
     /// Selects released paths using this interval's admitted Git observations.
     ///
     /// Assessed inputs must remain unchanged since classification.
+    // Native presence/resource forwarding; classification boundary tests exercise shared selections
+    // across fresh intervals, including nested packages, external resources and untracked advice.
+    #[cfg_attr(test, mutants::skip)]
     pub fn released_work_tree_paths(
         &self,
         package: &WorkPackage,
@@ -1094,10 +1097,26 @@ fn diff_package_with_tree(
     Ok((changed, patch, stat, untracked))
 }
 
+// Native Git forwarding; package_diff_preserves_presence_modes_content_and_external_resources
+// and package_diff_reads_singleton_additions_and_deletions exercise the actual blob protocols.
+#[cfg_attr(test, mutants::skip)]
 fn read_patch_blobs(git: &GitRepo, ids: &[&str]) -> Result<Vec<Vec<u8>>, AppError> {
+    read_patch_blobs_with(
+        ids,
+        |id| git.show_blob_bytes(id),
+        |ids| git.show_blob_batch(ids),
+    )
+}
+
+/// Keeps singleton acquisition independent of the batch protocol and forwards exact payloads.
+fn read_patch_blobs_with(
+    ids: &[&str],
+    single: impl FnOnce(&str) -> Result<Vec<u8>, AppError>,
+    batch: impl FnOnce(&[&str]) -> Result<Vec<Vec<u8>>, AppError>,
+) -> Result<Vec<Vec<u8>>, AppError> {
     match ids {
-        [id] => git.show_blob_bytes(id).map(|blob| vec![blob]),
-        _ => git.show_blob_batch(ids),
+        [id] => single(id).map(|blob| vec![blob]),
+        _ => batch(ids),
     }
 }
 
@@ -1268,6 +1287,10 @@ pub fn work_tree_modes(
     observed_work_tree_modes(git, side, tracked_resources, None)
 }
 
+// Native mode-query forwarding, including the fallback from unshareable observations.
+// Shared/narrow scope selection is unit-tested by LiveObservations; classification boundary
+// tests retain worktree/index precedence and external-resource mode coverage.
+#[cfg_attr(test, mutants::skip)]
 fn observed_work_tree_modes(
     git: &GitRepo,
     side: &PackageSide<'_>,
@@ -1468,6 +1491,9 @@ pub fn untracked_released(
     observed_untracked_released(git, side, tracked_resources, tracked, None)
 }
 
+// Native listings and resource metadata; untracked_released_with owns the in-process policy.
+// Classification boundary tests exercise shared advice without turning it into released content.
+#[cfg_attr(test, mutants::skip)]
 fn observed_untracked_released(
     git: &GitRepo,
     side: &PackageSide<'_>,
@@ -1558,6 +1584,9 @@ pub fn released_work_tree_paths(
     observed_released_work_tree_paths(git, package, case, None)
 }
 
+// Native resource/presence acquisition, including shared listings. The released_from_paths and
+// tracked_resources decisions stay unit-tested; classification boundary tests cover this adapter.
+#[cfg_attr(test, mutants::skip)]
 fn observed_released_work_tree_paths(
     git: &GitRepo,
     package: &WorkPackage,
