@@ -122,6 +122,9 @@ the gates require:
 
 - **not measured at the analyzed context commit** — the benchmark is no longer part of the suite
   at the context commit being analysed, so a change on it is history, not news.
+- **ignored by configuration** — the benchmark matches an
+  [ignore prefix](../commands/analyze.md#ignoring-benchmarks) and is intentionally outside
+  analysis scope.
 - **too few points in the analyzed window** — the series is shorter than the minimum the mode's
   detector evaluates.
 - **too few points since its blessing** — long enough overall, but its
@@ -141,7 +144,8 @@ commit. When nothing was in scope at all there is no ratio to print, and the rep
 instead that none of the accounted-for series is in scope at the analyzed context commit; with no
 series reconstructed at all it leads with the fact that nothing was analyzed.
 
-The denominator is the series that *could* have been judged, which excludes ghosts — and the
+The denominator is the series that *could* have been judged, which excludes ghosts and
+configured ignores — and the
 verdict above it is decided against the same denominator, so the headline and the ratio cannot
 tell you different things. A pull request benchmarks only the packages it impacts while analysis
 reads the whole store, so every untouched package leaves a ghost behind; counting those would
@@ -149,6 +153,11 @@ leave a healthy run reading as a dozen series judged out of thousands, and train
 ignore the one field that exists to stop them ignoring it. Ghosts are still named in the
 breakdown a silent report prints, and the [JSON census](#report-formats) counts them, so you can
 always ask how much of the store this run did not measure.
+
+Ignored series remain in that account too, without reducing coverage of the retained
+suite. Their count is disclosed even when there are findings. A report containing only
+ignored series, or a mixture of ignored series and ghosts, has outcome
+`nothing_in_scope`: it does not establish that performance is unchanged.
 
 Note what the tool does *not* claim either way: it reports that a measured level moved, never
 why it moved. Attributing a move — and deciding it is acceptable — is your judgment, recorded

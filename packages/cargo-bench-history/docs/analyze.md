@@ -33,7 +33,8 @@ flowchart TD
   EXEC["analyze"] --> SD["select data set (the load)"]
   SD --> DS[("series + run tallies + blessings")]
   DS --> GF["drop ghost benchmarks\n(absent at context commit)"]
-  GF --> AB["apply blessings\n(history active segment / branch base floor)"]
+  GF --> IG["drop configured ignore-prefix matches"]
+  IG --> AB["apply blessings\n(history active segment / branch base floor)"]
   AB --> FC["run mode-specific analysis"]
   FC --> SUM["per-set summaries"]
   SUM --> RENDER["render reports"]
@@ -43,8 +44,12 @@ The cost is overwhelmingly in the **load** and secondarily in the **detect**; ev
 else is bookkeeping. The **ghost filter** between the load and detect is a cheap
 per-series pass: it drops every reconstructed series whose benchmark has no run at the
 context commit (the analyzed tip), so a benchmark that no longer exists is not re-flagged.
-It runs before blessings and detection so ghosts never enter the false-discovery
-correction. Each analysis mode (`history`, `branch`) is a separate invocation with its own
+It runs before configured ignores, blessings and detection. The following ignore pass
+uses the shared qualified-ID prefix matcher and records its dropped metric-series count.
+Neither exclusion enters history correction or branch comparison families; ghost-first
+ordering gives overlapping reasons one deterministic classification. Both passes remain
+outside shared dataset selection so raw inspection and storage maintenance retain the data.
+Each analysis mode (`history`, `branch`) is a separate invocation with its own
 load — there is no dataset cache across modes — and the mode is auto-detected once per run
 from git topology.
 
@@ -168,7 +173,8 @@ produced at least as much report-wide movement, without filtering away factual p
 excursions.
 
 Both modes build a census from the same execution decision their workers use. The census outlives
-detection: the pipeline records ghost-filtered series into it too and hands it to the renderers,
+detection: the pipeline records ghost-filtered and configured ignored series into it too
+and hands it to the renderers,
 which is how a report states what it judged (DESIGN.md, “Accounting for what was judged”).
 
 History change points pass permutation-independent magnitude, residual, population-separation, and

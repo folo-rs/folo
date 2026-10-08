@@ -6,6 +6,10 @@ select packages, bench targets, and Cargo features rather than an engine; engine
 not run simply contribute no data. Outside Linux, Callgrind benches compile to no-ops and
 produce nothing.
 
+Configured [benchmark ignores](analyze.md#ignoring-benchmarks) affect analysis only:
+they do not skip execution, discard harvested measurements, or remove results from
+collection snapshots. The same rule applies to backfill.
+
 ```console
 # Store locally.
 cargo bench-history collect --local=./bench-history

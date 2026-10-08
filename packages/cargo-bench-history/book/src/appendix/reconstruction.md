@@ -3,8 +3,8 @@
 [Selection](selection.md) decided which stored runs are eligible. This stage turns them into
 the thing detection actually looks at: **series**.
 
-Four things happen here, and each one changes what detection can see. Three of them *remove*
-data, which makes this the stage most often responsible for a report that surprises you.
+Reconstruction orders observations and narrows the series detection can see. Its exclusions
+make this stage an important place to investigate a report that surprises you.
 
 ## Terms used here
 
@@ -94,6 +94,17 @@ see [Insights](insights.md).
 Renaming a benchmark does the same thing, from the tool's point of view: the old identity stops
 being measured and becomes a ghost, and the new one starts a fresh series with no history.
 
+## Configured exclusions
+
+An [ignore prefix](../commands/analyze.md#ignoring-benchmarks) deliberately keeps a benchmark
+out of analysis while leaving its measurements stored. It removes every matching metric
+series before blessings and detection, so neither history correction nor branch-wide
+comparison can depend on it.
+
+Ghost elimination precedes this policy: a benchmark absent at the context is accounted
+for as a ghost, not counted again as ignored. The census records each remaining exclusion
+as `ignored`. Neither exclusion applies to `list` or `examine`.
+
 ## Blessings
 
 A [blessing](../commands/bless.md) records that you looked at a change and accepted it. It
@@ -134,8 +145,8 @@ single observation, judged against a base that is itself one clean point per com
 
 ## What reconstruction hands on
 
-A set of series, each an ordered sequence of points, with ghosts removed and blessings positioned
-on the mode's evidence line.
+A set of series, each an ordered sequence of points, with ghosts and configured ignores
+removed and blessings positioned on the mode's evidence line.
 
 Next: [Detection](detection.md), which locates possible moves and corrects for its own search before
 handing candidates onward.

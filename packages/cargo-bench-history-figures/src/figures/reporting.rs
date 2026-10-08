@@ -85,6 +85,9 @@ const SHORT_SERIES: usize = 3;
 /// batch pass rather than being fed to it.
 const GHOST_SERIES: usize = 2;
 
+/// Intentionally excluded measurements demonstrate scope disclosure beside findings.
+const IGNORED_SERIES: usize = 1;
+
 /// The discriminant set the worked analyses are attributed to.
 fn worked_set() -> DiscriminantSet {
     DiscriminantSet::new(
@@ -94,12 +97,13 @@ fn worked_set() -> DiscriminantSet {
     )
 }
 
-/// Attaches the ghost account after detection.
+/// Attaches the account of analyze-only exclusions after detection.
 ///
-/// Ghosts are dropped before the detectors run, so a batch pass cannot observe them.
+/// Ghosts and ignored series are dropped before detection, so a batch pass cannot observe them.
 /// Recording them on the returned census is the same hand-off the pipeline performs.
-fn attach_ghosts(mut census: SeriesCensus) -> SeriesCensus {
+fn attach_exclusions(mut census: SeriesCensus) -> SeriesCensus {
     census.record_unjudged(UnjudgedReason::Ghost, GHOST_SERIES);
+    census.record_unjudged(UnjudgedReason::Ignored, IGNORED_SERIES);
     census
 }
 
@@ -167,7 +171,7 @@ fn detect_suite(suite: &[Series]) -> Detection {
     } = find_changes(suite, &suite_context(suite));
     Detection {
         findings,
-        census: attach_ghosts(census),
+        census: attach_exclusions(census),
         ..Detection::default()
     }
 }
@@ -421,7 +425,8 @@ fn formats() -> String {
          the full per-reason census, including the ghost count. It is not an observation \
          archive — the per-commit series behind the charts is obtained with `examine`. Text \
          and Markdown carry every finding but drop the per-reason census when there are \
-         findings to show, so only JSON always reveals the ghost count. The condensed \
+         findings to show, so only JSON always reveals the ghost count. Configured \
+         exclusions are disclosed even beside findings on every surface. The condensed \
          summary is lossy by design, so it is the one output that must not be automated \
          against: a check reading it cannot distinguish findings that were capped away from \
          findings that were never made. The outcome file repeats only JSON's top-level \
@@ -466,7 +471,7 @@ fn census() -> String {
         markdown,
         "| `in-scope series judged: {} of {}` | The denominator of every claim the report \
          makes. It counts series the analysis could have judged, which is every series it \
-         accounted for except the ghosts. |",
+         accounted for except ghosts and configured exclusions. |",
         coverage.judged(),
         coverage.in_scope(),
     )

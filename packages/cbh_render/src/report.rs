@@ -182,15 +182,15 @@ pub struct ReportInput<'a> {
 /// Self-contained: `total` is `judged` plus `unjudged`, `unjudged` is the sum of the
 /// `reasons` counts, and `coverage` is the verdict-bearing state derived from
 /// `in_scope` — so a consumer reads coverage without cross-referencing the rest of the
-/// document or re-deriving the ghost arithmetic. It counts *series*, and its total
-/// spans the whole suite the analysis started from — including the ghost-filtered
+/// document or re-deriving exclusion arithmetic. It counts *series*, and its total
+/// spans the whole suite the analysis started from — including ghost-filtered and ignored
 /// series the top-level `series` tally excludes.
 #[derive(Serialize)]
 struct JsonCensus {
     /// Every series the analysis accounted for.
     total: usize,
-    /// Every series that could have been judged: `total` less the ghosts, which no
-    /// analysis can judge. The denominator `coverage` is derived from.
+    /// Every series that could have been judged: `total` less ghosts and configured
+    /// exclusions. The denominator `coverage` is derived from.
     in_scope: usize,
     /// Series the detectors reached a verdict on. A silent report says nothing about
     /// the rest.
@@ -594,6 +594,12 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         runs_with_span(input.runs, input.commit_span)
     )];
     header.extend(judged_field(&coverage));
+    if !input.findings.is_empty() && coverage.ignored() > 0 {
+        header.push(format!(
+            "ignored by configuration: {} series",
+            coverage.ignored()
+        ));
+    }
     header.push(format!("regressions: {regressions}"));
     if input.report_improvements {
         header.push(format!(
@@ -1151,6 +1157,12 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         ),
     ];
     lines.extend(judged_bullet(&coverage));
+    if !input.findings.is_empty() && coverage.ignored() > 0 {
+        lines.push(format!(
+            "- Ignored by configuration: {} series",
+            coverage.ignored()
+        ));
+    }
     lines.push(format!("- Regressions: {regressions}"));
     if input.report_improvements {
         lines.push(format!(
@@ -1271,6 +1283,12 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         ),
     ];
     lines.extend(judged_bullet(&coverage));
+    if !input.findings.is_empty() && coverage.ignored() > 0 {
+        lines.push(format!(
+            "- Ignored by configuration: {} series",
+            coverage.ignored()
+        ));
+    }
     lines.push(format!("- Regressions: {regressions}"));
     if input.report_improvements {
         lines.push(format!(
@@ -2034,6 +2052,68 @@ mod tests {
             "{summary}"
         );
         assert!(summary.contains("Not judged: 2 series"), "{summary}");
+    }
+
+    #[test]
+    fn ignored_series_are_disclosed_with_findings_and_after_summary_truncation() {
+        let findings = [
+            named_regression("first", 0.5),
+            named_regression("second", 0.3),
+        ];
+        let input = ReportInput {
+            census: census_of(2, &[(UnjudgedReason::Ignored, 3)]),
+            ..flat_input(&findings)
+        };
+        for report in [
+            render(&input, ReportFormat::Text, false),
+            render(&input, ReportFormat::Markdown, false),
+            render_markdown_summary(&input, NonZero::<usize>::MIN),
+        ] {
+            assert!(
+                report
+                    .to_lowercase()
+                    .contains("ignored by configuration: 3 series")
+            );
+            assert!(!report.contains("Not judged:"));
+        }
+        let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(json["census"]["total"], 5);
+        assert_eq!(json["census"]["in_scope"], 2);
+        assert_eq!(json["census"]["reasons"][0]["reason"], "ignored");
+        assert_eq!(json["outcome"], "findings");
+    }
+
+    #[test]
+    fn ignored_series_are_disclosed_once_in_silent_reports_without_an_all_clear() {
+        let input = ReportInput {
+            census: census_of(0, &[(UnjudgedReason::Ignored, 2)]),
+            ..flat_input(&[])
+        };
+        for report in [
+            render(&input, ReportFormat::Text, false),
+            render(&input, ReportFormat::Markdown, false),
+            render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
+        ] {
+            assert_eq!(report.matches("ignored by configuration").count(), 1);
+            assert!(report.contains("nothing was judged"));
+            assert!(!report.contains("No notable changes"));
+            assert!(!report.contains("None of the 2 series"));
+        }
+        let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(json["outcome"], "nothing_in_scope");
+    }
+
+    #[test]
+    fn findings_without_ignored_series_do_not_announce_exclusions() {
+        let findings = [regression()];
+        let input = flat_input(&findings);
+        for report in [
+            render(&input, ReportFormat::Text, false),
+            render(&input, ReportFormat::Markdown, false),
+            render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
+        ] {
+            assert!(!report.to_lowercase().contains("ignored by configuration"));
+        }
     }
 
     #[test]

@@ -11,6 +11,11 @@ command selections and ambient values into concrete paths. Parsing and loading r
 from input resolution so pure resolution functions receive environment values explicitly instead
 of reading process-global state.
 
+The optional ignore section carries `cbh_model::BenchmarkIdPrefix` values, reusing
+their validation and literal matching contract rather than introducing a pattern language.
+The section rejects unknown fields. Its default is no exclusions; interpretation belongs
+only to analysis orchestration, not configuration loading or collection.
+
 Configuration acquisition passes its read result to synchronous parsing and read-policy logic.
 Unit tests cover that policy, including private error context, with in-memory read results;
 Cargo integration tests cover loading real files.

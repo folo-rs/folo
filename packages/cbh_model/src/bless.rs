@@ -88,13 +88,7 @@ impl BlessingRecord {
     /// identity, so a prefix may select a whole family of benchmarks at once.
     #[must_use]
     pub fn matches(&self, id: &BenchmarkId) -> bool {
-        if self.prefixes.is_empty() {
-            return true;
-        }
-        let qualified = id.qualified();
-        self.prefixes
-            .iter()
-            .any(|prefix| qualified.starts_with(prefix.as_str()))
+        self.prefixes.is_empty() || id.matching_prefix(&self.prefixes).is_some()
     }
 }
 

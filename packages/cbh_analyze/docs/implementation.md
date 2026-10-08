@@ -12,6 +12,13 @@ dataset-selection capabilities keep the query commands aligned where the applica
 requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
 and report presentation to `cbh_render`.
 
+Configured ignores are applied to reconstructed series after ghost elimination and before
+blessings or detection. This analyze-only pass is shared by ordinary and exact-current
+analysis, not by raw query or storage-maintenance selection. It records dropped metric
+series under the census's `Ignored` reason and emits matching-prefix diagnostics; the
+renderer owns their coverage interpretation. Matching delegates to the same model operation
+as positive selection and blessings, with empty-list policy kept at each caller.
+
 Analysis carries the renderer-owned outcome with the rendered report bundle so the shell can
 expose it in process or write the requested outcome file. It uses the
 [shared projection](../../cbh_render/docs/implementation.md), not an orchestration-specific

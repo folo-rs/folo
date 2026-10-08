@@ -11,6 +11,11 @@ and findings. It composes the kernels in `cbh_stats` with analysis-specific grou
 ranking policy. Storage loading and history queries remain in `cbh_analyze`, while presentation of
 the resulting findings remains in `cbh_render`.
 
+The census can account for `Ghost` and `Ignored` series removed by orchestration before
+detection. Detectors never receive those series, so neither history calibration nor branch
+family construction depends on them. Configuration remains outside this crate; positive
+series selection delegates literal prefix matching to `cbh_model`.
+
 Gating policy is centralized: every threshold a detector turns on lives in one module rather than
 at its point of use, so the policy can be reviewed as a whole and each value carries the reasoning
 that sets it. The thresholds are fixed constants with no override mechanism, because the shipped

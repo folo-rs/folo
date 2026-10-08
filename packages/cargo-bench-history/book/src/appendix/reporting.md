@@ -45,7 +45,7 @@ analysis with any findings has outcome `findings`, even when some series could n
 Without findings, a fully judged in-scope suite is `clean`. An in-scope suite with no judged
 series is `insufficient_baseline`; a suite with some judged and some unjudged series is
 `partial`. When no series entered analysis, or every accounted series was absent at the
-analyzed context commit, the outcome is `nothing_in_scope`.
+analyzed context commit or ignored by configuration, the outcome is `nothing_in_scope`.
 
 These outcomes describe the series available to analysis, not an inventory of collection jobs.
 **Platform coverage** is separate: matrix automation must verify which expected platforms
@@ -110,6 +110,8 @@ Note the asymmetry: the **reasons** a series went unjudged are spelled out only 
 has no findings to show — otherwise the human-readable formats print the tally alone, on the
 grounds that a report with findings has something more urgent to say. The JSON census always
 carries the full breakdown, which is another reason to read it rather than the text.
+Configured exclusions also receive a compact disclosure beside findings, including in
+the condensed summary, so an intentional reduction in analysis scope stays visible.
 
 ## Comparison-base lag
 

@@ -176,6 +176,12 @@ that judged nothing at all reports no findings, and a naive check reads that as 
 > that alarming on a good run is a ratio people learn to ignore. See
 > [Reconstruction](reconstruction.md) for what makes a ghost.
 
+Configured ignores are also outside the denominator, but remain in the total and
+per-reason account as `ignored`. They disclose an intentional policy choice rather than
+missing baseline evidence. If every measured series is ignored, the report has coverage
+and outcome `nothing_in_scope`; it does not claim an all-clear or recommend collecting
+more history for those exclusions.
+
 ## What this stage hands on
 
 The findings, and the census. Both go to [Reporting](reporting.md) — which, as it turns out,

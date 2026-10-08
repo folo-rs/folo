@@ -25,6 +25,9 @@ benchmark identity and the metric, so pasting them back in is natural.
 re-baselining** — it has no findings, modes, or blessings — and repeats the listing once per
 matching discriminant set.
 
+Configured [benchmark ignores](analyze.md#ignoring-benchmarks) do not apply to this
+raw-data view. An ignored benchmark remains inspectable by its exact qualified ID.
+
 The listing covers **every commit in the examined range**: from the earliest commit at which
 any matching set carries the series through to the analyzed tip. Every set shares that range,
 so their tables cover the same commits and can be read side by side. A commit that carries

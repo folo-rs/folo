@@ -25,7 +25,7 @@ pub enum AnalysisOutcome {
     /// In-scope series existed, but none carried enough evidence to be judged.
     InsufficientBaseline,
     /// No series entered analysis, or every accounted series was absent at the
-    /// analyzed context commit.
+    /// analyzed context commit or ignored by configuration.
     NothingInScope,
     /// Some in-scope series were judged and some were not, with no findings.
     Partial,
@@ -72,7 +72,7 @@ impl AnalysisOutcome {
 /// How much of the in-scope suite an analysis reached a verdict on.
 ///
 /// The three "nothing was judged" situations are distinct operational states with
-/// distinct remedies — no results at all, results that were all ghosts, and results
+/// distinct remedies — no results at all, results that were all outside scope, and results
 /// that were all declined by the gates — so they are distinct variants rather than
 /// one lumped "blind" state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,9 +81,8 @@ pub enum CoverageState {
     /// matching run was excluded, or nothing survived loading. The empty-outcome hint
     /// names which of those happened; this variant does not.
     NoSeries,
-    /// Series were accounted for, but every one of them was a ghost, so nothing was
-    /// in scope at the analyzed context commit. Remedy: check that the benchmarks still
-    /// run at the analyzed context commit.
+    /// Series were accounted for, but every one was absent at the analyzed context
+    /// commit or ignored by configuration.
     NothingInScope,
     /// In-scope series existed and none of them could be judged. Remedy: the
     /// per-reason breakdown says which evidence floor they fell short of.
@@ -136,7 +135,8 @@ impl CoverageState {
                 "Nothing: no series was accounted for. The empty-outcome hint explains why."
             }
             Self::NothingInScope => {
-                "Nothing at the analyzed context commit: every accounted series was measured elsewhere."
+                "Nothing: every accounted series was absent at the analyzed context commit \
+                 or ignored by configuration."
             }
             Self::NothingJudged => {
                 "Nothing: in-scope series existed but none could be judged; the breakdown \
@@ -161,15 +161,16 @@ impl CoverageState {
 /// Counts *metric series* throughout, matching the census: one benchmark measured for
 /// several metrics contributes one entry per metric.
 ///
-/// Ghosts sit outside [`in_scope`](Self::in_scope), which is the denominator of both
-/// the [`state`](Self::state) and every ratio a rendering states. A pull request
+/// Ghosts and configured exclusions sit outside [`in_scope`](Self::in_scope), the
+/// denominator of both [`state`](Self::state) and every ratio a rendering states. A pull request
 /// benchmarks only the packages it touches while analysis reads the whole store, so
 /// every untouched package's series is a ghost; a denominator counting those would leave
 /// a healthy run reading as a handful of series judged out of thousands, and train
 /// readers to ignore the field. The exclusion reaches only the ratio that decides
 /// whether an all-clear is warranted: [`total`](Self::total) and
 /// [`reasons`](Self::reasons) keep the whole account, so a consumer that needs the ghosts
-/// has them.
+/// has them. Configured exclusions likewise remain in the account without reducing
+/// coverage of the suite the project has chosen to analyze.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Coverage {
     state: CoverageState,
@@ -184,12 +185,12 @@ impl Coverage {
     #[must_use]
     pub fn from_census(census: &SeriesCensus) -> Self {
         let unjudged: Vec<(UnjudgedReason, usize)> = census.reasons().collect();
-        let ghosts = unjudged
+        let excluded = unjudged
             .iter()
-            .find_map(|&(reason, count)| (reason == UnjudgedReason::Ghost).then_some(count))
-            .unwrap_or(0);
+            .filter(|(reason, _)| matches!(reason, UnjudgedReason::Ghost | UnjudgedReason::Ignored))
+            .fold(0_usize, |total, (_, count)| total.saturating_add(*count));
         let total = census.total();
-        let in_scope = total.saturating_sub(ghosts);
+        let in_scope = total.saturating_sub(excluded);
         let judged = census.judged();
 
         let state = if total == 0 {
@@ -226,13 +227,13 @@ impl Coverage {
     }
 
     /// How many series could have been judged: every accounted series except the
-    /// ghosts, which no analysis can judge.
+    /// ghosts and the configured exclusions.
     #[must_use]
     pub fn in_scope(&self) -> usize {
         self.in_scope
     }
 
-    /// Every series the analysis accounted for, ghosts included.
+    /// Every series the analysis accounted for, including ghosts and configured exclusions.
     #[must_use]
     pub fn total(&self) -> usize {
         self.total
@@ -244,8 +245,17 @@ impl Coverage {
         self.total.saturating_sub(self.judged)
     }
 
+    /// How many metric series were excluded by configured benchmark prefixes.
+    #[must_use]
+    pub fn ignored(&self) -> usize {
+        self.unjudged
+            .iter()
+            .find_map(|&(reason, count)| (reason == UnjudgedReason::Ignored).then_some(count))
+            .unwrap_or(0)
+    }
+
     /// The unjudged series broken down by reason, in the census's reporting order.
-    /// Complete: ghosts are listed here even though they sit outside
+    /// Complete: ghosts and configured exclusions are listed even though they sit outside
     /// [`in_scope`](Self::in_scope).
     pub fn reasons(&self) -> impl Iterator<Item = (UnjudgedReason, usize)> + '_ {
         self.unjudged.iter().copied()
@@ -282,7 +292,7 @@ impl Coverage {
     /// Between them they account for the whole suite: the judged series are counted
     /// against [`in_scope`](Self::in_scope), and the breakdown that follows names every
     /// unjudged series — ghosts included — so the judged count and the listed reasons
-    /// together reach [`total`](Self::total).
+    /// together reach [`total`](Self::total). Configured exclusions are likewise included.
     #[must_use]
     pub fn qualifications(&self) -> Vec<String> {
         let mut sentences: Vec<String> = self.coverage_sentence().into_iter().collect();
@@ -305,8 +315,7 @@ impl Coverage {
             // hint that accompanies it. A third statement of the one fact is noise.
             CoverageState::NoSeries => None,
             CoverageState::NothingInScope => Some(format!(
-                "None of the {} series accounted for is measured at the analyzed context \
-                 commit, so nothing was tested.",
+                "All {} series accounted for are outside analysis scope, so nothing was tested.",
                 self.total
             )),
             CoverageState::NothingJudged => Some(format!(
@@ -371,6 +380,43 @@ mod tests {
                 CoverageState::NothingJudged,
                 0,
                 3,
+            ),
+            (
+                "every series ignored",
+                census_of(0, &[(UnjudgedReason::Ignored, 2)]),
+                CoverageState::NothingInScope,
+                0,
+                0,
+            ),
+            (
+                "ghosts and ignored only",
+                census_of(
+                    0,
+                    &[(UnjudgedReason::Ghost, 1), (UnjudgedReason::Ignored, 2)],
+                ),
+                CoverageState::NothingInScope,
+                0,
+                0,
+            ),
+            (
+                "judged with ignored",
+                census_of(2, &[(UnjudgedReason::Ignored, 3)]),
+                CoverageState::Full,
+                2,
+                2,
+            ),
+            (
+                "ignored and insufficient",
+                census_of(
+                    0,
+                    &[
+                        (UnjudgedReason::Ignored, 2),
+                        (UnjudgedReason::TooFewPoints, 1),
+                    ],
+                ),
+                CoverageState::NothingJudged,
+                0,
+                1,
             ),
             (
                 "partial: ghost",
@@ -553,6 +599,35 @@ mod tests {
     }
 
     #[test]
+    fn ignored_counts_do_not_include_other_exclusions() {
+        for ignored in [0, 2] {
+            let coverage = Coverage::from_census(&census_of(
+                1,
+                &[
+                    (UnjudgedReason::Ghost, 3),
+                    (UnjudgedReason::Ignored, ignored),
+                ],
+            ));
+            assert_eq!(coverage.ignored(), ignored);
+            assert_eq!(coverage.in_scope(), 1);
+            assert_eq!(coverage.total(), 4 + ignored);
+            assert_eq!(
+                AnalysisOutcome::from_analysis(false, &coverage),
+                AnalysisOutcome::Clean
+            );
+        }
+        let coverage = Coverage::from_census(&census_of(0, &[(UnjudgedReason::Ignored, 2)]));
+        assert_eq!(
+            AnalysisOutcome::from_analysis(false, &coverage),
+            AnalysisOutcome::NothingInScope
+        );
+        assert_eq!(
+            coverage.qualifications().last().unwrap(),
+            "Not judged: 2 series ignored by configuration."
+        );
+    }
+
+    #[test]
     fn qualifications_account_for_every_series() {
         let coverage = Coverage::from_census(&census_of(
             4,
@@ -646,6 +721,15 @@ mod tests {
                 "full"
             ]
         );
+    }
+
+    #[test]
+    fn coverage_states_explain_distinct_verdict_reach() {
+        let reaches = CoverageState::ALL.map(CoverageState::reach);
+        for (index, reach) in reaches.iter().enumerate() {
+            assert!(!reach.is_empty());
+            assert!(!reaches.iter().skip(index + 1).any(|other| other == reach));
+        }
     }
 
     #[test]

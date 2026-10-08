@@ -730,6 +730,7 @@ name = "cbh_config"
 version = "0.3.2"
 dependencies = [
  "cbh_command",
+ "cbh_model",
  "mutants",
  "ohno",
  "serde",

@@ -24,7 +24,7 @@ use cbh_detect::{
 };
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
-use cbh_model::DiscriminantSet;
+use cbh_model::{BenchmarkIdPrefix, DiscriminantSet};
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
 use cbh_render::{
     AnalysisOutcome, Coverage, DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render,
@@ -354,6 +354,12 @@ where
         (benchmarks.len(), ghosts.len())
     };
 
+    // This is analysis policy, not shared dataset selection: raw inspection and
+    // storage maintenance retain ignored data. Filter before blessings and every
+    // statistical pass so exclusions cannot enter either mode's comparison family.
+    // Ref: cargo-bench-history/docs/analyze.md, "Top-level flow".
+    let ignored_series = exclude_ignored(&mut series, &config.ignore.benchmarks, reporter);
+
     // Apply blessings on the topology each mode analyzes. History re-baselines the
     // context series; branch mode truncates each base-ref comparison window.
     let rebaseline_started = Instant::now();
@@ -384,9 +390,10 @@ where
         branch_comparisons,
         branch_trace,
     } = find_changes_spawned(Arc::clone(&series), context, spawner, available_parallelism).await;
-    // The ghost filter judged nothing either, and it ran before detection could see
-    // those series, so its exclusions join the same account.
+    // Analyze-only filters run before detection sees these series, so their
+    // exclusions join the same account after detection.
     census.record_unjudged(UnjudgedReason::Ghost, ghost_series);
+    census.record_unjudged(UnjudgedReason::Ignored, ignored_series);
     let detection_stage = match dataset.mode {
         AnalysisMode::History => "change detection (per-series detectors + FDR filter)",
         AnalysisMode::Branch => "change detection (current-regime excursions + report comparison)",
@@ -442,10 +449,17 @@ where
     // otherwise indistinguishable from "no data". Explain the dominant reasons so
     // the user can act without resorting to `--verbose`.
     //
-    // The ghost filter is a distinct empty case: runs *did* load and analyze, but
-    // every benchmark was dropped as a ghost. `empty_history_hint` keys off an
-    // empty load and stays silent here, so name the ghost case on its own.
-    let hint = if ghosts_excluded > 0 && series.is_empty() {
+    // Analyze-only filters can empty a successfully loaded dataset, which the
+    // empty-load hint cannot explain. Keep configured exclusions distinct from
+    // an all-ghost result so the remedy reflects the actual selection policy.
+    let hint = if ignored_series > 0 && series.is_empty() {
+        Some(
+            "No benchmarks remain after context-presence filtering and configured ignores. \
+             Review [ignore].benchmarks in the selected configuration; stored measurements \
+             remain available through list and examine."
+                .to_owned(),
+        )
+    } else if ghosts_excluded > 0 && series.is_empty() {
         Some(all_ghosts_hint(&dataset.tip_commit))
     } else {
         empty_history_hint(
@@ -490,6 +504,40 @@ where
     reporter.timing("report render", render_started.elapsed());
 
     Ok((rendered, regressions))
+}
+
+/// Removes configured exclusions before either detector can count or compare them.
+///
+/// Returning the metric-series count keeps reporting tied to the same selection decision.
+fn exclude_ignored(
+    series: &mut Vec<Series>,
+    prefixes: &[BenchmarkIdPrefix],
+    reporter: &dyn Reporter,
+) -> usize {
+    let before = series.len();
+    series.retain(|one| {
+        let Some(prefix) = one.id.matching_prefix(prefixes) else {
+            return true;
+        };
+        reporter.note_with(|| {
+            format!(
+                "excluding {} {} in {}: matches configured ignore prefix {:?}",
+                one.id.qualified(),
+                one.kind.as_str(),
+                one.set,
+                prefix.as_str(),
+            )
+        });
+        false
+    });
+    let excluded = before.saturating_sub(series.len());
+    reporter.note_with(|| {
+        format!(
+            "ignore filter: excluded {excluded} series by configuration, leaving {} series",
+            series.len(),
+        )
+    });
+    excluded
 }
 
 /// Finds the historical branch comparison belonging to one comparable partition.
@@ -630,7 +678,7 @@ fn baseline_guidance(reason: UnjudgedReason) -> Option<&'static str> {
             "collect this benchmark at the analyzed context commit in the selected partition; \
              more base history cannot replace the missing branch measurement.",
         ),
-        UnjudgedReason::Ghost => None,
+        UnjudgedReason::Ghost | UnjudgedReason::Ignored => None,
     }
 }
 
@@ -671,6 +719,7 @@ fn note_branch_evaluation<R: Reporter + ?Sized>(reporter: &R, trace: &BranchEval
                         count_noun(MIN_SERIES_POINTS, "distinct base-branch commit"),
                     ),
                     UnjudgedReason::Ghost
+                    | UnjudgedReason::Ignored
                     | UnjudgedReason::TooFewPoints
                     | UnjudgedReason::TooFewPointsSinceBlessing
                     | UnjudgedReason::NotMeasuredOnBranch => {
@@ -734,7 +783,7 @@ mod tests {
     use std::io;
     use std::path::PathBuf;
 
-    use cbh_config::Config;
+    use cbh_config::{Config, parse_config};
     use cbh_detect::{Blessing, examples, find_changes};
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
@@ -748,6 +797,7 @@ mod tests {
     use jiff::Timestamp;
     use nonempty::nonempty;
     use ohno::ErrorExt as _;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::testing::{store_run as store, two_commit_history};
@@ -761,7 +811,7 @@ mod tests {
         Timestamp::from_second(seconds).unwrap()
     }
 
-    /// A minimal configuration; `analyze_with` only reads `project.default_branch`.
+    /// A minimal configuration without project overrides or analysis exclusions.
     fn config() -> Config {
         Config::default()
     }
@@ -1195,7 +1245,7 @@ mod tests {
             .json
             .expect("the JSON report was rendered for the requested path");
         let outcome = rendered.outcome.expect("analysis returns a typed outcome");
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["outcome"], outcome.as_str(), "{report}");
         assert_eq!(
             parsed["notable"],
@@ -1260,7 +1310,7 @@ mod tests {
     /// A "nothing was flagged" assertion only says something about the gates when the
     /// data cleared that bar; without this check the same silence is also what an
     /// unanalyzed or ghost-filtered series produces.
-    fn assert_history_was_judged(parsed: &serde_json::Value) {
+    fn assert_history_was_judged(parsed: &Value) {
         assert_eq!(parsed["series"], 1, "{parsed}");
         assert_eq!(
             parsed["census"]["judged"], 1,
@@ -1421,7 +1471,7 @@ mod tests {
         let (report, regressions) =
             analyze_quiet_json(&history_git(), &storage, "folo", &options());
         assert_eq!(regressions, 1);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_history_was_judged(&parsed);
         assert_eq!(parsed["outcome"], "findings", "{report}");
         assert_eq!(parsed["findings"].as_array().unwrap().len(), 1, "{report}");
@@ -1432,7 +1482,7 @@ mod tests {
         let storage = MemoryStorage::new();
         let (report, regressions) = analyze_quiet_json(&linear_git(), &storage, "folo", &options());
         assert_eq!(regressions, 0);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["outcome"], "nothing_in_scope", "{report}");
         assert_eq!(parsed["census"]["total"], 0, "{report}");
         assert!(
@@ -1448,7 +1498,7 @@ mod tests {
         store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         let (report, regressions) = analyze_quiet_json(&linear_git(), &storage, "folo", &options());
         assert_eq!(regressions, 0);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["outcome"], "insufficient_baseline", "{report}");
         assert_eq!(parsed["census"]["total"], 1, "{report}");
         assert_eq!(parsed["census"]["judged"], 0, "{report}");
@@ -1469,7 +1519,7 @@ mod tests {
         let (report, regressions) =
             analyze_quiet_json(&history_git(), &storage, "folo", &options());
         assert_eq!(regressions, 0);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_history_was_judged(&parsed);
         assert_eq!(parsed["outcome"], "clean", "{report}");
         assert!(
@@ -1757,7 +1807,7 @@ mod tests {
         };
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &opts);
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         let sets = parsed["sets"].as_array().unwrap();
 
         let set_a = sets
@@ -2117,7 +2167,7 @@ mod tests {
         assert_eq!(regressions, 0, "the blessed step is re-baselined: {report}");
         assert_eq!(parse_census_judged(&report), 0, "{report}");
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&report).unwrap()["census"]["reasons"][0]["reason"],
+            serde_json::from_str::<Value>(&report).unwrap()["census"]["reasons"][0]["reason"],
             "too_few_points_since_blessing",
             "{report}"
         );
@@ -2161,7 +2211,7 @@ mod tests {
             "pre-blessing base data must not be used: {report}"
         );
         assert_eq!(parse_census_judged(&report), 0, "{report}");
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["census"]["reasons"][0]["reason"], "too_few_base_commits_since_blessing",
             "{report}"
@@ -2187,7 +2237,7 @@ mod tests {
 
     /// The `census.judged` tally of a rendered JSON report.
     fn parse_census_judged(report: &str) -> u64 {
-        serde_json::from_str::<serde_json::Value>(report).unwrap()["census"]["judged"]
+        serde_json::from_str::<Value>(report).unwrap()["census"]["judged"]
             .as_u64()
             .expect("every report carries a census")
     }
@@ -2256,7 +2306,7 @@ mod tests {
         let (report, regressions, reporter) =
             analyze_json(&history_git(), &storage, "folo", &options());
         assert_eq!(regressions, 0);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["outcome"], "partial", "{report}");
         assert!(
             parsed["findings"].as_array().unwrap().is_empty(),
@@ -2321,7 +2371,7 @@ mod tests {
             "folo",
             &options(),
         );
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["outcome"], "nothing_in_scope", "{report}");
         assert_eq!(parsed["ghosts_excluded"], 1, "one benchmark: {report}");
         assert_eq!(parsed["series"], 0, "none survived the filter: {report}");
@@ -2357,6 +2407,207 @@ mod tests {
         );
     }
 
+    /// Drives configured exclusions through the same load and report path as real analysis.
+    fn analyze_ignored(
+        git: &FakeGitHistory,
+        storage: &MemoryStorage,
+        config: &Config,
+        options: &AnalyzeOptions,
+    ) -> (Value, RecordingReporter) {
+        let options = AnalyzeOptions {
+            no_text: true,
+            json: Some("report.json".into()),
+            ..options.clone()
+        };
+        let reporter = RecordingReporter::new();
+        let (reports, regressions) = block_on(analyze_with(
+            git,
+            storage,
+            "folo",
+            config,
+            &options,
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+            &spawner(),
+            NonZero::<usize>::MIN,
+        ))
+        .unwrap();
+        let report: Value = serde_json::from_str(reports.json.as_ref().unwrap()).unwrap();
+        assert_eq!(report["regressions"], regressions);
+        assert_eq!(report["outcome"], reports.outcome.unwrap().as_str());
+        (report, reporter)
+    }
+
+    #[test]
+    fn ignore_filter_retains_unmatched_series_and_counts_metrics_across_partitions() {
+        let mut series: Vec<_> = [
+            ("family/noisy", "m1", MetricKind::InstructionCount),
+            ("family/noisy", "m1", MetricKind::ConditionalBranches),
+            ("family/noisy", "m2", MetricKind::InstructionCount),
+            ("family_keep", "m1", MetricKind::InstructionCount),
+        ]
+        .into_iter()
+        .map(|(name, machine, kind)| Series {
+            set: DiscriminantSet {
+                engine: Engine::Callgrind,
+                target_triple: "x86_64-unknown-linux-gnu".into(),
+                machine_key: machine.into(),
+            },
+            id: BenchmarkId::new(nonempty![name.to_owned()]),
+            kind,
+            points: Vec::new(),
+            base_window: Vec::new(),
+            base_history_count: 0,
+            active_start: 0,
+            blessing: None,
+        })
+        .collect();
+        let reporter = RecordingReporter::new();
+        assert_eq!(exclude_ignored(&mut series, &[], &reporter), 0);
+        assert_eq!(series.len(), 4);
+        let prefixes = ["family/", "family/noisy", "family/"]
+            .map(|prefix| BenchmarkIdPrefix::new(prefix).unwrap());
+        assert_eq!(exclude_ignored(&mut series, &prefixes, &reporter), 3);
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id.qualified(), "family_keep");
+        assert!(reporter.contains("matches configured ignore prefix \"family/\""));
+        assert!(reporter.contains("excluded 3 series by configuration, leaving 1 series"));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Multi-partition reconstruction and rendering exceed the interpreter budget; the pure filter and minimal pipeline tests retain Miri coverage."
+    )]
+    fn ignores_count_selected_metric_series_once_and_preserve_ghost_precedence() {
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &multi_bench(0, "c0", &[("skip/ghost", 100.0)]),
+        );
+        let machines: &[&str] = &["m1", "m2"];
+        for &machine in machines {
+            let mut run = two_metric_set(3, "c3", 100.0, 200.0);
+            if machine == "m1" {
+                run.results
+                    .extend(multi_bench(3, "c3", &[("kept", 100.0), ("outside", 100.0)]).results);
+            }
+            store(
+                &storage,
+                &clean_key_in("callgrind", "x86_64-unknown-linux-gnu", machine, "c3"),
+                &run,
+            );
+        }
+        let git = two_commit_history("c0", "c3");
+        let options = AnalyzeOptions {
+            machine_key: vec!["all".to_owned()],
+            prefixes: ["nm/", "skip/", "kept"]
+                .map(|prefix| BenchmarkIdPrefix::new(prefix).unwrap())
+                .to_vec(),
+            ..options()
+        };
+        let config =
+            parse_config("[ignore]\nbenchmarks = ['nm/', 'nm/nm::observe', 'nm/', 'skip/']")
+                .unwrap();
+        let (report, reporter) = analyze_ignored(&git, &storage, &config, &options);
+        assert_eq!(report["series"], 1);
+        let ignored = machines.len() * 2;
+        assert_eq!(report["census"]["total"], ignored + 2);
+        assert_eq!(report["census"]["in_scope"], 1);
+        assert_eq!(
+            report["census"]["reasons"][0],
+            json!({"reason": "ghost", "count": 1})
+        );
+        assert_eq!(
+            report["census"]["reasons"][1],
+            json!({"reason": "ignored", "count": ignored})
+        );
+        assert_eq!(report["outcome"], "insufficient_baseline");
+        assert!(reporter.contains("matches configured ignore prefix \"nm/\""));
+        assert!(reporter.contains(&format!(
+            "ignore filter: excluded {ignored} series by configuration"
+        )));
+    }
+
+    #[test]
+    fn ignores_explain_empty_scope_without_ghost_or_baseline_advice() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
+        let config = parse_config("[ignore]\nbenchmarks = ['nm/']").unwrap();
+        let (report, reporter) = analyze_ignored(&linear_git(), &storage, &config, &options());
+        assert_eq!(report["series"], 0);
+        assert_eq!(report["runs"], 1);
+        assert_eq!(report["census"]["total"], 1);
+        assert_eq!(report["census"]["in_scope"], 0);
+        assert_eq!(report["outcome"], "nothing_in_scope");
+        assert_eq!(report["ghosts_excluded"], 0);
+        assert!(
+            report["hint"]
+                .as_str()
+                .unwrap()
+                .contains("[ignore].benchmarks")
+        );
+        assert!(!reporter.contains("baseline guidance:"));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Comparing both detectors requires complete multi-series histories; small ignore tests cover selection under Miri."
+    )]
+    fn ignores_remove_series_from_both_modes_statistical_families() {
+        for branch in [false, true] {
+            let storage = MemoryStorage::new();
+            let retained = MemoryStorage::new();
+            for index in 0..HISTORY_COMMITS {
+                let commit = commit_name(index);
+                let value = if !branch && index >= REGIME_COMMITS {
+                    130.0
+                } else {
+                    100.0
+                };
+                let second = i64::try_from(index).unwrap();
+                store(
+                    &storage,
+                    &clean_key(&commit),
+                    &multi_bench(second, &commit, &[("kept", value), ("ignored", value)]),
+                );
+                store(
+                    &retained,
+                    &clean_key(&commit),
+                    &multi_bench(second, &commit, &[("kept", value)]),
+                );
+            }
+            if branch {
+                store(
+                    &storage,
+                    &dirty_key("f2", 20),
+                    &multi_bench(20, "f2", &[("kept", 130.0), ("ignored", 130.0)]),
+                );
+                store(
+                    &retained,
+                    &dirty_key("f2", 20),
+                    &multi_bench(20, "f2", &[("kept", 130.0)]),
+                );
+            }
+            let git = if branch { branch_git() } else { history_git() };
+            let config = parse_config("[ignore]\nbenchmarks = ['ignored']").unwrap();
+            let (filtered, _) = analyze_ignored(&git, &storage, &config, &options());
+            let (expected, _) = analyze_ignored(&git, &retained, &Config::default(), &options());
+            let (restored, _) = analyze_ignored(&git, &storage, &Config::default(), &options());
+            assert_eq!(filtered["findings"], expected["findings"]);
+            assert_eq!(filtered["sets"], expected["sets"]);
+            assert_eq!(filtered["regressions"], 1);
+            assert_eq!(filtered["census"]["judged"], 1);
+            assert_eq!(filtered["census"]["in_scope"], 1);
+            assert_eq!(restored["regressions"], 2);
+            assert_eq!(restored["census"]["judged"], 2);
+        }
+    }
+
     #[test]
     #[cfg_attr(
         miri,
@@ -2388,7 +2639,7 @@ mod tests {
         let (report, regressions, reporter) =
             analyze_json(&branch_git(), &storage, "folo", &options());
         assert_eq!(regressions, 1, "the measured metric still moved: {report}");
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["outcome"], "findings", "{report}");
         assert_eq!(parsed["findings"].as_array().unwrap().len(), 1, "{report}");
         assert_eq!(parsed["census"]["total"], 2, "{report}");
@@ -2430,7 +2681,7 @@ mod tests {
         // The ghost is filtered out before detection, and the verbose trail names it
         // and the context commit it is absent from.
         let (report, _, reporter) = analyze_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["ghosts_excluded"], 1, "{report}");
         assert_eq!(parsed["series"], 1, "only `kept` survives, {report}");
         assert!(
@@ -2455,7 +2706,7 @@ mod tests {
         let git = linear_git();
 
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["ghosts_excluded"], 1, "{report}");
         assert_eq!(parsed["series"], 0, "{report}");
         assert_eq!(parsed["runs"], 1, "the run still loaded, {report}");
@@ -2512,7 +2763,7 @@ mod tests {
         let git = history_git();
 
         let (report, regressions) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["runs"], HISTORY_COMMITS,
             "the dirty tip run is excluded"
@@ -2537,7 +2788,7 @@ mod tests {
         let git = branch_git();
 
         let (report, regressions) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], runs, "the dirty f2 snapshot is admitted");
         assert_eq!(
             regressions, 1,
@@ -2574,7 +2825,7 @@ mod tests {
             "{text}"
         );
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         let lags = &parsed["sets"][0]["comparison_base_lags"];
         assert_eq!(lags[0]["commits_behind"], 1, "{report}");
         assert_eq!(lags[0]["reason"], "discriminant_set_mismatch", "{report}");
@@ -2602,7 +2853,7 @@ mod tests {
             "{text}"
         );
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         let lags = &parsed["sets"][0]["comparison_base_lags"];
         assert_eq!(lags[0]["reason"], "no_recent_base_data", "{report}");
     }
@@ -2631,7 +2882,7 @@ mod tests {
         assert_eq!(regressions, 1, "{text}");
         assert!(!text.contains("comparison base is"), "{text}");
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert!(
             parsed["sets"][0]["comparison_base_lags"].is_null(),
             "an unaffected set omits the field entirely: {report}"
@@ -2668,7 +2919,7 @@ mod tests {
             ..options()
         };
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "--no-dirty drops the dirty snapshot");
     }
 
@@ -2683,7 +2934,7 @@ mod tests {
         let git = feature_git();
 
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 2, "the base-side dirty c1 run is excluded");
     }
 
@@ -2700,7 +2951,7 @@ mod tests {
 
         let (report, _, reporter) = analyze_json(&git, &storage, "folo", &options());
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["runs"], 0,
             "every dirty-on-base snapshot is excluded"
@@ -2748,7 +2999,7 @@ mod tests {
 
         let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["runs"],
             BASE_COMMITS.saturating_add(3),
@@ -2785,7 +3036,7 @@ mod tests {
         let git = linear_git(); // Clean working tree (the default).
 
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "the dirty tip run stays excluded");
         assert_eq!(
             parsed["tip_commit"], "c3",
@@ -2821,7 +3072,7 @@ mod tests {
 
         let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["mode"], "history",
             "a dirty tree with only clean runs is still the official history view"
@@ -2857,7 +3108,7 @@ mod tests {
             ..options()
         };
         let (report, _, reporter) = analyze_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "--no-dirty drops the dirty tip snapshot");
         assert_eq!(
             parsed["tip_dirty"], false,
@@ -2883,7 +3134,7 @@ mod tests {
         git.mark_dirty();
 
         let (report, _, reporter) = analyze_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the tip's dirty run is admitted");
         assert!(
             !parsed["warning"].is_null(),
@@ -2907,7 +3158,7 @@ mod tests {
         let git = feature_git();
 
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 2, "c2 is off the feature mainline");
     }
 
@@ -2929,7 +3180,7 @@ mod tests {
             ..options()
         };
         let (report, regressions) = analyze_quiet_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], HISTORY_COMMITS, "master's whole line");
         assert_eq!(regressions, 1);
     }
@@ -2987,7 +3238,7 @@ mod tests {
             ..options()
         };
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the windows set is loaded");
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 1, "{report}");
         assert_eq!(
@@ -3014,7 +3265,7 @@ mod tests {
             ..options()
         };
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the linux-gnu triple is loaded");
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 1, "{report}");
         assert_eq!(
@@ -3043,7 +3294,7 @@ mod tests {
             ..options()
         };
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 2, "{report}");
     }
 
@@ -3065,7 +3316,7 @@ mod tests {
             ..options()
         };
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the callgrind object is loaded");
     }
 
@@ -3089,7 +3340,7 @@ mod tests {
             ..options()
         };
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 2, "only c2 and c3 are within the window");
     }
 
@@ -3255,7 +3506,7 @@ mod tests {
         let git = linear_git();
 
         let (report, _) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["project"], "folo");
         assert_eq!(parsed["runs"], 1);
     }
@@ -3269,7 +3520,7 @@ mod tests {
         let git = linear_git();
 
         let (report, regressions) = analyze_quiet_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the real result object loaded");
         assert_eq!(regressions, 0);
     }
@@ -3443,7 +3694,7 @@ mod tests {
         ))
         .unwrap();
         let report = rendered.json.expect("the JSON report was rendered");
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = serde_json::from_str(&report).unwrap();
         // c1's dirty run is base-side (excluded); f1 clean loads.
         assert_eq!(
             parsed["runs"], 1,

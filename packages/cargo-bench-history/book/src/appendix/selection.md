@@ -143,23 +143,27 @@ report diffable and a regression in the tool itself detectable.
 ## What the other commands share
 
 `analyze`, `list runs`, and `examine` run this same selection pipeline, so `list` genuinely
-previews what `analyze` would consume. Three of the columns below name concepts that later
+previews the selected raw data. The columns below name concepts that later
 chapters introduce — [benchmark prefixes](../commands/bless.md), the
 [ghost filter](reconstruction.md#ghost-elimination), and
+[configured exclusions](reconstruction.md#configured-exclusions) and
 [blessings](reconstruction.md#blessings) — so a linear reader is not expected to know them yet;
 they are forward references. The divergences are real, though, and worth knowing:
 
-| | Discriminant filters, window, dirty rules | Benchmark prefixes | Ghost filter | Blessings |
-|---|---|---|---|---|
-| `analyze` | yes | yes | yes | yes (history mode) |
-| `examine` | yes | yes | no | no |
-| `list runs` | yes | no | n/a | n/a |
-| `prune` | its own rules | n/a | n/a | n/a |
+| | Discriminant filters, window, dirty rules | Benchmark prefixes | Ghost filter | Configured ignores | Blessings |
+|---|---|---|---|---|---|
+| `analyze` | yes | yes | yes | yes | yes |
+| `examine` | yes | exact ID | no | no | no |
+| `list runs` | yes | no | n/a | no | n/a |
+| `prune` | its own rules | n/a | n/a | no | n/a |
 
-`examine` deliberately skips the ghost filter and blessings: it is a drill-down onto raw
+`examine` deliberately skips ghosts, configured ignores and blessings: it is a drill-down onto raw
 recorded data, and hiding points there would defeat its purpose. `prune` is a maintenance
 command with its own selection rules — notably no default `--since` — because deleting data
 by accident is much worse than analyzing too little.
+
+Ignore matching needs benchmark IDs from the payload, so it happens after loading,
+not in this key-only selection stage. It leaves the selected run count unchanged.
 
 ## A base merged into the branch is supported
 

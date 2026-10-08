@@ -11,3 +11,7 @@ The template documents the optional cloud backend and notes that local storage i
 at run time (flag or environment), not configured in the committed file. It carries no
 engine or machine-key settings, and its next-steps hint points at
 [`backfill`](backfill.md) for seeding an existing repository's history.
+
+The template also documents optional
+[analysis-only benchmark ignores](analyze.md#ignoring-benchmarks), with no active
+exclusions by default.

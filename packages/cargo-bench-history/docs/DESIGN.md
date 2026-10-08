@@ -520,6 +520,9 @@ committed file; it carries no engine or machine-key settings, and its next-steps
 points at `backfill` for seeding an existing repository's history. The file write goes
 through a port so the command is testable without touching the filesystem.
 
+The template includes optional analysis-ignore prefixes, commented out so installation
+activates no exclusions.
+
 ### 7.3 `analyze`
 
 `analyze` **pieces a series together at query time from git topology**, so it requires a
@@ -642,6 +645,32 @@ Packaging this `collect → analyze → report` flow as a reusable, Marketplace-
 GitHub Action for other repositories — its shape, binary distribution, configuration
 surface, and hosting — is designed in [`reusable-action.md`](reusable-action.md) (issue
 #284).
+
+#### Configured benchmark exclusions
+
+The optional `[ignore]` section in `.cargo/bench_history.toml` contains a `benchmarks`
+array of qualified benchmark-ID prefixes. Matching is literal and case-sensitive, as
+in `analyze` and `bless`: `foo/bar` also matches `foo/bar_extra`, while `foo/bar/`
+selects descendants under that boundary. Entries are nonempty; an absent or empty list
+ignores nothing. Overlapping prefixes exclude each series only once. Unknown fields in
+the section and invalid value types are configuration errors.
+
+This is analysis policy, not collection policy. Both analysis modes, including exact
+current collections, exclude every metric of a matching ID in each selected partition.
+CLI subjects narrow scope but do not override ignores. The invocation's selected
+configuration governs the whole window, not only measurements from newer commits.
+Unmatched prefixes are allowed because the selected suite can vary by platform and hardware.
+
+Execution, collection, import, backfill, snapshots, raw inspection and storage maintenance
+remain unchanged. Removing an entry restores eligibility of retained history.
+Benchmark annotations are not required: the consumed engine output has no common
+annotation channel, and the same policy must work on existing data.
+
+Exclusions precede statistical work, so they cannot affect history multiple-comparison
+correction or branch report-wide comparisons. A benchmark absent at the context is a
+ghost first; remaining matches are accounted for as ignored. Reports disclose intentional
+exclusions outside the in-scope coverage denominator (§8.9). An entirely excluded suite
+is `nothing_in_scope`, not an all-clear. Verbose diagnostics name each matching prefix.
 
 ### 7.4 `backfill`
 
@@ -1571,6 +1600,8 @@ carries exactly one reason — the first that applies in pipeline order:
 
 * **not measured at the analyzed context commit** — the ghost filter (§8.5) dropped it: the
   benchmark is no longer part of the suite at the analyzed context commit.
+* **ignored by configuration** — a benchmark-ID prefix intentionally excludes it from
+  analysis, without removing its stored measurements.
 * **too few points in the analyzed window** — shorter than the minimum the mode's detector
   evaluates (§8.2).
 * **too few points since its blessing** — long enough overall, but its active segment (§8.6)
@@ -1583,9 +1614,10 @@ carries exactly one reason — the first that applies in pipeline order:
 * **current base regime unresolved** — the latest base observations support a material move, but
   the new level is still too short to establish as the current regime.
 
-Ghosts are excluded from the denominator, so what a report takes its ratio against — and
+Ghosts and configured ignores are excluded from the denominator, so what a report takes its
+ratio against — and
 derives its coverage state from — is the **in-scope** suite: every series accounted for except
-those the ghost filter dropped. A pull request benchmarks only the packages it impacts while the
+those either policy dropped. A pull request benchmarks only the packages it impacts while the
 analysis reads the whole store, so every untouched package leaves ghosts behind, and a
 denominator counting them would leave the healthy case reading as a handful of series judged out
 of thousands. A field that is alarming even when nothing is wrong is a field readers learn to
@@ -1597,7 +1629,7 @@ The census publishes a **series coverage state** describing how much of the in-s
 was judged:
 
 * `no_series` — nothing was accounted for at all.
-* `nothing_in_scope` — everything accounted for was a ghost.
+* `nothing_in_scope` — everything accounted for was a ghost or ignored by configuration.
 * `nothing_judged` — an in-scope suite existed and none of it could be judged.
 * `partial` — some, but not all, of the in-scope suite was judged.
 * `full` — the whole in-scope suite was judged.
@@ -1642,9 +1674,12 @@ How it surfaces (§8.7) follows what a reader needs where:
   ambiguity actually bites, and a healthy repository pays exactly one sentence for it. The ratio
   in that prose and the verdict above it answer to the same denominator, so a reader who trusts
   the headline and a reader who trusts the ratio cannot reach opposite conclusions.
+* Configured ignored-series counts remain visible beside findings in every human format,
+  including the condensed summary. They describe an intentional scope choice, not missing
+  evidence; the silent-report breakdown supplies the same disclosure without duplication.
 * JSON carries the full census — the accounted-for and in-scope totals, the judged count, the
   series coverage state and a per-reason breakdown — as supporting evidence for detailed
-  coverage policy. Consumers need not re-derive the ghost arithmetic or the analysis outcome
+  coverage policy. Consumers need not re-derive exclusion arithmetic or the analysis outcome
   when selecting a message.
 * **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
   and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.

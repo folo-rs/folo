@@ -3,7 +3,7 @@
 ```text
 Analyzed project textproc (history mode)
   commit: 9f2c4a1d3b5e708aab12cd34ef5678901234567a
-  runs: 128 (4d17b0c93ea2 → 9f2c4a1d3b5e)  in-scope series judged: 5 of 8  regressions: 2
+  runs: 128 (4d17b0c93ea2 → 9f2c4a1d3b5e)  in-scope series judged: 5 of 8  ignored by configuration: 1 series  regressions: 2
 
 criterion/x86_64-unknown-linux-gnu/a1b2c3d4
   runs: 128  regressions: 2

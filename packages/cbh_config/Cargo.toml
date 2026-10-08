@@ -20,6 +20,7 @@ rust-version.workspace = true
 allowed_external_types = [
     "cbh_command::command::CacheSelection",
     "cbh_command::command::LocalStorageSelection",
+    "cbh_model::benchmark_id::BenchmarkIdPrefix",
     "ohno::enrichable::Enrichable",
     "ohno::error_ext::ErrorExt",
     "serde_core::de::Deserialize",
@@ -36,6 +37,7 @@ doc = false
 
 [dependencies]
 cbh_command = { workspace = true }
+cbh_model = { workspace = true }
 ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["fs"] }

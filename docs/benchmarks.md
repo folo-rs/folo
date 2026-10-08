@@ -40,6 +40,27 @@ When comparing a tracking wrapper against an untracked allocator, use
 not a change of allocator. Allocator changes affect benchmark baselines and must
 not be interpreted as changes to the measured library algorithms.
 
+## Automated analysis scope
+
+Benchmarks with concurrent measured work or OS-thread creation inside measurement belong
+in `[ignore].benchmarks` in `.cargo/bench_history.toml`. Keep them runnable and retain their
+collected results for manual inspection; the ignore policy excludes analysis only.
+Uncached live OS topology/affinity queries and measured affinity changes are also excluded.
+These workloads can reflect environmental scheduling decisions rather than code changes.
+
+Entries are literal, case-sensitive prefixes of the qualified IDs shown by
+`cargo-bench-history`, not source paths or glob patterns. Use a trailing `/` for a whole
+group, and narrow prefixes for multithreaded cases in groups with single-worker controls.
+Review the policy when adding or renaming benchmarks, including generated parameter and
+hardware-topology variants. Tracker operation names that equal Criterion IDs share their
+exclusions; Callgrind identities must be considered separately.
+
+Distinguish measured work from harness setup. A single worker whose startup and controller
+handoff are outside the returned duration remains eligible. Likewise, a synchronous test
+spawner does not make an analysis benchmark multithreaded. See the
+[user guide](../packages/cargo-bench-history/book/src/commands/analyze.md#ignoring-benchmarks)
+for matching and report behavior.
+
 ## Bound routine workloads
 
 Routine benchmarks are microbenchmarks, not production-sized data sets or stress

@@ -5,6 +5,9 @@ running the analysis, letting you confirm the commit range and discriminant sets
 takes a bare positional subject — `runs`, `discriminants`, or `blessings`. A bare `list` with
 no subject is an error that names the three.
 
+The preview includes [ignored benchmarks](analyze.md#ignoring-benchmarks) and ghosts:
+these are exclusions from analysis, not from stored-data inspection.
+
 ```console
 # Per discriminant set, the run / series / per-commit counts of the selected runs.
 cargo bench-history list runs --local=./bench-history

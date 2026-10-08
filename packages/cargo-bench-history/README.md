@@ -122,6 +122,22 @@ cargo bench-history examine --local=./bench-history \
     --benchmark many_cpus/hardware_info/query --metric instruction_count
 ```
 
+## Ignoring benchmarks in analysis
+
+Keep noisy experiments runnable and their measurements available for inspection while
+excluding them from automated comparisons:
+
+```toml
+[ignore]
+benchmarks = ["worker_pool/contention/", "worker_pool/spawn_thread"]
+```
+
+Add this section to `.cargo/bench_history.toml`. Entries are literal, case-sensitive
+prefixes of benchmark IDs, matching `analyze` and `bless`. Collection is unchanged;
+`list` and `examine` still show the data. Reports disclose exclusions, and removing an
+entry restores analysis of the stored history. See
+[ignoring benchmarks](https://folo-rs.github.io/folo/cargo-bench-history/commands/analyze.html#ignoring-benchmarks).
+
 ## Further reading
 
 The [user guide](https://folo-rs.github.io/folo/cargo-bench-history/) walks through

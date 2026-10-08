@@ -176,7 +176,7 @@ mod tests {
     use std::num::NonZero;
 
     use cbh_command::AnalyzeOptions;
-    use cbh_config::Config;
+    use cbh_config::{Config, parse_config};
     use cbh_detect::testing::synchronous_spawner;
     use cbh_detect::{AnalysisMode, SeriesFilter};
     use cbh_diag::RecordingReporter;
@@ -513,6 +513,62 @@ mod tests {
         assert_eq!(report["census"]["in_scope"], 1);
         assert_eq!(report["census"]["judged"], 0);
         assert_eq!(report["outcome"], "insufficient_baseline");
+    }
+
+    #[test]
+    fn ignores_apply_to_current_snapshots_in_history_mode() {
+        assert_ignored_current_snapshot(false);
+    }
+
+    #[test]
+    fn ignores_apply_to_current_snapshots_in_branch_mode() {
+        assert_ignored_current_snapshot(true);
+    }
+
+    /// Separate mode tests keep each fake-driven pipeline within the Miri workload budget.
+    fn assert_ignored_current_snapshot(branch: bool) {
+        let base = "a".repeat(40);
+        let tip = "b".repeat(40);
+        let current =
+            CurrentCollections::new("project", &[snapshot(&tip, LINUX, KEY, 20.0)]).unwrap();
+        let config = parse_config("[ignore]\nbenchmarks = ['measured']").unwrap();
+        let mut git = crate::testing::two_commit_history(&base, &tip);
+        if branch {
+            git.branch("master", &base)
+                .branch("feature", &tip)
+                .head("feature");
+        }
+        let options = AnalyzeOptions {
+            json: Some("report.json".into()),
+            no_text: true,
+            ..AnalyzeOptions::default()
+        };
+        let (reports, regressions) = block_on(analyze_with_current(
+            &git,
+            &MemoryStorage::new(),
+            "project",
+            &config,
+            &options,
+            &AutoDiscriminants {
+                triple: LINUX.to_owned(),
+                machine_key: KEY.to_owned(),
+            },
+            "2026-01-02T00:00:00Z".parse().unwrap(),
+            &RecordingReporter::quiet(),
+            false,
+            &synchronous_spawner(),
+            NonZero::<usize>::MIN,
+            Some(&current),
+        ))
+        .unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(reports.json.as_ref().unwrap()).unwrap();
+        assert_eq!(report["mode"], if branch { "branch" } else { "history" });
+        assert_eq!(report["census"]["total"], 1);
+        assert_eq!(report["census"]["in_scope"], 0);
+        assert_eq!(report["census"]["reasons"][0]["reason"], "ignored");
+        assert_eq!(report["outcome"], "nothing_in_scope");
+        assert_eq!(regressions, 0);
     }
 
     #[test]

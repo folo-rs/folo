@@ -17,6 +17,11 @@ and that coverage select the analysis outcome. Text, Markdown, JSON and the shel
 or file outcome use these projections rather than maintaining independent verdict rules.
 Collection-platform completeness belongs to workflow evidence, outside analyzer-series coverage.
 
+Ghosts and configured ignores remain in the census total but sit outside the in-scope
+denominator. Ignored-series disclosure is derived from that same census, including beside
+findings and in truncated summaries. An all-excluded census retains `nothing_in_scope`;
+there is no separate outcome or duplicated top-level exclusion counter.
+
 ## Rendering benchmarks
 
 `cbh_render_reports` measures the production in-memory rendering functions, not detection or

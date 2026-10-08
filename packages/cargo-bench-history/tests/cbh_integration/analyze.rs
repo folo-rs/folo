@@ -4,6 +4,59 @@ use cbh_model::Engine;
 
 use crate::harness::*;
 
+/// Configured ignores change analysis without deleting evidence or blocking raw inspection.
+#[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "Native configuration loading, Git history and local storage."
+)]
+async fn ignored_history_remains_inspectable_and_can_be_reenabled_without_recollection() {
+    let config = format!(
+        "{}\n[ignore]\nbenchmarks = ['nm/']\n",
+        storage_only_config()
+    );
+    let workspace = Workspace::repo(&config);
+    workspace.seed_rising_callgrind_history();
+    let stored = workspace.stored_objects();
+
+    let report: serde_json::Value =
+        serde_json::from_str(&workspace.drive_json(&["analyze", "nm/"]).await).unwrap();
+    assert_eq!(report["outcome"], "nothing_in_scope");
+    assert_eq!(report["census"]["reasons"][0]["reason"], "ignored");
+
+    let listing: serde_json::Value =
+        serde_json::from_str(&workspace.drive_json(&["list", "runs"]).await).unwrap();
+    assert_eq!(listing["totals"]["series"], 1);
+    let pivot: serde_json::Value = serde_json::from_str(
+        &workspace
+            .drive_json(&[
+                "examine",
+                "--benchmark",
+                "nm/nm::observe/pull",
+                "--metric",
+                "instruction_count",
+            ])
+            .await,
+    )
+    .unwrap();
+    assert_eq!(
+        pivot["sets"][0]["points"].as_array().unwrap().len(),
+        MIN_SERIES_POINTS
+    );
+
+    let config_path = workspace.root().join(".cargo").join("alternate.toml");
+    fs::write(&config_path, storage_only_config()).unwrap();
+    let restored: serde_json::Value = serde_json::from_str(
+        &workspace
+            .drive_json(&["analyze", "--config", config_path.to_str().unwrap()])
+            .await,
+    )
+    .unwrap();
+    assert_eq!(restored["outcome"], "findings");
+    assert_eq!(restored["regressions"], 1);
+    assert_eq!(workspace.stored_objects(), stored);
+}
+
 /// An empty history analyzes cleanly and states that it tested nothing.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -2204,3 +2257,4 @@ async fn analyze_history_no_newer_data_renders_a_trailing_gap() {
          FULL:\n{full_report}\nLAG:\n{lag_report}"
     );
 }
+use std::fs;
