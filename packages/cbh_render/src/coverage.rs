@@ -275,7 +275,7 @@ impl Coverage {
             // accompanies this case explains the emptiness itself.
             CoverageState::NoSeries => "Nothing was analyzed, so no change could be detected.",
             CoverageState::NothingInScope => {
-                "Nothing was in scope at the analyzed context commit, so nothing was judged."
+                "Nothing was in analysis scope, so nothing was judged."
             }
             CoverageState::NothingJudged => {
                 "Nothing was judged, so no change could be detected either way."
@@ -484,6 +484,13 @@ mod tests {
         for (name, census, expected, judged, in_scope) in coverage_cases() {
             let coverage = Coverage::from_census(&census);
             assert_eq!(coverage.state(), expected, "{name}");
+            if expected == CoverageState::NothingInScope {
+                assert_eq!(
+                    coverage.verdict(),
+                    "Nothing was in analysis scope, so nothing was judged.",
+                    "{name}"
+                );
+            }
             assert_eq!(coverage.judged(), judged, "{name}");
             assert_eq!(coverage.in_scope(), in_scope, "{name}");
             assert_eq!(coverage.total(), census.total(), "{name}");

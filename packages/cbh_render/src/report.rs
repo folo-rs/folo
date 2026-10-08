@@ -2363,7 +2363,7 @@ mod tests {
             (
                 "every series a ghost",
                 census_of(0, &[(UnjudgedReason::Ghost, 4)]),
-                "Nothing was in scope at the analyzed context commit, so nothing was judged.",
+                "Nothing was in analysis scope, so nothing was judged.",
                 "No notable changes detected",
             ),
             (
@@ -2512,15 +2512,12 @@ mod tests {
 
         let text = render(&input, ReportFormat::Text, false);
         assert!(!text.contains("in-scope series judged"), "{text}");
-        assert!(
-            text.contains("Nothing was in scope at the analyzed context commit"),
-            "{text}"
-        );
+        assert!(text.contains("Nothing was in analysis scope"), "{text}");
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(!markdown.contains("In-scope series judged"), "{markdown}");
         assert!(
-            markdown.contains("Nothing was in scope at the analyzed context commit"),
+            markdown.contains("Nothing was in analysis scope"),
             "{markdown}"
         );
 
