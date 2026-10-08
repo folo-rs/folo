@@ -165,3 +165,7 @@ boundary integrations exercise the actual commands and filesystem effects.
 The shared repository fixture's Git and filesystem methods have individual
 native-support mutation exclusions. I/O scheduling stays unit-tested, including
 callback execution and rejection after a predecessor poisons its slot.
+Inert object-context fixtures are exercised by the same identity tests as captured
+contexts. Native filename fixtures probe actual creation and distinguish a specifically
+unsupported encoding from unrelated I/O errors. Mode-precedence coverage does not depend
+on support for non-UTF-8 filenames.

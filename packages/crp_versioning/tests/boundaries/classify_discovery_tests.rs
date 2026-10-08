@@ -109,9 +109,16 @@ fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() 
     );
     fixture.write(
         "pkg/Cargo.toml",
-        b"[package]\nname='pkg'\nversion='1.0.0'\nedition='2024'\n",
+        b"[package]\nname='pkg'\nversion='1.0.0'\nedition='2024'\n\
+          readme='../shared/README.md'\ninclude=['src/']\n",
     );
     fixture.write("pkg/src/lib.rs", b"pub fn original() {}\n");
+    fixture.write("pkg/src/nested/Cargo.toml", b"[workspace]\n");
+    fixture.write(
+        "pkg/src/nested/lib.rs",
+        b"not released by the outer package",
+    );
+    fixture.write("shared/README.md", b"external resource\n");
     fixture.command(&["add", "-A"]);
     fixture.command(&["commit", "--quiet", "-m", "baseline"]);
     let manifest = fixture.path().join("Cargo.toml");
@@ -124,6 +131,13 @@ fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() 
         let classification = classify_acquired(acquired, verbose, &mut snapshots).unwrap();
         let package = classification.work_tree.packages.first().unwrap();
         let paths = classification.released_work_tree_paths(package).unwrap();
+        let mut expected: BTreeSet<String> = ["Cargo.toml", "README.md", "src/lib.rs"]
+            .map(str::to_owned)
+            .into();
+        if pass != 0 {
+            expected.insert("src/added.rs".into());
+        }
+        assert_eq!(paths, expected);
         assert_eq!(
             paths,
             classification.released_work_tree_paths(package).unwrap()
@@ -137,7 +151,9 @@ fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() 
             assert!(class.patch().contains("+pub fn changed() {}"));
             assert!(class.patch().contains("new mode 100755"));
             assert!(paths.contains("src/added.rs"));
-            assert!(class.untracked.contains(&"src/untracked.rs".to_owned()));
+            assert_eq!(class.untracked, ["src/untracked.rs"]);
+            assert!(!paths.contains("src/untracked.rs"));
+            assert!(!class.patch().contains("untracked"));
         }
         inputs.verify(&manifest, None).unwrap();
         drop(classification);
@@ -146,6 +162,7 @@ fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() 
         fixture.command(&["add", "pkg/src/added.rs"]);
         fixture.command(&["update-index", "--chmod=+x", "pkg/src/lib.rs"]);
         fixture.write("pkg/src/untracked.rs", b"pub fn untracked() {}\n");
+        fixture.write("pkg/src/nested/untracked.rs", b"not outer-package advice");
     }
 }
 
@@ -277,6 +294,10 @@ fn work_tree_selection_and_untracked_advice_share_packaging_boundaries() {
         untracked_released(&git, &side, &tracked_resources, &tracked).unwrap(),
         ["NOTICE", "README.md", "src/new.rs"]
     );
+    fixture.write(".git/config", b"[invalid");
+    work_tree_modes(&git, &side, &tracked_resources).unwrap_err();
+    untracked_released(&git, &side, &tracked_resources, &tracked).unwrap_err();
+    released_work_tree_paths(&git, &package, PathCase::Sensitive).unwrap_err();
 }
 
 #[test]
@@ -344,6 +365,39 @@ fn package_diff_preserves_presence_modes_content_and_external_resources() {
     assert_eq!(patch.matches("new mode").count(), 2);
     assert!(patch.contains("deleted file mode 100755"));
     assert!(patch.contains("new file mode 100644"));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "renders singleton blobs from real Git additions and deletions"
+)]
+fn package_diff_reads_singleton_additions_and_deletions() {
+    let fixture = Repository::new();
+    fixture.write("pkg/deleted", b"deleted\n");
+    fixture.command(&["add", "pkg"]);
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fs::remove_file(fixture.path().join("pkg/deleted")).unwrap();
+    let resources = BTreeMap::new();
+    let rules = PackagingRules::default();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let git = fixture.repo();
+    let (_, patch, stat, _) = diff_package(&git, "pkg", "HEAD", &side, &side).unwrap();
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (1, 0, 1));
+    assert!(patch.contains("-deleted\n"));
+    fixture.command(&["add", "-u"]);
+    fixture.command(&["commit", "--quiet", "-m", "empty package"]);
+    fixture.write("pkg/added", b"added\n");
+    fixture.command(&["add", "pkg"]);
+    let (_, patch, stat, _) = diff_package(&git, "pkg", "HEAD", &side, &side).unwrap();
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (1, 1, 0));
+    assert!(patch.contains("+added\n"));
 }
 
 #[test]

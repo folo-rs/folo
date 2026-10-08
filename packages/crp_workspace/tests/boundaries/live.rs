@@ -180,11 +180,8 @@ fn a_new_interval_observes_index_and_untracked_changes() {
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    miri,
-    ignore = "uses Unix modes and an unrelated non-UTF8 untracked path"
-)]
-fn shared_scopes_preserve_worktree_mode_precedence_and_exclude_unrelated_errors() {
+#[cfg_attr(miri, ignore = "compares native Unix worktree and Git index modes")]
+fn shared_scopes_preserve_worktree_mode_precedence() {
     let fixture = Repository::new();
     fixture.write("pkg/file", b"one");
     fixture.command(&["add", "pkg"]);
@@ -194,15 +191,6 @@ fn shared_scopes_preserve_worktree_mode_precedence_and_exclude_unrelated_errors(
     fs::set_permissions(
         fixture.path().join("pkg/file"),
         fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
-    fs::create_dir_all(fixture.path().join("unrelated")).unwrap();
-    fs::write(
-        fixture
-            .path()
-            .join("unrelated")
-            .join(OsString::from_vec(vec![0xff])),
-        b"outside",
     )
     .unwrap();
     let git = fixture.repo();
@@ -229,5 +217,50 @@ fn shared_scopes_preserve_worktree_mode_precedence_and_exclude_unrelated_errors(
             .unwrap()
             .is_empty()
     );
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(miri, ignore = "creates and queries a native non-UTF8 filename")]
+fn shared_scopes_exclude_unrelated_filename_decoding_errors() {
+    let fixture = Repository::new();
+    fixture.write("pkg/file", b"tracked");
+    fixture.command(&["add", "pkg"]);
+    fs::create_dir_all(fixture.path().join("unrelated")).unwrap();
+    // Probe the actual filesystem, not Unix or macOS as a proxy for filename support.
+    // Only Darwin's EILSEQ identifies the reported unsupported encoding; other errors fail.
+    #[cfg(target_vendor = "apple")]
+    const DARWIN_EILSEQ: i32 = 92;
+    let path = fixture
+        .path()
+        .join("unrelated")
+        .join(OsString::from_vec(vec![0xff]));
+    match fs::write(path, b"outside") {
+        Ok(()) => {}
+        Err(error) => {
+            #[cfg(target_vendor = "apple")]
+            if error.raw_os_error() == Some(DARWIN_EILSEQ) {
+                eprintln!("The fixture filesystem rejects non-UTF8 filenames: {error}");
+                return;
+            }
+            panic!("Cannot create the non-UTF8 filename fixture: {error}");
+        }
+    }
+    let git = fixture.repo();
+    // Prove the unrelated filename actually triggers a decoding error before testing exclusion.
     git.ls_untracked("", PathCase::Sensitive).unwrap_err();
+    let shared = LiveObservations::acquire(
+        &git,
+        git.ls_files("").unwrap().into(),
+        &["pkg"],
+        &[],
+        PathCase::Sensitive,
+    )
+    .unwrap();
+    assert!(
+        shared
+            .untracked_paths("pkg", || panic!("shared"))
+            .unwrap()
+            .is_empty()
+    );
 }

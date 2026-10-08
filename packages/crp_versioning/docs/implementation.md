@@ -96,6 +96,12 @@ renderer without fixture generation or additional dependencies. Versioning-only 
 compile only this component and its intended lower-level dependencies. Criterion's development
 dependencies remain part of benchmark-enabled builds.
 
+Patch request ordering, singleton-versus-batch selection and retained-candidate identity
+admission use acquired values or narrow callbacks in unit tests. Native forwarding has
+individual mutation exclusions backed by boundary tests. Shared live-listing adapters still
+perform filesystem presence checks; their selection policies remain in-process operations,
+while integration coverage checks the composed classification and packaging results.
+
 Released-content comparison consumes acquired archive paths, object identities and modes.
 It requests bytes lazily only for content changes, independently of mode-only changes.
 Comparison first identifies changes in deterministic archive-path order, then renders them

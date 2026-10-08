@@ -193,6 +193,7 @@ struct UnresolvedObjectIdentity {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::git::testing::object_context;
 
     #[test]
     fn replacement_namespace_preserves_empty_and_custom_values_and_rejects_invalid_text() {
@@ -243,10 +244,14 @@ mod tests {
 
     #[test]
     fn interpretation_changes_change_identity_and_only_full_object_names_are_admitted() {
-        let context = GitObjectContext {
-            format: "sha1".into(),
-            ..GitObjectContext::default()
-        };
+        let context = object_context("sha1");
+        assert_eq!(
+            context,
+            GitObjectContext {
+                format: "sha1".into(),
+                ..GitObjectContext::default()
+            }
+        );
         let commit = "a".repeat(40);
         context.validate_identity(&commit).unwrap();
         for invalid in ["HEAD", "main", "", "bad"] {
@@ -279,10 +284,14 @@ mod tests {
         ] {
             assert_ne!(context, changed);
         }
-        let sha256 = GitObjectContext {
-            format: "sha256".into(),
-            ..context
-        };
+        let sha256 = object_context("sha256");
+        assert_eq!(
+            sha256,
+            GitObjectContext {
+                format: "sha256".into(),
+                ..context
+            }
+        );
         sha256.validate_identity(&commit).unwrap_err();
         sha256.validate_identity(&"a".repeat(64)).unwrap();
         GitObjectContext::default()
