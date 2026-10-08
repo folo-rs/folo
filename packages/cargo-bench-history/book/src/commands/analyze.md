@@ -129,7 +129,8 @@ Markdown **summary** is also available for a size-limited downstream consumer.
 
 Full Markdown ends with a **Coverage** section listing judged-series counts and unjudged
 reasons; JSON carries the same account under `census`. Text and condensed summaries include
-the judged ratio, but list reasons only when there are no findings. See
+the judged ratio and disclose configured exclusions even beside findings. Their full
+reason breakdown appears only when there are no findings. See
 [Reading a silent report](../appendix/insights.md#reading-a-silent-report) for matching
 examples and how to interpret the limits of a verdict.
 

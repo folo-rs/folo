@@ -57,6 +57,8 @@ mod linux {
         let fixture = Box::leak(Box::new(ReportFixture::new(count)));
         let summaries = Box::leak(fixture.summaries().into_boxed_slice());
         let input = Box::leak(Box::new(fixture.input(summaries)));
+        // This assertion renders the exact format and fixture once, also priming its
+        // output allocation sizes before the measured rendering.
         assert_full_report(input, format);
         input
     }

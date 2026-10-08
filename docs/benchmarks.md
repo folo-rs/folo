@@ -39,6 +39,8 @@ When comparing a tracking wrapper against an untracked allocator, use
 `testing::DefaultAllocator` for both sides so the difference measures tracking,
 not a change of allocator. Allocator changes affect benchmark baselines and must
 not be interpreted as changes to the measured library algorithms.
+Callgrind cases prime allocator state with an unmeasured iteration of their exact
+workload; follow the [workload-matched warmup pattern](callgrind-benchmarks.md#warm-the-allocator-with-the-actual-workload).
 
 ## Automated analysis scope
 

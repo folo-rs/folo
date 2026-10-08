@@ -121,28 +121,50 @@ mod linux {
         codec::compress(&sample_run_json(result_count))
     }
 
+    /// Uses the same payload size and codec path before preparing a fresh measured input.
+    fn warm_compression(result_count: usize) -> Vec<u8> {
+        drop(compress_payload(sample_run_json(result_count)));
+        sample_run_json(result_count)
+    }
+
+    /// Decompression has different allocation sizes from the compression used to build its input.
+    fn warm_decompression(result_count: usize) -> Vec<u8> {
+        drop(decompress_payload(compressed_run_json(result_count)));
+        compressed_run_json(result_count)
+    }
+
+    /// Shared operation includes the owned input's release on both execution paths.
+    fn compress_payload(payload: Vec<u8>) -> Vec<u8> {
+        black_box(codec::compress(black_box(&payload)))
+    }
+
+    /// Shared operation keeps warmup on the same decompressor and output-growth path.
+    fn decompress_payload(compressed: Vec<u8>) -> Vec<u8> {
+        black_box(codec::decompress(black_box(&compressed)).expect("payload round-trips"))
+    }
+
     #[library_benchmark]
-    #[bench::run(sample_run_json(SMALL_RESULTS))]
+    #[bench::run(warm_compression(SMALL_RESULTS))]
     fn compress_small(payload: Vec<u8>) -> Vec<u8> {
-        black_box(codec::compress(black_box(&payload)))
+        compress_payload(payload)
     }
 
     #[library_benchmark]
-    #[bench::run(sample_run_json(LARGE_RESULTS))]
+    #[bench::run(warm_compression(LARGE_RESULTS))]
     fn compress_large(payload: Vec<u8>) -> Vec<u8> {
-        black_box(codec::compress(black_box(&payload)))
+        compress_payload(payload)
     }
 
     #[library_benchmark]
-    #[bench::run(compressed_run_json(SMALL_RESULTS))]
+    #[bench::run(warm_decompression(SMALL_RESULTS))]
     fn decompress_small(compressed: Vec<u8>) -> Vec<u8> {
-        black_box(codec::decompress(black_box(&compressed)).expect("payload round-trips"))
+        decompress_payload(compressed)
     }
 
     #[library_benchmark]
-    #[bench::run(compressed_run_json(LARGE_RESULTS))]
+    #[bench::run(warm_decompression(LARGE_RESULTS))]
     fn decompress_large(compressed: Vec<u8>) -> Vec<u8> {
-        black_box(codec::decompress(black_box(&compressed)).expect("payload round-trips"))
+        decompress_payload(compressed)
     }
 
     library_benchmark_group!(

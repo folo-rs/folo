@@ -6,7 +6,7 @@
 //! the hot operations so they can be tracked at instruction-level
 //! granularity:
 //!
-//! * `push_back_empty` — `push_back` into an empty deque.
+//! * `push_back_empty` — `push_back` into an empty deque with warmed thread-local storage.
 //! * `push_back_into_100` — `push_back` when 100 futures are already
 //!   pending; measures steady-state insertion cost.
 //! * `poll_front_one_ready` — `poll_front` on a deque whose single
@@ -143,6 +143,9 @@ mod linux {
     // ---------- LocalFutureDeque setup helpers ----------
 
     fn empty_local() -> LocalFutureDeque<u64> {
+        // Complete a matching insertion and cleanup before preparing another empty deque.
+        // This primes the actual future, metadata and deque-buffer allocation sizes.
+        drop(push_local_empty(LocalFutureDeque::new()));
         LocalFutureDeque::new()
     }
 
@@ -163,6 +166,7 @@ mod linux {
     // ---------- FutureDeque setup helpers ----------
 
     fn empty_sync() -> FutureDeque<u64> {
+        drop(push_sync_empty(FutureDeque::new()));
         FutureDeque::new()
     }
 
@@ -258,7 +262,12 @@ mod linux {
 
     #[library_benchmark]
     #[bench::empty(empty_local())]
-    fn local_push_back_empty(mut deque: LocalFutureDeque<u64>) -> LocalFutureDeque<u64> {
+    fn local_push_back_empty(deque: LocalFutureDeque<u64>) -> LocalFutureDeque<u64> {
+        push_local_empty(deque)
+    }
+
+    /// Shares the exact insertion workload with allocator warmup.
+    fn push_local_empty(mut deque: LocalFutureDeque<u64>) -> LocalFutureDeque<u64> {
         deque.push_back(CountdownFuture::new(0, 42));
         deque
     }
@@ -314,7 +323,12 @@ mod linux {
 
     #[library_benchmark]
     #[bench::empty(empty_sync())]
-    fn sync_push_back_empty(mut deque: FutureDeque<u64>) -> FutureDeque<u64> {
+    fn sync_push_back_empty(deque: FutureDeque<u64>) -> FutureDeque<u64> {
+        push_sync_empty(deque)
+    }
+
+    /// Uses the thread-safe variant's own storage during warmup and measurement.
+    fn push_sync_empty(mut deque: FutureDeque<u64>) -> FutureDeque<u64> {
         deque.push_back(CountdownFuture::new(0, 42));
         deque
     }

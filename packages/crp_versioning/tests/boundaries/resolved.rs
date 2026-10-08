@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
-use std::{fs, slice};
+use std::{fs, io, slice};
 
 use crp_diag::Verbose;
 use crp_versioning::classify::{PackageStatus, classify};
+use crp_versioning::prospective::Prospective;
 use crp_versioning::resolved::*;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
@@ -173,7 +174,53 @@ fn evidence_must_name_the_recorded_candidate_and_never_the_live_workspace() {
     let error = state
         .verify_candidate(&directory.path().join("absent.toml"))
         .unwrap_err();
-    assert!(error.find_source::<std::io::Error>().is_some());
+    assert!(error.find_source::<io::Error>().is_some());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "captures and verifies canonical retained Git/Cargo workspaces"
+)]
+fn retained_candidate_aliases_verify_final_bytes_and_each_native_identity() {
+    let directory = capture_fixture("Cargo.toml");
+    let manifest = directory.path().join("Cargo.toml");
+    let inputs = Inputs::capture(&manifest, Some("HEAD")).unwrap();
+    let output = tempdir().unwrap();
+    let candidate = Prospective::new(output.path(), &inputs).unwrap();
+    let evidence = candidate.retain(output.path(), inputs.root()).unwrap();
+    let state = ResolvedState {
+        final_digest: inputs.digest.clone(),
+        inputs,
+        files: Vec::new(),
+        versions: BTreeMap::new(),
+        evidence_manifest_path: evidence.clone(),
+    };
+    let alias = evidence.parent().unwrap().join("src/../Cargo.toml");
+    state.verify_candidate(&alias).unwrap();
+    assert_eq!(canonical(&alias).unwrap(), canonical(&evidence).unwrap());
+    state.verify_candidate(&manifest).unwrap_err();
+    let mut changed = state.clone();
+    changed.final_digest = "not-the-captured-final-content".into();
+    changed.verify_candidate(&evidence).unwrap_err();
+    changed = state.clone();
+    changed.evidence_manifest_path = output.path().join("absent.toml");
+    assert!(
+        changed
+            .verify_candidate(&evidence)
+            .unwrap_err()
+            .find_source::<io::Error>()
+            .is_some()
+    );
+    changed = state;
+    changed.inputs.manifest = "absent.toml".into();
+    assert!(
+        changed
+            .verify_candidate(&evidence)
+            .unwrap_err()
+            .find_source::<io::Error>()
+            .is_some()
+    );
 }
 
 #[test]
@@ -279,7 +326,7 @@ fn source_collection_handles_absence_recursion_and_non_directory_errors() {
             .collect()
     );
     let error = collect_sources(directory.path(), &source.join("lib.rs"), &mut paths).unwrap_err();
-    assert!(error.find_source::<std::io::Error>().is_some());
+    assert!(error.find_source::<io::Error>().is_some());
 }
 
 #[test]

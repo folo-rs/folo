@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "crp_diag",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "crp_diag"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "crp_native"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "command-group",
  "criterion",
@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "crp_publication"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "crp-publication-test-helper",
  "crp_diag",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "crp_versioning"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "crp_diag",
@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "crp_workspace"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "crp_diag",
