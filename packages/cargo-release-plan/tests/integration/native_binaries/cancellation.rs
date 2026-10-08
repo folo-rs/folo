@@ -5,9 +5,9 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use serde_json::json;
 
@@ -38,6 +38,57 @@ impl Drop for AbortFixture {
     }
 }
 
+/// Retains controller diagnostics without reaping it before the fixture can signal it.
+// TODO: Use a failing run's phase and native status to diagnose the intermittent early exit.
+// Tracking: https://github.com/folo-rs/folo/issues/884.
+struct ControllerOutput {
+    stdout: JoinHandle<io::Result<Vec<u8>>>,
+    stderr: JoinHandle<io::Result<Vec<u8>>>,
+}
+
+impl ControllerOutput {
+    fn capture(process: &mut Child, events: &Sender<FixtureEvent>) -> Self {
+        let stdout = process.stdout.take().unwrap();
+        let stderr = process.stderr.take().unwrap();
+        let stdout = thread::spawn({
+            let events = events.clone();
+            move || {
+                let result = read_output(stdout);
+                _ = events.send(FixtureEvent::ControllerClosed);
+                result
+            }
+        });
+        let stderr = thread::spawn(move || read_output(stderr));
+        Self { stdout, stderr }
+    }
+
+    fn finish(self, process: &mut Child) -> io::Result<Output> {
+        let status = process.wait();
+        let stdout = self.stdout.join().unwrap();
+        let stderr = self.stderr.join().unwrap();
+        // Emit evidence before propagating any independent failure. The Windows launcher also
+        // reports its controller's status, rather than hiding it behind the launcher's status.
+        eprintln!("Fixture process exit: {status:?}");
+        for (name, result) in [("stdout", &stdout), ("stderr", &stderr)] {
+            match result {
+                Ok(bytes) => eprintln!("Controller {name}:\n{}", String::from_utf8_lossy(bytes)),
+                Err(error) => eprintln!("Reading controller {name} failed: {error}"),
+            }
+        }
+        Ok(Output {
+            status: status?,
+            stdout: stdout?,
+            stderr: stderr?,
+        })
+    }
+}
+
+fn read_output(mut stream: impl Read) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    stream.read_to_end(&mut output)?;
+    Ok(output)
+}
+
 #[test]
 fn cancellation_terminates_the_process_tree_and_cleans_the_source_worktree() {
     let (events, received) = mpsc::channel();
@@ -58,26 +109,20 @@ fn cancellation_terminates_the_process_tree_and_cleans_the_source_worktree() {
                 listener.local_addr().unwrap().to_string(),
             )
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         #[cfg(unix)]
         let mut process = controller.process_group(0).spawn().unwrap();
         #[cfg(windows)]
         let (mut process, mut control) = spawn_controller(&fixture, &controller);
-        let mut stdout = process.stdout.take().unwrap();
         // Observing stdout closure leaves Child unreaped on this thread, so readiness failures
         // cannot race a background waiter recycling the PID before the fixture signals it.
-        let closed = thread::spawn({
-            let events = events.clone();
-            move || {
-                let result = io::copy(&mut stdout, &mut io::sink());
-                _ = events.send(FixtureEvent::ControllerClosed);
-                result
-            }
-        });
+        let output = ControllerOutput::capture(&mut process, &events);
         let mut socket = None;
+        let mut phase = "waiting for the build-script connection";
         let result = (|| -> io::Result<()> {
             socket = Some(accept_or_exit(&listener, &events, &received)?);
             let socket = socket.as_mut().unwrap();
+            phase = "reading build-script readiness";
             let ready = read_or_exit(socket, &events, &received, |socket| {
                 let mut ready = [0; 5];
                 socket.read_exact(&mut ready)?;
@@ -87,6 +132,7 @@ fn cancellation_terminates_the_process_tree_and_cleans_the_source_worktree() {
                 return Err(io::Error::other("unexpected build-script readiness frame"));
             }
             socket.write_all(b"x")?;
+            phase = "reading the build-script waiting frame";
             let waiting = read_or_exit(socket, &events, &received, |socket| {
                 let mut waiting = [0; 7];
                 socket.read_exact(&mut waiting)?;
@@ -98,6 +144,7 @@ fn cancellation_terminates_the_process_tree_and_cleans_the_source_worktree() {
             if process.try_wait()?.is_some() {
                 return Err(io::Error::other("controller exited before cancellation"));
             }
+            phase = "sending controller cancellation";
             #[cfg(unix)]
             {
                 let signal = command(fixture.root.path(), "kill")
@@ -109,12 +156,15 @@ fn cancellation_terminates_the_process_tree_and_cleans_the_source_worktree() {
             }
             #[cfg(windows)]
             control.write_all(b"c")?;
+            phase = "waiting for controller exit after cancellation";
             require_event(received.recv().unwrap(), FixtureEvent::ControllerClosed)?;
             if process.wait()?.success() {
                 return Err(io::Error::other("cancelled controller reported success"));
             }
+            phase = "probing the build descendant after controller exit";
             probe_descendant(socket, &events, &received)
         })();
+        eprintln!("Cancellation fixture phase: {phase}; result: {result:?}");
 
         let shutdown = if result.is_err() {
             socket.as_ref().map(close_socket).transpose()
@@ -144,14 +194,12 @@ fn cancellation_terminates_the_process_tree_and_cleans_the_source_worktree() {
                 assert!(killed.status.success() || process.try_wait().unwrap().is_some());
             }
         }
-        let reaped = process.wait();
-        let drained = closed.join().unwrap();
+        let output = output.finish(&mut process);
         drop(socket);
         if result.is_err() {
             cleanup_worktrees(&fixture);
         }
-        reaped.unwrap();
-        drained.unwrap();
+        output.unwrap();
         shutdown.unwrap();
         #[cfg(windows)]
         aborted.unwrap();
@@ -319,35 +367,30 @@ fn cleanup_worktrees(fixture: &Fixture) {
 #[test]
 fn controller_exit_before_connection_unblocks_the_fixture_listener() {
     testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let (events, received) = mpsc::channel();
-        let mut controller = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
-        controller
-            .arg("--help")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        #[cfg(unix)]
-        let mut process = controller.spawn().unwrap();
         #[cfg(windows)]
         let fixture = Fixture::new();
-        #[cfg(windows)]
-        let (mut process, _control) = spawn_controller(&fixture, &controller);
-        let mut stdout = process.stdout.take().unwrap();
-        let closed = thread::spawn({
-            let events = events.clone();
-            move || {
-                io::copy(&mut stdout, &mut io::sink()).unwrap();
-                events.send(FixtureEvent::ControllerClosed).unwrap();
+        // Exercise both a normal exit and a CLI failure carrying a diagnostic canary.
+        for (argument, success) in [("--help", true), ("--fixture-diagnostic-canary", false)] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let (events, received) = mpsc::channel();
+            let mut controller = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
+            controller
+                .arg(argument)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(unix)]
+            let mut process = controller.spawn().unwrap();
+            #[cfg(windows)]
+            let (mut process, _control) = spawn_controller(&fixture, &controller);
+            let output = ControllerOutput::capture(&mut process, &events);
+            let result = accept_or_exit(&listener, &events, &received);
+            let output = output.finish(&mut process).unwrap();
+            assert_eq!(result.unwrap_err().kind(), ErrorKind::UnexpectedEof);
+            assert_eq!(output.status.success(), success);
+            if !output.status.success() {
+                assert!(String::from_utf8(output.stderr).unwrap().contains(argument));
             }
-        });
-        assert_eq!(
-            accept_or_exit(&listener, &events, &received)
-                .unwrap_err()
-                .kind(),
-            ErrorKind::UnexpectedEof
-        );
-        assert!(process.wait().unwrap().success());
-        closed.join().unwrap();
+        }
     });
 }
 
@@ -372,19 +415,12 @@ fn main() {
         controller.env("FIXTURE_READY", listener.local_addr().unwrap().to_string());
         let (mut process, mut control) = spawn_controller(&fixture, &controller);
         let (events, received) = mpsc::channel();
-        let mut stdout = process.stdout.take().unwrap();
-        let closed = thread::spawn({
-            let events = events.clone();
-            move || {
-                io::copy(&mut stdout, &mut io::sink()).unwrap();
-                _ = events.send(FixtureEvent::ControllerClosed);
-            }
-        });
+        let output = ControllerOutput::capture(&mut process, &events);
         let ready = accept_or_exit(&listener, &events, &received);
         let aborted = control.write_all(b"k");
         drop(control);
-        assert!(!process.wait().unwrap().success());
-        closed.join().unwrap();
+        let output = output.finish(&mut process).unwrap();
+        assert!(!output.status.success());
         aborted.unwrap();
         let mut ready = ready.unwrap();
         match ready.read(&mut [0]) {
