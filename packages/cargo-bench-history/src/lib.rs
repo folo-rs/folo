@@ -123,6 +123,14 @@
 //! writes just the stable outcome wire name for lightweight automation. See
 //! [Analyze modes](#analyze-modes) below.
 //!
+//! The optional `[ignore].benchmarks` array in `.cargo/bench_history.toml` excludes
+//! literal, case-sensitive benchmark-ID prefixes from analysis. It applies to all
+//! metrics of matching IDs, including exact-current collections, and cannot be
+//! overridden by positional analysis subjects. Collection and raw inspection remain
+//! unchanged. Reports disclose ignored series outside the in-scope coverage denominator;
+//! an entirely ignored selection has outcome `nothing_in_scope`, not `clean`.
+//! Removing a prefix restores eligibility of the stored history.
+//!
 //! ## `list`
 //!
 //! Previews, without analyzing, the data a matching `analyze` would consume. The

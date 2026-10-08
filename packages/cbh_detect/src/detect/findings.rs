@@ -169,6 +169,8 @@ pub enum UnjudgedReason {
     /// The benchmark carries no measurement at the analyzed context commit, so it is no
     /// longer part of the suite and was dropped before detection.
     Ghost,
+    /// The benchmark matches a configured ignore prefix and is outside analysis scope.
+    Ignored,
     /// History mode: the series carries fewer than
     /// [`MIN_SERIES_POINTS`](noise_gates::MIN_SERIES_POINTS) points.
     TooFewPoints,
@@ -200,8 +202,9 @@ impl UnjudgedReason {
     /// Reachable from the documentation generator as well as from this crate's own tests,
     /// because the appendix lists every reason and a list nothing checks would fall
     /// silently out of step the first time the set changed.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Ghost,
+        Self::Ignored,
         Self::TooFewPoints,
         Self::TooFewPointsSinceBlessing,
         Self::NotMeasuredOnBranch,
@@ -215,6 +218,7 @@ impl UnjudgedReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ghost => "ghost",
+            Self::Ignored => "ignored",
             Self::TooFewPoints => "too_few_points",
             Self::TooFewPointsSinceBlessing => "too_few_points_since_blessing",
             Self::NotMeasuredOnBranch => "not_measured_on_branch",
@@ -230,6 +234,7 @@ impl UnjudgedReason {
     pub fn describe(self) -> &'static str {
         match self {
             Self::Ghost => "not measured at the analyzed context commit",
+            Self::Ignored => "ignored by configuration",
             Self::TooFewPoints => "with too few points in the analyzed window",
             Self::TooFewPointsSinceBlessing => "with too few points since being blessed",
             Self::NotMeasuredOnBranch => "not measured on the branch",

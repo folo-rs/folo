@@ -599,6 +599,8 @@ fn worked_census() -> SeriesCensus {
         census.record(Testability::Judged);
     }
     census.record_unjudged(UnjudgedReason::Ghost, 5);
+    // Configured exclusions remain visible without reducing in-scope coverage.
+    census.record_unjudged(UnjudgedReason::Ignored, 2);
     census.record_unjudged(UnjudgedReason::TooFewPoints, 3);
     census.record_unjudged(UnjudgedReason::TooFewPointsSinceBlessing, 1);
     census
@@ -636,6 +638,7 @@ fn census_bar() -> Asset {
 fn reason_label(reason: UnjudgedReason) -> &'static str {
     match reason {
         UnjudgedReason::Ghost => "ghosts",
+        UnjudgedReason::Ignored => "ignored",
         UnjudgedReason::TooFewPoints => "too few points",
         UnjudgedReason::TooFewPointsSinceBlessing => "too few points since blessing",
         UnjudgedReason::NotMeasuredOnBranch => "not measured on the branch",
@@ -654,7 +657,7 @@ fn reason_color(reason: UnjudgedReason) -> RGBColor {
     match reason {
         // Ghosts sit outside the denominator the coverage state is judged against, so they
         // are drawn in the shade the theme reserves for what is present but not counted.
-        UnjudgedReason::Ghost => theme::MUTED,
+        UnjudgedReason::Ghost | UnjudgedReason::Ignored => theme::MUTED,
         UnjudgedReason::TooFewPoints | UnjudgedReason::TooFewBaseCommits => theme::HIGHLIGHT,
         UnjudgedReason::TooFewPointsSinceBlessing
         | UnjudgedReason::TooFewBaseCommitsSinceBlessing
@@ -669,6 +672,10 @@ fn reason_remedy(reason: UnjudgedReason) -> &'static str {
         UnjudgedReason::Ghost => {
             "Nothing, if the benchmark was removed or its package was not built. Otherwise \
              check that it still runs at the analyzed context commit."
+        }
+        UnjudgedReason::Ignored => {
+            "Nothing, if the exclusion is intentional. Inspect the raw data with examine, \
+             or remove the matching prefix from [ignore].benchmarks to analyze it."
         }
         UnjudgedReason::TooFewPoints => {
             "Wait. The series is judged once enough commits have been measured."

@@ -12,6 +12,13 @@ dataset-selection capabilities keep the query commands aligned where the applica
 requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
 and report presentation to `cbh_render`.
 
+Configured ignores are applied to reconstructed series after ghost elimination and before
+blessings or detection. This analyze-only pass is shared by ordinary and exact-current
+analysis, not by raw query or storage-maintenance selection. It records dropped metric
+series under the census's `Ignored` reason and emits matching-prefix diagnostics; the
+renderer owns their coverage interpretation. Matching delegates to the same model operation
+as positive selection and blessings, with empty-list policy kept at each caller.
+
 Analysis carries the renderer-owned outcome with the rendered report bundle so the shell can
 expose it in process or write the requested outcome file. It uses the
 [shared projection](../../cbh_render/docs/implementation.md), not an orchestration-specific
@@ -59,6 +66,14 @@ private to the responsibility that owns their context, while component failures 
 as sources. The shell can therefore convert the aggregate into `ohno::AppError` without exposing
 an internal taxonomy or losing causal diagnostics. The boundary follows the workspace
 [error-handling guide](../../../docs/error-handling.md).
+
+## Pipeline tests
+
+Pipeline policy scenarios share in-process fixtures and execution helpers in
+`src/pipeline_tests/harness.rs`. Configured-ignore scenarios live in the adjacent
+`ignore` test module. The harness supplies fake history and storage, fixed time anchors,
+and a synchronous spawner; it performs no external I/O. Compact interpreter scenarios
+complement the native full-history cases.
 
 ## Preparation benchmarks
 

@@ -55,6 +55,45 @@ See [Analysis](../concepts/analysis.md) for what each mode detects.
   exists is noise. Any run at that commit counts as presence, including one from a dirty
   working tree, and one metric being measured there rescues the benchmark's other metrics too.
 
+## Ignoring benchmarks
+
+Some workloads are useful to run manually but unsuitable for automated comparisons.
+For example, contention and thread creation can measure operating-system scheduling
+decisions more than changes to your code. Exclude these benchmarks from analysis in
+`.cargo/bench_history.toml`:
+
+```toml
+[ignore]
+benchmarks = [
+    "worker_pool/contention/",
+    "worker_pool/spawn_thread",
+]
+```
+
+Each entry is a **literal, case-sensitive prefix** of the qualified benchmark ID shown
+in reports, just like the subjects of `analyze` and `bless`. `foo/bar` also matches
+`foo/bar_extra`; use `foo/bar/` for descendants beneath that boundary. There are no
+wildcards or regular expressions. Entries must be nonempty. An absent section or an
+empty array ignores nothing; overlapping prefixes exclude a series only once.
+
+An exclusion applies to every metric of a matching ID in every selected partition.
+Engine adapters can produce different IDs for related benchmarks, so copy the ID from
+the report rather than deriving it from a source filename. CLI benchmark subjects narrow
+the selection but do not override ignores. The selected configuration, including an
+explicit `--config`, governs the whole analyzed history rather than only new results.
+Unmatched entries are allowed because platforms, hardware and selected packages vary.
+
+Ignoring changes **analysis only**. Collection, import, backfill and collection snapshots
+retain the measurements; `list` and `examine` still expose the raw data. Blessing and
+pruning retain their existing behavior. Removing an ignore entry makes stored history
+eligible again without recollecting it.
+
+Ignored series do not participate in statistical comparisons or the in-scope coverage
+denominator. Reports disclose them as `ignored` in the JSON census and in human-readable
+output. If nothing remains in scope, the outcome is `nothing_in_scope`, not an all-clear.
+`--verbose` names the matching prefix for each excluded series. A benchmark absent at the
+context commit is counted as a ghost instead, even if an ignore prefix also matches it.
+
 ## Exact current collections
 
 Repeat `--current-collection PATH` to analyze snapshots written by
@@ -66,7 +105,7 @@ or replace captured values, even when their target and hardware key match.
 Snapshots must belong to the configured project and the clean analysis context. Selected
 executions must have distinct measurement identities and jointly contain measurements.
 The snapshot identities replace the `--engine`, `--target-triple` and `--machine-key`
-selectors. Prefix subjects may still narrow the selected roster.
+selectors. Prefix subjects and configured ignores may still narrow the selected roster.
 
 Older matching history remains available for the selected series. In branch mode, only
 the selected executions supply current branch observations; the comparison uses ordinary
@@ -90,7 +129,8 @@ Markdown **summary** is also available for a size-limited downstream consumer.
 
 Full Markdown ends with a **Coverage** section listing judged-series counts and unjudged
 reasons; JSON carries the same account under `census`. Text and condensed summaries include
-the judged ratio, but list reasons only when there are no findings. See
+the judged ratio and disclose configured exclusions even beside findings. Their full
+reason breakdown appears only when there are no findings. See
 [Reading a silent report](../appendix/insights.md#reading-a-silent-report) for matching
 examples and how to interpret the limits of a verdict.
 

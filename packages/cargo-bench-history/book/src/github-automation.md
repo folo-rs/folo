@@ -20,6 +20,12 @@ and Windows. Apple Silicon macOS is also supported: add
 each caller's `with:` block to include it. Your benchmarks and their dependencies
 must support the selected platforms. You add the caller files and connect shared storage.
 
+[Benchmark ignore prefixes](commands/analyze.md#ignoring-benchmarks) in the selected
+configuration govern analysis on the checked-out revision. They do not shrink collection
+scope or change platform-completeness accounting. Use an action/tool release supporting
+the setting. An all-ignored analysis is inconclusive, not evidence that a previous
+regression recovered.
+
 First, run `cargo bench --workspace --all-features` to check your benchmarks. If you
 are adding benchmarks, start with a [supported benchmark engine](concepts/engines.md).
 

@@ -56,6 +56,24 @@ impl BenchmarkId {
             .collect::<Vec<_>>()
             .join("/")
     }
+
+    /// Finds the first literal prefix matching this benchmark's qualified ID.
+    ///
+    /// Matching is case-sensitive. An empty list has no match; callers decide
+    /// whether an empty selection means all benchmarks or no exclusions.
+    #[must_use]
+    pub fn matching_prefix<'a>(
+        &self,
+        prefixes: &'a [BenchmarkIdPrefix],
+    ) -> Option<&'a BenchmarkIdPrefix> {
+        if prefixes.is_empty() {
+            return None;
+        }
+        let qualified = self.qualified();
+        prefixes
+            .iter()
+            .find(|prefix| qualified.starts_with(prefix.as_str()))
+    }
 }
 
 impl fmt::Display for BenchmarkId {
@@ -65,7 +83,7 @@ impl fmt::Display for BenchmarkId {
 }
 
 /// A non-empty prefix of a benchmark's [qualified identity](BenchmarkId::qualified),
-/// used to scope `bless` and `analyze` to a family of benchmarks.
+/// used to scope `bless`, `analyze`, and configured analysis exclusions.
 ///
 /// Matching is a raw `starts_with` against the qualified identity, so `foo/bar`
 /// accepts `foo/bar` and `foo/bar/baz`; append a trailing `/` to require a
@@ -73,7 +91,8 @@ impl fmt::Display for BenchmarkId {
 /// is almost always a mistake, so the value is guaranteed non-empty — construct
 /// one with [`new`](Self::new) (or `parse`/`TryFrom<String>`), each of which
 /// rejects an empty input. The intent "accept every benchmark" is expressed by an
-/// *empty list* of prefixes, never by an empty prefix.
+/// *empty list* of selection prefixes, never by an empty prefix. An empty list
+/// of exclusion prefixes instead excludes nothing.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(into = "String", try_from = "String")]
 pub struct BenchmarkIdPrefix(String);
@@ -224,6 +243,46 @@ mod tests {
     fn qualified_handles_a_single_segment() {
         let id = BenchmarkId::new(nonempty!["a::group".to_owned()]);
         assert_eq!(id.qualified(), "a::group");
+    }
+
+    #[test]
+    fn matching_prefix_uses_literal_case_sensitive_qualified_ids() {
+        let segmented = BenchmarkId::new(nonempty![
+            "foo".to_owned(),
+            "bar::case".to_owned(),
+            "parameter[*]".to_owned(),
+        ]);
+        let flat = BenchmarkId::new(nonempty![segmented.qualified()]);
+        for id in [segmented, flat] {
+            for prefix in [
+                "foo",
+                "foo/bar",
+                "foo/bar::case/",
+                "foo/bar::case/parameter[*]",
+            ] {
+                let prefixes = [BenchmarkIdPrefix::new(prefix).unwrap()];
+                assert_eq!(id.matching_prefix(&prefixes), prefixes.first());
+            }
+            for prefix in ["Foo", "foo/bar/", "foo/*", "bar::case", "foo\\bar"] {
+                assert!(
+                    id.matching_prefix(&[BenchmarkIdPrefix::new(prefix).unwrap()])
+                        .is_none()
+                );
+            }
+            assert!(id.matching_prefix(&[]).is_none());
+        }
+    }
+
+    #[test]
+    fn matching_prefix_returns_the_first_of_overlapping_matches() {
+        let id = BenchmarkId::new(nonempty!["foo/bar_extra".to_owned()]);
+        let prefixes = ["missing", "foo/bar", "foo/", "foo/bar"]
+            .map(|prefix| BenchmarkIdPrefix::new(prefix).unwrap());
+        assert_eq!(id.matching_prefix(&prefixes), prefixes.get(1));
+        assert!(
+            id.matching_prefix(&[BenchmarkIdPrefix::new("foo/bar/").unwrap()])
+                .is_none()
+        );
     }
 
     #[test]

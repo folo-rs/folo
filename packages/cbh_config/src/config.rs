@@ -1,9 +1,10 @@
-//! Configuration loaded from `.cargo/bench_history.toml`: which project this is
-//! and where its benchmark history is stored.
+//! Configuration loaded from `.cargo/bench_history.toml`: which project this is,
+//! where its benchmark history is stored, and which benchmarks analysis ignores.
 
 use std::io;
 use std::path::Path;
 
+use cbh_model::BenchmarkIdPrefix;
 use serde::Deserialize;
 
 use crate::{ConfigError, ParseConfigError, ReadConfigError};
@@ -24,6 +25,14 @@ const DEFAULT_TEMPLATE: &str = "\
 # [project]
 # id = \"my-project\"            # defaults to the workspace directory name
 # default_branch = \"main\"      # base branch for `analyze`; auto-detected by default
+
+# Exclude benchmark-ID prefixes from analysis, without skipping execution or
+# discarding collected results. `list` and `examine` still show the raw data.
+# Matching is literal and case-sensitive, as in `analyze` and `bless`:
+# \"noisy/work\" also matches \"noisy/worker\"; a trailing slash selects descendants.
+#
+# [ignore]
+# benchmarks = [\"noisy/work/\", \"workers::contention\"]
 
 # To store results in Azure Blob Storage, configure the cloud backend here.
 # Authentication is always Microsoft Entra ID (OAuth): the endpoint must be
@@ -53,6 +62,21 @@ pub struct Config {
     /// means no cloud backend is configured; a command then requires `--local`.
     #[serde(default)]
     pub storage: Option<CloudStorageConfig>,
+    /// Benchmarks excluded from analysis without changing stored measurements.
+    #[serde(default)]
+    pub ignore: IgnoreConfig,
+}
+
+/// Benchmark families intentionally excluded from analysis.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IgnoreConfig {
+    /// Literal, case-sensitive prefixes of qualified benchmark IDs.
+    ///
+    /// Matches exclude every metric in each selected partition. An empty list
+    /// excludes nothing. Collection and raw-data inspection are unaffected.
+    #[serde(default)]
+    pub benchmarks: Vec<BenchmarkIdPrefix>,
 }
 
 /// Project identity section.
@@ -160,10 +184,58 @@ pub fn default_template() -> &'static str {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
 
     use super::*;
     use crate::{ParseConfigError, ReadConfigError};
+
+    assert_impl_all!(IgnoreConfig: Send, Sync, UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn ignore_defaults_to_no_exclusions() {
+        for text in [
+            "",
+            "[ignore]",
+            "[ignore]\nbenchmarks = []",
+            default_template(),
+        ] {
+            assert_eq!(parse_config(text).unwrap().ignore, IgnoreConfig::default());
+        }
+    }
+
+    #[test]
+    fn ignore_parses_literal_prefixes_without_rewriting_them() {
+        let config = parse_config(
+            "[ignore]\nbenchmarks = ['foo/bar/', 'boo::loo', 'Foo[*]', ' foo ', 'foo/bar/']",
+        )
+        .unwrap();
+        let prefixes: Vec<_> = config
+            .ignore
+            .benchmarks
+            .iter()
+            .map(BenchmarkIdPrefix::as_str)
+            .collect();
+        assert_eq!(
+            prefixes,
+            ["foo/bar/", "boo::loo", "Foo[*]", " foo ", "foo/bar/"]
+        );
+    }
+
+    #[test]
+    fn ignore_rejects_invalid_fields_and_prefixes() {
+        for section in [
+            "benchmarks = ['']",
+            "benchmarks = [42]",
+            "benchmarks = 'foo'",
+            "benchmark = ['foo']",
+        ] {
+            let error = parse_config(&format!("[ignore]\n{section}")).unwrap_err();
+            assert!(error.find_source::<ParseConfigError>().is_some());
+        }
+    }
 
     #[test]
     fn default_template_has_no_engines_section() {

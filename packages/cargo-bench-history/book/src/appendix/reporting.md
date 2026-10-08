@@ -45,7 +45,7 @@ analysis with any findings has outcome `findings`, even when some series could n
 Without findings, a fully judged in-scope suite is `clean`. An in-scope suite with no judged
 series is `insufficient_baseline`; a suite with some judged and some unjudged series is
 `partial`. When no series entered analysis, or every accounted series was absent at the
-analyzed context commit, the outcome is `nothing_in_scope`.
+analyzed context commit or ignored by configuration, the outcome is `nothing_in_scope`.
 
 These outcomes describe the series available to analysis, not an inventory of collection jobs.
 **Platform coverage** is separate: matrix automation must verify which expected platforms
@@ -112,7 +112,9 @@ cannot tell that statement apart from "the benchmarks did not run".
 
 The final **Coverage** section in full Markdown and the JSON `census` always contain the
 **reasons** series went unjudged, including when findings exist. Text and condensed summaries
-list reasons only when there are no findings. A GitHub comment's coverage warning points to
+list the full reason breakdown only when there are no findings. Configured exclusions
+also receive a compact disclosure beside findings, so an intentional reduction in
+analysis scope stays visible. A GitHub comment's coverage warning points to
 those full outputs in its report bundle. See
 [Reading a silent report](insights.md#reading-a-silent-report) for matching Markdown and JSON
 examples.

@@ -379,6 +379,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn ignored_only_report_is_valid_but_cannot_establish_recovery() {
+        let commit: CommitSha = "a".repeat(40).parse().unwrap();
+        let raw = serde_json::json!({
+            "tip_commit": commit.as_str(), "tip_dirty": false, "mode": "history",
+            "outcome": "nothing_in_scope", "notable": false,
+            "census": {
+                "coverage": "nothing_in_scope", "total": 2, "judged": 0, "in_scope": 0,
+                "unjudged": 2, "reasons": [{"reason": "ignored", "count": 2}]
+            }
+        });
+        let evidence = Evidence {
+            report: AnalysisReport::parse(&raw.to_string(), &commit).unwrap(),
+            platforms: PlatformCoverage::parse("linux", "linux").unwrap(),
+        };
+        assert_eq!(evidence.publication_state(), PublicationState::Inconclusive);
+        evidence.require_state(PublicationState::Clean).unwrap_err();
+    }
+
+    #[test]
     fn publication_projection_preserves_findings_and_distinguishes_incomplete_clean() {
         for (outcome, expected) in [
             (Outcome::Findings, PublicationState::Findings),

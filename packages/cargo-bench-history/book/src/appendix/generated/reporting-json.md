@@ -13,15 +13,19 @@
   "regressions": 2,
   "ghosts_excluded": 2,
   "census": {
-    "total": 10,
+    "total": 11,
     "in_scope": 8,
     "judged": 5,
-    "unjudged": 5,
+    "unjudged": 6,
     "coverage": "partial",
     "reasons": [
       {
         "reason": "ghost",
         "count": 2
+      },
+      {
+        "reason": "ignored",
+        "count": 1
       },
       {
         "reason": "too_few_points",

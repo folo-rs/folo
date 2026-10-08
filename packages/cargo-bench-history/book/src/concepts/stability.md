@@ -5,6 +5,19 @@ meaningful if a run's number moves when — and only when — the thing being me
 changes. Wall-clock benchmarks have a notorious source of movement that has nothing to do with
 your code: **instruction-cache layout**.
 
+## Workloads outside automated analysis
+
+Concurrent work, thread creation, live system queries and affinity changes can be dominated
+by environmental decisions. Repetition and noise gates can reduce random jitter but cannot
+identify the cause of a persistent shift. A benchmark may remain useful for manual
+experiments without being suitable for automated history analysis.
+
+Use [configured benchmark ignores](../commands/analyze.md#ignoring-benchmarks) to keep such
+measurements out of analysis while retaining collection and raw inspection. This is a
+project policy, not an automatic classification of all multithreaded benchmarks as invalid.
+Ignoring excludes a benchmark from comparisons; a blessing instead accepts a baseline
+change in a benchmark you still want analyzed.
+
 ## The phantom regression
 
 A CPU fetches instructions in fixed-size lines (64 bytes on x86-64). A hot loop that fits

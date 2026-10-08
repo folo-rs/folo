@@ -1,6 +1,7 @@
 | Reason | What it means | What to do |
 |---|---|---|
 | `ghost` | A series not measured at the analyzed context commit. | Nothing, if the benchmark was removed or its package was not built. Otherwise check that it still runs at the analyzed context commit. |
+| `ignored` | A series ignored by configuration. | Nothing, if the exclusion is intentional. Inspect the raw data with examine, or remove the matching prefix from [ignore].benchmarks to analyze it. |
 | `too_few_points` | A series with too few points in the analyzed window. | Wait. The series is judged once enough commits have been measured. |
 | `too_few_points_since_blessing` | A series with too few points since being blessed. | Wait. A blessing discards the evidence before it, so the count restarts. |
 | `not_measured_on_branch` | A series not measured on the branch. | Run the benchmark on the branch, or accept that this one is out of scope for the comparison. |

@@ -20,6 +20,11 @@ Full Markdown appends its complete coverage account after findings and report wa
 on the silent-result path. The same coverage projection supplies its totals and reason rows and
 the JSON census; condensed summaries retain the compact presentation.
 
+Ghosts and configured ignores remain in the census total but sit outside the in-scope
+denominator. Ignored-series disclosure is derived from that same census, including beside
+findings and in truncated summaries. An all-excluded census retains `nothing_in_scope`;
+there is no separate outcome or duplicated top-level exclusion counter.
+
 ## Rendering benchmarks
 
 `cbh_render_reports` measures the production in-memory rendering functions, not detection or

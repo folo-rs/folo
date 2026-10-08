@@ -14,3 +14,55 @@ id = "folo"
 [storage.azure]
 account = "folohistory"
 container = "bench-history"
+
+# Keep scheduler-dependent measurements for manual inspection, not automated analysis.
+# Prefixes match qualified benchmark IDs literally. Ref: docs/benchmarks.md.
+[ignore]
+benchmarks = [
+    # Paired-worker memory-locality experiments, including self/same-CPU modes.
+    "benchmarks_effects_of_memory/",
+    "benchmarks_effects_of_memory_windows/",
+    "many_cpus_benchmarking_harness_demo/",
+    # Shared-event contention; retain single-worker controls.
+    "events_contended/auto_reset/events/2_threads",
+    "events_contended/auto_reset/events/4_threads",
+    "events_contended/manual_reset/events/2_threads",
+    "events_contended/manual_reset/events/4_threads",
+    # Concurrent linked-object access; retain single-worker counterparts.
+    "linked_instance_per_thread/acquire_two_threaded/",
+    "linked_instance_per_thread/access/vs_static_lazy_lock_mt",
+    "linked_instance_per_thread_sync/acquire_two_threaded/",
+    "linked_instance_per_thread_sync/access/vs_static_lazy_lock_mt",
+    "linked_instances/get/two-threaded",
+    "linked_instances/get_1000/two-threaded",
+    "linked_static_thread_local_arc/access_two_threaded/",
+    "linked_static_thread_local_rc/access_two_threaded/",
+    # Concurrent processor-set construction.
+    "many_cpus_processor_set_builder/processor_set_builder/all_mt",
+    "many_cpus_processor_set_builder/processor_set_builder/one_mt",
+    "many_cpus_processor_set_builder/processor_set_builder/only_evens_mt",
+    # Uncached live OS queries and affinity changes measure environmental decisions.
+    "many_cpus_pal_windows/pal/pin_thread_to_default_set",
+    "many_cpus_pal_windows/pal/current_thread_processors",
+    "many_cpus_pal_windows/pal/get_all_processors",
+    # Concurrent metric observation, covering pull and push variants.
+    "nm_performance/observation/counter_mt_",
+    "nm_performance/observation/plain_mt_",
+    "nm_performance/observation/small_histogram_first_bucket_mt_",
+    "nm_performance/observation/small_histogram_above_range_mt_",
+    "nm_performance/observation/large_histogram_first_bucket_mt_",
+    "nm_performance/observation/large_histogram_above_range_mt_",
+    "nm_performance/timing/timing_mt_",
+    # Shared-counter contention and all-processor harness overhead.
+    "par_bench_basic/atomic_increments/multi_thread",
+    "par_bench_manual/atomic_increments/multi_thread",
+    "par_bench_overhead/overhead/",
+    # Concurrent regional reads and reader/writer workloads, including yielding readers.
+    "region_cached/read/par_get_",
+    "region_cached/get_set_pin/",
+    "region_local/read/get_pin_two",
+    "region_local/get_set_pin/",
+    # Cross-thread scheduling and completion, including measured OS-thread creation.
+    "vicinal/spawn/",
+    "vicinal/fire_and_forget/",
+]

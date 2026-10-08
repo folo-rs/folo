@@ -39,6 +39,10 @@ cargo bench-history examine --local=./bench-history \
 cargo bench-history machine-key
 ```
 
+For workloads you want to retain but not analyze automatically, configure
+[benchmark ignore prefixes](commands/analyze.md#ignoring-benchmarks). The starter
+configuration includes a commented example.
+
 ## What just happened
 
 A single `collect` on its own has nothing to compare against — the value of the tool comes

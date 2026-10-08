@@ -13,19 +13,20 @@ No notable changes detected among the series that were judged.
 
 Judged 3 of 6 in-scope series; no reportable move survived the gates.
 
-Not judged: 2 series not measured at the analyzed context commit; 3 series with too few points in the analyzed window.
+Not judged: 2 series not measured at the analyzed context commit; 1 series ignored by configuration; 3 series with too few points in the analyzed window.
 
 ## Coverage
 
 - State: `partial`
-- Metric series accounted for: 8
+- Metric series accounted for: 9
 - In scope: 6
 - Judged: 3
-- Unjudged (including out-of-scope series): 5
+- Unjudged (including out-of-scope series): 6
 
 | Unjudged reason | Metric series |
 | --- | --- |
 | not measured at the analyzed context commit | 2 |
+| ignored by configuration | 1 |
 | with too few points in the analyzed window | 3 |
 ````
 
@@ -44,15 +45,19 @@ Not judged: 2 series not measured at the analyzed context commit; 3 series with 
   "regressions": 0,
   "ghosts_excluded": 2,
   "census": {
-    "total": 8,
+    "total": 9,
     "in_scope": 6,
     "judged": 3,
-    "unjudged": 5,
+    "unjudged": 6,
     "coverage": "partial",
     "reasons": [
       {
         "reason": "ghost",
         "count": 2
+      },
+      {
+        "reason": "ignored",
+        "count": 1
       },
       {
         "reason": "too_few_points",

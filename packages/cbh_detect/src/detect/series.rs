@@ -164,13 +164,7 @@ pub struct SeriesFilter<'a> {
 /// mirroring blessing-prefix matching so the same prefix selects the same family
 /// of benchmarks in `bless` and `analyze`.
 fn prefixes_accept(prefixes: &[BenchmarkIdPrefix], id: &BenchmarkId) -> bool {
-    if prefixes.is_empty() {
-        return true;
-    }
-    let qualified = id.qualified();
-    prefixes
-        .iter()
-        .any(|prefix| qualified.starts_with(prefix.as_str()))
+    prefixes.is_empty() || id.matching_prefix(prefixes).is_some()
 }
 
 /// Reconstructs every series from the selected `objects`.

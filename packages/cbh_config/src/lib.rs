@@ -12,8 +12,9 @@
 
 //! Implementation crate for [`cargo-bench-history`]; do not depend on this directly.
 //!
-//! The configuration loaded from `.cargo/bench_history.toml`: which project this is
-//! and where its benchmark history is stored. Carries the parsed [`Config`] model, the
+//! The configuration loaded from `.cargo/bench_history.toml`: which project this is,
+//! where its benchmark history is stored, and which benchmarks analysis ignores.
+//! Carries the parsed [`Config`] model, the
 //! TOML [`parse_config`]/[`load_config`] entry points, the starter
 //! [`default_template`], the [`ConfigError`] type, and the command *input resolution*
 //! (locating the configuration file and repository, reading the storage/cache
@@ -31,8 +32,8 @@ mod error;
 mod input;
 
 pub use config::{
-    AzureStorageConfig, CloudStorageConfig, Config, ProjectConfig, default_template, load_config,
-    parse_config,
+    AzureStorageConfig, CloudStorageConfig, Config, IgnoreConfig, ProjectConfig, default_template,
+    load_config, parse_config,
 };
 pub use error::ConfigError;
 pub(crate) use error::{ParseConfigError, ReadConfigError, SelectionEnvironmentRequiredError};

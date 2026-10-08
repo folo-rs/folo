@@ -106,7 +106,7 @@ When present, **Download the full report bundle** links to the full outputs:
   account under `census`; the breakdown is `census.reasons`.
 - **Text on stdout and condensed Markdown summaries** show the in-scope judged ratio in
   their headers when anything is in scope. They list unjudged reasons only when there are
-  no findings.
+  no findings, while configured ignored-series counts remain visible beside findings.
 
 The warning about in-scope series that could not be judged refers to the full Markdown
 **Coverage** section or the JSON **`census`**, not to additional detail hidden in the comment.
@@ -133,6 +133,12 @@ the analyzed context commit. A pull request often benchmarks only affected packa
 analysis reads a wider history, so an untouched package's benchmarks can be ghosts. They still
 appear in the accounted-for and unjudged totals and in the reason breakdown. They do not
 prevent full coverage of the in-scope suite.
+
+Configured [ignore prefixes](../commands/analyze.md#ignoring-benchmarks) also exclude
+matching series from the in-scope count while preserving them in the total and reason
+breakdown. They describe an intentional policy choice, not missing baseline evidence.
+Removing a prefix restores eligibility of the stored measurements. If the suite contains
+only ignored series and ghosts, its outcome is `nothing_in_scope`, not an all-clear.
 
 The following reasons explain why series were not judged:
 

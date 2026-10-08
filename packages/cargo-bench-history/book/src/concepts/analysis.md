@@ -98,6 +98,11 @@ Branch mode cannot honestly apply that procedure to one observation. It keeps fa
 and compares the complete branch report with the same analysis run on eligible base commits in
 turn. See [Multiplicity and coverage](../appendix/coverage.md) for both controls.
 
+Configured [ignore prefixes](../commands/analyze.md#ignoring-benchmarks) remove benchmarks
+from analysis without discarding their measurements. Ignored series and ghosts sit outside
+the in-scope coverage denominator, but remain disclosed in the report's account. If those
+exclusions leave nothing in scope, the outcome is `nothing_in_scope`, not an all-clear.
+
 For practical interpretation, see
 [Reading a silent report](../appendix/insights.md#reading-a-silent-report).
 
