@@ -3,9 +3,11 @@
 Everything before this chapter explains what the tool does. This one is about what *you* do
 with the result.
 
-Two entry points, depending on which problem you have:
+Start with the question you need to answer:
 
 - **[I have a finding](#i-have-a-finding)** — something was reported and you need to act.
+- **[Reading a silent report](#reading-a-silent-report)** — no findings were reported, and you
+  need to know what was actually judged.
 - **[I expected a finding and got none](#i-expected-a-finding-and-got-none)** — the checklist
   for tracking down where a real regression was dropped.
 
@@ -87,6 +89,68 @@ Your branch's intermediate commits are ignored — only the context state is eva
    produced at least as much report-wide out-of-range movement. It is historical context, not a
    confidence percentage.
 
+## Reading a silent report
+
+"No notable changes detected" applies only to metric series that were actually **judged**.
+One benchmark can contribute several metric series, so these counts are not benchmark counts.
+
+### Where to find coverage
+
+The GitHub issue or pull-request comment contains a **condensed summary**, not the full report.
+Use **Download the full report bundle** to obtain the full outputs:
+
+- **Full Markdown** (`report.md` in the bundle, or the path passed to `--markdown`) ends with
+  a **Coverage** section. It lists the coverage state, accounted-for, in-scope, judged and
+  unjudged counts, and a count for each unjudged reason. It is present even when findings exist.
+- **JSON** (`report.json` in the bundle, or the path passed to `--json`) carries the same
+  account under `census`; the breakdown is `census.reasons`.
+- **Text on stdout and condensed Markdown summaries** show the in-scope judged ratio in
+  their headers when anything is in scope. They list unjudged reasons only when there are
+  no findings.
+
+The warning about in-scope series that could not be judged refers to the full Markdown
+**Coverage** section or the JSON **`census`**, not to additional detail hidden in the comment.
+For individual series identities, rerun the same analysis with `--verbose`: its diagnostics
+name each unjudged series, the evidence it carried and the rule that declined it.
+
+### A silent analysis in Markdown and JSON
+
+These examples are generated from the same analysis using the production renderers.
+The Markdown example is file content, not terminal stdout; the JSON example contains its matching
+`census` object.
+
+{{#include generated/reporting-silent.md}}
+
+### Interpreting the counts and reasons
+
+The **in-scope** count excludes **ghosts**: metric series whose benchmark was not measured at
+the analyzed context commit. A pull request often benchmarks only affected packages while the
+analysis reads a wider history, so an untouched package's benchmarks can be ghosts. They still
+appear in the accounted-for and unjudged totals and in the reason breakdown. They do not
+prevent full coverage of the in-scope suite.
+
+The following reasons explain why series were not judged:
+
+{{#include generated/coverage-reasons.md}}
+
+`Judged 0 of N` means nothing was tested, not that measured levels stayed flat. Check the
+reason breakdown: history may still be accumulating, a [blessing](../commands/bless.md) may
+have limited usable evidence, or current measurements may be absent. When nothing is in
+scope, the report says so instead of printing a ratio. When no series was accounted for,
+it says nothing was analyzed.
+
+The JSON `census.coverage` field and Markdown's Coverage state use the same tokens:
+`no_series`, `nothing_in_scope`, `nothing_judged`, `partial` and `full`.
+Only `full` means every in-scope series was judged. Even then, silence means no reportable
+move survived the gates, not proof that nothing changed.
+
+Findings do not imply full coverage: a report can identify a regression while leaving other
+series unjudged. **Platform coverage** is separate again. A missing collection platform can
+leave the available series fully judged without establishing an all-clear for every platform.
+
+The tool reports that a measured level moved, not why it moved. Attributing a move and deciding
+whether to accept it remain your judgment, recorded with [`bless`](../commands/bless.md).
+
 ## Unreliable or inconsistent hardware
 
 **Symptoms:**
@@ -166,7 +230,8 @@ instruction counts degrade far more gracefully than wall time.
 
 Work down this list. Each step names the chapter that explains it.
 
-1. **Was the series judged at all?** Read the report's coverage line, or the verbose
+1. **Was the series judged at all?** Read the full Markdown report's final Coverage section,
+   the JSON `census`, or the verbose
    per-series reasoning. An unjudged series is never a silent skip — the reason is stated.
    → [Multiplicity and coverage](coverage.md)
 2. **Is it a ghost?** If the benchmark did not run at the analyzed commit, every one of its

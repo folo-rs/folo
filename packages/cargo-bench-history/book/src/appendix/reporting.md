@@ -65,9 +65,10 @@ The tool emits reports and their derived outputs in these forms, each requested 
 - **Outcome** (`--outcome <path>`, `analyze` only) — the stable [analysis outcome](#analysis-outcomes)
   for selecting a message without parsing the full JSON report.
 
-Text and Markdown carry every finding but omit the per-reason census when findings exist. **JSON
-always carries the complete census**, which makes it the machine-readable signal: each finding
-self-describing, plus every unjudged reason the human formats print only on a silent report. It
+Full Markdown carries every finding and ends with a **Coverage** section containing the complete
+counts and unjudged-reason breakdown, including ghosts. **JSON always carries the complete census**
+under `census`, which makes it the machine-readable signal: each finding
+self-describing, plus every unjudged reason. Text omits that breakdown when findings exist. JSON
 deliberately omits the per-commit chart series — that is presentation, and
 [`examine`](../commands/examine.md) is the way to get the underlying points. The **condensed
 summary** is lossy by design — capped, and flattened so the per-set grouping is dropped — so it is
@@ -75,8 +76,9 @@ the one output you must not automate against. The outcome file repeats only the 
 top-level `outcome` field; it carries no report details. The full table is under
 [Where output goes](#where-output-goes).
 
-Here is the same analysis in each form. The JSON excerpt is illustrative of the shape
-automation reads, not a complete field catalog.
+Here is the same analysis in text and JSON. The JSON excerpt illustrates the shape automation
+reads, not a complete field catalog. For matching full Markdown and JSON examples, see
+[Reading a silent report](insights.md#reading-a-silent-report).
 
 {{#include generated/reporting-text.md}}
 
@@ -98,7 +100,8 @@ necessary for counts, reasons and findings.
 
 ## The coverage line is not decoration
 
-Every report states how many series it judged.
+Text and Markdown headers state how many in-scope series were judged when anything was in scope.
+JSON records those counts in `census`. This terminal example shows a silent report:
 
 {{#include generated/reporting-census.md}}
 
@@ -106,10 +109,12 @@ This is given the same prominence as the findings on purpose. "No notable change
 *nothing changed among the series this run was able to judge*, and without the denominator you
 cannot tell that statement apart from "the benchmarks did not run".
 
-Note the asymmetry: the **reasons** a series went unjudged are spelled out only when a report
-has no findings to show — otherwise the human-readable formats print the tally alone, on the
-grounds that a report with findings has something more urgent to say. The JSON census always
-carries the full breakdown, which is another reason to read it rather than the text.
+The final **Coverage** section in full Markdown and the JSON `census` always contain the
+**reasons** series went unjudged, including when findings exist. Text and condensed summaries
+list reasons only when there are no findings. A GitHub comment's coverage warning points to
+those full outputs in its report bundle. See
+[Reading a silent report](insights.md#reading-a-silent-report) for matching Markdown and JSON
+examples.
 
 ## Comparison-base lag
 

@@ -1468,7 +1468,7 @@ can attenuate an extreme falling inside it — the one detail binning gives up.
 
 ### 8.7 Report formats
 
-The three report formats carry the **same data** and differ only in presentation; the text
+The report formats carry the **same findings** with format-specific coverage detail; the text
 layout is canonical. Each report names the **analyzed context commit** — the commit whose line
 of history the findings describe — annotated `+ uncommitted changes` when the working tree
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
@@ -1495,9 +1495,12 @@ know whether findings exist; it does not distinguish the silent outcomes.
 A change-point finding's commit is an estimate of where the new level
 begins, not a claim that that commit introduced it.
 
-Every format also states what the analysis **judged** (§8.9): a coverage tally in the header of
-each format, prose qualifying a silent result where there are no findings, and, in JSON, a
-structured census with the per-reason breakdown. This evidence supports detailed coverage
+Every format also states what the analysis **judged** (§8.9): an in-scope judged tally in human
+report headers, prose qualifying a silent result where there are no findings, and a complete
+coverage account in both the final Markdown **Coverage** section and JSON's structured `census`.
+That account includes all counts, the coverage state and the per-reason breakdown even when
+findings exist. Text and condensed summaries list reasons only for silent results.
+This evidence supports detailed coverage
 policy without replacing the successful-analysis outcome.
 
 Separate from those canonical formats, `analyze` can also render a condensed Markdown
@@ -1635,8 +1638,9 @@ answered by the in-scope rule above.
 
 How it surfaces (§8.7) follows what a reader needs where:
 
-* Every format carries the **coverage tally** in its header — judged of in-scope — so a report
+* Human-readable report headers carry the **coverage tally** — judged of in-scope — so a report
   bearing findings still states how much of the suite it was able to judge, in one field.
+  JSON exposes these counts in `census`.
 * A report with **no findings** additionally qualifies its silence in prose: what the silence
   covers, and, when anything was unjudged, a one-line breakdown by reason. This is where the
   ambiguity actually bites, and a healthy repository pays exactly one sentence for it. The ratio
@@ -1646,6 +1650,10 @@ How it surfaces (§8.7) follows what a reader needs where:
   series coverage state and a per-reason breakdown — as supporting evidence for detailed
   coverage policy. Consumers need not re-derive the ghost arithmetic or the analysis outcome
   when selecting a message.
+* Full Markdown ends with a **Coverage** section containing the same counts, coverage state
+  and per-reason breakdown, including ghosts. It is present for every outcome and whether or
+  not findings exist. Condensed summaries omit this section to remain compact; GitHub coverage
+  warnings direct readers to full Markdown or JSON for these details.
 * **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
   and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.
   Count shortfalls state usable evidence and the required minimum together, using points in

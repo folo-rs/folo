@@ -6,8 +6,9 @@ use crate::result::{Coverage, Evidence, Outcome, PublicationState};
 const REGRESSION_HEADING: &str = "# Benchmark history";
 const PR_HEADING: &str = "## Benchmark history";
 const WARNING_HEADING: &str = "> [!WARNING]";
-// Reporting uses one message catalogue; callers supply evidence, not presentation policy.
-const DOCUMENTATION_URL: &str = "https://folo-rs.github.io/folo/cargo-bench-history/";
+// Readers need report interpretation rather than installation or command navigation.
+const DOCUMENTATION_URL: &str =
+    "https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html";
 const ADVISORY: &str = "Benchmark results are advisory and do not block merging.";
 
 /// Wraps validated history evidence and the caller-paired summary in the rolling issue body.
@@ -243,7 +244,8 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
     if evidence.report.coverage == Coverage::Partial {
         sections.push(format!(
             "{WARNING_HEADING}\n> Some in-scope metric series could not be judged. \
-             See the report for coverage details."
+             See the Coverage section at the end of the full Markdown report \
+             or the JSON report's `census` for counts and reasons."
         ));
     }
     let headline = match outcome {
@@ -333,7 +335,7 @@ mod tests {
         assert!(body.contains("Benchmark results are advisory and do not block merging."));
         assert!(body.contains("[Download the full report bundle](https://example.test/artifact)"));
         assert!(body.contains(
-            "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/)"
+            "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html)"
         ));
     }
 
@@ -361,7 +363,7 @@ mod tests {
             ),
         ] {
             assert!(body.contains(
-                "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/)"
+                "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html)"
             ));
             assert!(!body.contains("[Download the full report bundle]"));
         }
@@ -482,6 +484,8 @@ mod tests {
         );
         assert!(body.contains("Notable benchmark changes detected."));
         assert!(body.contains("Some in-scope metric series could not be judged."));
+        assert!(body.contains("Coverage section at the end of the full Markdown report"));
+        assert!(body.contains("JSON report's `census` for counts and reasons."));
         assert!(body.contains("Missing: windows."));
         assert!(body.contains("exact tool summary"));
     }

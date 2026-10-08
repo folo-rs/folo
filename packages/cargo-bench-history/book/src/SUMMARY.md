@@ -7,28 +7,12 @@
 - [Storage backends](storage.md)
 - [GitHub automation](github-automation.md)
 
-# Commands
-
-- [Overview](commands/index.md)
-- [install](commands/install.md)
-- [setup-azure](commands/setup-azure.md)
-- [collect](commands/collect.md)
-- [backfill](commands/backfill.md)
-- [analyze](commands/analyze.md)
-- [examine](commands/examine.md)
-- [list](commands/list.md)
-- [prune](commands/prune.md)
-- [bless / unbless](commands/bless.md)
-- [machine-key](commands/machine-key.md)
-
 # Concepts
 
 - [Benchmark engines](concepts/engines.md)
 - [Comparability and partitioning](concepts/comparability.md)
 - [Measurement stability](concepts/stability.md)
 - [Analysis](concepts/analysis.md)
-
-# Appendix
 
 - [Data pipeline](appendix/index.md)
   - [Shape of the data](appendix/shape.md)
@@ -43,3 +27,17 @@
   - [Limits](appendix/limits.md)
   - [Glossary](appendix/glossary.md)
   - [Reference tables](appendix/reference.md)
+
+# Commands
+
+- [Overview](commands/index.md)
+- [install](commands/install.md)
+- [setup-azure](commands/setup-azure.md)
+- [collect](commands/collect.md)
+- [backfill](commands/backfill.md)
+- [analyze](commands/analyze.md)
+- [examine](commands/examine.md)
+- [list](commands/list.md)
+- [prune](commands/prune.md)
+- [bless / unbless](commands/bless.md)
+- [machine-key](commands/machine-key.md)
