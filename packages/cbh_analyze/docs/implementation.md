@@ -67,6 +67,14 @@ as sources. The shell can therefore convert the aggregate into `ohno::AppError` 
 an internal taxonomy or losing causal diagnostics. The boundary follows the workspace
 [error-handling guide](../../../docs/error-handling.md).
 
+## Pipeline tests
+
+Pipeline policy scenarios share in-process fixtures and execution helpers in
+`src/pipeline_tests/harness.rs`. Configured-ignore scenarios live in the adjacent
+`ignore` test module. The harness supplies fake history and storage, fixed time anchors,
+and a synchronous spawner; it performs no external I/O. Compact interpreter scenarios
+complement the native full-history cases.
+
 ## Preparation benchmarks
 
 `cbh_analyze_preparation` measures preparation without running detection or rendering.

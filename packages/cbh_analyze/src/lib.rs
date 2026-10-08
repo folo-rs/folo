@@ -58,6 +58,10 @@ pub mod benchmarks;
 #[cfg(test)]
 mod testing;
 
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod pipeline_tests;
+
 pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
 pub use cbh_render::AnalysisOutcome;
