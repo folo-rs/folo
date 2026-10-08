@@ -76,7 +76,7 @@ impl Cell {
 /// One row of the grid: a discriminant set and what it holds at each commit.
 #[derive(Clone, Debug)]
 pub struct Row {
-    /// How the appendix names this partition, e.g. the engine and machine key.
+    /// How the book names this partition, e.g. the engine and machine key.
     pub label: String,
 
     /// One entry per commit position, oldest first.

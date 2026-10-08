@@ -16,6 +16,9 @@ the judged-series account and no-findings headline from the detector census; fin
 and that coverage select the analysis outcome. Text, Markdown, JSON and the shell's typed
 or file outcome use these projections rather than maintaining independent verdict rules.
 Collection-platform completeness belongs to workflow evidence, outside analyzer-series coverage.
+Full Markdown appends its complete coverage account after findings and report warnings, including
+on the silent-result path. The same coverage projection supplies its totals and reason rows and
+the JSON census; condensed summaries retain the compact presentation.
 
 ## Rendering benchmarks
 

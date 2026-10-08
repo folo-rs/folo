@@ -216,7 +216,14 @@ pub fn assert_full_report(input: &ReportInput<'_>, format: ReportFormat) {
     }
     if format == ReportFormat::Markdown {
         assert_eq!(output.matches("```text").count(), input.findings.len());
-        assert_eq!(output.matches("\n## ").count(), input.sets.len());
+        assert_eq!(output.matches("\n## Coverage\n").count(), 1);
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("## ") && *line != "## Coverage")
+                .count(),
+            input.sets.len()
+        );
     }
 }
 

@@ -70,7 +70,7 @@ Some engines report a confidence interval alongside the value.
 
 {{#include generated/shape-dispersion.md}}
 
-The rule that matters is the same everywhere it appears in this appendix: **a confidence
+The rule that matters is the same throughout the pipeline: **a confidence
 interval can only ever take a candidate away.** No gate uses one to create or strengthen a
 candidate. So an engine that reports none is not held to a weaker standard — it is judged on its
 own between-commit scatter instead, which is arguably the more relevant quantity anyway.

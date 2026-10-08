@@ -310,7 +310,7 @@ impl Verdict {
 /// One gate's row in a gate-ladder table.
 #[derive(Clone, Debug)]
 struct Rung {
-    /// The gate's identifier, as the appendix refers to it.
+    /// The gate's identifier, as the book refers to it.
     gate: String,
 
     /// What the gate computed from the candidate.
@@ -853,7 +853,7 @@ fn rendered(value: Option<f64>, render: fn(f64) -> String) -> String {
 /// The noun `kind` counts, in the singular and the plural.
 ///
 /// [`MetricKind::as_unit`] answers "count" for the counted metrics, which reads as
-/// "5 count" in a sentence the appendix has to print. These name the thing being counted
+/// "5 count" in a sentence the book has to print. These name the thing being counted
 /// instead.
 fn unit_nouns(kind: MetricKind) -> (&'static str, &'static str) {
     match kind {
@@ -945,7 +945,7 @@ mod tests {
     use super::*;
 
     /// The gates chapter names every gate in a hand-written table grouping them by the
-    /// question each asks. That table is the appendix's one list of gate identifiers that is
+    /// question each asks. That table is the book's one list of gate identifiers that is
     /// not itself generated, so this holds it to the enum: a gate added or removed without
     /// the chapter following would otherwise leave the prose quietly incomplete.
     #[test]

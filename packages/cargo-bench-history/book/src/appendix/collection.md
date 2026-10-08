@@ -97,8 +97,8 @@ diagnose a pool that is rotating keys unexpectedly.
 ## What is stored per commit
 
 Collection stores **runs**, not series. A run is one engine's whole output at one commit — every
-benchmark it measured, and every metric of each — written as a single object. The **series** this
-appendix keeps returning to do not exist in the store at all: they are cut *across* runs later, at
+benchmark it measured, and every metric of each — written as a single object. The **series** these
+pipeline chapters describe do not exist in the store at all: they are cut *across* runs later, at
 analysis time, one metric of one benchmark read against every commit (see
 [Reconstruction](reconstruction.md)).
 

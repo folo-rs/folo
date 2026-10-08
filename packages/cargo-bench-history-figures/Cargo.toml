@@ -1,9 +1,9 @@
 [package]
 # Cargo expects dashes in tool-style crate names. Okay.
 name = "cargo-bench-history-figures"
-description = "Generates the figures, tables and report excerpts embedded in the cargo-bench-history book's data pipeline appendix"
+description = "Generates the figures, tables and report excerpts embedded in the cargo-bench-history book's Data pipeline chapters"
 publish = false
-version = "0.3.2"
+version = "0.3.3"
 
 authors.workspace = true
 edition.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 # This crate is unpublished book infrastructure: a thin wrapper over `plotters` that renders the
-# appendix's figures from `cbh_detect`'s real findings. Exposing those two crates' types through its
+# book's figures from `cbh_detect`'s real findings. Exposing those two crates' types through its
 # workspace-internal API is intentional, not an accidental leak, so they are acknowledged here (see
 # docs/external-types.md). It is the one crate in the workspace with a wide external surface by design.
 [package.metadata.cargo_check_external_types]

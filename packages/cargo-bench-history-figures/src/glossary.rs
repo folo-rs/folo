@@ -1,6 +1,6 @@
-//! The appendix's glossary: every term it defines, in one place.
+//! The book's glossary: every term it defines, in one place.
 //!
-//! The appendix is written for engineers rather than statisticians, so a term is defined
+//! The book is written for engineers rather than statisticians, so a term is defined
 //! before it is used. Both the glossary page and each chapter's own "Terms used here" table
 //! are generated from this one list, which is what stops the same term being explained two
 //! different ways in two chapters — the failure mode a hand-maintained glossary always
@@ -25,15 +25,15 @@ pub struct Term {
     /// would help.
     pub formal_name: &'static str,
 
-    /// The appendix page that introduces the term, as a link target relative to the
-    /// appendix directory.
+    /// The pipeline page that introduces the term, as a link target relative to the
+    /// pipeline chapters' directory.
     pub chapter: &'static str,
 }
 
-/// Every term the appendix defines.
+/// Every term the book defines.
 ///
 /// Kept in the order a reader meets them rather than alphabetically; the generated page
-/// sorts them for lookup. Reading down this list is a fair summary of what the appendix
+/// sorts them for lookup. Reading down this list is a fair summary of what the book
 /// asks a non-statistician to absorb, and it is meant to stay short enough to do that.
 pub const TERMS: &[Term] = &[
     Term {
