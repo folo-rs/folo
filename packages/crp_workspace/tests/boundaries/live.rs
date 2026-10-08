@@ -223,14 +223,15 @@ fn shared_scopes_preserve_worktree_mode_precedence() {
 #[test]
 #[cfg_attr(miri, ignore = "creates and queries a native non-UTF8 filename")]
 fn shared_scopes_exclude_unrelated_filename_decoding_errors() {
+    // Darwin's EILSEQ identifies the reported unsupported encoding, not unrelated I/O failures.
+    #[cfg(target_vendor = "apple")]
+    const DARWIN_EILSEQ: i32 = 92;
+
     let fixture = Repository::new();
     fixture.write("pkg/file", b"tracked");
     fixture.command(&["add", "pkg"]);
     fs::create_dir_all(fixture.path().join("unrelated")).unwrap();
     // Probe the actual filesystem, not Unix or macOS as a proxy for filename support.
-    // Only Darwin's EILSEQ identifies the reported unsupported encoding; other errors fail.
-    #[cfg(target_vendor = "apple")]
-    const DARWIN_EILSEQ: i32 = 92;
     let path = fixture
         .path()
         .join("unrelated")
