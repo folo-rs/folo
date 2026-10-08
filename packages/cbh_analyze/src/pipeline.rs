@@ -2278,7 +2278,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "mixed judged and excluded series require decoding a complete multi-benchmark history"
+        ignore = "Complete multi-benchmark history; compact census tests cover Miri."
     )]
     fn the_census_accounts_for_every_series_and_explains_each_exclusion() {
         // Three series, one of each fate: `kept` runs the full history and is judged,
@@ -2479,7 +2479,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "Multi-partition reconstruction and rendering exceed the interpreter budget; the pure filter and minimal pipeline tests retain Miri coverage."
+        ignore = "Full partitioned analysis exceeds Miri's budget; compact filter tests cover Miri."
     )]
     fn ignores_count_selected_metric_series_once_and_preserve_ghost_precedence() {
         let storage = MemoryStorage::new();
@@ -2556,7 +2556,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "Comparing both detectors requires complete multi-series histories; small ignore tests cover selection under Miri."
+        ignore = "Full detector histories; compact selection tests retain Miri coverage."
     )]
     fn ignores_remove_series_from_both_modes_statistical_families() {
         for branch in [false, true] {
@@ -2611,7 +2611,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "the measured-metric positive control needs a full two-metric base and branch history"
+        ignore = "Full two-metric baseline and branch; smaller tests cover Miri."
     )]
     fn a_branch_analysis_accounts_for_a_metric_the_branch_never_measured() {
         // The benchmark still runs on the branch, but it stopped reporting one of its
@@ -2799,7 +2799,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "lag classification follows full stored base and branch detection plus a sibling load"
+        ignore = "Lag classification needs full base/branch detection and a sibling load."
     )]
     fn a_lagging_comparison_base_with_a_sibling_run_warns_of_a_mismatch() {
         // The PR runner's key (m1) carries base data only up to one commit behind the
@@ -3165,7 +3165,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "explicit-context selection is verified by detecting the full stored master history"
+        ignore = "Explicit-context detection requires a full stored history."
     )]
     fn explicit_branch_selects_the_official_master_view() {
         // From a feature checkout, `--context master` analyzes master's own history:
@@ -3188,7 +3188,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "cohort ordering is verified through detection over a full base and dirty snapshots"
+        ignore = "Cohort ordering requires full base history and dirty snapshots."
     )]
     fn within_a_commit_clean_precedes_dirty() {
         // On a target-side commit, a clean run and dirty snapshots both load. Branch
@@ -3472,7 +3472,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "the successful-result control requires loading and detecting a full stored regression"
+        ignore = "Successful-result control loads and detects a full stored regression."
     )]
     fn a_flagged_regression_still_yields_a_successful_analysis() {
         // The exit code no longer depends on findings: even a flagged regression

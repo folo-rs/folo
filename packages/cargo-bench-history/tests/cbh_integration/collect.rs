@@ -107,7 +107,7 @@ async fn dangling_collection_output_is_occupied() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--callgrind", &bench]);
     let target = workspace.root().join("target");
-    std::fs::create_dir_all(&target).unwrap();
+    fs::create_dir_all(&target).unwrap();
     let path = target.join("collection.json");
     let missing = target.join("missing.json");
     symlink(&missing, &path).unwrap();
@@ -118,8 +118,8 @@ async fn dangling_collection_output_is_occupied() {
         .unwrap_err();
 
     assert!(workspace.stored_objects().is_empty());
-    assert_eq!(std::fs::read_link(&path).unwrap(), missing);
-    assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+    assert_eq!(fs::read_link(&path).unwrap(), missing);
+    assert_eq!(fs::read_dir(&target).unwrap().count(), 1);
 }
 
 #[tokio::test]

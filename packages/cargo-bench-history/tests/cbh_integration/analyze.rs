@@ -1,3 +1,5 @@
+use std::fs;
+
 use cargo_bench_history::AnalysisOutcome;
 use cbh_engines::parse_alloc_tracker_operation;
 use cbh_model::Engine;
@@ -2257,4 +2259,3 @@ async fn analyze_history_no_newer_data_renders_a_trailing_gap() {
          FULL:\n{full_report}\nLAG:\n{lag_report}"
     );
 }
-use std::fs;
