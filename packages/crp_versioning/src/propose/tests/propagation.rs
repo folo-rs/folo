@@ -1,8 +1,58 @@
 use serde_json::json;
 
 use crate::propose::tests::{
-    assert_invariants, assert_versions, depends, entries, generate, package, report,
+    assert_invariants, assert_versions, depends, entries, generate, needs, package, report,
 };
+
+#[test]
+fn unchanged_grouped_facades_retain_their_own_semantic_impact() {
+    assert_facade_impacts(true);
+}
+
+#[test]
+fn unchanged_ungrouped_facades_retain_their_own_semantic_impact() {
+    assert_facade_impacts(false);
+}
+
+fn assert_facade_impacts(grouped: bool) {
+    // Miri retains the exposed-addition decision; native tests also cover the other levels.
+    let cases: &[(&str, &str)] = if cfg!(miri) {
+        &[("nonbreaking", "1.1.0")]
+    } else {
+        &[
+            ("patch", "1.0.1"),
+            ("nonbreaking", "1.1.0"),
+            ("breaking", "2.0.0"),
+        ]
+    };
+    for &(impact, version) in cases {
+        let mut implementation = needs(package("implementation", "1.0.0", Some("1.0.0")));
+        implementation.consumer_contract = false;
+        let group = ["facade", "implementation"];
+        let groups = [&group[..]];
+        let report = report(
+            vec![
+                depends(
+                    package("facade", "1.0.0", Some("1.0.0")),
+                    "implementation",
+                    true,
+                ),
+                implementation,
+            ],
+            vec![],
+            if grouped { &groups } else { &[] },
+        );
+        let plan = generate(&report, &[("facade", impact), ("implementation", "patch")]).unwrap();
+        assert_versions(
+            &report,
+            &plan,
+            &json!({
+                "facade": version,
+                "implementation": if grouped { version } else { "1.0.1" }
+            }),
+        );
+    }
+}
 
 #[test]
 fn public_dependency_propagation_reaches_a_fixed_point() {

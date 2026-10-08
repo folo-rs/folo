@@ -324,6 +324,7 @@ fn endpoints(
         manifest_path: root.join("Cargo.toml"),
         dependencies: Vec::new(),
         consumer_contract: false,
+        proc_macro: false,
         has_lockfile_target: work_binary,
         resources: BTreeMap::new(),
     };

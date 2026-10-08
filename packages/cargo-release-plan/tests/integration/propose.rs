@@ -101,7 +101,7 @@ fn propose(report: &Path, decisions: &Path, output: &Path) -> Result<RunOutcome,
 
 fn report() -> Value {
     json!({
-        "schema_version": 7,
+        "schema_version": 8,
         "head": "captured",
         "release_history": "released",
         "packages": [{
@@ -114,7 +114,7 @@ fn report() -> Value {
             "dependencies": [],
             "public_origins": [],
             "dependents": [],
-            "consumer_contract": true
+            "consumer_contract": true, "proc_macro": false
         }],
         "non_publishable_packages": [],
         "groups": {}

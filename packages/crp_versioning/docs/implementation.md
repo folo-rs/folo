@@ -13,6 +13,10 @@ Plans, proposals, preparation, prospective workspaces, resolved state, preview
 and application stay together. Their captured-input and no-late-resolution invariants
 must not be distributed across independently interpreted artifacts. Report and plan
 producers own the schemas their consumers validate.
+Reports preserve both consumer policy and procedural-macro target identity. Shared
+comparison selection first expands affected version groups, then separates supported
+public libraries from unsupported macros. The artifact-only command emits direct targets;
+the application also consumes exclusions for explicit compatibility evidence.
 Report completion uses exclusive same-directory staging rather than opening a reusable
 staging filename for truncation. Abandoned staging is removed as an entry, preserving
 contents shared with another hard-linked file.

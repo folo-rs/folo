@@ -72,6 +72,13 @@ consumer API. It defaults to public when absent; binary-only packages have no
 library contract to compare. The declaration does not disable publication or
 dependency propagation.
 
+Checker capability is separate. Procedural-macro libraries can offer a supported
+consumer API without declaring it private. Their Cargo target metadata excludes them
+from direct checker invocation and records the unsupported comparison explicitly.
+They remain subject to semantic assessment, release planning and publication.
+A private implementation's re-exported items are assessed through the public package;
+the private declaration does not make that exposed contract private.
+
 A CLI package with an internal library target must also declare `private-api = true`
 when it offers no supported Rust library API. This does not waive compatibility
 requirements for its command line or documented artifact formats.

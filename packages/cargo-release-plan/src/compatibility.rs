@@ -19,7 +19,7 @@ use crp_versioning::inspect_plan::read_resolved_preview_with_snapshots;
 use crp_versioning::preview::Prepared;
 use crp_versioning::report::{read_report, write_report};
 use crp_versioning::resolved::{Inputs, read_json};
-use crp_versioning::semver_targets::semver_targets;
+use crp_versioning::semver_targets::{SemverTargets, semver_targets};
 use crp_workspace::artifact_path::write_new;
 use crp_workspace::command::{BUILD_CREDENTIAL_VARIABLES, run_capture};
 use crp_workspace::git::GitRepo;
@@ -61,6 +61,29 @@ struct CompatibilityOutcome {
 }
 
 impl CompatibilityOutcome {
+    /// Records known exclusions before any checker or baseline acquisition can fail.
+    fn new(report: PathBuf, targets: &SemverTargets) -> Self {
+        Self {
+            schema_version: COMPATIBILITY_SCHEMA_VERSION,
+            checker: if targets.comparable.is_empty() {
+                "not invoked: no supported consumer contracts selected"
+            } else {
+                "selected: checker identity unavailable"
+            }
+            .to_owned(),
+            report,
+            completed: false,
+            findings: false,
+            packages: targets
+                .unsupported_proc_macros
+                .iter()
+                .map(|name| {
+                    Comparison::unavailable(name.clone(), NotComparedReason::UnsupportedProcMacro)
+                })
+                .collect(),
+        }
+    }
+
     fn identify(&mut self, result: &Output) -> Result<(), AppError> {
         if !result.status.success() {
             return Err(CheckerFailed::new("identify itself", result.status.code()).into());
@@ -105,12 +128,10 @@ impl CompatibilityOutcome {
     ) -> Result<(), AppError> {
         let Some(baseline) = baseline else {
             verbose.note(||format!("{name} has no available published comparison version; no compatibility conclusion is inferred."));
-            self.packages.push(Comparison {
-                name: name.to_owned(),
-                baseline_version: None,
-                required_impact: None,
-                compared: false,
-            });
+            self.packages.push(Comparison::unavailable(
+                name.to_owned(),
+                NotComparedReason::NoBaseline,
+            ));
             return Ok(());
         };
         verbose.note(||format!("Comparing {name} against baseline {baseline} with all features from the captured source workspace."));
@@ -123,6 +144,7 @@ impl CompatibilityOutcome {
             baseline_version: Some(baseline.to_string()),
             required_impact: floor,
             compared: true,
+            not_compared_reason: None,
         });
         Ok(())
     }
@@ -178,10 +200,32 @@ struct Comparison {
     baseline_version: Option<String>,
     required_impact: Option<&'static str>,
     compared: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_compared_reason: Option<NotComparedReason>,
+}
+
+impl Comparison {
+    fn unavailable(name: String, reason: NotComparedReason) -> Self {
+        Self {
+            name,
+            baseline_version: None,
+            required_impact: None,
+            compared: false,
+            not_compared_reason: Some(reason),
+        }
+    }
+}
+
+/// Distinguishes missing comparison data from an unsupported target without claiming compatibility.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum NotComparedReason {
+    UnsupportedProcMacro,
+    NoBaseline,
 }
 
 /// Current compatibility.json layout; independent of the report and plan schemas.
-pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 2;
+pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 3;
 
 /// Persists critical checker evidence while deferring secondary diagnostic-delivery failures.
 struct CheckerOutput<L, M> {
@@ -382,24 +426,13 @@ fn check_with_output(
     let report = output.join("report.json");
     let source_report = read_report(&report)?;
     let targets = semver_targets(&source_report, verbose);
+    let mut outcome = CompatibilityOutcome::new(report, &targets);
+    let targets = targets.comparable;
     let cache = cache_path(&env::temp_dir(), &original_root)?;
     fs::create_dir_all(&cache)?;
     let log = output.join("semver-checks.log");
     let log = fs::File::create(log).map_err(CheckerLogFailed::caused_by)?;
     let mut checker_output = CheckerOutput::new(log, io::stderr());
-    let mut outcome = CompatibilityOutcome {
-        schema_version: COMPATIBILITY_SCHEMA_VERSION,
-        checker: if targets.is_empty() {
-            "not invoked: no consumer contracts selected"
-        } else {
-            "selected: checker identity unavailable"
-        }
-        .to_owned(),
-        report,
-        completed: false,
-        findings: false,
-        packages: Vec::new(),
-    };
     let mut parent_source = None;
     let result = (|| {
         let parent_root = if let Some(anchor) = targets
@@ -477,6 +510,9 @@ fn check_with_output(
         outcome.completed = false;
     }
     let result = finish_parent_source(result, cleanup);
+    outcome
+        .packages
+        .sort_by(|left, right| left.name.cmp(&right.name));
     let destination = output.join("compatibility.json");
     outcome.finish(checker_output.finish(result), |outcome| {
         write_new(&destination, |file| {
@@ -983,7 +1019,7 @@ struct ParentCleanupAlsoFailed {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::Cell;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::ffi::OsStr;
     use std::io::Error;
     #[cfg(unix)]
@@ -1009,6 +1045,53 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_targets_need_no_baseline_and_survive_other_comparison_failures() {
+        for supported in [false, true] {
+            let targets = SemverTargets {
+                comparable: if supported {
+                    ["library".to_owned()].into()
+                } else {
+                    BTreeSet::new()
+                },
+                unsupported_proc_macros: ["macros".to_owned()].into(),
+            };
+            let mut outcome = CompatibilityOutcome::new(PathBuf::from("report.json"), &targets);
+            assert_eq!(
+                outcome.checker,
+                if supported {
+                    "selected: checker identity unavailable"
+                } else {
+                    "not invoked: no supported consumer contracts selected"
+                }
+            );
+            let result = outcome.assess(
+                targets.comparable,
+                |name| {
+                    assert_eq!(name, "library");
+                    Err(Error::other("baseline failure").into())
+                },
+                |_, _| panic!("unsupported targets and failed baselines cannot be compared"),
+                &mut CheckerOutput::new(Vec::new(), io::sink()),
+                Verbose::new(false, &crp_diag::Discard),
+            );
+            assert_eq!(result.is_err(), supported);
+            assert_eq!(outcome.completed, !supported);
+            assert!(!outcome.findings);
+            let finalized = outcome.finish(result, |persisted| {
+                assert_eq!(
+                    serde_json::to_value(&persisted.packages).unwrap(),
+                    json!([{
+                        "name":"macros", "compared":false, "baseline_version":null,
+                        "required_impact":null, "not_compared_reason":"unsupported-proc-macro"
+                    }])
+                );
+                Ok(())
+            });
+            assert_eq!(finalized.is_err(), supported);
+        }
+    }
+
+    #[test]
     fn compatibility_outcome_uses_only_canonical_schema_and_impact_field() {
         let mut outcome = outcome();
         outcome.packages.push(Comparison {
@@ -1016,11 +1099,12 @@ mod tests {
             baseline_version: Some("1.2.3".to_owned()),
             required_impact: Some("breaking"),
             compared: true,
+            not_compared_reason: None,
         });
         assert_eq!(
             serde_json::to_value(outcome).unwrap(),
             json!({
-                "schema_version":2,
+                "schema_version":3,
                 "checker":"not invoked",
                 "report":"report.json",
                 "completed":false,
@@ -1117,7 +1201,7 @@ mod tests {
             serde_json::to_value(&outcome.packages).unwrap(),
             json!([{
                 "name":"new-library", "baseline_version":null,
-                "required_impact":null, "compared":false
+                "required_impact":null, "compared":false, "not_compared_reason":"no-baseline"
             }])
         );
         assert!(outcome.conclusion(Path::new("evidence"), true).0);
@@ -1282,7 +1366,8 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&outcome.packages).unwrap(),
             json!([
-                {"name":"new","baseline_version":null,"required_impact":null,"compared":false},
+                {"name":"new","baseline_version":null,"required_impact":null,"compared":false,
+                 "not_compared_reason":"no-baseline"},
                 {"name":"published","baseline_version":"1.0.0","required_impact":"breaking","compared":true}
             ])
         );

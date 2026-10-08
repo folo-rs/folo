@@ -36,7 +36,7 @@ fn preview(fixture: &Fixture, prepared: PathBuf, increments: &Value) -> PathBuf 
     let proposed = fixture.path().join("proposal.json");
     fs::write(
         &proposed,
-        serde_json::to_vec(&json!({"schema_version": 7, "increments": increments})).unwrap(),
+        serde_json::to_vec(&json!({"schema_version": 8, "increments": increments})).unwrap(),
     )
     .unwrap();
     let output = fixture.path().join("preview");
@@ -124,7 +124,7 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
         .find(|package| package.get("name").unwrap() == "core")
         .unwrap();
     assert_eq!(core.get("status").unwrap(), "needs-increment");
-    fixture.write("proposal.json", r#"{"schema_version":7,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":8,"increments":[]}"#);
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),
         prepared: prepared.clone(),
@@ -326,7 +326,7 @@ fn a_proposal_cannot_bypass_preview() {
     fixture.commit("released binary");
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":7,"increments":[{"name":"tool","bump":"patch"}]}"#,
+        r#"{"schema_version":8,"increments":[{"name":"tool","bump":"patch"}]}"#,
     );
     let lock = fixture.read("Cargo.lock");
     run(&RunInput::Apply {
@@ -352,7 +352,7 @@ fn source_changes_after_preparation_invalidate_preview() {
     fixture.write("packages/library/src/lib.rs", "pub fn new_evidence() {}\n");
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":7,"increments":[{"name":"library","bump":"patch"}]}"#,
+        r#"{"schema_version":8,"increments":[{"name":"library","bump":"patch"}]}"#,
     );
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),

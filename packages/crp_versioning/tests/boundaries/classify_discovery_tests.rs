@@ -276,6 +276,7 @@ fn work_tree_selection_and_untracked_advice_share_packaging_boundaries() {
         resources,
         dependencies: vec![],
         consumer_contract: true,
+        proc_macro: false,
         has_lockfile_target: false,
     };
     let git = fixture.repo();

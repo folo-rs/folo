@@ -127,6 +127,10 @@ pub struct WorkPackage {
     /// decision.
     /// Ref: packages/cargo-release-plan/docs/design.md, "Consumer contracts".
     pub consumer_contract: bool,
+    /// Cargo identifies the library as a procedural macro, independently of its consumer policy.
+    ///
+    /// Ref: packages/cargo-release-plan/docs/design.md, "Consumer contracts".
+    pub proc_macro: bool,
     /// Whether an installable binary makes the package's locked closure relevant.
     ///
     /// Ref: packages/cargo-release-plan/docs/design.md, "Relevant lockfile closures".
@@ -750,6 +754,7 @@ fn work_tree_from_metadata_parsed_with(
             public_origins: Vec::new(),
             has_lockfile_target: tracked.has_lockfile_target_with(&manifest, &mut regular)?,
             consumer_contract: is_consumer_contract(package),
+            proc_macro: is_proc_macro(package),
             manifest,
             manifest_path: path,
             dependencies,
@@ -1223,6 +1228,14 @@ fn is_consumer_contract(package: &MetadataPackage) -> bool {
     !declared
         .as_bool()
         .expect("reserved metadata is validated before projecting workspace packages")
+}
+
+/// Retains Cargo's target distinction for comparison tools without changing API policy.
+fn is_proc_macro(package: &MetadataPackage) -> bool {
+    package
+        .targets
+        .iter()
+        .any(|target| target.kind.iter().any(|kind| kind == "proc-macro"))
 }
 
 /// The identifier a Rust path uses for a package's library, if it has one.
@@ -2019,6 +2032,7 @@ mod tests {
                 dependencies,
                 has_lockfile_target: false,
                 consumer_contract: true,
+                proc_macro: false,
                 resources: BTreeMap::new(),
             }
         }
@@ -2185,6 +2199,20 @@ mod tests {
             serde_json::json!({ "release-plan": { "private-api": value } })
         }
 
+        for kind in ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"] {
+            for metadata in [Value::Null, declaring(false), declaring(true)] {
+                let public = metadata != declaring(true);
+                let package = metadata_package(&[kind, "bin"], metadata);
+                assert_eq!(is_consumer_contract(&package), public);
+                assert_eq!(is_proc_macro(&package), kind == "proc-macro");
+            }
+        }
+        for kinds in [vec![], vec!["bin"], vec!["example", "test", "bench"]] {
+            let package = metadata_package(&kinds, Value::Null);
+            assert!(!is_consumer_contract(&package));
+            assert!(!is_proc_macro(&package));
+        }
+
         // A library is a contract unless the package declares itself private.
         assert!(is_consumer_contract(&metadata_package(
             &["lib"],
@@ -2327,6 +2355,7 @@ mod tests {
                 dependencies,
                 has_lockfile_target: false,
                 consumer_contract: true,
+                proc_macro: false,
                 resources: BTreeMap::new(),
             }
         }

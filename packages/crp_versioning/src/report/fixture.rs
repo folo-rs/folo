@@ -27,7 +27,8 @@ pub(crate) fn package(name: &str, status: &str, consumer_contract: bool) -> Valu
         "dependencies": [],
         "public_origins": [],
         "dependents": [],
-        "consumer_contract": consumer_contract
+        "consumer_contract": consumer_contract,
+        "proc_macro": false
     })
 }
 

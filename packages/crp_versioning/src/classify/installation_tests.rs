@@ -204,6 +204,7 @@ fn binary_endpoints_independently_contribute_locked_closures() {
                 manifest_path: "tool/Cargo.toml".into(),
                 dependencies: vec![],
                 consumer_contract: false,
+                proc_macro: false,
                 has_lockfile_target: work_binary,
                 resources: BTreeMap::new(),
             };

@@ -214,7 +214,7 @@ fn apply_rejects_a_proposal_without_preview_even_for_dry_run() {
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 7, "increments": [{ "name": "demo", "bump": "patch" }] }"#,
+        r#"{ "schema_version": 8, "increments": [{ "name": "demo", "bump": "patch" }] }"#,
     )
     .unwrap();
     let output = release_plan(
@@ -238,7 +238,7 @@ fn resolved_workflow_dispatches_every_command_to_stdout() {
     let proposal = fixture.path().join("proposal.json");
     fs::write(
         &proposal,
-        r#"{"schema_version":7,"increments":[{"name":"demo","bump":"patch"}]}"#,
+        r#"{"schema_version":8,"increments":[{"name":"demo","bump":"patch"}]}"#,
     )
     .unwrap();
 

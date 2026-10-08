@@ -67,6 +67,10 @@ or workspace relocation requires fresh acquisition. Unresolved metadata uses
 classification into dependency resolution. Content-keyed syntax can outlive repository
 rebinding because it has no repository interpretation.
 
+Cargo target metadata retains procedural-macro identity separately from the package's
+consumer-contract declaration. Versioning projects both observations into reports;
+comparison capability does not alter general library recognition or public-origin discovery.
+
 Source-location discovery accepts the same acquisition's documents and reads newly
 reached manifests. Native-read and supplied-document entry points share recursive
 discovery and root-alias admission. Versioning adds relocatability constraints and

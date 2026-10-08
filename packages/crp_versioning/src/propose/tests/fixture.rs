@@ -34,6 +34,7 @@ pub(crate) fn package(name: &str, version: &str, anchor: Option<&str>) -> Report
         public_origins: Vec::new(),
         dependents: Vec::new(),
         consumer_contract: true,
+        proc_macro: false,
         untracked: Vec::new(),
         diff_path: None,
     }

@@ -41,7 +41,7 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 if ("{{MODE}}" -notin @("configured", "standalone")) { throw "Select an explicit planning mode." }
 $Identity = & "{{TOOL}}" version | ConvertFrom-Json
-$Expected = @{ plan = 7; report = 7; prepared = 7; decisions = 2; compatibility = 2 }
+$Expected = @{ plan = 8; report = 8; prepared = 8; decisions = 2; compatibility = 3 }
 if ("{{MODE}}" -eq "configured") { $Expected.release_context = 2 }
 foreach ($Name in $Expected.Keys) {
     if ($Identity.schemas.$Name -ne $Expected[$Name]) {
@@ -142,6 +142,9 @@ Read `report.json`, its `diffs` patches, `prepared.json`, and the compatibility
 evidence in `WORK_DIR`. A consistent lockfile may be installed during preparation;
 the report describes that same source. Compatibility checks require completed
 evidence before semantic assessment.
+Completed evidence can contain explicit exclusions: `not_compared_reason` distinguishes
+`unsupported-proc-macro` from `no-baseline`. Neither implies compatibility. Keep these
+packages in the dependency-first assessment; do not substitute the checker target list.
 
 ## Stage 3: Assess in dependency order
 
@@ -172,6 +175,9 @@ Write the assessed decisions to `WORK_DIR\decisions.json`, for example:
 
 Names and impacts are scenario values, not defaults. Use the decision guide and
 report evidence; keep the explanation alongside this agent-authored document.
+For re-exported APIs, record the affected public package and consumer-visible change
+even when its own source is unchanged. A passing facade check is not coverage of
+the dependency's definitions or generated code.
 
 ## Stage 5: Review resolved effects
 

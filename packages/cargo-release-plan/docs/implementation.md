@@ -153,8 +153,9 @@ handoff. Outcomes are not part of that identity and belong to separate artifacts
 Artifact-only planning shares the report producer's serde model. Report loading
 validates the schema and cross-package identities before consumers build dependency
 graphs or version targets. Analysis ordering follows recorded dependencies rather
-than exact-version grouping. Compatibility selection follows group closure but
-emits only packages declaring a consumer contract.
+than exact-version grouping. Compatibility selection follows group closure and separates supported consumer contracts
+from unsupported procedural-macro members. The report retains Cargo's target distinction
+independently of consumer policy so artifact-only selection matches execution.
 Dependency and dependent references must name a reported workspace target; an
 incomplete report cannot silently remove a relationship from release assessment.
 Classification and report validation share the status derivation from anchor,
@@ -202,8 +203,10 @@ to run. A short workspace-identity-keyed target directory avoids generated Windo
 length problems while retaining compatible compiler artifacts across assessment
 passes, without affecting other Cargo commands. Checker findings and
 execution errors remain distinct; a completed comparison supplies a semantic
-floor, not the author's compatibility judgment. Empty target sets do not invoke
-external tooling or query registry versions.
+floor, not the author's compatibility judgment. Empty supported-target sets do not invoke
+external tooling or query registry versions. Unsupported macro records are seeded
+before checker acquisition and survive failures in supported comparisons. Only supported
+targets drive parent-worktree creation, checker preflight and baseline queries.
 
 Checker lookup separates PATH order, file eligibility and observation-error decisions
 from native metadata and canonicalization. Credential-removal decisions consume observed
