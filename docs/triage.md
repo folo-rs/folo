@@ -18,12 +18,9 @@ Additional scenarios in the same binary can change inlining of shared code even
 when the measured case and library source are unchanged; compare generated call
 graphs before treating an instruction-count change as a library regression.
 
-[Issue #726](https://github.com/folo-rs/folo/issues/726) tracks the allocator-warmup
-work and follow-up dispositions. Its Group C runner variation is intentionally
-left to accumulate more history without a filtering change. Work on the groups
-outside A, B and D is deferred to that issue. The idle bulk-push findings in
-Group D require allocator and memory-locality evidence, not an assumption that
-untimed allocation cannot affect a later read-only traversal.
+For allocation-sensitive workloads, compare allocator selection and memory
+locality as well as instruction counts. Untimed allocation can affect a later
+read-only traversal through the placement of its data.
 
 ## Codecov verification-key import failures
 
