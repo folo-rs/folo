@@ -206,10 +206,12 @@ mod linux {
     // measured region can hand it back, keeping storage teardown untimed.
 
     fn local_boxed_bound() -> LocalBoxedEndpoints {
+        _ = warm_local_boxed();
         LocalEvent::<i32>::boxed()
     }
 
     fn sync_boxed_bound() -> SyncBoxedEndpoints {
+        _ = warm_sync_boxed();
         Event::<i32>::boxed()
     }
 
@@ -381,37 +383,37 @@ mod linux {
     // has already left behind.
 
     fn local_boxed_sender_only() -> BoxedLocalSender<i32> {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = local_boxed_bound();
         drop(receiver);
         sender
     }
 
     fn sync_boxed_sender_only() -> BoxedSender<i32> {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = sync_boxed_bound();
         drop(receiver);
         sender
     }
 
     fn local_boxed_set() -> BoxedLocalReceiver<i32> {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = local_boxed_bound();
         sender.send(PAYLOAD);
         receiver
     }
 
     fn sync_boxed_set() -> BoxedReceiver<i32> {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = sync_boxed_bound();
         sender.send(PAYLOAD);
         receiver
     }
 
     fn local_boxed_disconnected() -> BoxedLocalReceiver<i32> {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = local_boxed_bound();
         drop(sender);
         receiver
     }
 
     fn sync_boxed_disconnected() -> BoxedReceiver<i32> {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = sync_boxed_bound();
         drop(sender);
         receiver
     }
@@ -468,12 +470,19 @@ mod linux {
     // object the caller already owns and letting the event own its own allocation.
 
     #[library_benchmark]
-    #[bench::fresh(noop_context())]
+    #[bench::fresh(warm_local_boxed())]
     fn lifecycle_local_boxed(cx: NoopContext) {
-        // Rebound rather than taken as a `mut` parameter: a `mut` binding in the
-        // signature is a pattern, which the benchmark macro is not obliged to preserve.
-        let mut cx = cx;
+        run_local_boxed(cx);
+    }
 
+    /// Primes the exact event allocation and release before measuring a fresh event.
+    fn warm_local_boxed() -> NoopContext {
+        run_local_boxed(noop_context());
+        noop_context()
+    }
+
+    /// Shared operation keeps allocator warmup identical to the measured lifecycle.
+    fn run_local_boxed(mut cx: NoopContext) {
         let (sender, receiver) = black_box(LocalEvent::<i32>::boxed());
         let mut receiver = pin!(receiver);
 
@@ -483,12 +492,19 @@ mod linux {
     }
 
     #[library_benchmark]
-    #[bench::fresh(noop_context())]
+    #[bench::fresh(warm_sync_boxed())]
     fn lifecycle_sync_boxed(cx: NoopContext) {
-        // Rebound rather than taken as a `mut` parameter: a `mut` binding in the
-        // signature is a pattern, which the benchmark macro is not obliged to preserve.
-        let mut cx = cx;
+        run_sync_boxed(cx);
+    }
 
+    /// Primes the thread-safe event's own allocation layout and release path.
+    fn warm_sync_boxed() -> NoopContext {
+        run_sync_boxed(noop_context());
+        noop_context()
+    }
+
+    /// Shared operation keeps allocator warmup identical to the measured lifecycle.
+    fn run_sync_boxed(mut cx: NoopContext) {
         let (sender, receiver) = black_box(Event::<i32>::boxed());
         let mut receiver = pin!(receiver);
 

@@ -50,6 +50,9 @@ mod linux {
 
     fn setup(batches: usize) -> (CandidateFixture, Vec<String>) {
         let fixture = CandidateFixture::new(batches);
+        // Candidate output allocation differs from fixture construction; exercise this exact
+        // batch size before preparing the keys consumed by the measured selection.
+        drop(black_box(fixture.select(black_box(fixture.keys()))));
         let keys = fixture.keys();
         (fixture, keys)
     }

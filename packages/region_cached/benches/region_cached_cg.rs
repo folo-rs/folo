@@ -8,7 +8,7 @@
 //! each can be tracked at instruction-level granularity:
 //!
 //! * `read_get_cached_first_touch` — first read; initializes the per-thread
-//!   cache snapshot and the region-aware infrastructure.
+//!   cache snapshot with allocator and shared infrastructure already warm.
 //! * `read_get_cached_warm` — subsequent read; hits the cache.
 //! * `read_with_cached_warm` — closure-form read on a warm cache.
 //! * `read_std_thread_local_get_warm` — `thread_local!` `Cell` baseline.
@@ -30,6 +30,7 @@
     expect(
         clippy::exit,
         clippy::missing_docs_in_private_items,
+        unit_bindings,
         unused_qualifications,
         reason = "These lints originate in Gungraun macro expansion and cannot be addressed in \
           this benchmark."
@@ -64,10 +65,11 @@ mod linux {
     use gungraun::prelude::*;
     use region_cached::{RegionCachedCopyExt as _, RegionCachedExt as _, region_cached};
 
-    // One static per scenario keeps each bench's first-touch behavior
-    // isolated, even if gungraun ever changes its per-subprocess execution
-    // model. Today each subprocess is fresh, but the per-scenario static
-    // makes that assumption explicit.
+    // Separate warmup statics exercise the same typed allocation path without touching
+    // the measured static. First-touch cases still initialize their own cache snapshot.
+    region_cached!(static WARMUP_FIRST_TOUCH_VALUE: u32 = 99942);
+    region_cached!(static WARMUP_SET_FIRST_TOUCH_VALUE: u32 = 99942);
+
     region_cached!(static FIRST_TOUCH_VALUE: u32 = 99942);
 
     region_cached!(static WARM_VALUE: u32 = 99942);
@@ -102,10 +104,20 @@ mod linux {
         _ = STD_VALUE.with(Cell::get);
     }
 
+    /// Primes a real first read on equivalent storage before the measured static is accessed.
+    fn warm_first_read_allocator() {
+        _ = black_box(WARMUP_FIRST_TOUCH_VALUE.get_cached());
+    }
+
+    /// A first write exercises its own allocation path rather than relying on read warmup.
+    fn warm_first_write_allocator() {
+        WARMUP_SET_FIRST_TOUCH_VALUE.set_global(black_box(566));
+    }
+
     // ---------- Read paths ----------
 
-    #[library_benchmark]
-    fn read_get_cached_first_touch() -> u32 {
+    #[library_benchmark(setup = warm_first_read_allocator)]
+    fn read_get_cached_first_touch(_: ()) -> u32 {
         FIRST_TOUCH_VALUE.get_cached()
     }
 
@@ -123,8 +135,8 @@ mod linux {
 
     // ---------- Write path ----------
 
-    #[library_benchmark]
-    fn write_set_global_first_touch() {
+    #[library_benchmark(setup = warm_first_write_allocator)]
+    fn write_set_global_first_touch(_: ()) {
         SET_FIRST_TOUCH_VALUE.set_global(black_box(566));
     }
 

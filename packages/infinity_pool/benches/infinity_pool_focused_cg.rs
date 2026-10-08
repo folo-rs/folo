@@ -78,6 +78,7 @@
     expect(
         clippy::exit,
         clippy::missing_docs_in_private_items,
+        unit_bindings,
         unused_qualifications,
         reason = "These lints originate in Gungraun macro expansion and cannot be addressed in \
           this benchmark."
@@ -149,6 +150,9 @@ mod linux {
     }
 
     fn make_empty_pinned_pool() -> PinnedPool<u64> {
+        // A separate pool primes the real slab allocation without giving the measured pool
+        // reusable capacity. Its first insertion still allocates and initializes a slab.
+        drop(insert_into_empty(PinnedPool::new()));
         PinnedPool::new()
     }
 
@@ -417,6 +421,11 @@ mod linux {
     fn focused_pinned_pool_insert_into_empty(
         pool: PinnedPool<u64>,
     ) -> (PinnedPool<u64>, PooledMut<u64>) {
+        insert_into_empty(pool)
+    }
+
+    /// Shares first-slab insertion with the allocator warmup.
+    fn insert_into_empty(pool: PinnedPool<u64>) -> (PinnedPool<u64>, PooledMut<u64>) {
         let handle = black_box(&pool).insert(black_box(42_u64));
         (pool, handle)
     }
@@ -628,13 +637,33 @@ mod linux {
 
     // ---------- Baselines ----------
 
-    #[library_benchmark]
-    fn focused_arc_pin_baseline_insert() -> Pin<Arc<u64>> {
+    #[library_benchmark(setup = warm_arc_pin)]
+    fn focused_arc_pin_baseline_insert(_: ()) -> Pin<Arc<u64>> {
+        insert_arc_pin()
+    }
+
+    /// The Arc header gives this allocation a different layout from the Box baseline.
+    fn warm_arc_pin() {
+        drop(black_box(insert_arc_pin()));
+    }
+
+    /// Shared allocation workload for the Arc baseline and its warmup.
+    fn insert_arc_pin() -> Pin<Arc<u64>> {
         Arc::pin(black_box(42_u64))
     }
 
-    #[library_benchmark]
-    fn focused_box_pin_baseline_insert() -> Pin<Box<u64>> {
+    #[library_benchmark(setup = warm_box_pin)]
+    fn focused_box_pin_baseline_insert(_: ()) -> Pin<Box<u64>> {
+        insert_box_pin()
+    }
+
+    /// Warms the exact Box allocation rather than relying on the pool's larger slabs.
+    fn warm_box_pin() {
+        drop(black_box(insert_box_pin()));
+    }
+
+    /// Shared allocation workload for the Box baseline and its warmup.
+    fn insert_box_pin() -> Pin<Box<u64>> {
         Box::pin(black_box(42_u64))
     }
 

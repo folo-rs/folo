@@ -8,7 +8,7 @@
 //! writes so each can be tracked at instruction-level granularity:
 //!
 //! * `read_get_local_first_touch` — first read; initializes the per-thread
-//!   snapshot and the region-aware infrastructure.
+//!   snapshot with allocator and shared infrastructure already warm.
 //! * `read_get_local_warm` — subsequent read; hits the cached snapshot.
 //! * `read_with_local_warm` — closure-form read on a warm snapshot.
 //! * `read_std_thread_local_get_warm` — `thread_local!` `Cell` baseline.
@@ -30,6 +30,7 @@
     expect(
         clippy::exit,
         clippy::missing_docs_in_private_items,
+        unit_bindings,
         unused_qualifications,
         reason = "These lints originate in Gungraun macro expansion and cannot be addressed in \
           this benchmark."
@@ -64,8 +65,10 @@ mod linux {
     use gungraun::prelude::*;
     use region_local::{RegionLocalCopyExt as _, RegionLocalExt as _, region_local};
 
-    // One static per scenario keeps each bench's first-touch behavior
-    // isolated even if gungraun's per-subprocess execution model changes.
+    // Warmup uses equivalent typed statics so the measured static remains untouched.
+    region_local!(static WARMUP_FIRST_TOUCH_VALUE: u32 = 99942);
+    region_local!(static WARMUP_SET_FIRST_TOUCH_VALUE: u32 = 99942);
+
     region_local!(static FIRST_TOUCH_VALUE: u32 = 99942);
 
     region_local!(static WARM_VALUE: u32 = 99942);
@@ -98,10 +101,20 @@ mod linux {
         _ = STD_VALUE.with(Cell::get);
     }
 
+    /// Primes the actual first-read allocation path on a separate static.
+    fn warm_first_read_allocator() {
+        _ = black_box(WARMUP_FIRST_TOUCH_VALUE.get_local());
+    }
+
+    /// Primes the first-write path independently because its allocations can differ.
+    fn warm_first_write_allocator() {
+        WARMUP_SET_FIRST_TOUCH_VALUE.set_local(black_box(566));
+    }
+
     // ---------- Read paths ----------
 
-    #[library_benchmark]
-    fn read_get_local_first_touch() -> u32 {
+    #[library_benchmark(setup = warm_first_read_allocator)]
+    fn read_get_local_first_touch(_: ()) -> u32 {
         FIRST_TOUCH_VALUE.get_local()
     }
 
@@ -119,8 +132,8 @@ mod linux {
 
     // ---------- Write path ----------
 
-    #[library_benchmark]
-    fn write_set_local_first_touch() {
+    #[library_benchmark(setup = warm_first_write_allocator)]
+    fn write_set_local_first_touch(_: ()) {
         SET_FIRST_TOUCH_VALUE.set_local(black_box(566));
     }
 

@@ -145,6 +145,22 @@ mod linux {
         per_bucket_count: u64,
         plus_infinity_bucket_count: u64,
     ) -> ExportInputs {
+        // Instrument creation alone does not exercise the recurring positive/zero-delta
+        // branches. Run this exact case, then rebuild its original delta state.
+        drop(run_export(export_inputs(
+            bucket_bounds,
+            per_bucket_count,
+            plus_infinity_bucket_count,
+        )));
+        export_inputs(bucket_bounds, per_bucket_count, plus_infinity_bucket_count)
+    }
+
+    /// Recreates the named delta without reusing state mutated by allocator warmup.
+    fn export_inputs(
+        bucket_bounds: &'static [Magnitude],
+        per_bucket_count: u64,
+        plus_infinity_bucket_count: u64,
+    ) -> ExportInputs {
         let publisher = warm_publisher(bucket_bounds);
         let report = make_report(bucket_bounds, per_bucket_count, plus_infinity_bucket_count);
         (publisher, report)

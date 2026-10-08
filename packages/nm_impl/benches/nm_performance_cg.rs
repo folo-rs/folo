@@ -564,7 +564,7 @@ mod linux {
         // once they have been published.
         pusher.push();
 
-        CollectionState {
+        let state = CollectionState {
             _pull_counter: pull_counter,
             _pull_plain: pull_plain,
             _pull_small_histogram: pull_small_histogram,
@@ -573,7 +573,11 @@ mod linux {
             _push_plain: push_plain,
             _push_small_histogram: push_small_histogram,
             _push_large_histogram: push_large_histogram,
-        }
+        };
+        // The live registry is unchanged by collection. Discarding one real report primes
+        // every output allocation size while keeping registry construction out of measurement.
+        drop(black_box(Report::collect()));
+        state
     }
 
     /// Magnitude observed where the benchmark needs an explicit magnitude but its value does not
