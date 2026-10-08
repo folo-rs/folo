@@ -55,7 +55,7 @@ pub enum ReportFormat {
     Text,
     /// A machine-readable JSON document.
     Json,
-    /// A Markdown summary mirroring the text report, with charts as fenced blocks.
+    /// A full Markdown report with coverage details and charts as fenced blocks.
     Markdown,
 }
 
@@ -1185,6 +1185,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         }
         if !render_empty_branch_sets {
             push_warning(&mut lines, input.warning);
+            push_markdown_coverage(&mut lines, &coverage);
             return finish(&lines);
         }
     }
@@ -1253,7 +1254,35 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         }
     }
     push_warning(&mut lines, input.warning);
+    push_markdown_coverage(&mut lines, &coverage);
     finish(&lines)
+}
+
+/// Keeps the complete census available after findings without expanding condensed summaries.
+fn push_markdown_coverage(lines: &mut Vec<String>, coverage: &Coverage) {
+    lines.extend([
+        String::new(),
+        "## Coverage".to_owned(),
+        String::new(),
+        format!("- State: `{}`", coverage.state().as_str()),
+        format!("- Metric series accounted for: {}", coverage.total()),
+        format!("- In scope: {}", coverage.in_scope()),
+        format!("- Judged: {}", coverage.judged()),
+        format!(
+            "- Unjudged (including out-of-scope series): {}",
+            coverage.unjudged()
+        ),
+    ]);
+    if coverage.unjudged() > 0 {
+        lines.extend([
+            String::new(),
+            "| Unjudged reason | Metric series |".to_owned(),
+            "| --- | --- |".to_owned(),
+        ]);
+        for (reason, count) in coverage.reasons() {
+            lines.push(format!("| {} | {count} |", reason.describe()));
+        }
+    }
 }
 
 /// Renders a condensed Markdown report carrying only the `limit` most significant
@@ -2010,6 +2039,102 @@ mod tests {
     }
 
     #[test]
+    fn markdown_ends_with_complete_coverage_even_when_findings_exist() {
+        let set = discriminant_set();
+        let findings = [regression()];
+        let mut summaries = Vec::new();
+        let input = ReportInput {
+            census: census_of(
+                4,
+                &[
+                    (UnjudgedReason::Ghost, 2),
+                    (UnjudgedReason::TooFewPoints, 3),
+                ],
+            ),
+            warning: Some("Dirty measurements were admitted."),
+            ..single_set_input("folo", &set, &findings, &mut summaries)
+        };
+
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        let (body, coverage) = markdown.split_once("\n## Coverage\n").unwrap();
+        assert!(body.contains("### `nm/nm::observe/pull`"));
+        assert!(body.contains("Dirty measurements were admitted."));
+        assert!(!markdown.contains("no reportable move survived the gates"));
+        assert_eq!(
+            coverage,
+            "\n- State: `partial`\n\
+             - Metric series accounted for: 9\n\
+             - In scope: 7\n\
+             - Judged: 4\n\
+             - Unjudged (including out-of-scope series): 5\n\n\
+             | Unjudged reason | Metric series |\n\
+             | --- | --- |\n\
+             | not measured at the analyzed context commit | 2 |\n\
+             | with too few points in the analyzed window | 3 |\n"
+        );
+
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(!summary.contains("## Coverage"));
+        assert!(summary.contains("- In-scope series judged: 4 of 7"));
+    }
+
+    #[test]
+    fn markdown_coverage_matches_json_for_silent_history() {
+        assert_markdown_coverage_matches_json(AnalysisMode::History);
+    }
+
+    #[test]
+    fn markdown_coverage_matches_json_for_silent_branch() {
+        assert_markdown_coverage_matches_json(AnalysisMode::Branch);
+    }
+
+    /// Exercises each state and reason without repeatedly rendering one state per reason.
+    fn assert_markdown_coverage_matches_json(mode: AnalysisMode) {
+        for census in [
+            SeriesCensus::default(),
+            census_of(0, &[(UnjudgedReason::Ghost, 1)]),
+            census_of(0, &[(UnjudgedReason::TooFewPoints, 1)]),
+            census_of(1, &UnjudgedReason::ALL.map(|reason| (reason, 1))),
+            census_of(1, &[]),
+            census_of(1, &[(UnjudgedReason::Ghost, 1)]),
+        ] {
+            let set = discriminant_set();
+            let mut summaries = Vec::new();
+            let input = ReportInput {
+                mode,
+                census,
+                ..single_set_input("folo", &set, &[], &mut summaries)
+            };
+            let markdown = render(&input, ReportFormat::Markdown, false);
+            let (_, coverage) = markdown.split_once("\n## Coverage\n").unwrap();
+            let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+            let census = &json["census"];
+
+            assert!(coverage.contains(&format!(
+                "- State: `{}`",
+                census["coverage"].as_str().unwrap()
+            )));
+            for (label, key) in [
+                ("Metric series accounted for", "total"),
+                ("In scope", "in_scope"),
+                ("Judged", "judged"),
+                ("Unjudged (including out-of-scope series)", "unjudged"),
+            ] {
+                assert!(coverage.contains(&format!("- {label}: {}\n", census[key])));
+            }
+            let reasons = input.census.reasons().collect::<Vec<_>>();
+            assert_eq!(
+                coverage.contains("| Unjudged reason |"),
+                !reasons.is_empty()
+            );
+            for (reason, count) in reasons {
+                assert!(coverage.contains(&format!("| {} | {count} |\n", reason.describe())));
+            }
+            assert_eq!(markdown.matches("## Coverage").count(), 1);
+        }
+    }
+
+    #[test]
     fn silence_names_the_series_it_did_not_judge() {
         // Silence over a partly-judged suite must disclose the gap and its causes on
         // every human surface, or a repository can go blind without the report saying so.
@@ -2084,14 +2209,13 @@ mod tests {
     }
 
     #[test]
-    fn ignored_series_are_disclosed_once_in_silent_reports_without_an_all_clear() {
+    fn silent_compact_reports_disclose_ignored_series_once_without_an_all_clear() {
         let input = ReportInput {
             census: census_of(0, &[(UnjudgedReason::Ignored, 2)]),
             ..flat_input(&[])
         };
         for report in [
             render(&input, ReportFormat::Text, false),
-            render(&input, ReportFormat::Markdown, false),
             render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
         ] {
             assert_eq!(report.matches("ignored by configuration").count(), 1);
@@ -2099,6 +2223,10 @@ mod tests {
             assert!(!report.contains("No notable changes"));
             assert!(!report.contains("None of the 2 series"));
         }
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(markdown.contains("Not judged: 2 series ignored by configuration."));
+        assert!(markdown.contains("| ignored by configuration | 2 |"));
+        assert!(!markdown.contains("No notable changes"));
         let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
         assert_eq!(json["outcome"], "nothing_in_scope");
     }
@@ -3225,7 +3353,7 @@ mod tests {
     }
 
     #[test]
-    fn warning_renders_at_the_end_of_every_format() {
+    fn warning_renders_after_findings_in_every_format() {
         let set = discriminant_set();
         let findings = vec![regression()];
         let mut summaries = Vec::new();
@@ -3236,7 +3364,8 @@ mod tests {
         assert!(text.trim_end().ends_with("(ephemeral)."), "{text}");
 
         let markdown = render(&input, ReportFormat::Markdown, false);
-        assert!(markdown.trim_end().ends_with("(ephemeral)."), "{markdown}");
+        let (body, _) = markdown.split_once("\n## Coverage\n").unwrap();
+        assert!(body.trim_end().ends_with("(ephemeral)."));
 
         let json = render(&input, ReportFormat::Json, false);
         let parsed: Value = from_str(&json).unwrap();
@@ -3269,7 +3398,8 @@ mod tests {
         assert!(text.trim_end().ends_with("included."), "{text}");
 
         let markdown = render(&input, ReportFormat::Markdown, false);
-        assert!(markdown.trim_end().ends_with("included."), "{markdown}");
+        let (body, _) = markdown.split_once("\n## Coverage\n").unwrap();
+        assert!(body.trim_end().ends_with("included."));
     }
 
     #[test]

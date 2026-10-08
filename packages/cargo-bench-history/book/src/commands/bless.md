@@ -14,6 +14,20 @@ cargo bench-history bless --local=./bench-history <benchmark-prefix>...
 cargo bench-history unbless --local=./bench-history <benchmark-prefix>...
 ```
 
+## Effect on analysis
+
+A blessing sets a new baseline for the selected benchmarks. It does **not** remove just one
+data point: **all observations before the blessed commit are excluded from detection**.
+The blessed commit itself remains eligible and starts the new baseline.
+
+{{#include ../appendix/generated/reconstruction-blessing.svg}}
+
+The shaded prefix is the history no longer judged, not a hole at the blessing marker.
+The stored observations remain intact and visible in charts and [`examine`](examine.md);
+changes within the new baseline can still be reported. The
+[Reconstruction chapter](../appendix/reconstruction.md#blessings) explains how this boundary
+applies to history and branch analysis.
+
 ## Rules
 
 - `bless` takes one or more benchmark-id prefixes matched against the qualified identity, so

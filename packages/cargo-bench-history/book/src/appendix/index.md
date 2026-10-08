@@ -1,6 +1,6 @@
 # Data pipeline
 
-This appendix follows a single number all the way through the tool: from the moment a
+The data pipeline follows a single number all the way through the tool: from the moment a
 benchmark engine writes it to a file, to the sentence in a report that says it moved.
 
 The rest of this guide teaches the mental model. This part is the mechanism, in full, with
@@ -16,7 +16,7 @@ the numbers. It exists for two readers:
 ## The stages
 
 <!-- The stage names used here are the ones every chapter title repeats, so a reader who
-     remembers this diagram can navigate the rest of the appendix without the sidebar. -->
+     remembers this diagram can navigate the pipeline chapters without the sidebar. -->
 
 ```mermaid
 flowchart TD
@@ -59,7 +59,7 @@ gate weighs it. Multiplicity control later answers the report-wide question: his
 false-discovery correction across series, while branch mode compares the complete report with
 historical base turns.
 
-## How to read this appendix
+## How to read the pipeline chapters
 
 The chapters are ordered along the pipeline, and each one assumes only the ones before it.
 Reading them in order builds the whole picture; stopping anywhere leaves you with a correct
@@ -70,7 +70,7 @@ Two conventions run throughout.
 **Terms are defined before they are used.** Every chapter that introduces a term opens with a
 short table defining it in plain language, and the [Glossary](glossary.md) collects them all
 with the textbook name alongside, for when you want to read further. Where a plain description
-works as well as the technical name, this appendix uses the description.
+works as well as the technical name, these chapters use the description.
 
 **Generated evidence is computed, not invented.** Every behavior-bearing table, figure,
 computed example, configured value, and serialized excerpt is produced by
@@ -91,4 +91,4 @@ This is also why the examples are small: they are meant to be checkable by hand,
 | The mental model, briefly | [Analysis](../concepts/analysis.md) |
 | Why two results are or are not compared | [Comparability](../concepts/comparability.md) |
 | To make your benchmarks less noisy | [Measurement stability](../concepts/stability.md) |
-| The full mechanism, with numbers | this appendix |
+| The full mechanism, with numbers | these pipeline chapters |

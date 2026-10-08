@@ -1,8 +1,8 @@
 # Glossary
 
-Every term this appendix defines, in one place.
+Every term the pipeline chapters define, in one place.
 
-The appendix is written for engineers rather than statisticians. Where a plain description
+The chapters are written for engineers rather than statisticians. Where a plain description
 works as well as the textbook name, the description is what the prose uses — but the
 textbook name is recorded here too, because it is what you need if you want to read further
 about a method.

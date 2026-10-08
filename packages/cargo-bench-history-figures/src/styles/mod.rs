@@ -1,6 +1,6 @@
 //! The figure catalogue: one module per reusable figure style.
 //!
-//! A style is a *primitive*, not a drawing. When the data behind the appendix changes,
+//! A style is a *primitive*, not a drawing. When the data behind the book changes,
 //! every figure is re-rendered by re-running the generator, and each comes back in the
 //! same visual language it had before — which is only true because no figure is drawn
 //! ad hoc.

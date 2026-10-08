@@ -127,10 +127,11 @@ Text goes to stdout by default. File toggles compose, so a single pass can emit 
 Markdown, and JSON at once; requesting no output at all is an error. A derived, condensed
 Markdown **summary** is also available for a size-limited downstream consumer.
 
-Every report also states how many series it **judged**, and names the reason for each one it
-did not, so that "no notable changes" can be read for what it covers rather than taken as a
-blanket all-clear. See
-[Reading a silent report](../concepts/analysis.md#reading-a-silent-report).
+Full Markdown ends with a **Coverage** section listing judged-series counts and unjudged
+reasons; JSON carries the same account under `census`. Text and condensed summaries include
+the judged ratio, but list reasons only when there are no findings. See
+[Reading a silent report](../appendix/insights.md#reading-a-silent-report) for matching
+examples and how to interpret the limits of a verdict.
 
 In branch mode each finding states the observed current-base range and the excess beyond its
 nearest edge. Each discriminant-set section also states how many comparable base commits showed at

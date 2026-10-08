@@ -37,6 +37,7 @@ pub fn assets() -> Vec<Asset> {
         Asset::new("reporting-formats.md", formats()),
         Asset::new("reporting-text.md", text()),
         Asset::new("reporting-json.md", json()),
+        Asset::new("reporting-silent.md", silent()),
         Asset::new("reporting-census.md", census()),
         Asset::new("reporting-lag.svg", lag_figure()),
         Asset::new("reporting-lag.md", lag()),
@@ -316,7 +317,13 @@ fn lagging_analysis(lag: ComparisonBaseLag) -> Analysis {
 
 /// `content` wrapped in a fenced block tagged `language`.
 fn fenced(language: &str, content: &str) -> String {
-    format!("```{language}\n{}\n```\n", content.trim_end())
+    // Markdown reports contain fenced charts; the enclosing example must not end at a chart.
+    let fence = if language == "markdown" {
+        "````"
+    } else {
+        "```"
+    };
+    format!("{fence}{language}\n{}\n{fence}\n", content.trim_end())
 }
 
 /// The lines of the report block describing the finding identified by `id`.
@@ -394,7 +401,7 @@ fn formats() -> String {
     );
     markdown.push_str(
         "| Markdown | `--markdown <path>` | Pasting into a pull request or an issue | \
-         every finding; omits the per-reason census when findings exist |\n",
+         every finding and a final Coverage section with the complete per-reason census |\n",
     );
     markdown.push_str(
         "| JSON | `--json <path>` | Automation | the complete census always, and every \
@@ -423,10 +430,10 @@ fn formats() -> String {
     markdown.push_str(
         "\nJSON is the complete machine-readable result: it always carries every finding and \
          the full per-reason census, including the ghost count. It is not an observation \
-         archive — the per-commit series behind the charts is obtained with `examine`. Text \
-         and Markdown carry every finding but drop the per-reason census when there are \
-         findings to show, so only JSON always reveals the ghost count. Configured \
-         exclusions are disclosed even beside findings on every surface. The condensed \
+         archive — the per-commit series behind the charts is obtained with `examine`. \
+         Full Markdown always includes the same coverage counts and reasons in its final \
+         Coverage section. Text omits the full reason breakdown when findings exist. \
+         Configured exclusions remain visible beside findings on every surface. The condensed \
          summary is lossy by design, so it is the one output that must not be automated \
          against: a check reading it cannot distinguish findings that were capped away from \
          findings that were never made. The outcome file repeats only JSON's top-level \
@@ -444,6 +451,21 @@ fn text() -> String {
         &worked_analysis().render(ReportFormat::Text),
     ));
     markdown
+}
+
+/// Paired human and machine coverage examples for readers investigating a silent result.
+fn silent() -> String {
+    let analysis = silent_analysis();
+    let mut excerpt = String::from("**Full Markdown report** — written by `--markdown`.\n\n");
+    excerpt.push_str(&fenced(
+        "markdown",
+        &analysis.render(ReportFormat::Markdown),
+    ));
+    excerpt.push_str(
+        "\n**JSON report** — the same analysis from `--json`, with counts under `census`.\n\n",
+    );
+    excerpt.push_str(&fenced("json", &analysis.render(ReportFormat::Json)));
+    excerpt
 }
 
 /// The same analysis as the JSON report writes it.
@@ -504,9 +526,10 @@ fn census() -> String {
     }
 
     markdown.push_str(
-        "\nThe judged ratio heads every report that had anything in scope. The per-reason \
-         breakdown is printed by the text and Markdown reports only where the report has no \
-         findings, as here; the JSON report always carries it, under `census.reasons`.\n",
+        "\nThe judged ratio heads each human-readable report that had anything in scope. \
+         Text prints the per-reason breakdown only when there are no findings, as here. \
+         Full Markdown always includes it in the final Coverage section, and JSON always \
+         carries it under `census.reasons`.\n",
     );
     markdown
 }
@@ -665,6 +688,7 @@ mod tests {
             "reporting-formats.md",
             "reporting-text.md",
             "reporting-json.md",
+            "reporting-silent.md",
             "reporting-census.md",
             "reporting-lag.svg",
             "reporting-lag.md",
@@ -777,10 +801,22 @@ mod tests {
         ignore = "repeats full worked-suite detection and report rendering to verify the generated excerpt"
     )]
     fn the_report_excerpts_are_renderings_of_the_worked_analysis() {
-        let rendered = worked_analysis().render(ReportFormat::Text);
-        let excerpt = text();
+        let analysis = worked_analysis();
+        for (format, excerpt) in [(ReportFormat::Text, text()), (ReportFormat::Json, json())] {
+            assert!(excerpt.contains(analysis.render(format).trim_end()));
+        }
+    }
 
-        assert!(excerpt.contains(rendered.trim_end()), "{excerpt}");
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "repeats quiet-suite detection to verify paired Markdown and JSON book excerpts"
+    )]
+    fn the_silent_excerpt_contains_the_rendered_markdown_and_json() {
+        let analysis = silent_analysis();
+        let excerpt = silent();
+        assert!(excerpt.contains(analysis.render(ReportFormat::Markdown).trim_end()));
+        assert!(excerpt.contains(analysis.render(ReportFormat::Json).trim_end()));
     }
 
     #[test]

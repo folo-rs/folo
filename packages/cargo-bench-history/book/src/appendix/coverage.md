@@ -141,8 +141,9 @@ series drives the report's coverage line. In branch mode, that verdict includes 
 current-base regimes, so the analysis and the report cannot disagree about whether a series was
 judged.
 
-Every report states it — the coverage line in the text and Markdown output, and the full census
-in the JSON, on every `analyze` run. How each format presents it is the
+Text and Markdown headers give the in-scope judged count when anything is in scope.
+Full Markdown also ends with a Coverage section listing all counts and unjudged reasons;
+JSON carries that account under `census`, on every `analyze` run. How each format presents it is the
 [Reporting](reporting.md) chapter's subject.
 
 {{#include generated/coverage-census.svg}}
@@ -165,6 +166,8 @@ reportable move survived the gates.
 
 This is why automation should gate on coverage rather than on an empty findings list. A run
 that judged nothing at all reports no findings, and a naive check reads that as success.
+For report locations and worked examples, see
+[Reading a silent report](insights.md#reading-a-silent-report) in Insights.
 
 > **Ghosts are counted apart.** A benchmark the analyzed commit no longer measures is
 > excluded from the coverage denominator, though it is still counted in the totals and named

@@ -54,7 +54,7 @@ pub fn assets() -> Vec<Asset> {
 /// construction rather than by two agreeing derivations.
 #[derive(Clone, Debug)]
 struct Judged {
-    /// How the appendix names the series.
+    /// How the book names the series.
     label: String,
 
     /// Its place in the sorted list, counting from one.
@@ -71,7 +71,7 @@ struct Judged {
 }
 
 impl Judged {
-    /// Whether the appendix calls this candidate reported or dropped.
+    /// Whether the book calls this candidate reported or dropped.
     fn outcome(&self) -> &'static str {
         if self.kept { "kept" } else { "dropped" }
     }
@@ -442,7 +442,7 @@ fn combinations(n: usize, k: usize) -> u128 {
         let i = u128::try_from(i).expect("the loop index fits in u128");
         let product = count
             .checked_mul(numerator)
-            .expect("binomial counts for the series lengths this appendix uses fit in u128");
+            .expect("binomial counts for the series lengths this book uses fit in u128");
         // Multiplying in this order keeps every partial product divisible by i.
         assert_eq!(
             product.checked_rem(i),
@@ -459,7 +459,7 @@ fn combinations(n: usize, k: usize) -> u128 {
 /// `count` as an `f64`, for chance-level arithmetic over binomial assignments.
 fn binomial_as_f64(count: u128) -> f64 {
     let count = usize::try_from(count)
-        .expect("binomial counts for the series lengths this appendix uses fit in usize");
+        .expect("binomial counts for the series lengths this book uses fit in usize");
     crate::coord::of(count)
 }
 
@@ -515,10 +515,10 @@ const IMPROVEMENT_CHANCE: f64 = 0.001;
 /// range where the table can demonstrate the cost of filtering first.
 const REGRESSION_CHANCE: f64 = 0.015;
 
-/// How the appendix names the improvement.
+/// How the book names the improvement.
 const IMPROVEMENT_SERIES: &str = "checksum";
 
-/// How the appendix names the regression.
+/// How the book names the regression.
 const REGRESSION_SERIES: &str = "tokenize";
 
 /// The worked example comparing direction filtering before and after correction.

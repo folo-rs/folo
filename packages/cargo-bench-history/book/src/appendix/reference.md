@@ -1,6 +1,6 @@
 # Reference tables
 
-Key generated facts from the appendix, gathered for lookup. The owning chapters hold the
+Key generated facts from the pipeline chapters, gathered for lookup. The owning chapters hold the
 complete explanations; this page is a reference, not a substitute for the reasoning.
 
 Every table here is generated from the code, so it cannot drift from the tool's behavior.
@@ -116,4 +116,4 @@ See [Reporting](reporting.md#comparison-base-lag).
 
 ## Terms
 
-Every term the appendix defines is in the [Glossary](glossary.md).
+Every term the pipeline chapters define is in the [Glossary](glossary.md).

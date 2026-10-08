@@ -1,8 +1,8 @@
 //! SVG emission: the boundary between a style module's drawing code and the bytes the
 //! book includes.
 //!
-//! Every figure in the appendix goes through [`draw`]. It exists to guarantee the three
-//! properties the appendix's freshness check depends on, which no individual style
+//! Every figure in the book goes through [`draw`]. It exists to guarantee the three
+//! properties the book's freshness check depends on, which no individual style
 //! module should have to think about:
 //!
 //! * **Determinism.** Two renders of the same data produce byte-identical SVG, on any

@@ -1,6 +1,6 @@
 //! The before/after figure that shows a pipeline stage acting on data.
 //!
-//! This is the appendix's workhorse. Every stage of the pipeline adds, removes,
+//! This is the book's workhorse. Every stage of the pipeline adds, removes,
 //! reorders, collapses or reshapes observations, and a reader should never have to infer
 //! which of those happened from a changed picture. An operation figure therefore draws
 //! the input, draws the output, and marks in the input exactly what the stage was about

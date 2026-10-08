@@ -49,10 +49,10 @@ The teaching points that every chapter should reinforce, not just the concept ch
 
 ## Chapter map
 
-The guide is four parts: **orientation** (get it working), **command reference** (task-level how),
-**concepts** (the mental model), and an **appendix** (the full mechanism, for validation and deep
-troubleshooting). Reference pages link down into concepts for the *why*; concept pages link up into
-the commands that exercise them and down into the appendix for mechanism.
+The guide begins with **orientation** (get it working), followed by **concepts** (the mental model
+and the full Data pipeline walkthrough), then **command reference** (task-level how).
+Command pages link back to concepts for the *why*; concept pages link to the commands that
+exercise them and to the Data pipeline chapters for the detailed mechanism.
 
 ### Front matter — Introduction
 
@@ -87,28 +87,7 @@ the commands that exercise them and down into the appendix for mechanism.
 - **Boundary**: describe the *selection model*; defer Azure provisioning to `setup-azure`
   and configuration fields to the generated, commented starter file.
 
-### Part 2 — Command reference
-
-- **Overview page**: the command set at a glance; shared option groups; the selection option
-  meanings shared by `analyze`/`list`/`prune`/`examine`, while defaults and admission policies
-  can differ; subjects are bare positional words, not flags. Point at `<command> --help` for
-  the exhaustive flag list, and at `prune --dry-run` for the exact deletion preview.
-- Each command page: *problem it solves* → minimal invocation → the one or two rules that matter →
-  links to the relevant concept.
-
-| Page | The single thing it must teach |
-|---|---|
-| `install` | Generates a commented starter config; never clobbers; documents the optional Azure backend without storing a machine-local path. |
-| `setup-azure` | Explicit Azure provisioning or probe-free standalone export, one federated identity, state-preserving repeat deployment and non-secret configuration handoff. |
-| `collect` | Harvests whichever engines produced output and persists immediately unless dry-running; `--best-of N` min-of-N noise reduction and its caveats. |
-| `backfill` | Reconstructs history over a first-parent commit range in an isolated worktree; resumable and idempotent. |
-| `analyze` | Reconstructs series from topology and reports regressions/drift; target/base/mode auto-selection; findings never set the exit code. |
-| `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
-| `list` | Preview the runs `analyze` would consume, catalog discriminant sets, or audit blessings without analyzing. |
-| `prune` | Delete a chosen scope of stored data; `--dry-run` previews the exact deletion plan, and base-branch history needs an explicit confirm. |
-| `bless` / `unbless` | Manually accept an intentional change; per-benchmark; starts history's active segment and branch mode's admissible base evidence. |
-
-### Part 3 — Concepts
+### Part 2 — Concepts
 
 #### Benchmark engines
 
@@ -139,14 +118,14 @@ the commands that exercise them and down into the appendix for mechanism.
   via blessings; the three report formats sharing one pass and the
   advisory-finding / machine-readable-outcome split (tenet 6); no severity classification.
 - **Boundary**: this page owns the *mental model* and stops there. Mechanism with numbers — which
-  gate computes what, against which threshold, in what order — belongs to the appendix. Where the
+  gate computes what, against which threshold, in what order — belongs to Data pipeline. Where the
   two would overlap, this page states the rule in a sentence and links down.
 
-### Part 4 — Appendix: Data pipeline
+#### Data pipeline
 
 A reference-grade walkthrough of the whole path from a benchmark's output file to a sentence in a
-report. Where Part 3 builds the mental model, the appendix is what a maintainer validates the tool
-against and what a user reads when a finding does not make sense.
+report. The preceding concept pages build the mental model; these nested chapters are what a
+maintainer validates the tool against and what a user reads when a finding does not make sense.
 
 - **Audience**: a maintainer checking the tool does the right thing, and the user who has exhausted
   the concept chapters. Not the first thing anyone reads.
@@ -163,7 +142,7 @@ against and what a user reads when a finding does not make sense.
   the checked-in includes drift from regenerated output. Genuinely explanatory,
   non-behavioural prose stays ordinary Markdown.
   The generated-evidence boundary is owned by `cargo-bench-history-figures`: it manages the asset
-  registry, write/check reconciliation, rendering, and preview for appendix evidence. Its
+  registry, write/check reconciliation, rendering, and preview for pipeline evidence. Its
   dependencies are one-way from the generator to narrow production-owned projections such as
   `cbh_analyze::auto_mode`, the `cbh_detect` gate-log inspection surface,
   `cbh_render::CoverageState::ALL`, and `UnjudgedReason::ALL`; the generator is book
@@ -181,7 +160,7 @@ against and what a user reads when a finding does not make sense.
 | 1. Shape of the data | What one benchmark produces per engine, and what the stored record holds — including the storage layer the rest of the guide never mentions. |
 | 2. Collection | What `collect` and `backfill` actually do, and how runs land on commits — including the gaps a heterogeneous runner pool leaves. |
 | 3. Selection | Which stored objects are even eligible, decided from keys and topology alone; discriminant filters, `--since`, base/context, and how mode is auto-detected. |
-| 4. Reconstruction | How runs fold into series, and the four things that change what detection sees: ordering, gaps, ghosts, blessings. |
+| 4. Reconstruction | How runs fold into series, and what changes detection scope: ordering, gaps, ghosts, configured ignores and blessings. |
 | 5. Detection | What a signal is, which detector establishes it, how a history change point is tested fairly after searching across possible splits, and what each mode does and does not do. |
 | 6. Noise gates | Every gate, in application order, with its computation and its threshold — and that gates short-circuit. |
 | 7. Multiplicity and coverage | Why a per-series test is not enough; what the false-discovery family is and why it includes series that raised nothing; that a judged short series can still fail to report a lone finding as the family grows. |
@@ -190,6 +169,27 @@ against and what a user reads when a finding does not make sense.
 | 10. Limits | What the pipeline deliberately does not do, and what to do instead. |
 | Glossary | Every term the part defines, in plain language, with the technical name alongside. |
 | Reference tables | The generated lookup surface: metric kinds, engine outputs, key grammar, gate constants, evidence minimums, unjudged reasons, coverage states. |
+
+### Part 3 — Command reference
+
+- **Overview page**: the command set at a glance; shared option groups; the selection option
+  meanings shared by `analyze`/`list`/`prune`/`examine`, while defaults and admission policies
+  can differ; subjects are bare positional words, not flags. Point at `<command> --help` for
+  the exhaustive flag list, and at `prune --dry-run` for the exact deletion preview.
+- Each command page: *problem it solves* → minimal invocation → the one or two rules that matter →
+  links to the relevant concept.
+
+| Page | The single thing it must teach |
+|---|---|
+| `install` | Generates a commented starter config; never clobbers; documents the optional Azure backend without storing a machine-local path. |
+| `setup-azure` | Explicit Azure provisioning or probe-free standalone export, one federated identity, state-preserving repeat deployment and non-secret configuration handoff. |
+| `collect` | Harvests whichever engines produced output and persists immediately unless dry-running; `--best-of N` min-of-N noise reduction and its caveats. |
+| `backfill` | Reconstructs history over a first-parent commit range in an isolated worktree; resumable and idempotent. |
+| `analyze` | Reconstructs series from topology and reports regressions/drift; target/base/mode auto-selection; findings never set the exit code. |
+| `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
+| `list` | Preview the runs `analyze` would consume, catalog discriminant sets, or audit blessings without analyzing. |
+| `prune` | Delete a chosen scope of stored data; `--dry-run` previews the exact deletion plan, and base-branch history needs an explicit confirm. |
+| `bless` / `unbless` | Manually accept an intentional change; per-benchmark; starts history's active segment and branch mode's admissible base evidence. |
 
 ## Maintenance
 
@@ -200,5 +200,5 @@ against and what a user reads when a finding does not make sense.
 - Generated evidence cannot be edited in place: change the code or the example data and re-run
   `just book-figures`. The figures package owns the reconciliation check; ordinary explanatory
   Markdown is edited in the chapter files themselves.
-- When the appendix gains coverage of something a concept page also explains, trim the concept page
+- When Data pipeline gains coverage of something a concept page also explains, trim the concept page
   to the mental model and link down. The two must not both carry the mechanism.

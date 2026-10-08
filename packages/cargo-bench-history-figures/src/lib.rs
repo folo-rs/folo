@@ -4,7 +4,7 @@
     reason = "this crate is book infrastructure rather than a published API: every \
               consumer of its `pub` items lives in this workspace — its own binary, its \
               examples, and one integration test in cargo-bench-history. A new variant \
-              or field here is an edit to the appendix, made in the same commit as the \
+              or field here is an edit to the book, made in the same commit as the \
               call sites it affects, so reserving room to extend these types without \
               notice protects nobody and only costs those call sites exhaustive \
               construction and matching"
@@ -12,12 +12,12 @@
 
 //! Generates the registered figures, computed examples, configured values, and
 //! serialized excerpts embedded in the `cargo-bench-history` book's "Data pipeline"
-//! appendix.
+//! chapters.
 //!
-//! The appendix documents the tool's statistical processing end to end. Evidence that
+//! These chapters document the tool's statistical processing end to end. Evidence that
 //! materially depends on executable behaviour — gate thresholds, series values,
 //! p-values, census tallies, report excerpts — is rendered from the same data the
-//! appendix's tests assert against, written into
+//! generator's tests assert against, written into
 //! `packages/cargo-bench-history/book/src/appendix/generated/`, and included by the
 //! book verbatim. Stable explanatory Markdown stays in the chapter files. A `--check`
 //! run re-renders the generated assets into memory and compares, so a change in
@@ -38,9 +38,9 @@
 //!   determinism guarantees the `--check` run depends on.
 //! * [`styles`] — the figure catalogue. Each style is a reusable primitive rather than
 //!   a one-off drawing, so regenerating after a data change reproduces the same look.
-//! * [`figures`] — the appendix's actual figures, where each module owns one chapter
+//! * [`figures`] — the book's actual figures, where each module owns one chapter
 //!   or a cohesive group of related chapters.
-//! * [`glossary`] — the terms the appendix defines, feeding both the glossary page and
+//! * [`glossary`] — the terms the book defines, feeding both the glossary page and
 //!   each chapter's own term table.
 //! * [`assets`] — the registry of everything the book embeds, and the write/check pair
 //!   that keeps the checked-in copies honest.
