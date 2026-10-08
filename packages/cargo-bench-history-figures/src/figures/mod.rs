@@ -1,4 +1,4 @@
-//! The figures, tables and excerpts embedded in each appendix chapter.
+//! The figures, tables and excerpts embedded in each pipeline chapter.
 //!
 //! Each module owns one chapter or a cohesive group of related chapters, so the evidence
 //! and its prose stay easy to keep in step. A module exposes a single `assets` function;

@@ -97,7 +97,7 @@ One benchmark can contribute several metric series, so these counts are not benc
 ### Where to find coverage
 
 The GitHub issue or pull-request comment contains a **condensed summary**, not the full report.
-Use **Download the full report bundle** to obtain the full outputs:
+When present, **Download the full report bundle** links to the full outputs:
 
 - **Full Markdown** (`report.md` in the bundle, or the path passed to `--markdown`) ends with
   a **Coverage** section. It lists the coverage state, accounted-for, in-scope, judged and
@@ -110,6 +110,11 @@ Use **Download the full report bundle** to obtain the full outputs:
 
 The warning about in-scope series that could not be judged refers to the full Markdown
 **Coverage** section or the JSON **`census`**, not to additional detail hidden in the comment.
+Publication can omit the bundle link. In that case, obtain the full outputs from the workflow
+that produced the comment, or rerun [`analyze`](../commands/analyze.md) with the reported commit
+and discriminant filters, adding `--markdown report.md --json report.json`. Use the same stored
+measurements and selection to reproduce the report.
+
 For individual series identities, rerun the same analysis with `--verbose`: its diagnostics
 name each unjudged series, the evidence it carried and the rule that declined it.
 

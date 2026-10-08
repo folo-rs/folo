@@ -1,12 +1,12 @@
-//! The registry of everything the appendix embeds, and the read/write side of the
+//! The registry of everything the book embeds, and the read/write side of the
 //! generated-asset contract.
 //!
-//! The appendix quotes concrete numbers on almost every page, and none of them is typed
+//! The pipeline chapters quote concrete numbers on almost every page, and none of them is typed
 //! by hand: each is rendered here and included by the book verbatim. That only holds if
 //! the checked-in copies are kept in step with the code, which is what [`check`]
 //! enforces — it re-renders everything in memory and reports whatever no longer matches
 //! the registry, including leftover files from a rename or removal, so a behaviour
-//! change that the appendix describes fails a test instead of quietly making the prose
+//! change that the book describes fails a test instead of quietly making the prose
 //! wrong.
 //!
 //! An asset is content plus the path it belongs at. Nothing else in the crate knows
@@ -19,7 +19,7 @@ use std::{fs, io};
 
 /// Where the generated assets live, relative to the workspace root.
 ///
-/// The appendix includes them from here, so this path is the contract between this crate and
+/// The book includes them from here, so this path is the contract between this crate and
 /// the book's Markdown. It lives in the library rather than in the binary so the freshness
 /// test can reach it: a check only the binary can perform is a check that runs when someone
 /// remembers the recipe, which is not often enough for content the book embeds verbatim.
@@ -28,7 +28,7 @@ pub const GENERATED_ROOT: &str = "packages/cargo-bench-history/book/src/appendix
 /// One generated file the book includes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Asset {
-    /// Path relative to the appendix's generated-asset directory, using forward slashes
+    /// Path relative to the book's generated-asset directory, using forward slashes
     /// so the registry reads the same on every platform.
     pub path: String,
 
@@ -55,7 +55,7 @@ impl Asset {
     }
 }
 
-/// Every asset the appendix embeds.
+/// Every asset the book embeds.
 ///
 /// This is the crate's single source of truth: the writer, the freshness check and the
 /// preview page all render from it, so none of them can drift from the others.
@@ -140,7 +140,7 @@ fn check_registry(root: &Path, assets: &[Asset]) -> io::Result<Option<String>> {
     }
 
     let mut report = String::from(
-        "The generated appendix assets are out of date: a checked-in copy differs from what \
+        "The generated Data pipeline assets are out of date: a checked-in copy differs from what \
          the generator now produces. Run `just book-figures` to regenerate them, then review \
          the diff — for a behaviour-derived asset a change means the pipeline changed, while a \
          presentation-only asset may simply have been restyled.\n",
@@ -445,7 +445,7 @@ mod tests {
         assert!(check_registry(root.path(), &[asset]).unwrap().is_none());
     }
 
-    /// The appendix embeds these files verbatim, so a stale one publishes a page that
+    /// The book embeds these files verbatim, so a stale one publishes a page that
     /// contradicts the tool. Running the check as an ordinary test means a behaviour change
     /// that moves a figure fails the suite, rather than waiting for someone to remember
     /// `just book-figures-check`.
@@ -454,7 +454,7 @@ mod tests {
         miri,
         ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
     )]
-    fn the_checked_in_appendix_assets_are_current() {
+    fn the_checked_in_book_assets_are_current() {
         let root = workspace_root().join(GENERATED_ROOT);
 
         let report = check(&root).expect("reading the checked-in assets must not fail");

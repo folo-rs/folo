@@ -334,9 +334,10 @@ mod tests {
         assert!(body.contains("DOMAIN SUMMARY"));
         assert!(body.contains("Benchmark results are advisory and do not block merging."));
         assert!(body.contains("[Download the full report bundle](https://example.test/artifact)"));
-        assert!(body.contains(
-            "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html)"
-        ));
+        assert!(body.contains(concat!(
+            "[How to read this report](https://folo-rs.github.io/folo/",
+            "cargo-bench-history/appendix/insights.html)"
+        )));
     }
 
     #[test]
@@ -362,9 +363,10 @@ mod tests {
                 None,
             ),
         ] {
-            assert!(body.contains(
-                "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html)"
-            ));
+            assert!(body.contains(concat!(
+                "[How to read this report](https://folo-rs.github.io/folo/",
+                "cargo-bench-history/appendix/insights.html)"
+            )));
             assert!(!body.contains("[Download the full report bundle]"));
         }
     }

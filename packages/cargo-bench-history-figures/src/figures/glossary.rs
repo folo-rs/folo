@@ -73,7 +73,7 @@ fn table() -> String {
     markdown
 }
 
-/// The human-readable title of an appendix chapter file.
+/// The human-readable title of a pipeline chapter file.
 ///
 /// The mapping is spelled out rather than derived from the filename so a chapter can be
 /// renamed on disk without silently changing how the glossary refers to it.

@@ -38,7 +38,7 @@ pub fn assets() -> Vec<Asset> {
 ///
 /// The mapping is stated here rather than read from the adapters because an adapter reports a
 /// kind only when its input happens to contain one; the *contract* — which kinds an engine can
-/// produce at all — is a design fact, and this table is where the appendix states it. The
+/// produce at all — is a design fact, and this table is where the book states it. The
 /// [`metric_kinds_are_all_accounted_for`] test holds it to the model, so a kind added to the
 /// enum cannot go unmentioned.
 ///
@@ -122,7 +122,7 @@ fn engines() -> String {
 
 /// The unit a metric kind is stored in.
 ///
-/// Units are a property of the kind, and the appendix quotes them in several places, so they
+/// Units are a property of the kind, and the book quotes them in several places, so they
 /// are defined once here.
 fn unit_of(kind: MetricKind) -> &'static str {
     match kind {
@@ -356,7 +356,7 @@ mod tests {
     }
 
     /// A metric kind added to the model must appear in the chapter's tables. Without this the
-    /// appendix would keep describing a complete set that had quietly stopped being complete.
+    /// book would keep describing a complete set that had quietly stopped being complete.
     #[test]
     fn metric_kinds_are_all_accounted_for() {
         let documented: Vec<MetricKind> = engine_kinds()

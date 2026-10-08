@@ -1,6 +1,6 @@
 //! Rendering a detector's verdict as the prose fragment a chapter embeds.
 //!
-//! The appendix states what the tool decided about each worked example, in numbers. Those
+//! The book states what the tool decided about each worked example, in numbers. Those
 //! numbers come from here rather than from the author, so a change in detection behaviour
 //! rewrites the sentence instead of leaving it quietly wrong.
 //!

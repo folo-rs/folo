@@ -1,8 +1,8 @@
-//! The single palette, type scale and geometry every figure in the appendix shares.
+//! The single palette, type scale and geometry every figure in the book shares.
 //!
 //! Consistency across some fifty figures is a property of this module rather than of
 //! the person drawing them: a style module never names a colour or a size directly, it
-//! names a role here. Changing how the whole appendix looks is therefore an edit to
+//! names a role here. Changing how the whole book looks is therefore an edit to
 //! this file.
 //!
 //! # Colour and the book's two themes
@@ -36,14 +36,14 @@ pub const INK: RGBColor = RGBColor(1, 2, 3);
 /// [`to_svg`](crate::canvas::to_svg) searches for.
 pub const INK_HEX: &str = "#010203";
 
-/// A regression, or any quantity the appendix wants the reader to read as the bad
+/// A regression, or any quantity the book wants the reader to read as the bad
 /// direction.
 ///
 /// Mid-toned rather than a pure red so it stays legible against the dark theme's
 /// near-black background as well as against white.
 pub const REGRESSION: RGBColor = RGBColor(214, 69, 65);
 
-/// An improvement, or any quantity the appendix wants the reader to read as the good
+/// An improvement, or any quantity the book wants the reader to read as the good
 /// direction.
 pub const IMPROVEMENT: RGBColor = RGBColor(35, 144, 86);
 

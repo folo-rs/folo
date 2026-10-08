@@ -58,7 +58,8 @@ error, not an outcome.
 The tool emits reports and their derived outputs in these forms, each requested independently:
 
 - **Text** — the default terminal report.
-- **Markdown** (`--markdown <path>`) — the same content, for a pull request or an issue.
+- **Markdown** (`--markdown <path>`) — every finding plus complete coverage counts and reasons,
+  for a pull request or an issue.
 - **JSON** (`--json <path>`) — the complete machine-readable result.
 - **Condensed summary** (`--markdown-summary <path>`, `analyze` only) — a short, capped Markdown
   digest for a size-limited destination such as a pull request comment.

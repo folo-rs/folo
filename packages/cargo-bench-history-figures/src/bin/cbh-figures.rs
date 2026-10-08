@@ -1,5 +1,5 @@
 //! Regenerates, verifies, or previews the assets embedded in the `cargo-bench-history`
-//! book's data pipeline appendix.
+//! book's Data pipeline chapters.
 //!
 //! Normally driven through `just book-figures` and `just book-figures-check` rather than
 //! invoked directly.
@@ -25,7 +25,7 @@ const PREVIEW_PATH: &str = "target/appendix-figures.html";
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Generates the figures and tables embedded in the cargo-bench-history book appendix"
+    about = "Generates figures and tables for the cargo-bench-history Data pipeline chapters"
 )]
 struct Args {
     #[command(subcommand)]
@@ -78,7 +78,7 @@ fn check(root: &Path) -> ExitCode {
     let target = root.join(GENERATED_ROOT);
     match assets::check(&target) {
         Ok(None) => {
-            println!("Generated appendix assets are up to date.");
+            println!("Generated Data pipeline assets are up to date.");
             ExitCode::SUCCESS
         }
         Ok(Some(report)) => {
