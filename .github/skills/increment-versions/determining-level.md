@@ -39,6 +39,59 @@ increment that no longer covers them is raised.
 the floor described in the skill's decision stage. No summary means the tool could not
 determine a required version increment; it does not establish that the package is compatible.
 
+## Re-exported APIs
+
+A **public facade** is a package consumers use while another package supplies its
+implementation. A private implementation can provide public items through that
+facade without offering an independently supported API of its own. `private-api`
+does not exclude those exposed effects from semantic assessment.
+
+Trace changed definitions and behavior through each affected public package, including
+nested re-exports. Inspect methods, trait implementations, bounds and types reachable
+through exported items, not only the names in `pub use`. A facade's unchanged source
+or report status does not prove that its dependency-supplied API is unchanged.
+Use source changes, documented promises and relevant consumer tests.
+
+The checker has a [cross-crate limitation](https://github.com/obi1kenobi/cargo-semver-checks/issues/638):
+dependency definitions are not fully present in a facade's rustdoc JSON. A passing facade
+comparison therefore does not establish compatibility of those definitions.
+The external-types check acknowledges permitted exposure; it is not a compatibility check.
+Version groups align versions, and `public_origins` tracks defining packages for
+type-identity propagation. Neither substitutes for this source-level assessment.
+
+Classify the facade's effect independently: removal of an exposed method or stricter
+requirements are breaking; a genuinely compatible new exposed method is nonbreaking;
+a compatible behavior correction is patch. Unexported implementation items have no
+independent facade API promise, but changes to them can still affect promised public behavior.
+Do not treat a change to an implementation-only `pub` item as a public break merely
+because it has Rust visibility, or copy its package's impact blindly to every dependent.
+
+Record the public package, affected promise, chosen impact and supporting evidence.
+An implementation can receive `patch` while its facade receives `nonbreaking`; let
+the tool align group versions afterward. Obtain missing consumer evidence or report
+uncertainty instead of defaulting to compatibility.
+
+## Procedural macros
+
+A procedural macro transforms consumer input into Rust code during compilation.
+Cargo identifies its defining library as a `proc-macro` target. Direct comparison
+of that target is unsupported, independently of its `private-api` declaration.
+An explicit `unsupported-proc-macro` result supplies no semantic floor and does not
+justify a `patch` or no-increment decision.
+
+Assess supported invocations: macro availability, accepted syntax, attribute arguments
+and helper attributes recognized by derive macros. Assess generated public items,
+trait implementations, required bounds, and other obligations imposed on consumer
+code. Also assess promised behavior of the generated code even when macro names
+and signatures stay unchanged.
+
+Apply the same review through a public facade, including when the defining macro is
+private or the facade has no patch. A passing facade comparison is not evidence that
+macro invocations or generated code remain compatible. For example, withdrawing a
+supported invocation or promised implementation is breaking; adding a compatible
+opt-in capability is nonbreaking; a compatible internal refactor is patch.
+Calling a change a bug fix does not establish compatibility.
+
 ## Breaking
 
 Choose `breaking` when existing consumers may need to change or may observe an incompatible
@@ -73,7 +126,10 @@ not cover explicitly exposed trait/type identities or other contract changes.
 
 Only a `breaking` dependency propagates this way. A dependency that adds API compatibly leaves
 the exposure intact, so it establishes no more than the `patch` its requirement rewrite already
-does.
+does **from that version/type-identity effect alone**. This is not a ceiling on the
+dependent's own semantic impact. A new public method on a re-exported type is a
+new facade capability even when its `pub use` line is unchanged; assess it as
+`nonbreaking` when compatible.
 
 ## Nonbreaking
 

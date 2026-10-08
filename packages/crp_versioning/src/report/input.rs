@@ -451,6 +451,7 @@ mod tests {
             "dependents",
             "stat",
             "consumer_contract",
+            "proc_macro",
         ] {
             let mut value = original.clone();
             let package = value
@@ -476,6 +477,7 @@ mod tests {
             ("dependencies", json!([{"name": "api", "req": "1.0.0"}])),
             ("public_origins", json!([false])),
             ("consumer_contract", json!("true")),
+            ("proc_macro", json!("true")),
         ] {
             let mut value = original.clone();
             *value

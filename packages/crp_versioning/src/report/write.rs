@@ -50,6 +50,8 @@ pub struct ReportPackage {
     /// False for a package with no library target, and for one declaring
     /// `[package.metadata.release-plan] private-api = true`.
     pub(crate) consumer_contract: bool,
+    /// Whether Cargo identifies the library as a procedural macro.
+    pub(crate) proc_macro: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) untracked: Vec<String>,
 }
@@ -221,6 +223,7 @@ fn report_package(package: &PackageClass, diff_path: Option<String>) -> ReportPa
         public_origins: package.public_origins.clone(),
         dependents: package.dependents.clone(),
         consumer_contract: package.consumer_contract,
+        proc_macro: package.proc_macro,
         untracked: package.untracked.clone(),
     }
 }
@@ -316,7 +319,8 @@ mod tests {
                 "diff_path": "diffs/api.patch",
                 "dependencies": [{"name": "pending", "req": "1.0.1", "exact_pin": false}],
                 "public_origins": ["pending"],
-                "dependents": [], "consumer_contract": true, "untracked": ["untracked.rs"]
+                "dependents": [], "consumer_contract": true, "proc_macro": false,
+                "untracked": ["untracked.rs"]
             })
         );
         assert_eq!(

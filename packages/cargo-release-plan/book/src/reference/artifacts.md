@@ -43,12 +43,12 @@ A decisions document is caller-authored literal JSON:
 `changes[].impact` is semantic: `breaking`, `nonbreaking` or `patch`.
 Non-publishable packages have no semantic impacts.
 
-The proposed-plan format uses report/plan schema revision `7`. This is a literal
+The proposed-plan format uses report/plan schema revision `8`. This is a literal
 example of that format:
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "increments": [
     { "name": "widget", "bump": "minor" },
     { "name": "widget-cli", "version": "2.0.1" }
@@ -70,7 +70,7 @@ regenerate unsupported or stale evidence with `prepare` and `preview`.
 
 ## Reports
 
-The revision-7 report's top level contains:
+The revision-8 report's top level contains:
 
 | Field | Content |
 | --- | --- |
@@ -83,7 +83,7 @@ The revision-7 report's top level contains:
 | `groups` | Complete group membership across both package arrays. |
 
 Each publishable entry includes `name`, `declared_version`, `status`, `changed`,
-`stat`, `dependencies`, `public_origins`, `dependents` and `consumer_contract`. Optional evidence
+`stat`, `dependencies`, `public_origins`, `dependents`, `consumer_contract` and `proc_macro`. Optional evidence
 includes its group, anchor, patch path and advisory untracked files. An anchor can
 identify a release-history version change or the final snapshot of an anticipated
 parent version; the report's history/target fields identify that context.
@@ -99,9 +99,11 @@ Changed entries distinguish:
 Dependencies record `name`, `req` and `exact_pin`. `public_origins` is the sorted
 set of defining workspace package names exposed directly or through another
 exposed owner's API. It is independent of the dependency paths supplying the
-types and is required even when empty. Consumer-contract
-flags select public library comparisons; they do not claim that binaries or
-private implementation changes lack behavioral consequences.
+types and is required even when empty. `consumer_contract` is true for a library
+offering a supported API for direct consumers, rather than declaring `private-api = true`.
+`proc_macro` independently records Cargo's procedural-macro library target kind.
+Both booleans are required. A public macro can have both true while remaining unsupported
+for direct comparison. Neither flag removes semantic, dependency or publication obligations.
 
 Non-publishable packages carry `name`, `declared_version` and an optional group,
 not a status or semantic impact. Group records include complete sorted
@@ -143,14 +145,14 @@ Each `check-compatibility` invocation uses a new output directory and writes
 The evidence retains checker identity and exact comparison versions. Its linked
 report identifies any anticipated-parent anchor supplying the comparison source.
 
-Compatibility evidence uses schema `2`:
+Compatibility evidence uses schema `3`:
 
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Compatibility-evidence format revision. |
 | `checker` | Identified checker version, or an explanation when no identity was established. |
 | `report` | Location of the source-bound report generated for this comparison. |
-| `completed` | Whether the required input checks and comparisons completed. |
+| `completed` | Whether required input checks and supported comparisons completed, with exclusions recorded. |
 | `findings` | Whether completed comparisons found an insufficient increment. |
 | `packages` | Comparison records containing the fields below. |
 
@@ -158,6 +160,11 @@ Each comparison record contains `name`, `compared`, nullable `baseline_version`,
 and nullable `required_impact`. A compared package uses a published version or its
 anticipated parent's version and final source. An unavailable comparison has
 `compared: false` and no comparison version or required impact.
+Unavailable records also contain `not_compared_reason`: `unsupported-proc-macro`
+for a target the checker cannot compare directly, or `no-baseline` for a supported
+target without a comparison version. Compared records omit this field.
+Affected macro records include private packages and macro members of affected version
+groups; unrelated unchanged packages need no record.
 An operational failure can leave only earlier completed records; inspect the
 overall completion flag and retained diagnostics rather than treating absent
 records as passes.
@@ -167,6 +174,9 @@ means no comparison was available, not proof of compatibility.
 `required_impact` is a semantic `breaking` or `nonbreaking` floor; `null`
 establishes no minimum. The author still judges behavioral, CLI, format and
 feature-subset effects.
+This includes APIs and behavior supplied through re-exports, which are not fully covered
+by the checker, and macro invocation syntax and generated code. See
+[semantic assessment](../concepts/versions.md#external-api-evidence-is-a-floor).
 
 Do not confuse a completed comparison with a passing merge gate:
 `--deny-findings` additionally rejects insufficient increments. Source inputs are checked
@@ -190,8 +200,9 @@ This example assumes those are the publishable packages. Every publishable
 member appears once, including unchanged ones; non-publishable packages do not.
 Cycle batches represent actual dependencies, not group alignment.
 
-`semver-targets` emits sorted package names, or `[]` when no public contract is
-selected. `inspect-plan` emits:
+`semver-targets` emits sorted directly checkable public package names, or `[]`
+when none are selected. Procedural macros are excluded regardless of consumer policy;
+their public version-group members remain eligible. `inspect-plan` emits:
 
 ```json
 {

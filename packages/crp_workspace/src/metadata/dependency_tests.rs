@@ -312,6 +312,7 @@ fn work_package(name: &str, dependencies: Vec<ReportedDep>) -> WorkPackage {
         manifest_path: PathBuf::from(name).join("Cargo.toml"),
         dependencies,
         consumer_contract: true,
+        proc_macro: false,
         has_lockfile_target: false,
         resources: BTreeMap::new(),
     }

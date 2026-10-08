@@ -32,8 +32,8 @@ the caller's applicable permission. Fetching a private configured repository als
 requires GitHub CLI authentication.
 
 Check the schema revisions reported by `cargo release-plan version` before
-modifying source. This skill consumes plan/report/prepared schema `7`,
-semantic-decision schema `2` and compatibility schema `2`. Configured mode also
+modifying source. This skill consumes plan/report/prepared schema `8`,
+semantic-decision schema `2` and compatibility schema `3`. Configured mode also
 consumes release-context schema `2`. Matching package version numbers are not a prerequisite.
 
 If schemas differ, update the installed skill from the complete
@@ -169,6 +169,17 @@ Require `completed: true` in compatibility evidence. A compared package's
 minimum, and `compared: false` is not proof of compatibility. The skill's wider
 assessment of behavior, CLI, data formats and feature contracts can raise that floor.
 
+Read `not_compared_reason` for unavailable comparisons. `unsupported-proc-macro`
+means the checker cannot compare that Cargo target directly; `no-baseline` means
+a supported target lacks a comparison version. Neither removes a package from
+assessment or justifies a `patch` default.
+
+Follow the decision guide's [re-export assessment](determining-level.md#re-exported-apis)
+and [procedural-macro assessment](determining-level.md#procedural-macros).
+Private implementations and unchanged facades remain in scope. Record the affected
+public package, exposed API or behavior, chosen impact and supporting source/test
+evidence; obtain missing evidence or report uncertainty rather than infer compatibility.
+
 Write `decisions.json` with semantic impacts, not numeric version bumps. Omit packages
 requiring no semantic increment. Record substantive reasons, including inherited
 changes, dependency effects and retained pending versions. Do not invent a Git
@@ -184,6 +195,8 @@ Read its report, patches and compatibility results. Assess new effects and raise
 decisions where needed, then repeat proposal/preview from the original prepared
 evidence with new output directories. Source edits require new preparation.
 Never hand-edit generated plans or widen exact requirements to evade grouping.
+Include effects supplied through dependencies and re-exports even when the public
+package has no source patch. Apply the same re-export and macro assessment as in stage 4.
 
 Prepare the PR's **Version/release plan** from the union of resolved-plan targets
 and pending releases in the final report. Give one row per complete group or

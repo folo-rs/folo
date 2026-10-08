@@ -202,7 +202,7 @@ private-api = true
 ```
 
 A package is public unless it declares itself private, and a package with no
-library target presents no contract either way. That direction is chosen for its
+library target presents no library contract either way. That direction is chosen for its
 failure mode rather than its frequency: a package wrongly treated as public
 produces a finding a maintainer can act on, while one wrongly treated as private
 produces nothing at all. A malformed declaration is an error for the same reason.
@@ -212,13 +212,26 @@ wiring declares `private-api = true` as well. Its CLI and artifact contracts sti
 receive the normal compatibility assessment; internal Rust visibility does not
 make those types a supported library interface.
 
-This declaration selects evidence for the API compatibility checker; it
-does not ask `cargo-release-plan` to infer whether an API changed.
-`semver-targets` reads the report's consumer-contract flags and chooses the public
-library contracts that need comparison. Assessing an implementation partition directly would
-measure a surface no consumer can reach, and demand version increases of the
-public package for changes its consumers cannot observe. A re-exported item
-appears in the public package's own documented API and is compared there.
+This declaration describes a supported API, not checker capability.
+Procedural-macro packages can have public contracts, but their Cargo targets are
+unsupported for direct comparison. Target metadata and consumer policy are recorded
+independently. `semver-targets` selects only supported public library comparisons.
+Unsupported macro packages remain in assessment, planning and publication.
+
+A public facade is the package consumers use while an implementation package supplies
+its API. The exposed subset is assessed at the facade rather than demanding compatibility
+for every implementation-only item. The checker has a
+[cross-crate limitation](https://github.com/obi1kenobi/cargo-semver-checks/issues/638):
+re-exported dependency definitions are not fully available in its input. Selecting the
+facade is not proof that the checker covers those definitions.
+
+Semantic assessment follows exposed definitions and behavior even when the facade's
+source is unchanged. A compatible new method on a re-exported type can require a
+nonbreaking facade release; a removed method can require a breaking release.
+Dependency-version propagation alone does not infer those effects. Macro invocations,
+generated APIs and promised generated behavior likewise require source review and
+consumer tests. Neither private implementation policy nor a passing checker result
+waives this assessment.
 
 For example, if `widget_impl` and `widget` share a version group and only
 `widget_impl` declares `private-api = true`, an implementation change selects
@@ -505,6 +518,8 @@ Compatibility target selection follows consumer contracts. A changed package
 selects the public contracts in its version group rather than demanding a
 comparison of private implementation APIs. Packages without changed released
 content do not independently select a comparison.
+Group members are considered before unsupported procedural macros are excluded
+from direct comparison. A macro change can therefore select its public facade.
 
 Proposal generation consumes explicit `breaking`, `nonbreaking`, or `patch`
 decisions. It retains adequate pending version increases, aligns version groups
@@ -520,7 +535,7 @@ its additional evidence can require a fresh semantic impact.
 ### Collect external compatibility evidence
 
 `check-compatibility` consumes prepared inputs or a resolved plan's retained
-prospective workspace, or collects fresh read-only report evidence. It uses the report-selected consumer contracts and runs
+prospective workspace, or collects fresh read-only report evidence. It uses the report-selected supported consumer contracts and runs
 the supported API compatibility checker. The operation records comparison inputs,
 checker identity, findings and diagnostics; it does not replace the author's
 semantic impacts.
@@ -531,7 +546,7 @@ inputs for its own report generation. A matching HEAD alone is insufficient for
 a dirty work tree. A retained preview is admitted at its retained location.
 Read-only comparison uses those same admitted observations. Artifact-only target
 selection does not by itself establish that the selected checkout matches a report.
-An assessed workspace with selected consumer contracts must have a lockfile accepted
+An assessed workspace with selected supported consumer contracts must have a lockfile accepted
 by Cargo's default metadata resolution without changes.
 The comparison versions and any anticipated-parent source are recorded with the
 result; an unavailable comparison is not silently replaced with a different one.
@@ -545,6 +560,14 @@ Preview admission accepts an original workspace matching the captured initial st
 or the completely applied plan; the retained candidate must match the captured final state.
 The shared workflow uses the result to enforce supported API compatibility;
 the skill uses it as a floor while assessing the complete contract.
+
+Affected procedural macros receive explicit unsupported-comparison records, including
+private macros. A supported target without a baseline has a distinct unavailable reason.
+Neither receives a semantic floor. Completion means the supported work finished and
+exclusions were recorded, not that every package was compared or is compatible.
+If no supported comparisons are selected, the operation needs no checker, registry
+baseline or anticipated-parent checkout. Known exclusions remain in evidence if
+another comparison fails.
 
 ### Check first-publication prerequisites
 

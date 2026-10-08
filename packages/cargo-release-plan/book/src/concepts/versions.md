@@ -53,6 +53,21 @@ stronger decision than the checker reports.
 Raise the decision when the contract requires it. Do not lower it below a valid
 compatibility finding.
 
+The checker has a [cross-crate limitation](https://github.com/obi1kenobi/cargo-semver-checks/issues/638):
+re-exported dependency definitions are not fully available in its input.
+A public facade is the package consumers use while another package supplies its
+implementation. Review the definitions and behavior it exposes, including public methods
+on re-exported types, even when the facade's own source is unchanged.
+A passing facade comparison does not replace this assessment.
+
+Procedural macros transform consumer input into Rust code during compilation.
+Their Cargo targets are unsupported for direct comparison, regardless of whether
+they offer a public API. Review accepted invocations, attribute arguments, generated
+APIs and trait implementations, consumer requirements, and promised behavior.
+Explicit unavailable evidence supplies no minimum impact, not a default `patch`.
+Consumer tests and source review support the decision; missing evidence is not
+proof of compatibility.
+
 ## Version groups
 
 An exact local dependency such as `version = "=1.4.0"` joins its Git-tracked
@@ -107,7 +122,11 @@ version-group obligations and dependency effects.
 
 When `widget_impl` changes, compatibility selection reaches the public `widget`
 contract through their group. Re-exported items are compared where consumers use
-them, rather than demanding compatibility for every private implementation item.
+them only to the extent supported by the checker; the author assesses their full
+contract there rather than demanding compatibility for every private implementation item.
+Unsupported procedural-macro members are excluded from direct comparison after group
+selection, so a macro implementation change can still select the public facade.
+All publishable packages remain in dependency-first semantic assessment.
 
 A **public origin** is a workspace package defining types exposed by another
 package's public API, directly or through another exposed owner's API. Its
@@ -133,6 +152,12 @@ trait implementations is intentionally considered nonbreaking. Implementation
 contributors are not tracked solely to prevent that ambiguity. Explicitly exposed
 trait and type identities, bounds and associated types still participate in
 propagation; other behavioral and API changes still require semantic assessment.
+
+A compatible dependency-version movement imposes no type-identity break. It does not
+cap the facade's own impact at patch: a compatible new method on a re-exported type
+is a nonbreaking facade capability. Conversely, changing an unexported implementation
+item is not a public API change merely because it is `pub` inside that crate.
+Assess its observable effects and let group alignment follow the semantic decisions.
 
 This model requires a real
 [external-type validation gate](../integration/repository.md#verify-external-type-exposure).

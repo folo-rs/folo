@@ -29,7 +29,7 @@ fn missing_captured_configuration_is_distinct_from_an_empty_file() {
     })
     .unwrap();
     fixture.write(".cargo/config.toml", "");
-    fixture.write("proposal.json", r#"{"schema_version":7,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":8,"increments":[]}"#);
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),
         prepared: prepared.join("prepared.json"),
@@ -66,7 +66,7 @@ fn executable_mode_changes_invalidate_captured_evidence_without_changing_bytes()
         mode & !0o111
     });
     fs::set_permissions(&source, permissions).unwrap();
-    fixture.write("proposal.json", r#"{"schema_version":7,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":8,"increments":[]}"#);
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),
         prepared: prepared.join("prepared.json"),
@@ -156,7 +156,7 @@ fn case_aliased_workspace_inputs_project_and_apply_the_same_final_bytes() {
     .unwrap();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":7,"increments":[{"name":"demo","bump":"patch"}]}"#,
+        r#"{"schema_version":8,"increments":[{"name":"demo","bump":"patch"}]}"#,
     );
     let preview = fixture.path().join("preview");
     run(&RunInput::Preview {

@@ -199,6 +199,286 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
     }
 }
 
+/// Macro-only work remains assessable in every source mode without checker or registry access.
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Acquires Cargo/Git metadata and executes the release tool"
+)]
+fn procedural_macros_are_reported_but_never_compared_in_any_source_mode() {
+    let fixture = Fixture::new("");
+    for (name, privacy) in [
+        ("public", None),
+        ("explicit_public", Some(false)),
+        ("private", Some(true)),
+    ] {
+        write_macro(&fixture, name, "1.0.0", privacy);
+    }
+    fixture.commit("macro baseline");
+    let history = fixture.sha("HEAD");
+    for name in ["public", "explicit_public", "private"] {
+        fixture.write(
+            &format!("packages/{name}/src/lib.rs"),
+            "extern crate proc_macro;\n#[proc_macro]\npub fn changed(input: proc_macro::TokenStream) -> proc_macro::TokenStream { input }\n",
+        );
+    }
+    let output = TempDir::new().unwrap();
+    let prepared = output.path().join("prepared");
+    run(&RunInput::Prepare {
+        manifest_path: fixture.manifest(),
+        output: prepared.clone(),
+        release_history: Some(history.clone()),
+        merge_target: None,
+        verbose: false,
+    })
+    .unwrap();
+    let proposal = output.path().join("proposal.json");
+    fs::write(&proposal, json!({
+        "schema_version": SCHEMA_VERSION,
+        "increments": (["public", "explicit_public", "private"].map(|name| json!({"name":name, "bump":"patch"})))
+    }).to_string()).unwrap();
+    let preview = output.path().join("preview");
+    run(&RunInput::Preview {
+        manifest_path: fixture.manifest(),
+        prepared: prepared.join("prepared.json"),
+        plan: proposal,
+        output: preview.clone(),
+        verbose: false,
+    })
+    .unwrap();
+
+    for mode in ["source", "prepared", "preview-original", "preview-applied"] {
+        let evidence = output.path().join(format!("evidence-{mode}"));
+        let calls = output.path().join(format!("{mode}.calls"));
+        if mode == "preview-applied" {
+            run(&RunInput::Apply {
+                plan: preview.join("plan.json"),
+                manifest_path: fixture.manifest(),
+                dry_run: false,
+                verbose: false,
+            })
+            .unwrap();
+        }
+        let mut command = checker_command();
+        command
+            .args(["check-compatibility", "--manifest-path"])
+            .arg(fixture.manifest())
+            .arg("--output")
+            .arg(&evidence)
+            .arg("--deny-findings")
+            .env("CRP_FIXTURE_SCENARIO", "identity-failure")
+            .env("CRP_FIXTURE_CALLS", &calls);
+        match mode {
+            "source" => {
+                command.args(["--release-history", &history]);
+            }
+            "prepared" => {
+                command
+                    .arg("--prepared")
+                    .arg(prepared.join("prepared.json"));
+            }
+            _ => {
+                command.arg("--plan").arg(preview.join("plan.json"));
+            }
+        }
+        let result = command.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{mode}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!calls.exists());
+        let outcome = read_outcome(&evidence);
+        assert_eq!(outcome.get("completed").unwrap(), true);
+        assert_eq!(outcome.get("findings").unwrap(), false);
+        assert_eq!(
+            outcome.get("packages").unwrap(),
+            &json!((["explicit_public", "private", "public"].map(unsupported_macro)))
+        );
+        let report: Value =
+            serde_json::from_slice(&fs::read(evidence.join("report.json")).unwrap()).unwrap();
+        for package in report.get("packages").unwrap().as_array().unwrap() {
+            assert_eq!(package.get("proc_macro").unwrap(), true);
+            assert_eq!(
+                package.get("declared_version").unwrap(),
+                if mode.starts_with("preview") {
+                    "1.0.1"
+                } else {
+                    "1.0.0"
+                }
+            );
+            assert_eq!(
+                package.get("consumer_contract").unwrap(),
+                package.get("name").unwrap() != "private"
+            );
+        }
+        let targets = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .arg("semver-targets")
+            .arg("--report")
+            .arg(evidence.join("report.json"))
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(targets.status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&targets.stdout).unwrap(),
+            json!([])
+        );
+    }
+    let inspected = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+        .args(["inspect-plan", "--plan"])
+        .arg(preview.join("plan.json"))
+        .arg("--manifest-path")
+        .arg(fixture.manifest())
+        .output()
+        .unwrap();
+    assert!(inspected.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&inspected.stdout)
+            .unwrap()
+            .get("publication_targets")
+            .unwrap(),
+        &json!(["explicit_public", "private", "public"])
+    );
+}
+
+/// Group membership selects the facade before target capability excludes the macro.
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Uses real parent worktrees and a controlled checker executable"
+)]
+fn macro_changes_select_unchanged_facades_and_preserve_skips_on_failure() {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+        for privacy in [false, true] {
+            let (fixture, history, _) = anticipated_parent();
+            // Install the macro and exact edge in the parent's final source, so only the macro
+            // changes in the child and every comparison uses local parent source, not crates.io.
+            fixture.git(&["checkout", "anticipated-parent"]);
+            write_macro(&fixture, "macros", "1.1.0", Some(privacy));
+            write_package(
+                &fixture,
+                "library",
+                "1.1.0",
+                "[dependencies]\nmacros = { path = '../macros', version = '=1.1.0' }\n",
+            );
+            fixture.write(
+                "packages/library/src/lib.rs",
+                "pub fn existing() {}\npub fn parent_added() {}\n",
+            );
+            resolve_lock(&fixture);
+            fixture.commit("parent includes macro group");
+            let parent = fixture.sha("HEAD");
+            fixture.git(&["checkout", "-b", "macro-child"]);
+            fixture.write("packages/macros/src/lib.rs",
+                "extern crate proc_macro;\n#[proc_macro]\npub fn changed(input: proc_macro::TokenStream) -> proc_macro::TokenStream { input }\n");
+            let output = TempDir::new().unwrap();
+            for scenario in ["parent-macro-compatible", "parent-comparison-failure"] {
+                let evidence = output.path().join(scenario);
+                let calls = output.path().join(format!("{scenario}.calls"));
+                let result = parent_check(&fixture, &history, &evidence, &calls)
+                    .env("CRP_FIXTURE_SCENARIO", scenario)
+                    .env("CRP_EXPECTED_PARENT", &parent)
+                    .env("CRP_EXPECT_UNCHANGED_FACADE", "1")
+                    .output()
+                    .unwrap();
+                let success = scenario == "parent-macro-compatible";
+                assert_eq!(
+                    result.status.success(),
+                    success,
+                    "{}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                let outcome = read_outcome(&evidence);
+                assert_eq!(outcome.get("completed").unwrap(), success);
+                let packages = outcome.get("packages").unwrap().as_array().unwrap();
+                assert!(packages.contains(&unsupported_macro("macros")));
+                assert_eq!(packages.len(), if success { 2 } else { 1 });
+                assert_eq!(
+                    fs::read_to_string(calls).unwrap(),
+                    "version\ncanary\ncomparison\n"
+                );
+                let report: Value =
+                    serde_json::from_slice(&fs::read(evidence.join("report.json")).unwrap())
+                        .unwrap();
+                let facade = report
+                    .get("packages")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|package| package.get("name").unwrap() == "library")
+                    .unwrap();
+                assert_eq!(facade.get("status").unwrap(), "unchanged");
+                assert_eq!(
+                    report.pointer("/groups/library/members").unwrap(),
+                    &json!(["library", "macros"])
+                );
+            }
+        }
+    });
+}
+
+/// Capturing metadata again must observe target changes, not reuse an old capability decision.
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Reclassifies changing Cargo targets and executes the checker fixture"
+)]
+fn changing_library_kind_recomputes_direct_comparison_eligibility() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "library", "1.0.0", "");
+    fixture.commit("ordinary library baseline");
+    let output = TempDir::new().unwrap();
+    for (label, procedural) in [("macro", true), ("ordinary", false)] {
+        if procedural {
+            write_macro(&fixture, "library", "1.0.0", None);
+        } else {
+            write_package(&fixture, "library", "1.0.0", "");
+            fixture.write("packages/library/src/lib.rs", "pub fn changed() {}\n");
+        }
+        let evidence = output.path().join(label);
+        let calls = output.path().join(format!("{label}.calls"));
+        let result = checker_command()
+            .args(["check-compatibility", "--manifest-path"])
+            .arg(fixture.manifest())
+            .args(["--release-history", "HEAD", "--output"])
+            .arg(&evidence)
+            .env("CRP_FIXTURE_SCENARIO", "identity-failure")
+            .env("CRP_FIXTURE_CALLS", &calls)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.success(), procedural);
+        assert_eq!(calls.exists(), !procedural);
+        assert_eq!(
+            read_outcome(&evidence).get("completed").unwrap(),
+            procedural
+        );
+    }
+}
+
+/// A real proc-macro target supplies metadata without external dependencies.
+fn write_macro(fixture: &Fixture, name: &str, version: &str, private: Option<bool>) {
+    let policy = private.map_or(String::new(), |private| {
+        format!("[package.metadata.release-plan]\nprivate-api = {private}\n")
+    });
+    write_package(
+        fixture,
+        name,
+        version,
+        &format!("[lib]\nproc-macro = true\n{policy}"),
+    );
+    fixture.write(&format!("packages/{name}/src/lib.rs"),
+        "extern crate proc_macro;\n#[proc_macro]\npub fn original(input: proc_macro::TokenStream) -> proc_macro::TokenStream { input }\n");
+}
+
+fn unsupported_macro(name: &str) -> Value {
+    json!({
+        "name":name, "compared":false, "baseline_version":null, "required_impact":null,
+        "not_compared_reason":"unsupported-proc-macro"
+    })
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "Prepares and validates a real Cargo/Git workspace")]
 fn prepared_compatibility_rejects_same_head_source_drift_before_comparison() {
@@ -352,7 +632,7 @@ fn preview_check_uses_final_source_and_rejects_drift_in_either_workspace() {
     let fixture = private_library();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":7,"increments":[{"name":"library","bump":"patch"}]}"#,
+        r#"{"schema_version":8,"increments":[{"name":"library","bump":"patch"}]}"#,
     );
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let output = TempDir::new().unwrap();
@@ -415,7 +695,7 @@ fn compatibility_requires_resolved_plan_evidence() {
     let fixture = private_library();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":7,"increments":[{"name":"library","bump":"patch"}]}"#,
+        r#"{"schema_version":8,"increments":[{"name":"library","bump":"patch"}]}"#,
     );
     let output = TempDir::new().unwrap();
     let evidence = output.path().join("evidence");
@@ -823,7 +1103,7 @@ fn moved_anticipated_parent_invalidates_captured_compatibility_before_checker() 
         let proposal = output.path().join("proposal.json");
         fs::write(
             &proposal,
-            r#"{"schema_version":7,"increments":[{"name":"library","bump":"major"}]}"#,
+            r#"{"schema_version":8,"increments":[{"name":"library","bump":"major"}]}"#,
         )
         .unwrap();
         let preview = output.path().join("preview");
@@ -1185,7 +1465,7 @@ fn private_library() -> Fixture {
 pub(crate) fn read_outcome(output: &Path) -> Value {
     let outcome: Value =
         serde_json::from_slice(&fs::read(output.join("compatibility.json")).unwrap()).unwrap();
-    assert_eq!(outcome.get("schema_version").unwrap(), 2);
+    assert_eq!(outcome.get("schema_version").unwrap(), 3);
     outcome
 }
 
@@ -1311,7 +1591,7 @@ fn main() {
         let parent_manifest = fs::read_to_string(Path::new(&baseline).join("packages/library/Cargo.toml")).unwrap();
         assert!(parent_manifest.contains("1.1.0"));
         let current = fs::read_to_string(env::var_os("CRP_FIXTURE_SOURCE").unwrap()).unwrap();
-        assert!(!current.contains("pub fn parent_added()"));
+        assert_eq!(current.contains("pub fn parent_added()"), env::var_os("CRP_EXPECT_UNCHANGED_FACADE").is_some());
         if scenario == "parent-comparison-and-cleanup-failure" {
             let root = git().args(["-C", &baseline, "rev-parse", "--show-toplevel"]).output().unwrap();
             assert!(root.status.success());
@@ -1329,7 +1609,7 @@ fn main() {
             eprintln!("comparison failure canary");
             process::exit(1);
         }
-        if scenario == "parent-compatible" {
+        if scenario == "parent-compatible" || scenario == "parent-macro-compatible" {
             println!("Summary no semver update required");
             return;
         }

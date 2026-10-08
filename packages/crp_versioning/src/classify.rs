@@ -178,6 +178,8 @@ pub struct PackageClass {
     ///
     /// Ref: `crp_workspace::metadata::WorkPackage::consumer_contract`.
     pub consumer_contract: bool,
+    /// Cargo target kind retained independently of whether the library is a consumer contract.
+    pub proc_macro: bool,
     pub manifest_path: PathBuf,
 }
 
@@ -319,6 +321,7 @@ impl PackageClass {
             public_origins: Vec::new(),
             dependents: Vec::new(),
             consumer_contract: true,
+            proc_macro: false,
             manifest_path,
         }
     }
@@ -764,6 +767,7 @@ fn classify_one(
             public_origins: package.public_origins.clone(),
             dependents,
             consumer_contract: package.consumer_contract,
+            proc_macro: package.proc_macro,
             manifest_path: package.manifest_path.clone(),
         });
     };
@@ -853,6 +857,7 @@ fn classify_one(
         public_origins: package.public_origins.clone(),
         dependents,
         consumer_contract: package.consumer_contract,
+        proc_macro: package.proc_macro,
         manifest_path: package.manifest_path.clone(),
     };
     log_status(&verbose, &class);

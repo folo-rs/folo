@@ -124,7 +124,7 @@ It checks the selected inputs and regenerates a report from those same observati
 Assessed source, configuration and history must remain unchanged during checking.
 An assessed workspace with selected contracts must have a lockfile accepted by Cargo's
 default metadata resolution without changes. It never accepts detached `--report` evidence.
-The regenerated report uses report/plan schema `7`.
+The regenerated report uses report/plan schema `8`.
 
 For a resolved preview, input checks at command entry cover both the original workspace
 and the retained candidate. The original
@@ -134,13 +134,16 @@ the retained candidate must match the captured final state.
 The new output directory contains `compatibility.json`, `semver-checks.log` and
 the read-only report. Evidence records the checker identity, comparison versions
 and sources, completed comparisons and semantic floors. An
-identical-source canary verifies the checker. An empty contract selection
-requires neither checker execution nor registry access.
+identical-source canary verifies the checker. When no supported public targets are
+selected, neither checker execution nor registry access is required. Procedural-macro
+targets are excluded before either, independently of `private-api`, and receive explicit
+`unsupported-proc-macro` records. Their public version-group members remain eligible.
 
 Operational failures do not become compatibility passes. Completed findings are
 planning evidence by default; `--deny-findings` makes an insufficient increment
 fail the command as well. Read `completed`, `compared` and `required_impact`,
-not merely the exit code.
+not merely the exit code. `completed: true` can include unavailable comparisons;
+read their `not_compared_reason` and retain semantic assessment of every affected package.
 
 `check-published --plan` validates the resolved target set and fails on a
 never-published or indeterminate publishable target. Non-publishable packages are
