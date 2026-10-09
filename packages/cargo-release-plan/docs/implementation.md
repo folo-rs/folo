@@ -431,6 +431,13 @@ The [careful runner](../../../docs/build-and-tooling.md#careful-test-execution)
 isolates compiler instrumentation at test launch; production build commands keep
 the caller's configuration and the source's toolchain selection.
 
+Cancellation fixtures retain the handshake phase, controller status and captured
+output before asserting or removing failed source worktrees. Output readers notify
+the fixture without reaping its process, preserving ownership until signalling is
+complete. The Windows console launcher forwards the controller's full native exit
+code and captures its diagnostics alongside launcher failures. Early-exit fixtures
+exercise both normal completion and failure before a build-script connection.
+
 Candidate-boundary tests in `crp_publication/tests/boundaries/candidate/` cover actual
 Git history, tracked-input semantics and real Cargo verification.
 Workspace snapshot acquisition has its own boundary tests. Native scheduling and
