@@ -120,9 +120,14 @@ fn main() {
                 let terminate = if cancel {
                     // SAFETY: The supported event targets our owned child's group in this console.
                     // The completed lock and owned process handle keep its lifetime bounded.
-                    let signalled = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process_group) };
+                    let signalled = unsafe {
+                        GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process_group)
+                    };
                     if signalled == 0 {
-                        eprintln!("failed to signal owned controller: {}", std::io::Error::last_os_error());
+                        eprintln!(
+                            "failed to signal owned controller: {}",
+                            std::io::Error::last_os_error()
+                        );
                     }
                     signalled == 0
                 } else {
@@ -133,7 +138,10 @@ fn main() {
                     // A nonzero fixture exit code marks aborted or failed signal delivery.
                     let stopped = unsafe { TerminateProcess(handle.as_raw_handle(), 1) };
                     if stopped == 0 {
-                        eprintln!("failed to abort owned controller: {}", std::io::Error::last_os_error());
+                        eprintln!(
+                            "failed to abort owned controller: {}",
+                            std::io::Error::last_os_error()
+                        );
                     }
                     return;
                 }
