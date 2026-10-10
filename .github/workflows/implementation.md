@@ -150,8 +150,8 @@ The fixed `bench-history-setup` hook selects Folo's ordinary cached setup enviro
 Valgrind enabled. The callers supply matching `rustflags` values; the companion appends them
 to effective ambient Cargo arguments using child-only environment overrides. It honors
 `CARGO_ENCODED_RUSTFLAGS` precedence and preserves argument boundaries, and uses the same
-environment for collection and snapshot capture. No configuration job or flag-merging
-script is required in a consumer repository.
+environment for collection and snapshot capture. No configuration job or workflow-side
+flag-merging script is required in a consumer repository.
 
 The shared workflows also use an internal composite action at
 `.github/actions/workflow-tools` in the action repository. It prepares the caller's checkouts,

@@ -28,6 +28,6 @@ jobs:
       best-of: 3
       # Keep relink-sensitive timings comparable across history, PR and backfill.
       # Ref: design.md#benchmark-setup-hook.
-      rustflags: -Cllvm-args=-align-all-functions=6
+      rustflags: -Cllvm-args=-align-all-functions=6 -Cllvm-args=-align-all-nofallthru-blocks=6
       install-method: path
       source-path: .
