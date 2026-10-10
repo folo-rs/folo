@@ -87,11 +87,7 @@ fn findings_remain_findings_with_partial_platform_and_series_coverage() {
     let issue = only_issue(&github);
     assert!(issue.body.contains("Notable benchmark changes detected."));
     assert!(issue.body.contains("Missing: windows."));
-    assert!(
-        issue
-            .body
-            .contains("Some in-scope metric series could not be judged.")
-    );
+    assert_eq!(issue.body.matches("> [!WARNING]").count(), 1);
     assert!(issue.body.contains(&findings.summary));
     assert!(issue.body.contains(findings.artifact_url.as_ref().unwrap()));
 }

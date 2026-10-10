@@ -79,9 +79,11 @@ findings or re-derives analysis vocabulary.
 
 Reports use a shared message catalogue, including advisory wording and the public
 [report-reading guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
-Partial-series warnings locate the counts and reasons in the full Markdown report's final
-Coverage section or the JSON report's `census`, rather than implying that the embedded condensed
-summary carries those details.
+Completed reports use the embedded summary's heading and commit attribution without repeating
+them in the GitHub envelope. Unjudged in-scope series are routine coverage information, not a
+top-level warning: the summary's judged-series bullet points readers to the full report for
+details. Counts and reasons remain in the full Markdown report's final Coverage section and the
+JSON report's `census`. Missing collection platforms and stale results retain their warnings.
 Regression issues use `Benchmark history findings for <project> (updated YYYY-MM-DD)`.
 The project-qualified prefix identifies the rolling issue; the suffix is the UTC date of
 the companion's last body update, not the last measurement. For example, repeating an identical

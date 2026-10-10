@@ -1540,6 +1540,8 @@ total it shows and leaves the full reports to be consulted separately. Because i
 grouping, each retained finding instead carries its set's discriminant-filter flags as a trailing
 footer — reference material for a follow-up query rather than a headline — so the summary
 stays investigable and blocks for the same benchmark in different sets remain distinguishable.
+When in-scope series remain unjudged, the summary's judged-series bullet points to the full
+report for coverage details rather than adding a separate notice.
 Because it exists to
 fit a downstream cap rather than to present the analysis, it is offered only by `analyze`,
 never by the enumerating commands, and the retained-count is a fixed policy of the renderer.
