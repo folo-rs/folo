@@ -19,7 +19,17 @@ only the narrow decisions required across the crate boundary: object absence and
 collision. Other distinctions remain private under the workspace
 [error-handling guide](../../../docs/error-handling.md).
 
-Local writes compress data and publish it atomically. Azure operations retain SDK diagnostics,
+Local writes compress data and stage complete files beside their destinations. Publication uses
+`tempfile`'s no-clobber operation for ordinary writes and its replacing operation only for explicit
+overwrites. The publication itself enforces write-once behavior, without an existence-check race.
+Staging and publication run together on Tokio's blocking pool. Temporary-file ownership cleans up
+failed writes, and listing ignores the reserved staging prefix after an interrupted process.
+Published files use ordinary file-creation permissions, including the process umask on Unix.
+On Windows, canonicalizing the existing parent supplies extended-length paths to native publication.
+Key validation rejects NUL before native publication APIs can truncate a path.
+Native integration tests exercise competing writes, collision reporting and cleanup.
+
+Azure operations retain SDK diagnostics,
 while conditional creates persist an opaque request identity so a collision caused by an automatic
 retry after a committed upload is recognized as success. Read-through caching uses per-project
 invalidation markers after remote overwrites and deletions.

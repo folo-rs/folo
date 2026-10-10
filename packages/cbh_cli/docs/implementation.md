@@ -11,6 +11,10 @@ the values owned by `cbh_command`. It also classifies parser exits for the proce
 Command execution and application policy remain outside this crate, keeping parser dependencies
 and parser-specific concerns out of command implementations.
 
+Blessing mutations have a separate discriminant argument group: their help describes
+unrestricted omitted axes, while query help describes host defaults. Both produce the
+same raw option values; orchestration owns their distinct resolution policies.
+
 Standalone Azure setup has its own argument group rather than flattening benchmark
 environment options. Export admits partial deployment inputs; execution requires explicit
 placement and repository inputs. Explicit custom access is a paired CLI constraint.

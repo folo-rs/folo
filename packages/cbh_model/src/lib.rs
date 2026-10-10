@@ -26,6 +26,7 @@
 mod aggregate;
 mod benchmark_id;
 mod bless;
+mod blessing_scope;
 mod collection;
 mod comparability;
 mod constants;
@@ -33,10 +34,12 @@ mod context;
 mod identifiers;
 mod metric;
 mod run;
+mod scoped_blessing;
 
 pub use aggregate::{AggregateError, Combined, Selection, min_per_metric};
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
+pub use blessing_scope::*;
 pub use collection::*;
 pub use comparability::{
     DiscriminantSet, Engine, IntervalSupport, ObjectKind, StorageKey, parse_key, sanitize_segment,
@@ -49,6 +52,7 @@ pub use context::{
 pub use identifiers::{MachineKey, TargetTriple};
 pub use metric::{Metric, MetricKind};
 pub use run::{BenchmarkResult, MetricList, Run, SCHEMA_VERSION};
+pub use scoped_blessing::*;
 
 #[cfg(test)]
 ::testing::set_allocator!();

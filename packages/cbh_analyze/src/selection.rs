@@ -88,8 +88,8 @@ impl<'a> Selection<'a> {
 
     /// Discriminant filters for `bless`.
     ///
-    /// Only the filters and `base` matter: a blessing always acts at the current
-    /// commit, so it has no `context` / `since` / topology selectors.
+    /// The mutation resolves its context separately and has no history window.
+    /// Its caller resolves omitted discriminants without host defaults.
     pub(crate) fn from_bless(options: &'a BlessOptions) -> Self {
         Self {
             current: None,

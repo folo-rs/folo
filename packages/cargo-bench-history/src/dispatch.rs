@@ -153,12 +153,8 @@ pub async fn run_with_overrides(
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }
-        Command::Bless(options) => {
-            commands::bless(options, workspace_dir, clock, auto_discriminants).await
-        }
-        Command::Unbless(options) => {
-            commands::unbless(options, workspace_dir, auto_discriminants).await
-        }
+        Command::Bless(options) => commands::bless(options, workspace_dir, clock).await,
+        Command::Unbless(options) => commands::unbless(options, workspace_dir).await,
         Command::MachineKey(options) => commands::machine_key(options).await,
     }
 }

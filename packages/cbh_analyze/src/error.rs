@@ -31,7 +31,7 @@ use crate::current::InvalidCurrentCollection;
 #[from(
     BlessSelectionRequiredError,
     BlessBaseRequiredError,
-    BlessDiscriminantsRequiredError
+    BlessingScopeConflictError
 )]
 #[from(
     ResolveRefFailedError,
@@ -253,19 +253,19 @@ pub(crate) struct BlessBaseRequiredError;
 impl UnwindSafe for BlessBaseRequiredError {}
 impl RefUnwindSafe for BlessBaseRequiredError {}
 
-/// A blessing could not identify a concrete discriminant set.
+/// A deletion request covers only part of a persisted acceptance scope.
 #[ohno::error]
 #[display(
-    "bless cannot target a discriminant set: no stored result exists at the context commit \
-     {commit}, and the target-triple or machine-key filter is unconstrained; pass --target-triple \
-     and --machine-key (or record a run at the commit first)"
+    "cannot partially revoke blessing {key} with persisted scope {scope}; select its entire \
+     scope to unbless, then re-bless the scope to keep"
 )]
-pub(crate) struct BlessDiscriminantsRequiredError {
-    commit: String,
+pub(crate) struct BlessingScopeConflictError {
+    key: String,
+    scope: String,
 }
 
-impl UnwindSafe for BlessDiscriminantsRequiredError {}
-impl RefUnwindSafe for BlessDiscriminantsRequiredError {}
+impl UnwindSafe for BlessingScopeConflictError {}
+impl RefUnwindSafe for BlessingScopeConflictError {}
 
 /// Asking git what commit a ref names failed.
 #[ohno::error]
@@ -401,7 +401,7 @@ mod tests {
         RefUnwindSafe
     );
     assert_impl_all!(
-        BlessDiscriminantsRequiredError: Send,
+        BlessingScopeConflictError: Send,
         Sync,
         Debug,
         Error,

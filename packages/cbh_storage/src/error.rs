@@ -100,13 +100,6 @@ pub(crate) struct CreateLocalParentDirectoriesError {
     pub(crate) path: PathBuf,
 }
 
-/// Inspecting whether a local object already exists failed.
-#[ohno::error]
-#[display("could not inspect local storage object at {}", path.display())]
-pub(crate) struct InspectLocalObjectExistenceError {
-    pub(crate) path: PathBuf,
-}
-
 /// Atomically writing a local object failed.
 #[ohno::error]
 #[display("could not write local storage object at {}", path.display())]
@@ -220,7 +213,6 @@ impl_other_storage_error!(
     InvalidStorageKeyError,
     StorageConfigurationError,
     CreateLocalParentDirectoriesError,
-    InspectLocalObjectExistenceError,
     WriteLocalObjectError,
     ReadLocalObjectError,
     DecompressLocalObjectError,

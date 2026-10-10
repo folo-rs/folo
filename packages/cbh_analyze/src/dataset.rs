@@ -1,7 +1,7 @@
 //! `select_dataset`: resolve the git timeline, enumerate and fold the in-selection
 //! objects into a `SelectedDataSet`, and explain an empty outcome.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::num::NonZero;
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,7 +14,7 @@ use cbh_detect::{
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
-use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, StorageKey};
+use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, StorageKey};
 use cbh_storage::Storage;
 use jiff::Timestamp;
 
@@ -24,15 +24,11 @@ use super::discriminants::{
     resolve_discriminants,
 };
 use super::history::{DirtyTipPolicy, ResolvedHistory, resolve_history};
-use super::load::{
-    CandidateListing, RunIndex, WorkerFold, fold_runs_chunked, list_candidates,
-    load_objects_concurrently,
-};
+use super::load::{CandidateListing, RunIndex, WorkerFold, fold_runs_chunked, list_candidates};
 use super::selection::Selection;
 use super::window::{auto_mode, before_since_cutoff, resolve_since, since_cutoff_reason};
-use crate::{
-    AnalyzeError, FirstParentWalkFailedError, InvalidBlessingError, InvalidStoredUtf8Error,
-};
+use crate::stored_blessings::{blessing_candidates, load_blessings};
+use crate::{AnalyzeError, FirstParentWalkFailedError};
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
@@ -151,6 +147,7 @@ where
     let CandidateListing {
         selected: candidates,
         siblings: mut sibling_candidates,
+        scoped_blessings,
     } = list_candidates(
         storage,
         project_id,
@@ -487,8 +484,8 @@ where
         let blessing_started = Instant::now();
         // Phase 1 — key-only filtering: drop blessings whose commit is not on the
         // analyzed history before fetching, in candidate order.
-        let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
-        for (key, parsed) in bless_candidates {
+        let mut to_fetch = Vec::new();
+        for (key, parsed) in blessing_candidates(bless_candidates, scoped_blessings) {
             let on_analysis_history = match mode {
                 AnalysisMode::History => order.contains_key(&parsed.commit),
                 AnalysisMode::Branch => base_ref_history
@@ -509,29 +506,21 @@ where
         }
         // Phase 2 — fetch and deserialize concurrently, then restore storage-key
         // order (`buffer_unordered` completes out of order).
-        let mut fetched = load_objects_concurrently(storage, to_fetch, |key, bytes| {
-            let text = String::from_utf8(bytes).map_err(|error| {
-                InvalidStoredUtf8Error::caused_by("stored blessing", key, error)
-            })?;
-            BlessingRecord::from_json(&text).map_err(|error| {
-                InvalidBlessingError::caused_by("stored blessing", key, "blessing record", error)
-                    .into()
-            })
-        })
-        .await?;
-        fetched.sort_by(|left, right| left.0.cmp(&right.0));
+        let fetched = load_blessings(storage, to_fetch, &discriminants).await?;
+        let sets: BTreeSet<_> = series.iter().map(|series| &series.set).collect();
         // Phase 3 — record each blessing against its commit's topological index
         // and committer date (resolved from topology, for the report anchor).
-        for (key, parsed, record) in fetched {
+        for blessing in fetched {
+            let commit = &blessing.commit;
             let (topo_index, commit_time) = match mode {
                 AnalysisMode::History => (
-                    order.get(&parsed.commit).copied(),
-                    commit_times.get(&parsed.commit).copied(),
+                    order.get(commit).copied(),
+                    commit_times.get(commit).copied(),
                 ),
                 AnalysisMode::Branch => base_ref_history.as_ref().map_or((None, None), |history| {
                     (
-                        history.order.get(&parsed.commit).copied(),
-                        history.commit_times.get(&parsed.commit).copied(),
+                        history.order.get(commit).copied(),
+                        history.commit_times.get(commit).copied(),
                     )
                 }),
             };
@@ -539,16 +528,23 @@ where
                 topo_index.expect("phase 1 admitted only blessings on the analysis topology");
             reporter.note_with(|| {
                 format!(
-                    "loaded blessing {key} ({} accepted at {})",
-                    count_noun(record.prefixes.len(), "prefix filter"),
-                    parsed.commit
+                    "loaded blessing {} ({} accepted at {commit}; persisted scope {})",
+                    blessing.key,
+                    count_noun(blessing.record.prefixes.len(), "prefix filter"),
+                    blessing.scope,
                 )
             });
-            blessings.entry(parsed.set.clone()).or_default().push((
-                topo_index,
-                commit_time,
-                record,
-            ));
+            // Expand only for this query, never in storage. A newly discovered partition
+            // receives the same acceptance even when it has no run at the anchor commit.
+            for set in &sets {
+                if blessing.scope.matches(set) {
+                    blessings.entry((*set).clone()).or_default().push((
+                        topo_index,
+                        commit_time,
+                        blessing.record.clone(),
+                    ));
+                }
+            }
         }
         reporter.timing(
             "blessing sidecar load (filter + fetch + parse)",

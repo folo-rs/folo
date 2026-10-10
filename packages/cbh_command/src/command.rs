@@ -591,11 +591,9 @@ impl Default for BackfillOptions {
 
 /// Options for the `bless` command.
 ///
-/// The data-set-selection options mirror the discriminant subset of [`AnalyzeOptions`]
-/// (engine, target triple, and machine key) so a `bless` writes its sidecars into
-/// exactly the discriminant sets a matching `analyze` would consume. It always
-/// acts at the current commit (`HEAD`), so it has no `context` / `since` /
-/// `metric` selectors.
+/// Discriminants describe persistent acceptance intent. Omitted axes are unrestricted,
+/// including partitions with no anchor measurement and partitions discovered later.
+/// Benchmark prefixes remain independent of the discriminant scope.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BlessOptions {
@@ -606,21 +604,16 @@ pub struct BlessOptions {
     /// Local-storage selection from `--local`; overrides the configured cloud
     /// backend. `None` means `--local` was not given (use the configured backend).
     pub local: Option<LocalStorageSelection>,
-    /// Commit to bless; defaults to `HEAD`. The blessing is recorded against the
-    /// `clean.json` stored at this commit.
+    /// Commit to bless; defaults to `HEAD`. No measurement at this commit is required.
     pub context: Option<String>,
     /// Base ref the context commit must be on; defaults to the detected (or
     /// configured) default branch.
     pub base: Option<String>,
-    /// Restrict the blessing to these engines (repeatable). Empty auto-detects
-    /// every engine; the `all` keyword is an explicit synonym for no filter.
+    /// Restrict the blessing to these engines (repeatable). Empty or `all` is unrestricted.
     pub engine: Vec<String>,
-    /// Restrict the blessing to these full target triples (repeatable). Empty
-    /// auto-detects the current machine's triple; `all` matches every triple.
+    /// Restrict the blessing to these target triples (repeatable). Empty or `all` is unrestricted.
     pub target_triple: Vec<String>,
-    /// Restrict the blessing to these machine keys (repeatable). Empty
-    /// auto-detects the current machine's fingerprint; `all` matches every
-    /// machine.
+    /// Restrict the blessing to these machine keys (repeatable). Empty or `all` is unrestricted.
     pub machine_key: Vec<String>,
     /// Benchmark-id prefixes to accept (matched against the qualified identity).
     /// At least one is required unless `all` is set.
@@ -634,9 +627,9 @@ pub struct BlessOptions {
 /// Options for the `unbless` command.
 ///
 /// Mirrors [`BlessOptions`]' discriminant filters but takes no prefixes: an unbless
-/// removes every blessing recorded at the current commit in the selected sets
-/// (sidecars are immutable, so editing a blessing means unblessing then
-/// re-blessing the subset to keep).
+/// removes every blessing recorded at the context commit within the selected scope.
+/// A record overlapping but extending beyond the selected scope is an error.
+/// Editing a blessing means unblessing then re-blessing the subset to keep.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UnblessOptions {
@@ -653,15 +646,11 @@ pub struct UnblessOptions {
     /// Base ref the context commit must be on; defaults to the detected (or
     /// configured) default branch.
     pub base: Option<String>,
-    /// Restrict the unblessing to these engines (repeatable). Empty auto-detects
-    /// every engine; the `all` keyword is an explicit synonym for no filter.
+    /// Restrict revocation to these engines (repeatable). Empty or `all` is unrestricted.
     pub engine: Vec<String>,
-    /// Restrict the unblessing to these full target triples (repeatable). Empty
-    /// auto-detects the current machine's triple; `all` matches every triple.
+    /// Restrict revocation to these target triples (repeatable). Empty or `all` is unrestricted.
     pub target_triple: Vec<String>,
-    /// Restrict the unblessing to these machine keys (repeatable). Empty
-    /// auto-detects the current machine's fingerprint; `all` matches every
-    /// machine.
+    /// Restrict revocation to these machine keys (repeatable). Empty or `all` is unrestricted.
     pub machine_key: Vec<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,

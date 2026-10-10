@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::{Component, Path};
 
 use cbh_model::{OBJECTS_SEGMENT, STORAGE_VERSION, sanitize_segment};
@@ -7,8 +8,13 @@ use crate::{InvalidStorageKeyError, StorageError};
 /// Returns `true` only if `segment` is a single ordinary path component, so it
 /// can never escape or rebind a storage root when appended to a key.
 pub(crate) fn is_plain_segment(segment: &str) -> bool {
+    // Native publication APIs use NUL-terminated paths; truncation must never address another key.
+    if segment.contains('\0') {
+        return false;
+    }
     let mut components = Path::new(segment).components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+    matches!(components.next(), Some(Component::Normal(name)) if name == OsStr::new(segment))
+        && components.next().is_none()
 }
 
 /// Validates that `key` is a well-formed object key: a `/`-separated sequence of
@@ -76,7 +82,26 @@ pub fn project_objects_prefix(project: &str) -> String {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use ohno::ErrorExt as _;
+
     use super::*;
+
+    #[test]
+    fn segments_must_not_normalize_to_different_names() {
+        assert!(!is_plain_segment("name/"));
+        #[cfg(windows)]
+        assert!(!is_plain_segment("name\\"));
+        assert!(is_plain_segment("name"));
+    }
+
+    #[test]
+    fn nul_cannot_alias_a_different_storage_key() {
+        for key in ["\0", "v1/run\0.json", "v1/a\0/b"] {
+            let error = validate_key(key).unwrap_err();
+            assert!(error.find_source::<InvalidStorageKeyError>().is_some());
+        }
+        validate_key("v1/run.json").unwrap();
+    }
 
     #[test]
     fn cache_epoch_key_lands_in_the_project_partition() {

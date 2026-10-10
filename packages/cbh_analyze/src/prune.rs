@@ -31,7 +31,7 @@ use cbh_config::{
 };
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
-use cbh_model::DiscriminantSet;
+use cbh_model::BlessingScope;
 use cbh_storage::{Storage, StorageFacade, finish_with_flush, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -40,9 +40,11 @@ use tick::Clock;
 use super::announce::{AnnouncedBase, AnnouncedSince, announce_selection, selection_announcement};
 use super::{
     AutoDiscriminants, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection,
-    before_since_cutoff, discriminant_filtered_candidates, parse_since, resolve_auto_discriminants,
-    resolve_discriminants, resolve_history, resolve_now,
+    before_since_cutoff, parse_since, resolve_auto_discriminants, resolve_discriminants,
+    resolve_history, resolve_now,
 };
+use crate::load::list_candidates;
+use crate::stored_blessings::{blessing_scope, load_blessings, require_contained_scope};
 use crate::{
     AnalyzeError, PruneBaseConfirmationRequiredError, PruneSelectionRequiredError, RenderedReports,
     ReportRequest,
@@ -194,8 +196,7 @@ where
     let selection = Selection::from_prune(options);
 
     let discriminants = resolve_discriminants(&selection, Some(auto))?;
-    let candidates =
-        discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
+    let listing = list_candidates(storage, project_id, &discriminants, false, reporter).await?;
 
     let ResolvedHistory {
         target_ref,
@@ -239,7 +240,8 @@ where
     // Runs and blessing sidecars are pruned independently: `--clean`/`--dirty`/`--all`
     // select runs, while `--include-blessings` selects blessing sidecars. Partition
     // the candidates so each pass considers only its own object kind.
-    let (runs, blessings): (Vec<_>, Vec<_>) = candidates
+    let (runs, blessings): (Vec<_>, Vec<_>) = listing
+        .selected
         .into_iter()
         .partition(|(_, parsed)| !parsed.is_bless());
 
@@ -317,7 +319,7 @@ where
             reporter.note_with(|| format!("selected {key} for removal"));
             items.push(RemovalItem {
                 index,
-                set: parsed.set,
+                set: BlessingScope::from(&parsed.set),
                 commit: parsed.commit,
                 key,
                 kind,
@@ -352,9 +354,45 @@ where
             reporter.note_with(|| format!("selected {key} for removal (blessing sidecar)"));
             items.push(RemovalItem {
                 index,
-                set: parsed.set,
+                set: BlessingScope::from(&parsed.set),
                 commit: parsed.commit,
                 key,
+                kind: RunKind::Bless,
+            });
+        }
+    }
+
+    if options.include_blessings {
+        // Resolve topology before fetching scopes. Containment is checked before
+        // deleting any item, including runs, so a narrowed request fails atomically.
+        let candidates = listing
+            .scoped_blessings
+            .into_iter()
+            .filter(|(key, candidate)| {
+                selected_index(
+                    key,
+                    &candidate.commit,
+                    &order,
+                    merge_base_index,
+                    tip_is_merge_base,
+                    &options.commit,
+                    &target_ref,
+                    reporter,
+                )
+                .is_some()
+                    && !before_since_cutoff(commit_times.get(&candidate.commit).copied(), since)
+            })
+            .collect();
+        let selected = blessing_scope(&discriminants);
+        for blessing in load_blessings(storage, candidates, &discriminants).await? {
+            require_contained_scope(&selected, &blessing.scope, &blessing.key)?;
+            items.push(RemovalItem {
+                index: *order
+                    .get(&blessing.commit)
+                    .expect("candidates were restricted to the selected topology"),
+                set: blessing.scope,
+                commit: blessing.commit,
+                key: blessing.key,
                 kind: RunKind::Bless,
             });
         }
@@ -482,8 +520,8 @@ impl RunKind {
 struct RemovalItem {
     /// First-parent position of the commit, for oldest-first ordering.
     index: usize,
-    /// The discriminant set the object belongs to.
-    set: DiscriminantSet,
+    /// The concrete run partition or the complete persisted blessing scope.
+    set: BlessingScope,
     /// The commit the object was measured against.
     commit: String,
     /// The storage key to delete.
@@ -509,7 +547,7 @@ struct CommitRemoval {
 #[derive(Clone)]
 struct SetRemoval {
     /// The comparable partition this slice covers.
-    set: DiscriminantSet,
+    set: BlessingScope,
     /// Runs removed in this set.
     runs: usize,
     /// Blessing sidecars removed in this set.
@@ -536,7 +574,7 @@ struct Plan {
 /// Groups the selected objects by discriminant set and commit (ordered by
 /// first-parent topology, oldest first).
 fn build_plan(project_id: &str, target_ref: &str, items: &[RemovalItem]) -> Plan {
-    let mut sets: Vec<DiscriminantSet> = items.iter().map(|item| item.set.clone()).collect();
+    let mut sets: Vec<BlessingScope> = items.iter().map(|item| item.set.clone()).collect();
     sets.sort();
     sets.dedup();
 
@@ -695,9 +733,10 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
     }
     #[derive(Serialize)]
     struct JsonSet<'a> {
-        engine: &'a str,
-        target_triple: &'a str,
-        machine_key: &'a str,
+        engine: String,
+        target_triple: String,
+        machine_key: String,
+        discriminant_scope: &'a BlessingScope,
         runs: usize,
         blessings: usize,
         commits: Vec<JsonCommit<'a>>,
@@ -720,22 +759,26 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
     let sets: Vec<JsonSet<'_>> = plan
         .sets
         .iter()
-        .map(|set| JsonSet {
-            engine: set.set.engine.as_str(),
-            target_triple: set.set.target_triple.as_str(),
-            machine_key: set.set.machine_key.as_str(),
-            runs: set.runs,
-            blessings: set.blessings,
-            commits: set
-                .commits
-                .iter()
-                .map(|commit| JsonCommit {
-                    commit: &commit.commit,
-                    runs: commit.runs,
-                    blessings: commit.blessings,
-                    keys: &commit.keys,
-                })
-                .collect(),
+        .map(|set| {
+            let [engine, target_triple, machine_key] = set.set.labels();
+            JsonSet {
+                engine,
+                target_triple,
+                machine_key,
+                discriminant_scope: &set.set,
+                runs: set.runs,
+                blessings: set.blessings,
+                commits: set
+                    .commits
+                    .iter()
+                    .map(|commit| JsonCommit {
+                        commit: &commit.commit,
+                        runs: commit.runs,
+                        blessings: commit.blessings,
+                        keys: &commit.keys,
+                    })
+                    .collect(),
+            }
         })
         .collect();
 
@@ -763,7 +806,7 @@ mod tests {
     use cbh_config::Config;
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
-    use cbh_model::Engine;
+    use cbh_model::{DiscriminantSet, Engine};
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
@@ -1723,6 +1766,7 @@ mod tests {
             target_triple: "x86_64-unknown-linux-gnu".into(),
             machine_key: "m1".into(),
         };
+        let set = BlessingScope::from(&set);
         // Two clean runs (c0, c1) plus one blessing on c0: an asymmetric mix so a
         // run/blessing miscount diverges from the truth.
         let items = vec![

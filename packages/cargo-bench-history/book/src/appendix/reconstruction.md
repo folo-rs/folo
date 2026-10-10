@@ -123,12 +123,13 @@ A few details worth knowing:
   Branch mode applies it to the base ref's first-parent history, because that is the evidence the
   branch is judged against. In both cases the blessed commit remains and earlier evidence is
   excluded.
-- **A blessing is a prefix of the benchmark identity.** The blessed value is matched as a plain
-  string prefix of the slash-joined benchmark identity (`group/case`, `package/module/fn`, …),
+- **Benchmark identity selection uses prefixes.** The recorded prefixes are matched against
+  the slash-joined benchmark identity (`group/case`, `package/module/fn`, …),
   so blessing `foo/bar` also accepts `foo/barbaz`. Bear that in mind when names share a stem.
-- **A blessing is per discriminant set.** It re-baselines only the series in the discriminant
-  set it was recorded against, under the same partitioning rules as everything else; a different
-  machine key or target triple is untouched.
+- **A blessing applies within its scope.** Its
+  [blessing scope](../concepts/comparability.md#blessing-scopes) selects the eligible
+  discriminant sets. Each matching series is re-baselined separately; acceptance across
+  several machine keys or targets never combines their measurements.
 
 ## One run per commit
 

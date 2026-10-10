@@ -2,31 +2,33 @@
 //! filesystem. Object keys map to relative paths under a configured root.
 
 use std::ffi::OsStr;
-use std::io;
+#[cfg(unix)]
+use std::fs::Permissions;
+use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::io::AsyncWriteExt;
+use tempfile::Builder;
 
 use crate::{
     AdvanceLocalListingDirectoryError, CreateLocalParentDirectoriesError,
-    DecompressLocalObjectError, InspectLocalListingEntryError, InspectLocalObjectExistenceError,
-    ObjectAlreadyExistsError, ObjectNotFoundError, OpenLocalListingDirectoryError,
-    ReadLocalObjectError, RemoveLocalObjectError, Storage, StorageError, WriteLocalObjectError,
-    is_plain_segment, validate_key,
+    DecompressLocalObjectError, InspectLocalListingEntryError, ObjectAlreadyExistsError,
+    ObjectNotFoundError, OpenLocalListingDirectoryError, ReadLocalObjectError,
+    RemoveLocalObjectError, Storage, StorageError, WriteLocalObjectError, is_plain_segment,
+    validate_key,
 };
 
-/// Filename prefix for the transient files an atomic write renames into place.
+/// Filename prefix for the transient files an atomic write publishes.
 /// The prefix is reserved: real object keys are `.json` files named from commit
 /// hashes and timestamps, so nothing stored ever starts with it, which lets
 /// [`list`](LocalStorage::list) skip a crash-orphaned temp file rather than
 /// mistake it for an object.
 const TEMP_PREFIX: &str = ".cbh-tmp-";
 
-/// Distinguishes concurrent atomic writes within a single process; combined with
-/// the process id it keeps every temp filename unique.
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Matches ordinary file creation; the process umask determines the final access bits.
+#[cfg(unix)]
+const CREATION_PERMISSIONS: u32 = 0o666;
 
 /// A [`Storage`] that persists objects as files under a root directory.
 #[derive(Clone, Debug)]
@@ -37,7 +39,7 @@ pub struct LocalStorage {
 impl LocalStorage {
     /// Creates a local storage rooted at `root`.
     #[must_use]
-    pub(crate) fn new(root: impl Into<PathBuf>) -> Self {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
@@ -64,29 +66,8 @@ impl Storage for LocalStorage {
                 CreateLocalParentDirectoriesError::caused_by(parent.to_path_buf(), error)
             })?;
         }
-        // Write-once: refuse to replace an existing object. This existence check
-        // races with a concurrent writer of the same key, but the atomic rename
-        // in `write_atomic` guarantees the published object is always complete,
-        // so a lost race degrades only to last-writer-wins, never to a corrupt
-        // or half-written file. Concurrent writers of the same key do not arise
-        // in practice: object keys are partitioned by commit and discriminant,
-        // and duplicate commits are rejected a layer above.
-        match tokio::fs::try_exists(&path).await {
-            Ok(true) => {
-                return Err(ObjectAlreadyExistsError::new(key.to_owned()).into());
-            }
-            Ok(false) => {}
-            Err(error) => {
-                return Err(
-                    InspectLocalObjectExistenceError::caused_by(path.clone(), error).into(),
-                );
-            }
-        }
         let compressed = cbh_codec::compress(bytes);
-        write_atomic(&path, &compressed)
-            .await
-            .map_err(|error| WriteLocalObjectError::caused_by(path, error))?;
-        Ok(())
+        write_atomic(key, path, compressed, false).await
     }
 
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
@@ -96,13 +77,8 @@ impl Storage for LocalStorage {
                 CreateLocalParentDirectoriesError::caused_by(parent.to_path_buf(), error)
             })?;
         }
-        // The atomic rename replaces any existing object in full, the deliberate
-        // escape hatch from the write-once contract.
         let compressed = cbh_codec::compress(bytes);
-        write_atomic(&path, &compressed)
-            .await
-            .map_err(|error| WriteLocalObjectError::caused_by(path, error))?;
-        Ok(())
+        write_atomic(key, path, compressed, true).await
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
@@ -218,48 +194,67 @@ fn is_temp_file_name(name: &OsStr) -> bool {
         .is_some_and(|name| name.starts_with(TEMP_PREFIX))
 }
 
-/// A unique temp-file path in the same directory as `target`. Keeping the temp
-/// file beside its destination ensures the later rename stays on one filesystem
-/// and is therefore atomic.
-fn temp_path_for(target: &Path) -> PathBuf {
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    parent.join(format!(
-        "{TEMP_PREFIX}{pid}-{nanos}-{counter}",
-        pid = std::process::id()
-    ))
-}
+/// Publishes complete objects without a check-then-replace race.
+///
+/// Staging and publication share a filesystem; the temporary file owns failure cleanup.
+/// See `docs/implementation.md` for the local publication policy.
+async fn write_atomic(
+    key: &str,
+    target: PathBuf,
+    bytes: Vec<u8>,
+    overwrite: bool,
+) -> Result<(), StorageError> {
+    let key = key.to_owned();
+    let error_path = target.clone();
+    // tempfile exposes synchronous platform-specific no-clobber publication, so keep the
+    // complete filesystem operation off the async worker rather than wrapping each syscall.
+    tokio::task::spawn_blocking(move || -> Result<(), StorageError> {
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        // Windows canonicalization supplies the extended-length path form needed by
+        // tempfile's native publication API. The destination itself need not exist.
+        #[cfg(windows)]
+        let target = parent
+            .canonicalize()
+            .map_err(|error| WriteLocalObjectError::caused_by(target.clone(), error))?
+            .join(
+                target
+                    .file_name()
+                    .expect("a validated storage key ends in an ordinary path component"),
+            );
+        #[cfg(windows)]
+        let parent = target
+            .parent()
+            .expect("joining a file name to the canonical directory preserves its parent");
+        let mut builder = Builder::new();
+        builder.prefix(TEMP_PREFIX);
+        #[cfg(unix)]
+        builder.permissions(Permissions::from_mode(CREATION_PERMISSIONS));
+        let mut staging = builder
+            .tempfile_in(parent)
+            .map_err(|error| WriteLocalObjectError::caused_by(target.clone(), error))?;
+        staging
+            .write_all(&bytes)
+            .map_err(|error| WriteLocalObjectError::caused_by(target.clone(), error))?;
 
-/// Writes `bytes` to `target` atomically. The data lands in a temp file that is
-/// flushed and then renamed onto `target`, so a crash mid-write can only leave
-/// an orphaned temp file, never a half-written object at the real key. The temp
-/// file is removed on any error so a failed write leaves nothing behind.
-async fn write_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temp = temp_path_for(target);
-    // Close the handle (end of the block) before the rename: Windows refuses to
-    // rename a file that is still open.
-    let written = async {
-        let mut file = tokio::fs::File::create(&temp).await?;
-        file.write_all(bytes).await?;
-        // Tokio's `File` does not flush its buffer on drop, so flush explicitly
-        // to guarantee every byte is durable before the rename publishes it.
-        file.flush().await
-    }
-    .await;
-    if let Err(error) = written {
-        // Best-effort: removing the orphaned temp file cannot recover the
-        // original error we are about to return, so its own result is ignored.
-        let _cleanup = tokio::fs::remove_file(&temp).await;
-        return Err(error);
-    }
-    if let Err(error) = tokio::fs::rename(&temp, target).await {
-        let _cleanup = tokio::fs::remove_file(&temp).await;
-        return Err(error);
-    }
-    Ok(())
+        let published = if overwrite {
+            staging.persist(&target)
+        } else {
+            // A competing publication must fail here, not overwrite a winner after an exists check.
+            staging.persist_noclobber(&target)
+        };
+        match published {
+            Ok(_) => Ok(()),
+            Err(error) if !overwrite && error.error.kind() == io::ErrorKind::AlreadyExists => {
+                Err(ObjectAlreadyExistsError::caused_by(key, error.error).into())
+            }
+            Err(error) => Err(WriteLocalObjectError::caused_by(target, error.error).into()),
+        }
+    })
+    .await
+    .map_err(|error| WriteLocalObjectError::caused_by(error_path, error))?
 }
 
 #[cfg(test)]
@@ -423,26 +418,6 @@ mod tests {
             .unwrap_err();
 
         assert!(error.find_source::<InvalidStorageKeyError>().is_some());
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
-    async fn put_maps_a_non_existence_open_error_to_io() {
-        let dir = tempdir().unwrap();
-        let storage = LocalStorage::new(dir.path());
-
-        // An interior NUL passes the plain-segment check but the OS rejects it at
-        // open time with `InvalidInput` (not `AlreadyExists`), so it must surface
-        // through the generic IO arm rather than the write-once arm.
-        let error = storage.put("bad\0name", b"x").await.unwrap_err();
-
-        assert!(
-            error
-                .find_source::<InspectLocalObjectExistenceError>()
-                .is_some()
-                || error.find_source::<WriteLocalObjectError>().is_some()
-        );
-        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[cfg(windows)]

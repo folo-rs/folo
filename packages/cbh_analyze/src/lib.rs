@@ -50,6 +50,7 @@ mod pipeline;
 mod prune;
 mod report;
 mod selection;
+mod stored_blessings;
 mod window;
 
 #[cfg(any(test, feature = "private-test-util"))]
@@ -71,8 +72,8 @@ pub use discriminants::AutoDiscriminants;
 pub(crate) use discriminants::resolve_discriminants;
 pub use error::AnalyzeError;
 pub(crate) use error::{
-    BaseBranchUnavailableError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
-    BlessSelectionRequiredError, CommitterTimeFailedError, DefaultBranchProbeFailedError,
+    BaseBranchUnavailableError, BlessBaseRequiredError, BlessSelectionRequiredError,
+    BlessingScopeConflictError, CommitterTimeFailedError, DefaultBranchProbeFailedError,
     EmptyBenchmarkError, FirstParentWalkFailedError, InvalidBlessingError, InvalidResultSetError,
     InvalidStoredUtf8Error, InvalidWindowValueError, ListAllUnsupportedError, MergeBaseFailedError,
     MergeBaseUnavailableError, NoOutputSelectedError, PruneBaseConfirmationRequiredError,

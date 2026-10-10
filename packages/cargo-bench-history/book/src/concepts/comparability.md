@@ -56,3 +56,16 @@ A benchmark identity is an ordered, non-empty list of string segments; each engi
 decides the segments, and reports render the full form with segments joined by `/`. Renaming a
 benchmark starts a new series. Because identity is per discriminant set, the same benchmark can
 exist under several triples or machine keys at once.
+
+## Blessing scopes
+
+A **blessing** records acceptance of a benchmark change and sets a new analysis baseline
+at a chosen commit. Its **blessing scope** selects which discriminant sets receive that
+acceptance, using engine, target-triple and machine-key restrictions. An unrestricted
+field matches every value, including values encountered later. Benchmark-id prefixes
+select the affected benchmark identities separately from this scope.
+
+A blessing can apply to several partitions without combining their measurements.
+Each matching series is re-baselined independently, even when its partition has no
+measurement at the chosen commit. See [bless / unbless](../commands/bless.md) for the
+command syntax and defaults.
