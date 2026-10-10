@@ -29,8 +29,9 @@ cargo bench-history list blessings --local=./bench-history
   discriminant filters it lists every stored partition, so you can find triples and machine keys
   you do not already know.
 - **`blessings`** — audits blessings (see [bless / unbless](bless.md)): records at
-  `--context` (default `HEAD`), with their actual persisted scopes, even without measurements.
-  A logical scope is shown when it intersects the query, but is never narrowed in the output.
+  `--context` (default `HEAD`), with their actual persisted
+  [blessing scopes](../concepts/comparability.md#blessing-scopes), even without measurements.
+  A scope is shown when it intersects the query, but is never narrowed in the output.
   Pass `--engine all --target-triple all --machine-key all` to audit every scope at that anchor.
   JSON's `discriminant_scope` contains the accepted values per axis; an empty array is unrestricted.
   Add `--all` to show the most recent effective blessing per measured benchmark and partition

@@ -64,7 +64,7 @@ so `list runs` may report more series than `analyze` now analyzes. Each is
 generic over the `GitHistory` + `Storage` ports so tests drive it with fakes + `block_on`.
 Semantics and per-command behaviour: DESIGN §7–§8.
 
-Keep logical blessing scopes independent of observed partitions. Inspection must
+Keep persisted blessing scopes independent of observed partitions. Inspection must
 show persisted scope; deletion must contain it completely before removing any
 record. See the [blessing implementation](../cbh_analyze/docs/implementation.md).
 

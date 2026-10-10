@@ -79,7 +79,7 @@ trunk measurements use the same persistence path; query-time topology selection 
 unrelated branch commits out of trunk series. Local filesystem storage remains an alternative
 backend selected at run time.
 
-Acceptance uses project-level logical records and compatible partition-local records.
+Acceptance uses project-level blessing records and compatible partition-local blessing records.
 The [model](../../cbh_model/docs/implementation.md) owns scope matching and key grammar;
 [analysis orchestration](../../cbh_analyze/docs/implementation.md) owns topology admission,
 query-time application and complete-scope revocation. Both formats remain under the

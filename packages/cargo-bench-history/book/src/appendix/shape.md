@@ -115,7 +115,7 @@ benchmarked out of order, or backfilled months later, lands exactly where its co
 
 ## Where it all lives
 
-A storage key is a path with a fixed grammar:
+A run's storage key is a path with a fixed grammar:
 
 {{#include generated/shape-key-grammar.md}}
 
@@ -123,12 +123,13 @@ Concrete partition directories hold runs and any partition-local blessing record
 
 {{#include generated/shape-object-kinds.md}}
 
-Logical blessings live independently under
+Project-level blessing records store their
+[blessing scope](../concepts/comparability.md#blessing-scopes) explicitly and live under
 `v1/<project>/objects/blessings/<commit>/bless-<issued_unix_nanos>.json`.
 Each record carries benchmark prefixes and a required `scope` object containing `engine`,
 `target_triple` and `machine_key` arrays. An empty array leaves that axis unrestricted.
 The scope is matched at query time rather than expanded into the partitions present at issuance.
-Partition-local records derive their exact scope from their keys and remain effective.
+Partition-local blessing records derive their exact scope from their keys and remain effective.
 See [bless / unbless](../commands/bless.md) for acceptance and revocation.
 
 Each path segment is **sanitized**: characters outside a safe set are replaced, and the result

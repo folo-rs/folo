@@ -12,10 +12,10 @@ dataset-selection capabilities keep the query commands aligned where the applica
 requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
 and report presentation to `cbh_render`.
 
-Blessing mutation resolves omitted discriminants without host defaults. New records
+Blessing mutation resolves omitted discriminants without host defaults. Project-level records
 persist the requested scope through the ordinary write-once storage port; measurements
 at the context are consulted only for the no-data warning, never to decide that scope.
-Query selection lists logical records alongside run partitions, rejects off-topology
+Query selection lists project-level blessing records alongside run partitions, rejects off-topology
 anchors before fetching, then decodes scopes through the shared blessing loader.
 Only at query time are records applied to matching reconstructed partitions. The
 detector therefore keeps its per-partition input and history/branch boundary logic.

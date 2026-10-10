@@ -194,8 +194,10 @@ path component — a commit ID is globally unique, so the same commit on two bra
 one point, and branch selection happens at query time. Each path segment is sanitized so a
 stray separator in a value cannot split the key into the wrong number of segments.
 
-Logical blessings are project-level records, independent of run partitions. Their
-scope persists even when no matching partition has a measurement at the anchor.
+The **blessing scope** selects the engines, target triples and machine keys to which
+acceptance applies; benchmark prefixes select the affected identities separately.
+Project-level blessing records store this scope independently of run partitions,
+even when no matching partition has a measurement at the anchor.
 Partition-local blessing records remain supported with their original exact scope.
 Both live under `objects/`, so the same cache invalidation policy covers all acceptance.
 
@@ -788,7 +790,7 @@ prune can reclaim ephemeral base-branch snapshots regardless of the current tree
 Pruning runs never removes a blessing; `--include-blessings` deletes every blessing sidecar
 in the selected range — including an orphan on a commit with no recorded run — and may be
 given on its own to remove only blessings. A blessing is otherwise removed only by `unbless`.
-Logical records must fit wholly inside the requested discriminant scope. An overlapping
+Each blessing record's scope must fit wholly within the requested discriminants. An overlapping
 broader record causes an error before any deletion, including run deletion.
 A dry-run builds the identical plan but skips the deletes.
 
@@ -815,7 +817,7 @@ series' accepted baseline. Hard errors
 are an unresolvable context ref, an undeterminable base branch, and no prefixes without
 `--all`. A dirty working tree is allowed (the blessing targets the committed run) but warns.
 
-The logical scope follows where expected behavior changes. Omitted discriminants and explicit
+The blessing scope follows where expected behavior changes. Omitted discriminants and explicit
 `all` values are unrestricted; partial restrictions leave every other axis open. Acceptance
 covers existing and later-discovered partitions independently of anchor measurements.
 Benchmark identity selection remains separate: accepting one source-wide benchmark change

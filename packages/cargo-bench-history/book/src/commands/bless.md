@@ -46,9 +46,10 @@ applies to history and branch analysis.
   or no prefixes without `--all` are hard errors.
 - A dirty working tree is allowed (the blessing targets the committed run) but warns.
 
-## Logical scope
+## Blessing scope
 
-Choose the scope where expected behavior changes. With no discriminant options, `bless`
+Choose the [blessing scope](../concepts/comparability.md#blessing-scopes) where expected
+behavior changes. With no discriminant options, `bless`
 accepts the selected benchmark identities on **every engine, target and machine**. The
 scope persists independently of measurements, covering partitions already present and
 partitions discovered later. It never defaults to the machine executing the command.
@@ -73,7 +74,7 @@ not machine restrictions. Query commands retain their own current-machine defaul
 
 Blessings are immutable records. Repeated issuances coexist and apply together. Capturing or
 overwriting a run never removes a blessing. Partition-local records remain readable and apply
-only to their original partition, alongside logical-scope records.
+only to their original partition, alongside project-level blessing records.
 
 `unbless` deletes the complete records at the context commit, not individual benchmark prefixes.
 With no discriminants it removes all records there. Explicit discriminants restrict revocation:
@@ -100,5 +101,5 @@ Check these axes, the anchor and the prefixes. `list blessings --all` instead re
 acceptance for measured series in the selected analysis window; it does not enumerate future
 partitions or replace the stored-scope audit.
 
-Logical-scope records require a tool version that supports them for analysis as well as writing.
-Older readers of partition-local blessings do not apply project-level scope records.
+Project-level blessing records require a tool version that supports them for analysis as well
+as writing. Readers supporting only partition-local blessing records do not apply them.

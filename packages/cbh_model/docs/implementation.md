@@ -11,7 +11,8 @@ identity, measurements, run context, persistence discriminants, stored records, 
 object-key layout with its construction and parsing. Engine-specific schemas, backend-specific
 representations, and storage-facing safety validation stay outside this boundary.
 
-Logical blessings pair the common acceptance payload with a required scope. Empty
+Project-level blessing records pair the common acceptance payload with a required
+`BlessingScope`, which selects engines, target triples and machine keys. Empty
 axis arrays mean unrestricted; populated arrays use the same case-insensitive
 matching rule as queries. Intersection supports inspection and application, while
 containment protects revocation from affecting unselected partitions.
@@ -21,7 +22,7 @@ of measurement partitions but inside the data subtree covered by cache invalidat
 The nanosecond issue time distinguishes invocations; storage must use write-once
 insertion so even a colliding timestamp cannot overwrite acceptance. Partition-local
 records keep their existing keys and payloads; their scope comes only from the key.
-The model parses both key forms separately so a logical scope cannot become a
+The model parses both key forms separately so a project-level blessing record cannot become a
 measurement partition or a discovered machine.
 
 `CollectionSnapshot` is the independently versioned handoff for one clean execution.
