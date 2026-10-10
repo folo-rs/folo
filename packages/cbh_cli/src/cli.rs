@@ -280,6 +280,23 @@ struct QueryDiscriminantArgs {
     machine_key: Vec<String>,
 }
 
+/// Acceptance scope is explicit intent, never inferred from the executing host.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_DISCRIMINANT)]
+struct BlessingDiscriminantArgs {
+    /// Restrict acceptance to these engines (repeatable; omitted or `all`: unrestricted).
+    #[arg(long, value_name = "NAME")]
+    engine: Vec<String>,
+
+    /// Restrict acceptance to these target triples (repeatable; omitted or `all`: unrestricted).
+    #[arg(long, value_name = "TRIPLE")]
+    target_triple: Vec<String>,
+
+    /// Restrict acceptance to these machine keys (repeatable; omitted or `all`: unrestricted).
+    #[arg(long, value_name = "KEY")]
+    machine_key: Vec<String>,
+}
+
 /// Commit selection shared by `analyze`/`list`.
 #[derive(Args, Debug)]
 #[command(next_help_heading = HEADING_COMMIT)]
@@ -983,7 +1000,7 @@ struct BlessCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Accept every benchmark recorded at the context commit, with no prefixes.
+    /// Accept every benchmark, including future identities, with no prefixes.
     #[arg(long, conflicts_with = "prefixes")]
     all: bool,
 
@@ -997,7 +1014,7 @@ struct BlessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    discriminants: QueryDiscriminantArgs,
+    discriminants: BlessingDiscriminantArgs,
 }
 
 impl BlessCommand {
@@ -1038,7 +1055,7 @@ struct UnblessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    discriminants: QueryDiscriminantArgs,
+    discriminants: BlessingDiscriminantArgs,
 }
 
 impl UnblessCommand {
@@ -2111,8 +2128,33 @@ pub(crate) mod tests {
             ]
         );
         assert_eq!(options.engine, vec!["callgrind".to_owned()]);
+        assert!(options.target_triple.is_empty());
+        assert!(options.machine_key.is_empty());
         assert_eq!(options.context.as_deref(), Some("abc123"));
         assert!(!options.all);
+    }
+
+    fn assert_blessing_help(command: &str) {
+        let help = from_args(&["cargo-bench-history"], &[command, "--help"]).unwrap_err();
+        assert_eq!(help.status, Ok(()));
+        assert!(help.output.contains("unrestricted"));
+        assert!(!help.output.contains("this machine"));
+    }
+
+    #[test]
+    fn blessing_help_describes_unrestricted_defaults() {
+        assert_blessing_help("bless");
+    }
+
+    #[test]
+    fn unbless_help_describes_unrestricted_defaults() {
+        assert_blessing_help("unbless");
+    }
+
+    #[test]
+    fn query_help_preserves_current_machine_defaults() {
+        let help = from_args(&["cargo-bench-history"], &["analyze", "--help"]).unwrap_err();
+        assert!(help.output.contains("this machine"));
     }
 
     #[test]

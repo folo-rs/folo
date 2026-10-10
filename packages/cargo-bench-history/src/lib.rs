@@ -185,17 +185,22 @@
 //! `bless` accepts an intentional performance change on the base branch so history
 //! analysis stops re-flagging it. Pass one or more benchmark-id prefixes to accept
 //! (matched against the qualified `<package>/<group>/<case>/<value>` identity, e.g.
-//! `bless all_the_time/read_cell`), or `--all` to accept every benchmark recorded
-//! at the commit. A blessing re-baselines the benchmark's history from the blessed
+//! `bless all_the_time/read_cell`), or `--all` to accept every benchmark identity.
+//! A blessing re-baselines the benchmark's history from the blessed
 //! commit forward, so the accepted step is no longer reported while earlier points
 //! stay on the chart for context. Blessing prefers the base branch and an existing
 //! recorded run at the blessed commit, but neither is required: blessing off the base
 //! branch warns (the blessing only takes effect once the commit joins the base's
-//! first-parent history), and blessing a commit with no recorded run warns and
-//! synthesizes the target discriminant sets from the resolved discriminant filters, so a change can
-//! be accepted *before* its data is captured. By default `bless`/`unbless` act on
+//! first-parent history), and blessing a commit with no recorded run also warns.
+//! Omitted discriminants are unrestricted: acceptance persists across current and
+//! future partitions, even without a measurement at the anchor. Explicit discriminants
+//! restrict only the named axes; benchmark prefixes remain independent.
+//! By default `bless`/`unbless` act on
 //! `HEAD`; `--context <ref>` blesses or unblesses another commit instead. `unbless`
-//! removes the blessings recorded at that commit — note that any blessings defined
+//! removes whole records within its scope at that commit; a narrower scope that
+//! overlaps a broader record is rejected. With no discriminants, all scopes are selected.
+//! `list blessings --context <ref>` audits actual persisted scopes.
+//! Note that any blessings defined
 //! at *later* commits remain in force, so the timeline may stay blessed past the
 //! unblessed commit.
 //!

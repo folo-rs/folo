@@ -6,6 +6,29 @@ benchmark work; the deep references are
 [`docs/callgrind-benchmarks.md`](callgrind-benchmarks.md) for the Callgrind
 strategy and [`docs/naming.md`](naming.md) for file and identifier naming.
 
+When responding to history findings, follow the
+[investigation and blessing-scope guidance](triage.md#benchmark-history-findings).
+Acceptance scope follows where expected behavior changes, not where it was measured.
+
+## Compiler layout policy
+
+Normal workspace measurements use function-entry alignment and selective alignment of
+basic blocks without fall-through predecessors. The exponents in
+`BENCH_STABILITY_RUSTFLAGS` select the instruction-cache-line size of the x86-64
+benchmark runners. The larger code footprint is accepted to reduce incidental layout
+sensitivity without adding executed fall-through padding.
+
+`just bench` and the history, PR, backfill and canary workflow callers apply the same
+policy to benchmark code and Cargo-built Rust dependencies. Keep their flag values
+consistent. Do not substitute all-block alignment: it can execute padding inside
+measured paths and has a different performance cost.
+
+The local recipes preserve Cargo's encoded-argument precedence and unrelated compiler
+options. `bench-best` removes the workspace's alignment choices before selecting its
+whole-program optimization profile. The dedicated `bench-cg` recipe does not add
+native-timing stability flags. Neither alternative produces a drop-in replacement
+for the normal wall-clock history.
+
 ## Benchmark design
 
 Unless otherwise prompted, create single-threaded synchronous Criterion

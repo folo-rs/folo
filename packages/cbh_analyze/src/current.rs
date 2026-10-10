@@ -178,12 +178,12 @@ mod tests {
     use cbh_command::AnalyzeOptions;
     use cbh_config::{Config, parse_config};
     use cbh_detect::testing::synchronous_spawner;
-    use cbh_detect::{AnalysisMode, SeriesFilter};
+    use cbh_detect::{AnalysisMode, SeriesFilter, apply_blessings};
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
-        BenchmarkResult, Engine, EnvironmentInfo, GitInfo, MachineInfo, Metric, RunContext,
-        ToolchainInfo,
+        BenchmarkResult, BlessingRecord, BlessingScope, Engine, EnvironmentInfo, GitInfo,
+        MachineInfo, Metric, RunContext, ScopedBlessingRecord, ToolchainInfo,
     };
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
@@ -374,6 +374,35 @@ mod tests {
             .collect::<Vec<_>>();
         values.sort_by(f64::total_cmp);
         assert_eq!(values, [20.0, 30.0]);
+    }
+
+    #[test]
+    fn logical_blessing_applies_to_an_exact_current_partition_without_stored_runs() {
+        let first = "a".repeat(40);
+        let tip = "b".repeat(40);
+        let git = crate::testing::two_commit_history(&first, &tip);
+        let storage = MemoryStorage::new();
+        let record = ScopedBlessingRecord {
+            record: BlessingRecord::new(
+                first,
+                "2026-01-01T00:00:00Z".parse().unwrap(),
+                Vec::new(),
+                "test".to_owned(),
+            ),
+            scope: BlessingScope::default(),
+        };
+        block_on(storage.put(&record.key("project"), record.to_json().unwrap().as_bytes()))
+            .unwrap();
+        let current =
+            CurrentCollections::new("project", &[snapshot(&tip, LINUX, KEY, 20.0)]).unwrap();
+        let mut selected = dataset(&git, &storage, &current);
+        apply_blessings(&mut selected.series, &selected.blessings);
+        assert_eq!(selected.series.len(), 1);
+        assert_eq!(
+            selected.series[0].blessing.as_ref().unwrap().commit,
+            record.record.commit
+        );
+        assert_eq!(selected.series[0].points.len(), 1);
     }
 
     #[test]

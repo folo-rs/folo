@@ -14,12 +14,14 @@ use cbh_detect::{
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_model::{
-    BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, StorageKey, parse_key, sanitize_segment,
+    BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, StorageKey, parse_key,
+    parse_scoped_blessing_key, sanitize_segment,
 };
 use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};
 
 use super::discriminants::describe_discriminants;
+use crate::stored_blessings::BlessingCandidate;
 use crate::{AnalyzeError, InvalidResultSetError, InvalidStoredUtf8Error};
 
 /// One commit's run tally within a discriminant set, the granularity the report
@@ -180,6 +182,8 @@ pub(crate) struct CandidateListing {
     /// target-triple filters but whose machine key the selection does not cover. Empty
     /// unless siblings were requested (`collect_siblings`).
     pub(crate) siblings: Vec<(String, StorageKey)>,
+    /// Project-level scopes cannot be filtered until their records are decoded.
+    pub(crate) scoped_blessings: Vec<(String, BlessingCandidate)>,
 }
 
 /// Lists the stored objects under the project's partition and keeps the ones whose
@@ -267,7 +271,16 @@ pub(crate) fn filter_candidates(
 
     let mut selected: Vec<(String, StorageKey)> = Vec::new();
     let mut siblings: Vec<(String, StorageKey)> = Vec::new();
+    let mut scoped_blessings = Vec::new();
     for key in keys {
+        if let Some(commit) = parse_scoped_blessing_key(&key) {
+            let candidate = BlessingCandidate {
+                commit: commit.to_owned(),
+                legacy_set: None,
+            };
+            scoped_blessings.push((key, candidate));
+            continue;
+        }
         if !key.ends_with(".json") {
             reporter.note_with(|| format!("skipping {key}: not a .json object"));
             continue;
@@ -321,7 +334,11 @@ pub(crate) fn filter_candidates(
             )
         });
     }
-    CandidateListing { selected, siblings }
+    CandidateListing {
+        selected,
+        siblings,
+        scoped_blessings,
+    }
 }
 
 /// How many stored objects to fetch concurrently while loading a data set.
@@ -347,14 +364,14 @@ const LOAD_CONCURRENCY: usize = 128;
 /// the caller must re-sort the results (by storage key) to keep diagnostics and
 /// the loaded order deterministic. The whole operation stays single-threaded and
 /// `!Send`, so it runs unchanged under the Miri-driven `block_on` tests.
-pub(crate) async fn load_objects_concurrently<S, T, F>(
+pub(crate) async fn load_objects_concurrently<S, K, T, F>(
     storage: &S,
-    keys: Vec<(String, StorageKey)>,
+    keys: Vec<(String, K)>,
     parse: F,
-) -> Result<Vec<(String, StorageKey, T)>, AnalyzeError>
+) -> Result<Vec<(String, K, T)>, AnalyzeError>
 where
     S: Storage,
-    F: Fn(&str, Vec<u8>) -> Result<T, AnalyzeError>,
+    F: Fn(&str, &K, Vec<u8>) -> Result<T, AnalyzeError>,
 {
     let parse = &parse;
     futures::stream::iter(keys)
@@ -367,18 +384,18 @@ where
 /// Fetches and deserializes a single stored object. Factored out of
 /// [`load_objects_concurrently`] so the stream closure stays a plain `FnMut`
 /// returning this future (rather than a closure wrapping an `async` block).
-async fn fetch_one<S, T, F>(
+async fn fetch_one<S, K, T, F>(
     storage: &S,
     key: String,
-    parsed: StorageKey,
+    parsed: K,
     parse: &F,
-) -> Result<(String, StorageKey, T), AnalyzeError>
+) -> Result<(String, K, T), AnalyzeError>
 where
     S: Storage,
-    F: Fn(&str, Vec<u8>) -> Result<T, AnalyzeError>,
+    F: Fn(&str, &K, Vec<u8>) -> Result<T, AnalyzeError>,
 {
     let bytes = storage.get(&key).await?;
-    let value = parse(&key, bytes)?;
+    let value = parse(&key, &parsed, bytes)?;
     Ok((key, parsed, value))
 }
 

@@ -476,7 +476,16 @@ async fn include_blessings_is_required_to_prune_a_blessing() {
 
     // `--include-blessings` removes the now-orphan blessing.
     let message = workspace
-        .drive_json(&["prune", &head, "--include-blessings", "--prune-base"])
+        .drive_json(&[
+            "prune",
+            &head,
+            "--include-blessings",
+            "--prune-base",
+            "--target-triple",
+            "all",
+            "--machine-key",
+            "all",
+        ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 0, "no runs left: {message}");
@@ -510,6 +519,10 @@ async fn all_and_include_blessings_combine_in_one_invocation() {
             "--all",
             "--include-blessings",
             "--prune-base",
+            "--target-triple",
+            "all",
+            "--machine-key",
+            "all",
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();

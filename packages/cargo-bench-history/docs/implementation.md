@@ -79,6 +79,12 @@ trunk measurements use the same persistence path; query-time topology selection 
 unrelated branch commits out of trunk series. Local filesystem storage remains an alternative
 backend selected at run time.
 
+Acceptance uses project-level logical records and compatible partition-local records.
+The [model](../../cbh_model/docs/implementation.md) owns scope matching and key grammar;
+[analysis orchestration](../../cbh_analyze/docs/implementation.md) owns topology admission,
+query-time application and complete-scope revocation. Both formats remain under the
+ordinary cached data subtree; no backend-specific mutation path is needed.
+
 Error boundaries match the context each component owns. Semantic operations expose package
 aggregates where callers need a component-level boundary. Lower-level components instead return
 the foreign error that describes their mechanism: process and probe boundaries use `io::Result`,

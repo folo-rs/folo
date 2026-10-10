@@ -588,6 +588,12 @@ The companion combines it with the effective ambient Cargo flags for measurement
 processes, preserving unrelated options. The reusable workflows own tool installation and
 their remaining job preparation.
 
+The shared value combines function-entry alignment with selective alignment of blocks
+without fall-through predecessors, matching the workspace's
+[compiler layout policy](../../docs/benchmarks.md#compiler-layout-policy).
+It applies through the Cargo-built Rust dependency graph as well as the benchmark.
+The code-size cost is accepted; all-block alignment is not part of the policy.
+
 Requirements for reusable workflows and their composite-action building blocks in the external
 `cargo-bench-history-action` repository, including optional setup-hook behavior, belong to the
 [reusable-action design](../../packages/cargo-bench-history/docs/reusable-action.md#47-two-consumption-layers--reusable-workflows-over-composite-actions).

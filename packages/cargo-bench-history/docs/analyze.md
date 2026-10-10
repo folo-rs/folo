@@ -69,6 +69,13 @@ Captured values are folded directly and only snapshot-measured metrics survive f
 Branch analysis loads base-ref comparison windows but no other branch-side measurements.
 The historical loader and detector otherwise retain the same behavior.
 
+Blessing records share the project listing but load separately from measurements.
+Partition-local keys supply exact scopes; project-level records carry their own
+restrictions. Topology admission precedes record loading. Scope intersection then
+selects relevant records, and their scopes are applied to the reconstructed partitions
+at query time. No anchor measurement is required, including for exact-current snapshots.
+History uses the context line; branch analysis uses the base ref's independent line.
+
 ```mermaid
 flowchart TD
   subgraph P1["Phase 1 — key-only filtering (no payload fetched)"]

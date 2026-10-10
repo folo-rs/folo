@@ -20,11 +20,10 @@ change in a benchmark you still want analyzed.
 
 ## The phantom regression
 
-A CPU fetches instructions in fixed-size lines (64 bytes on x86-64). A hot loop that fits
-entirely inside one line is fetched cheaply; the same loop straddling two lines costs an extra
-fetch on every iteration. Where a loop lands is decided by the linker, which orders functions in
-the final binary. That order can shift for reasons entirely outside the benchmarked crate — most
-commonly an unrelated dependency version bump that adds or removes code ahead of your function.
+A CPU fetches instructions in fixed-size lines (64 bytes on x86-64), and instruction-fetch
+and decoding behavior can depend on code placement. The linker orders functions in the final
+binary, while the compiler determines the layout inside each function. An unrelated dependency
+change can move a function; a change to untimed setup can move a measured loop within it.
 
 The result is a step in the timeline with **no source change**: a byte-identical hot loop that
 used to sit inside one cache line now straddles two, and the benchmark reports a regression that
@@ -34,10 +33,9 @@ wall-clock measurement.
 
 ## Pinning the layout
 
-You can make layout a deterministic function of your source by forcing every function to start on
-a cache-line boundary. Then a hot loop's position relative to the cache lines depends only on its
-own offset within its function — which your source fixes — and never on what the linker placed
-before it.
+Forcing every function to start on a cache-line boundary preserves its cache-line-relative
+layout when a byte-identical function is relocated. A hot loop's position then depends on its
+offset within that generated function, not on what the linker placed before it.
 
 With the LLVM backend (stable Rust), set the flag through the `RUSTFLAGS` environment variable
 when building benchmarks — for example:
@@ -52,32 +50,39 @@ RUSTFLAGS="-Cllvm-args=-align-all-functions=6" cargo bench
 $env:RUSTFLAGS = "-Cllvm-args=-align-all-functions=6"; cargo bench
 ```
 
-The value is a **log2 exponent**, so `=6` aligns every function to `2^6 = 64` bytes — one full
-cache line. `=5` (32 bytes) is cheaper but only *partly* pins the layout: a function can still
-start at either the `0` or `32` offset within a line, so a loop long enough to cross the midpoint
-can still straddle. Only 64-byte alignment makes each loop's placement fully deterministic.
+The value is a **log2 exponent**, so `=6` selects a 64-byte boundary. A smaller boundary does
+not fully fix the function entry's offset within a cache line.
 
-Align **functions only** — for code the LLVM backend emits under deterministic codegen (which is
-what a Rust benchmark and its dependencies compile to), this is a *complete* fix for relink-driven
-instability, not a partial one. Once every function starts on a cache-line boundary, a loop's
-offset from the nearest boundary equals its offset *within its own function*. Relinking only ever
-moves whole functions around; it never rewrites a function's internal byte layout. So that
-intra-function offset — and therefore the loop's position relative to the cache lines — is fixed
-for a given source and can no longer shift when an unrelated dependency reorders the binary. (The
-flag aligns only LLVM-emitted functions; machine code from a C dependency, hand-written assembly
-or a prebuilt static library is unaffected, and would need its own alignment if it hosted the hot
-loop.)
+Function alignment does not freeze a function's internal layout when code generation changes.
+The measured instructions can remain identical while different allocation or cleanup code
+around them changes their placement. Nor does alignment stabilize data placement or every
+other source of native timing variation.
 
-Do **not** additionally pass `-align-all-nofallthru-blocks`. It aligns basic blocks *inside*
-functions, which buys no extra relink stability — intra-function layout is already deterministic
-under fixed codegen — while injecting NOPs into the measured path that can make small hot loops
-dramatically slower. A loop that straddles a line purely because of its offset within its own
-function does so deterministically for a given source: that is a fixed performance cost, not a
-phantom regression, so it is a performance question rather than a stability one.
+The option applies to the LLVM code being compiled, not to prebuilt libraries, hand-written
+assembly, or C dependencies built without equivalent options. Padding increases executable
+code size and can shift the measured baseline.
 
-The cost is a modest `.text` size increase (padding between functions) and, for a benchmark that
-was previously lucky enough to sit inside a line, a one-time shift to its aligned position. After
-that, the series stays put.
+## Internal-block alignment
+
+A **basic block** is a straight-line group of instructions inside a function. Internal
+alignment options address these blocks rather than only function entry points. The LLVM
+backend provides options with different execution costs:
+
+- `-align-all-nofallthru-blocks=6` aligns blocks that have no fall-through predecessors.
+  Its padding is not executed by falling through from a preceding block. It can stabilize
+  selected internal positions, but does not align every block.
+- `-align-all-blocks=6` aligns every block, including those reached by fall-through.
+  That padding can execute inside a measured path, changing its instruction count and timing.
+
+Both use the same log2 convention as function alignment. Avoiding executed padding does not
+make the selective option free: its larger code footprint can still affect native behavior.
+Adding either option is a benchmark-build policy decision, not a universal stability fix.
+
+Compare the affected benchmark and neighboring controls before adopting a policy. Distinguish
+applying the option only to benchmark code from applying it through all Cargo-built Rust
+dependencies; the code-size and timing effects can differ substantially. Keep allocators,
+sampling settings, source and other compiler options matched. Faster results in one case
+do not establish better stability for the whole suite.
 
 ## `cargo-bench-history` does not impose this
 
@@ -88,9 +93,10 @@ benchmarks. Apply the flag in your own benchmark build path — a `just` recipe,
 
 Consequences worth planning for:
 
-- **Only wall-clock engines need it.** Instruction-count engines (for example Callgrind) count
-  executed instructions, which do not depend on where functions land, so alignment neither helps
-  nor should be applied there. Allocation-tracking metrics are likewise layout-invariant.
+- **Interpret each engine separately.** Function-entry alignment addresses native timing,
+  not executed instruction counts or allocation counts. Internal padding that executes can
+  affect an instruction-count engine such as Callgrind, so do not treat every alignment
+  option as equivalent or automatically apply it to every measurement path.
 - **Introducing it is a one-time step.** Because the build flag is not part of a result's
   identity, aligned and unaligned runs share a series, so turning alignment on shifts wall-clock
   numbers once, at the commit that introduces it. Land that change on its own commit and

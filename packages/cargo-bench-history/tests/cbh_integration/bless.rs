@@ -89,6 +89,9 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
     let blessings = parsed["blessings"].as_array().unwrap();
     assert_eq!(blessings.len(), 1, "{message}");
     assert_eq!(blessings[0]["commit"], short_head, "{message}");
+    assert_eq!(blessings[0]["engine"], "all");
+    assert_eq!(blessings[0]["target_triple"], "all");
+    assert_eq!(blessings[0]["machine_key"], "all");
     // The blessed commit's committer date is read from git topology (HEAD is the
     // seeded tip), not from a denormalized copy on the sidecar. The tip's date is
     // derived from the fixture's own timeline so it follows the fixture's length.
@@ -230,9 +233,7 @@ async fn bless_before_capture_applies_once_the_data_lands() {
         workspace.commit_dated(date, &format!("c{}", index + 1));
     }
 
-    // Pre-emptively accept the tip before any run exists there. With no data to
-    // anchor to, the target sets are synthesized from the resolved discriminant filters (every
-    // engine on this host).
+    // Accept the tip before any run exists; no discriminants restrict future partitions.
     let RunOutcome::Completed { message } = workspace.drive(&["bless", "--all"]).await.unwrap()
     else {
         panic!("expected a completed outcome");
@@ -246,8 +247,7 @@ async fn bless_before_capture_applies_once_the_data_lands() {
         workspace.seed_callgrind(&format!("c{}", index + 1), value);
     }
 
-    // The pre-emptive blessing occupies the exact Callgrind set the run landed in,
-    // so the regression is suppressed with no re-bless.
+    // The persisted scope includes the newly recorded partition without re-blessing.
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(

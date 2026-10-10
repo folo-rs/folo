@@ -194,13 +194,10 @@ path component — a commit ID is globally unique, so the same commit on two bra
 one point, and branch selection happens at query time. Each path segment is sanitized so a
 stray separator in a value cannot split the key into the wrong number of segments.
 
-*Considered and not adopted:* hoisting the run *kind* into the key path (separate
-`runs-clean` / `runs-dirty` / `blessings` prefixes) so a single-kind query could narrow to
-one prefix. It is rejected because the cost it targets is already avoided — `analyze`
-filters non-admitted candidates from the key alone before any body is fetched — and
-because the commit-centric grouping co-locates a commit's clean run, dirty snapshots, and
-blessing sidecars under one directory, which is exactly what lets `prune` drop a commit's
-whole set and keeps a blessing adjacent to the run it baselines.
+Logical blessings are project-level records, independent of run partitions. Their
+scope persists even when no matching partition has a measurement at the anchor.
+Partition-local blessing records remain supported with their original exact scope.
+Both live under `objects/`, so the same cache invalidation policy covers all acceptance.
 
 ### 3.3 Discriminant sets and discriminant filters
 
@@ -223,11 +220,11 @@ normalized to lowercase, so `Callgrind`, `callgrind`, and `CALLGRIND` name the s
 and a triple or machine key differing only in case resolves to one set rather than silently
 splitting into two.
 
-The commands divide into **create** and **query** roles. `collect` and `backfill` record
+`collect` and `backfill` record
 new data into exactly one machine's reality, so they auto-detect their discriminant values;
-they reject engine or triple selection and the `all` keyword. Every other command queries
-existing data and uses the full repeatable, `all`-aware, auto-detecting discriminant-filter
-model.
+they reject engine or triple selection and the `all` keyword. Query commands use repeatable,
+`all`-aware filters. `bless` and `unbless` instead describe acceptance intent: omitted axes
+are unrestricted, without host auto-detection.
 
 ## 4. Machine key
 
@@ -791,6 +788,8 @@ prune can reclaim ephemeral base-branch snapshots regardless of the current tree
 Pruning runs never removes a blessing; `--include-blessings` deletes every blessing sidecar
 in the selected range — including an orphan on a commit with no recorded run — and may be
 given on its own to remove only blessings. A blessing is otherwise removed only by `unbless`.
+Logical records must fit wholly inside the requested discriminant scope. An overlapping
+broader record causes an error before any deletion, including run deletion.
 A dry-run builds the identical plan but skips the deletes.
 
 ### 7.7 `bless` / `unbless`
@@ -802,29 +801,38 @@ accepted step forever. Blessing re-baselines the series from the blessed commit 
 
 `bless` takes one or more benchmark-id prefixes matched against the qualified identity, so
 it is deliberately per-benchmark — accepting the benchmark that caused trouble must not
-silently accept every other benchmark that may be trending badly unnoticed. An all-switch
-(mutually exclusive with prefixes) accepts every benchmark recorded at the commit. Both
+silently accept every other benchmark that may be trending badly unnoticed. The `--all` switch
+(mutually exclusive with prefixes) accepts every identity, including future identities. Both
 commands operate on a context ref (default `HEAD`), so any commit that resolves can be
 (un)blessed, not just the checked-out one. Blessing prefers — but does not require — the
 base branch and an existing clean run at the commit. Blessing off the base branch **warns**:
 the blessing only takes effect once the commit joins the base branch's first-parent history
 (for example after a fast-forward), so a fast-forward merge workflow can legitimately bless a
 commit already on a feature branch. Blessing a commit with **no recorded run** also warns
-(the commit id is worth double-checking) and synthesizes the target discriminant sets from
-the resolved discriminant filters — all four engines when `--engine` is omitted, under the
-resolved target triple and machine key — so an intentional change can be accepted *before*
-its data is captured; whichever engine's data lands there later is then accepted. This
-synthesis needs a concrete target triple and machine key, so a no-data blessing whose triple
-or machine-key filter is unconstrained (`all`) is a hard error. The remaining hard errors
+(the commit id is worth double-checking), without restricting acceptance to partitions with
+data at that anchor. The first measurement at or after the anchor starts each matching
+series' accepted baseline. Hard errors
 are an unresolvable context ref, an undeterminable base branch, and no prefixes without
 `--all`. A dirty working tree is allowed (the blessing targets the committed run) but warns.
 
-A blessing is an **append-only sidecar** in each targeted set's commit directory (which need
-not yet hold a run), so narrowing one means unbless-then-re-bless the subset to keep.
-Capturing or overwriting a run never removes a blessing. `unbless` deletes only the blessings recorded at the context commit;
-blessings at later commits stay in effect, so the timeline may remain blessed past the
-unblessed commit. `list blessings` audits them — the sidecars at the current commit by
-default, or the most recent blessing of every benchmark across the analysis window.
+The logical scope follows where expected behavior changes. Omitted discriminants and explicit
+`all` values are unrestricted; partial restrictions leave every other axis open. Acceptance
+covers existing and later-discovered partitions independently of anchor measurements.
+Benchmark identity selection remains separate: accepting one source-wide benchmark change
+does not require `--all`. Investigation on specific hardware does not by itself justify
+hardware-specific acceptance.
+
+Blessings are immutable records; overlapping records apply together. Capturing or overwriting
+a run never removes one. `unbless` removes whole records at the context commit. No filters
+means every scope there; explicit filters must contain the entire scope of each overlapping
+record, or the command fails before deletion. Narrowing acceptance requires revoking its full
+scope and re-blessing the subset to retain. Other commits' blessings remain effective.
+
+`list blessings --context <ref>` shows persisted scopes intersecting the query, even without
+measurements, without projecting a broad record onto the query's narrower scope. Use explicit
+`all` on every discriminant to audit all persisted intent. `list blessings --all` instead
+shows the latest effective blessing per measured benchmark and partition, using the same
+history or branch evidence line as analysis. Queries keep their independent host defaults.
 
 ### 7.8 `examine`
 
