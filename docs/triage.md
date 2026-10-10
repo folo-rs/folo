@@ -22,6 +22,36 @@ For allocation-sensitive workloads, compare allocator selection and memory
 locality as well as instruction counts. Untimed allocation can affect a later
 read-only traversal through the placement of its data.
 
+### Scope an accepted change by its cause
+
+A blessing records acceptance of an expected behavior change, not the location
+where a finding happened to be observed. Select the narrow benchmark-id prefixes
+whose behavior changed, then choose discriminant restrictions only where the
+expected behavior actually differs.
+
+For a source-wide benchmark change, omit engine, target-triple and machine-key
+filters. The acceptance must cover every matching partition, including existing
+partitions without measurements at the anchor commit and partitions discovered
+later. Hardware-specific investigation evidence does not make an accepted
+source-wide change hardware-specific. Conversely, an intentional change limited
+to one engine, target or hardware class warrants that explicit restriction.
+Leave the other axes unrestricted.
+
+Do not use `bless --all` merely to reach every machine: that switch accepts every
+benchmark identity, including future identities. Benchmark identity selection
+and discriminant scope are independent. Use the supported `bless` command rather
+than editing storage objects; its
+[command guide](../packages/cargo-bench-history/book/src/commands/bless.md)
+defines persistent scope and revocation.
+
+Verify the **effective persisted scope**, not just the invocation or a successful
+exit. Inspect `list blessings --context <anchor> --engine all --target-triple all
+--machine-key all`, optionally with `--json <path>`. Confirm the anchor, exact
+prefixes and unrestricted axes in the stored record view. A successful analysis
+on the investigating machine alone cannot establish that other partitions are
+covered. Use the current scoped-blessing-capable executable for both the write
+and the audit.
+
 ## Codecov verification-key import failures
 
 ### Workflow policy

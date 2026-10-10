@@ -12,6 +12,22 @@ dataset-selection capabilities keep the query commands aligned where the applica
 requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
 and report presentation to `cbh_render`.
 
+Blessing mutation resolves omitted discriminants without host defaults. New records
+persist the requested scope through the ordinary write-once storage port; measurements
+at the context are consulted only for the no-data warning, never to decide that scope.
+Query selection lists logical records alongside run partitions, rejects off-topology
+anchors before fetching, then decodes scopes through the shared blessing loader.
+Only at query time are records applied to matching reconstructed partitions. The
+detector therefore keeps its per-partition input and history/branch boundary logic.
+Exact-current snapshots receive scopes through the same reconstructed-series path.
+
+Context inspection retains each record's persisted scope, rather than projecting it
+onto the inspecting query. Window inspection applies the mode-specific evidence
+boundary and reports measured series. Unbless and pruning require complete containment
+before any deletion; an intersecting broader record is a hard error. The shared loader
+keeps partition-local records readable with key-derived scopes and rejects records
+whose anchor disagrees with their key.
+
 Configured ignores are applied to reconstructed series after ghost elimination and before
 blessings or detection. This analyze-only pass is shared by ordinary and exact-current
 analysis, not by raw query or storage-maintenance selection. It records dropped metric

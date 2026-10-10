@@ -2,34 +2,11 @@
 //! benchmark's level on the base branch, so history analysis stops re-flagging an
 //! intentional change.
 //!
-//! `bless` writes an append-only `BlessingRecord` sidecar for the context commit
-//! (`HEAD` by default, or `--context <ref>`). Any commit that *resolves* can be
-//! blessed; the hard errors are an unresolvable ref, no benchmark prefixes (and no
-//! `--all`), an undeterminable base branch, and — only when the commit has no stored
-//! run — an unconstrained target triple or machine key (nothing to synthesize a set
-//! from). Two conditions warn and proceed rather than refuse, so the command never
-//! refuses without cause:
-//!
-//! * **Off the base branch** — a blessing only takes effect once the commit joins
-//!   the base branch's first-parent history (for example after a fast-forward), so
-//!   this warns and proceeds rather than refusing.
-//! * **No stored result at the commit** — a blessing may be recorded *before* data
-//!   is captured. With a run present, the sidecar lands in every set selected by
-//!   discriminant filters that has a stored result there. With no run present,
-//!   the target sets are synthesized from the resolved discriminant filters (all
-//!   four engines when `--engine` is omitted, under the resolved target triple and
-//!   machine key), so whichever engine's data is captured later at that commit is
-//!   accepted. This warns, because a typo'd commit id is the likelier cause.
-//!
-//! When blessing `HEAD`, a dirty working tree is allowed — the blessing applies to
-//! the committed `clean.json` recorded at `HEAD`, which the local edits do not
-//! change — but it emits a warning. `unbless` deletes every blessing recorded at
-//! the context commit in the selected sets; sidecars are immutable, so narrowing a
-//! blessing means unblessing and re-blessing the subset to keep. Blessings issued
-//! at later commits are unaffected, so the timeline can stay blessed past the
-//! context commit.
+//! New records persist the requested logical scope independently of observed
+//! partitions. Omitted discriminants are unrestricted. Missing anchor measurements
+//! and off-base commits warn but do not prevent acceptance. Revocation requires
+//! containment of a record's entire scope; it never carves implicit exceptions.
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use cbh_command::{BlessOptions, UnblessOptions};
@@ -37,10 +14,9 @@ use cbh_config::{
     Config, load_config, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
 };
-use cbh_detect::{DiscriminantFilter, DiscriminantSetQuery};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
-use cbh_model::{BlessingRecord, DiscriminantSet, Engine, MachineKey, StorageKey, TargetTriple};
+use cbh_model::{BlessingRecord, ScopedBlessingRecord};
 use cbh_storage::{Storage, build_storage, finish_with_flush};
 use jiff::Timestamp;
 use tick::Clock;
@@ -49,14 +25,14 @@ use super::announce::{
     AnnouncedBase, AnnouncedContext, announce_selection, selection_announcement,
 };
 use super::history::resolve_base;
-use super::{
-    AutoDiscriminants, Selection, discriminant_filtered_candidates, resolve_auto_discriminants,
-    resolve_discriminants, resolve_now,
+use super::{Selection, discriminant_filtered_candidates, resolve_discriminants, resolve_now};
+use crate::load::list_candidates;
+use crate::stored_blessings::{
+    blessing_candidates, blessing_scope, load_blessings, require_contained_scope,
 };
 use crate::{
-    AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
-    BlessSelectionRequiredError, FirstParentWalkFailedError, ResolveRefFailedError,
-    UnresolvedRefError, WorkingTreeProbeFailedError,
+    AnalyzeError, BlessBaseRequiredError, BlessSelectionRequiredError, FirstParentWalkFailedError,
+    ResolveRefFailedError, UnresolvedRefError, WorkingTreeProbeFailedError,
 };
 
 /// The real `bless`: load configuration, wire the configured storage and git
@@ -67,7 +43,7 @@ use crate::{
 /// while tests inject a frozen clock (`Clock::new_frozen_at`) so the recorded time
 /// is deterministic.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
+// and shells out via `SystemGitHistory` before delegating every
 // decision to the mutation-tested `bless_with`. In-crate tests cannot drive these real
 // adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
@@ -75,7 +51,6 @@ pub async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
-    auto_override: Option<AutoDiscriminants>,
 ) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -88,8 +63,6 @@ pub async fn bless(
     let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_discriminants(auto_override).await?;
-
     let now = resolve_now(clock_override);
     let result = bless_with(
         &git,
@@ -97,17 +70,12 @@ pub async fn bless(
         &project_id,
         &config,
         options,
-        &auto,
         now,
         env!("CARGO_PKG_VERSION"),
         &reporter,
     )
     .await;
-    // Flush the cache-invalidation marker after success: blessing writes a fresh
-    // timestamped sidecar, so it is additive and never arms the backend — a
-    // read-through cache discovers the new key through its always-fresh listing. It
-    // only arms (and so bumps the marker, invalidating other machines' caches) in
-    // the rare case of overwriting an existing sidecar, e.g. a same-second re-bless.
+    // Additive write-once records are discovered through the cache's fresh listing.
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
@@ -117,14 +85,13 @@ pub async fn bless(
 /// The real `unbless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
+// and shells out via `SystemGitHistory` before delegating every
 // decision to the mutation-tested `unbless_with`. In-crate tests cannot drive these
 // real adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
 pub async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,
-    auto_override: Option<AutoDiscriminants>,
 ) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -137,18 +104,7 @@ pub async fn unbless(
     let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_discriminants(auto_override).await?;
-
-    let result = unbless_with(
-        &git,
-        &storage,
-        &project_id,
-        &config,
-        options,
-        &auto,
-        &reporter,
-    )
-    .await;
+    let result = unbless_with(&git, &storage, &project_id, &config, options, &reporter).await;
     // Unblessing deletes sidecars, which arms the backend, so flush the marker to
     // invalidate other machines' caches.
     let flush = storage
@@ -157,9 +113,7 @@ pub async fn unbless(
     finish_with_flush(result, flush)
 }
 
-/// Storage- and git-generic `bless`: validate the preconditions, then write a
-/// blessing sidecar into every set selected by discriminant filters that has a clean result at the
-/// current commit.
+/// Validates the context and persists acceptance without enumerating partitions.
 #[expect(
     clippy::too_many_arguments,
     reason = "blessing wires several injected ports plus the pinned issue time and tool version"
@@ -170,7 +124,6 @@ pub(crate) async fn bless_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &BlessOptions,
-    auto: &AutoDiscriminants,
     now: Timestamp,
     tool_version: &str,
     reporter: &dyn Reporter,
@@ -203,11 +156,9 @@ where
         .ok_or_else(BlessBaseRequiredError::new)?;
 
     let selection = Selection::from_bless(options);
-    let discriminants = resolve_discriminants(&selection, Some(auto))?;
+    let discriminants = resolve_discriminants(&selection, None)?;
 
-    // The always-on effective-selection announcement: one line, printed regardless
-    // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
-    // branch, and context commit, so a plain run never hides a value it defaulted.
+    // Always show the intended scope, base and anchor, including unrestricted axes.
     announce_selection(
         reporter,
         &selection_announcement(
@@ -260,53 +211,29 @@ where
             .await
             .map_err(WorkingTreeProbeFailedError::caused_by)?;
 
-    let issued_unix = now.as_second();
     let candidates =
         discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
-    let clean_at_head: Vec<StorageKey> = candidates
-        .into_iter()
-        .filter(|(_, parsed)| parsed.commit == head && parsed.is_clean())
-        .map(|(_, parsed)| parsed)
-        .collect();
-
-    // Each target is a `(discriminant set, sidecar key)` pair. With a run present the
-    // sidecars land beside the stored results at the commit; with no run present they
-    // are synthesized from the resolved discriminant filters so a pre-emptive blessing still has a
-    // concrete home for whichever engine's data is captured there later.
-    let targets: Vec<(DiscriminantSet, String)> = if clean_at_head.is_empty() {
+    if !candidates
+        .iter()
+        .any(|(_, parsed)| parsed.commit == head && parsed.is_clean())
+    {
         warnings.push(format!(
-            "Warning: no stored result at the context commit {short}; blessing anyway — \
-             double-check the commit id. The blessing takes effect once a run is captured at this \
-             commit in a matching discriminant set."
+            "Warning: no stored result at the context commit {short}; blessing anyway - \
+             double-check the commit id. Matching series are re-baselined at this commit \
+             even when no measurement exists there."
         ));
-        let sets = synthesize_target_sets(&discriminants);
-        if sets.is_empty() {
-            return Err(BlessDiscriminantsRequiredError::new(short).into());
-        }
-        sets.into_iter()
-            .map(|set| {
-                let key = set.bless_key(project_id, &head, issued_unix);
-                (set, key)
-            })
-            .collect()
-    } else {
-        clean_at_head
-            .iter()
-            .map(|parsed| (parsed.set.clone(), parsed.bless_key(issued_unix)))
-            .collect()
-    };
-
-    let mut sets = 0_usize;
-    for (set, bless_key) in &targets {
-        let record =
-            BlessingRecord::new(head.clone(), now, prefixes.clone(), tool_version.to_owned());
-        let json = record
-            .to_json()
-            .expect("a freshly built blessing always serializes to JSON");
-        storage.put_overwrite(bless_key, json.as_bytes()).await?;
-        reporter.note_with(|| format!("blessed set {set} at {bless_key}"));
-        sets = sets.saturating_add(1);
     }
+
+    let record = ScopedBlessingRecord {
+        record: BlessingRecord::new(head.clone(), now, prefixes.clone(), tool_version.to_owned()),
+        scope: blessing_scope(&discriminants),
+    };
+    let key = record.key(project_id);
+    let json = record
+        .to_json()
+        .expect("a freshly built blessing always serializes to JSON");
+    storage.put(&key, json.as_bytes()).await?;
+    reporter.note_with(|| format!("persisted blessing scope {} at {key}", record.scope));
 
     if working_tree_dirty {
         warnings.push(format!(
@@ -326,21 +253,19 @@ where
         format!("{}\n", warnings.join("\n"))
     };
     let message = format!(
-        "{warnings_prefix}Blessed {scope} across {} at commit {short}.",
-        count_noun(sets, "discriminant set"),
+        "{warnings_prefix}Blessed {scope} with persistent scope {} at commit {short}.",
+        record.scope,
     );
     Ok(message)
 }
 
-/// Storage- and git-generic `unbless`: delete every blessing recorded at the
-/// current commit in the sets selected by discriminant filters.
+/// Deletes complete acceptance records at the context within the requested scope.
 pub(crate) async fn unbless_with<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
     _config: &Config,
     options: &UnblessOptions,
-    auto: &AutoDiscriminants,
     reporter: &dyn Reporter,
 ) -> Result<String, AnalyzeError>
 where
@@ -352,12 +277,9 @@ where
     let short = short_commit_id(&head);
 
     let selection = Selection::from_unbless(options);
-    let discriminants = resolve_discriminants(&selection, Some(auto))?;
+    let discriminants = resolve_discriminants(&selection, None)?;
 
-    // The always-on effective-selection announcement: one line, printed regardless
-    // of `--verbose`, naming the resolved (possibly auto-detected) partition and the
-    // context commit whose blessings are being removed. `unbless` acts purely at a
-    // commit and never resolves a base branch, so no base segment appears.
+    // Revocation acts at one anchor, without resolving a base branch.
     announce_selection(
         reporter,
         &selection_announcement(
@@ -371,18 +293,26 @@ where
         ),
     );
 
-    let candidates =
-        discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
-    let blessings_at_head: Vec<String> = candidates
+    let listing = list_candidates(storage, project_id, &discriminants, false, reporter).await?;
+    let legacy = listing
+        .selected
         .into_iter()
-        .filter(|(_, parsed)| parsed.commit == head && parsed.is_bless())
-        .map(|(key, _)| key)
+        .filter(|(_, parsed)| parsed.is_bless())
         .collect();
+    let candidates = blessing_candidates(legacy, listing.scoped_blessings)
+        .into_iter()
+        .filter(|(_, candidate)| candidate.commit == head)
+        .collect();
+    let blessings_at_head = load_blessings(storage, candidates, &discriminants).await?;
+    let selected = blessing_scope(&discriminants);
+    for blessing in &blessings_at_head {
+        require_contained_scope(&selected, &blessing.scope, &blessing.key)?;
+    }
 
     let mut removed = 0_usize;
-    for key in &blessings_at_head {
-        storage.delete(key).await?;
-        reporter.note_with(|| format!("removed blessing {key}"));
+    for blessing in &blessings_at_head {
+        storage.delete(&blessing.key).await?;
+        reporter.note_with(|| format!("removed blessing {}", blessing.key));
         removed = removed.saturating_add(1);
     }
 
@@ -420,61 +350,6 @@ fn short_commit_id(commit_id: &str) -> &str {
     commit_id.get(..12).unwrap_or(commit_id)
 }
 
-/// Concrete discriminant sets to record a pre-emptive blessing in when the context
-/// commit has no stored run to anchor to.
-///
-/// Analysis matches a blessing to a series by an *exact* [`DiscriminantSet`], so a
-/// pre-emptive blessing must already occupy the set a future run will land in. The
-/// targets are the cartesian product of the resolved discriminant filters' concrete values: an
-/// omitted `--engine` expands to every [`Engine`] (there is no host default), so
-/// whichever engine's data is captured later is accepted, while the target triple and
-/// machine key default to the current host. The product is empty only when the triple
-/// or machine-key filter is unconstrained (`all`) and so cannot be enumerated.
-///
-/// Repeated discriminant values (for example `--engine callgrind --engine callgrind`) or
-/// values that sanitize to the same segment collapse to one set, so the caller writes
-/// each sidecar key once and reports an honest count.
-fn synthesize_target_sets(discriminants: &DiscriminantSetQuery) -> Vec<DiscriminantSet> {
-    let engines: Vec<Engine> = match &discriminants.engine {
-        DiscriminantFilter::All => Engine::ALL.to_vec(),
-        DiscriminantFilter::Auto(value) => Engine::from_name(value).into_iter().collect(),
-        DiscriminantFilter::Explicit(values) => values
-            .iter()
-            .filter_map(|value| Engine::from_name(value))
-            .collect(),
-    };
-    let triples = concrete_discriminant_values(&discriminants.target_triple);
-    let machines = concrete_discriminant_values(&discriminants.machine_key);
-
-    let mut sets = Vec::new();
-    let mut seen = HashSet::new();
-    for engine in &engines {
-        for triple in &triples {
-            for machine in &machines {
-                let set = DiscriminantSet::new(
-                    *engine,
-                    &TargetTriple::from(triple.as_str()),
-                    &MachineKey::from(machine.as_str()),
-                );
-                if seen.insert(set.clone()) {
-                    sets.push(set);
-                }
-            }
-        }
-    }
-    sets
-}
-
-/// The concrete values a non-engine discriminant filter resolves to, or empty when it is
-/// unconstrained (`all`) and so cannot be enumerated.
-fn concrete_discriminant_values(filter: &DiscriminantFilter) -> Vec<String> {
-    match filter {
-        DiscriminantFilter::All => Vec::new(),
-        DiscriminantFilter::Auto(value) => vec![value.clone()],
-        DiscriminantFilter::Explicit(values) => values.iter().cloned().collect(),
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -482,8 +357,8 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
-        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
-        MetricKind, Run, RunContext, ToolchainInfo,
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingScope, EnvironmentInfo, GitInfo,
+        Metric, MetricKind, Run, RunContext, ToolchainInfo,
     };
     use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
@@ -495,14 +370,6 @@ mod tests {
 
     fn config() -> Config {
         Config::default()
-    }
-
-    /// The auto-detected discriminant values the tests seed their default partition under.
-    fn auto() -> AutoDiscriminants {
-        AutoDiscriminants {
-            triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".into(),
-        }
     }
 
     fn ts(seconds: i64) -> Timestamp {
@@ -579,7 +446,6 @@ mod tests {
             "folo",
             &config(),
             options,
-            &auto(),
             ts(1_700_000_000),
             "0.0.1",
             &RecordingReporter::quiet(),
@@ -587,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn bless_writes_a_sidecar_into_the_set_with_a_clean_run_at_head() {
+    fn bless_writes_a_logical_record_when_a_clean_run_exists_at_head() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let git = master_git();
@@ -598,7 +464,7 @@ mod tests {
 
         let blessings = stored_blessings(&storage);
         assert_eq!(blessings.len(), 1, "one sidecar written: {blessings:?}");
-        // The sidecar lands in the same commit directory as the run it accepts.
+        // The anchor is encoded independently of any measurement partition.
         assert!(
             blessings[0].contains("/c2/bless-"),
             "sidecar in the commit dir: {}",
@@ -787,7 +653,6 @@ mod tests {
             "folo",
             &config(),
             &unbless,
-            &auto(),
             &RecordingReporter::quiet(),
         ))
         .unwrap();
@@ -796,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn bless_without_a_run_at_the_commit_warns_and_synthesizes_all_engine_sets() {
+    fn bless_without_anchor_data_persists_an_unrestricted_scope() {
         let storage = MemoryStorage::new();
         // A clean run exists, but on an earlier commit, not HEAD.
         block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes())).unwrap();
@@ -807,30 +672,16 @@ mod tests {
         assert!(message.contains("no stored result"), "{message}");
         assert!(message.contains("Blessed"), "{message}");
 
-        // With no run to anchor to, one sidecar is synthesized per engine under the
-        // auto-detected triple and machine key.
         let blessings = stored_blessings(&storage);
-        assert_eq!(blessings.len(), 4, "one sidecar per engine: {blessings:?}");
-        assert!(
-            blessings.iter().all(|key| key.contains("/c2/bless-")),
-            "all at the c2 commit dir: {blessings:?}"
-        );
-        // The callgrind sidecar sits exactly where a future callgrind run at c2 would,
-        // so the blessing will actually apply once that data lands.
-        let callgrind = DiscriminantSet::new(
-            Engine::Callgrind,
-            &TargetTriple::from("x86_64-unknown-linux-gnu"),
-            &MachineKey::from("m1"),
-        )
-        .bless_key("folo", "c2", 1_700_000_000);
-        assert!(
-            blessings.contains(&callgrind),
-            "{blessings:?} lacks {callgrind}"
-        );
+        assert_eq!(blessings.len(), 1);
+        let bytes = block_on(storage.get(&blessings[0])).unwrap();
+        let record = ScopedBlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(record.scope, BlessingScope::default());
+        assert_eq!(record.record.commit, "c2");
     }
 
     #[test]
-    fn bless_all_on_an_empty_project_synthesizes_all_engine_sets() {
+    fn bless_all_on_an_empty_project_persists_unrestricted_identity_and_scope() {
         let storage = MemoryStorage::new();
         // No runs recorded anywhere: `bless --all` still succeeds pre-emptively.
         let options = BlessOptions {
@@ -843,8 +694,7 @@ mod tests {
         assert!(message.contains("all benchmarks"), "{message}");
 
         let blessings = stored_blessings(&storage);
-        assert_eq!(blessings.len(), 4, "one sidecar per engine: {blessings:?}");
-        // Each carries an empty prefix list (accepting every benchmark).
+        assert_eq!(blessings.len(), 1);
         for key in &blessings {
             let bytes = block_on(storage.get(key)).unwrap();
             let record = BlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
@@ -863,21 +713,19 @@ mod tests {
         let message = drive_bless(&storage, &master_git(), &options).unwrap();
         assert!(message.contains("no stored result"), "{message}");
 
-        // An explicit engine narrows synthesis to just that engine.
         let blessings = stored_blessings(&storage);
-        assert_eq!(blessings.len(), 1, "one callgrind sidecar: {blessings:?}");
-        assert!(
-            blessings[0].contains("/callgrind/x86_64-unknown-linux-gnu/m1/c2/bless-"),
-            "{}",
-            blessings[0]
-        );
+        assert_eq!(blessings.len(), 1);
+        let bytes = block_on(storage.get(&blessings[0])).unwrap();
+        let record = ScopedBlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(record.scope.engine, ["callgrind"]);
+        assert!(record.scope.target_triple.is_empty());
+        assert!(record.scope.machine_key.is_empty());
     }
 
     #[test]
     fn bless_without_data_dedupes_repeated_engine_discriminants() {
         let storage = MemoryStorage::new();
-        // A repeated `--engine` value must not write the same sidecar key twice or
-        // over-report the discriminant-set count.
+        // Repeated selectors represent alternatives, not multiple issuances.
         let options = BlessOptions {
             engine: vec!["callgrind".to_owned(), "callgrind".to_owned()],
             ..bless_options(&["all_the_time"])
@@ -885,52 +733,39 @@ mod tests {
 
         let message = drive_bless(&storage, &master_git(), &options).unwrap();
         assert!(message.contains("no stored result"), "{message}");
-        assert!(
-            message.contains("across 1 discriminant set "),
-            "the repeated engine collapses to one set: {message}"
-        );
-
         let blessings = stored_blessings(&storage);
         assert_eq!(blessings.len(), 1, "one callgrind sidecar: {blessings:?}");
+        let bytes = block_on(storage.get(&blessings[0])).unwrap();
+        let record = ScopedBlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(record.scope.engine, ["callgrind"]);
     }
 
     #[test]
-    fn bless_without_data_and_unconstrained_machine_is_an_error() {
+    fn explicit_all_without_data_is_unrestricted() {
         let storage = MemoryStorage::new();
-        // No data at the commit and the machine-key filter is `all`, so no concrete
-        // discriminant set can be synthesized to anchor the blessing.
         let options = BlessOptions {
             machine_key: vec!["all".to_owned()],
             ..bless_options(&["all_the_time"])
         };
 
-        let error = drive_bless(&storage, &master_git(), &options).unwrap_err();
-        assert!(
-            error
-                .find_source::<BlessDiscriminantsRequiredError>()
-                .is_some()
-        );
-        assert!(stored_blessings(&storage).is_empty());
+        drive_bless(&storage, &master_git(), &options).unwrap();
+        let keys = stored_blessings(&storage);
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let record = ScopedBlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(record.scope, BlessingScope::default());
     }
 
     #[test]
-    fn synthesize_expands_an_auto_engine_and_explicit_discriminants() {
-        // An auto-detected engine resolves to that single engine, while explicit
-        // multi-value discriminants expand across each concrete value.
-        let discriminants = DiscriminantSetQuery {
-            engine: DiscriminantFilter::Auto("callgrind".to_owned()),
-            target_triple: DiscriminantFilter::Explicit(nonempty![
-                "x86_64-unknown-linux-gnu".to_owned(),
-                "aarch64-apple-darwin".to_owned(),
-            ]),
-            machine_key: DiscriminantFilter::Auto("m1".to_owned()),
-        };
-        let sets = synthesize_target_sets(&discriminants);
-        // One engine × two triples × one machine = two sets.
-        assert_eq!(sets.len(), 2, "{sets:?}");
-        assert!(
-            sets.iter().all(|set| set.engine == Engine::Callgrind),
-            "the auto engine is callgrind: {sets:?}"
+    fn colliding_issuance_never_overwrites_an_existing_acceptance() {
+        let storage = MemoryStorage::new();
+        drive_bless(&storage, &master_git(), &bless_options(&["first"])).unwrap();
+        drive_bless(&storage, &master_git(), &bless_options(&["second"])).unwrap_err();
+        let keys = stored_blessings(&storage);
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let record = ScopedBlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(
+            record.record.prefixes,
+            [BenchmarkIdPrefix::new("first").unwrap()]
         );
     }
 
@@ -948,7 +783,6 @@ mod tests {
             "folo",
             &config(),
             &UnblessOptions::default(),
-            &auto(),
             &RecordingReporter::quiet(),
         ))
         .unwrap();
@@ -966,7 +800,6 @@ mod tests {
             "folo",
             &config(),
             &UnblessOptions::default(),
-            &auto(),
             &RecordingReporter::quiet(),
         ))
         .unwrap();
@@ -996,7 +829,6 @@ mod tests {
             "folo",
             &config(),
             &UnblessOptions::default(),
-            &auto(),
             &RecordingReporter::quiet(),
         ))
         .unwrap_err();
@@ -1069,21 +901,19 @@ mod tests {
             "folo",
             &config(),
             &bless_options(&["all_the_time/read_cell"]),
-            &auto(),
             ts(1_700_000_000),
             "0.0.1",
             &reporter,
         ))
         .unwrap();
-        // The auto-detected partition, auto-detected base branch, and the context
-        // commit (defaulted to HEAD) are all named on the always-on line.
+        // Unrestricted discriminants, the base branch and the default context are all explicit.
         assert!(
-            reporter.announced("target-triple=x86_64-unknown-linux-gnu (auto-detected)"),
+            reporter.announced("target-triple=all"),
             "{:?}",
             reporter.announcements()
         );
         assert!(
-            reporter.announced("machine-key=m1 (auto-detected)"),
+            reporter.announced("machine-key=all"),
             "{:?}",
             reporter.announcements()
         );
@@ -1112,12 +942,11 @@ mod tests {
             "folo",
             &config(),
             &UnblessOptions::default(),
-            &auto(),
             &reporter,
         ))
         .unwrap();
         assert!(
-            reporter.announced("machine-key=m1 (auto-detected)"),
+            reporter.announced("machine-key=all"),
             "{:?}",
             reporter.announcements()
         );

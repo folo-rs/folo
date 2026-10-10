@@ -54,7 +54,7 @@ New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyz
 `discriminant_filtered_candidates` + `resolve_history`/`select_dataset`), and all four live
 inside the `analyze` module tree (`list.rs`, `prune.rs`, `examine.rs`, each
 `pub(crate) mod`; `bless`/`unbless` in `bless.rs` reuse the same discriminant-filter
-selection). **A selection parameter added to one must be added to all four** unless
+parser without host defaults). **A selection parameter added to one must be added to all four** unless
 genuinely inapplicable. The analyze-only condensed `--markdown-summary` output is **not**
 part of the lockstep — only `analyze` detects; `list`/`prune`/`examine` reuse the selection
 but never analyze.
@@ -63,6 +63,10 @@ on* (it drops benchmarks absent at the context commit), not which runs are *sele
 so `list runs` may report more series than `analyze` now analyzes. Each is
 generic over the `GitHistory` + `Storage` ports so tests drive it with fakes + `block_on`.
 Semantics and per-command behaviour: DESIGN §7–§8.
+
+Keep logical blessing scopes independent of observed partitions. Inspection must
+show persisted scope; deletion must contain it completely before removing any
+record. See the [blessing implementation](../cbh_analyze/docs/implementation.md).
 
 `analyze` needs a resolvable repository (topology at query time); `list discriminants` is the
 one query view that does **not** (a pure index over storage keys). `examine` is the one

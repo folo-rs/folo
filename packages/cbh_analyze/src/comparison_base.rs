@@ -254,7 +254,7 @@ where
         )
     });
 
-    let loaded = load_objects_concurrently(storage, needed, |key, bytes| {
+    let loaded = load_objects_concurrently(storage, needed, |key, _, bytes| {
         let text = str::from_utf8(&bytes)
             .map_err(|error| InvalidStoredUtf8Error::caused_by("stored object", key, error))?;
         RunPoints::from_json(text)

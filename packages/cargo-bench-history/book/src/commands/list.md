@@ -28,6 +28,11 @@ cargo bench-history list blessings --local=./bench-history
   It requires **no repository** and so ignores the timeline and data-filtering groups. With no
   discriminant filters it lists every stored partition, so you can find triples and machine keys
   you do not already know.
-- **`blessings`** — audits blessings (see [bless / unbless](bless.md)): the sidecars at the
-  current commit by default. Add `--all` to show the most recent blessing of every
-  benchmark across the analysis window.
+- **`blessings`** — audits blessings (see [bless / unbless](bless.md)): records at
+  `--context` (default `HEAD`), with their actual persisted scopes, even without measurements.
+  A logical scope is shown when it intersects the query, but is never narrowed in the output.
+  Pass `--engine all --target-triple all --machine-key all` to audit every scope at that anchor.
+  JSON's `discriminant_scope` contains the accepted values per axis; an empty array is unrestricted.
+  Add `--all` to show the most recent effective blessing per measured benchmark and partition
+  across the analysis window, using the same history or branch evidence line as `analyze`.
+  The window view describes existing series, not the stored scope's coverage of future partitions.

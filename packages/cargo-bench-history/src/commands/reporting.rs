@@ -178,9 +178,8 @@ pub(crate) async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
     clock: Option<Clock>,
-    auto_discriminants: Option<AutoDiscriminants>,
 ) -> Result<RunOutcome, AppError> {
-    let message = cbh_analyze::bless(options, workspace_dir, clock, auto_discriminants).await?;
+    let message = cbh_analyze::bless(options, workspace_dir, clock).await?;
     Ok(RunOutcome::Completed { message })
 }
 
@@ -193,9 +192,8 @@ pub(crate) async fn bless(
 pub(crate) async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,
-    auto_discriminants: Option<AutoDiscriminants>,
 ) -> Result<RunOutcome, AppError> {
-    let message = cbh_analyze::unbless(options, workspace_dir, auto_discriminants).await?;
+    let message = cbh_analyze::unbless(options, workspace_dir).await?;
     Ok(RunOutcome::Completed { message })
 }
 

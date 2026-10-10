@@ -6,6 +6,10 @@ benchmark work; the deep references are
 [`docs/callgrind-benchmarks.md`](callgrind-benchmarks.md) for the Callgrind
 strategy and [`docs/naming.md`](naming.md) for file and identifier naming.
 
+When responding to history findings, follow the
+[investigation and blessing-scope guidance](triage.md#benchmark-history-findings).
+Acceptance scope follows where expected behavior changes, not where it was measured.
+
 ## Benchmark design
 
 Unless otherwise prompted, create single-threaded synchronous Criterion
