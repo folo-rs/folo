@@ -73,6 +73,11 @@ directly:
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.
+* **Keep issue state out of documentation.** Do not store point-in-time issue
+  state or issue-specific follow-up notes in documentation, including `AGENTS.md`.
+  Keep that tracking in issue/PR discussions, or in `TODO.md` if repository-local
+  notes are needed. Technical guidance may cite issues as durable references,
+  but must not record their current status or disposition.
 * **`AGENTS.md` files are agent instructions, not design or implementation
   docs.** A package-local `AGENTS.md` holds only actionable guidance for working
   in that package — conventions to follow, gotchas, invariants to preserve, how

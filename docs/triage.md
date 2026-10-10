@@ -47,10 +47,6 @@ Reproduction on one processor model does not establish the exact contribution
 on another. Conversely, failure to reproduce locally does not resolve a finding
 on the reported hardware.
 
-Track the benchmark-boundary changes and representative-hardware follow-up for
-the allocator, notification, export and regional-read investigation in
-[#726](https://github.com/folo-rs/folo/issues/726).
-
 ### Scope an accepted change by its cause
 
 A blessing records acceptance of an expected behavior change, not the location
