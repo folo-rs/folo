@@ -18,21 +18,46 @@ Describe 'Get-BenchmarkEncodedRustFlagSet' {
             Should -BeExactly '--cfg=profile'
     }
 
-    It 'replaces competing alignment options in <Form> form for <Option>' -ForEach @(
+    It 'normalizes <Form> / <Dash> / <Option> / <ValueName>' -ForEach @(
         foreach ($option in @('functions', 'nofallthru-blocks', 'blocks')) {
             foreach ($form in @('-C', '-C ', '--codegen=', '--codegen ')) {
-                @{ Option = $option; Form = $form }
+                foreach ($dash in @('-', '--')) {
+                    foreach ($value in @(
+                        @{ Name = 'equals'; Separator = '=' },
+                        @{ Name = 'separate'; Separator = ' ' }
+                    )) {
+                        @{
+                            Option = $option; Form = $form; Dash = $dash
+                            ValueName = $value.Name; ValueSeparator = $value.Separator
+                        }
+                    }
+                }
             }
         }
     ) {
         # The values are representative: profile selection must not depend on their magnitude.
+        $llvm = "llvm-args=${Dash}align-all-${Option}${ValueSeparator}3"
+        $codegen = if ($Form.EndsWith(' ')) {
+            @($Form.TrimEnd(), $llvm)
+        } else {
+            @("${Form}${llvm}")
+        }
+        $encoded = @('-Copt-level=2') + $codegen + @('--cfg=caller') -join $script:Separator
         $result = Get-BenchmarkEncodedRustFlagSet `
-            -RustFlags "-Copt-level=2 ${Form}llvm-args=-align-all-${Option}=3 --cfg=caller" `
+            -EncodedRustFlags $encoded `
             -StabilityFlags '-Cllvm-args=-align-all-functions=6 -Cllvm-args=-align-all-nofallthru-blocks=6'
         $result | Should -BeExactly (@(
             '-Copt-level=2', '--cfg=caller',
             '-Cllvm-args=-align-all-functions=6', '-Cllvm-args=-align-all-nofallthru-blocks=6'
         ) -join $script:Separator)
+        Get-BenchmarkEncodedRustFlagSet -EncodedRustFlags $encoded |
+            Should -BeExactly (@('-Copt-level=2', '--cfg=caller') -join $script:Separator)
+
+        # A plain flag string has no boundary that can retain a separate LLVM value.
+        if ($ValueSeparator -eq '=') {
+            Get-BenchmarkEncodedRustFlagSet -RustFlags "-Copt-level=2 ${Form}${llvm} --cfg=caller" |
+                Should -BeExactly (@('-Copt-level=2', '--cfg=caller') -join $script:Separator)
+        }
     }
 
     It 'removes every inherited alignment policy for the best profile' {
@@ -58,7 +83,7 @@ Describe 'Get-BenchmarkEncodedRustFlagSet' {
     }
 
     It 'preserves unrelated options inside a combined LLVM argument' {
-        $encoded = @('-C', 'llvm-args=-align-all-functions=3 -inline-threshold=42 -align-all-nofallthru-blocks=4') -join $script:Separator
+        $encoded = @('-C', 'llvm-args=-align-all-functions 3 -inline-threshold=42 --align-all-nofallthru-blocks=4 --align-all-blocks 5') -join $script:Separator
         Get-BenchmarkEncodedRustFlagSet -EncodedRustFlags $encoded |
             Should -BeExactly (@('-C', 'llvm-args=-inline-threshold=42') -join $script:Separator)
     }
@@ -92,6 +117,9 @@ Describe 'Get-BenchmarkEncodedRustFlagSet' {
         $flags = '-Cllvm-args=-align-all-functions=bad -Cllvm-args=-align-all-blocks=6junk -Cllvm-args=-align-loops=64'
         Get-BenchmarkEncodedRustFlagSet -RustFlags $flags |
             Should -BeExactly (($flags -split ' ') -join $script:Separator)
+        $encoded = @('-C', 'llvm-args=--align-all-functions bad -align-all-blocks 6junk') -join $script:Separator
+        Get-BenchmarkEncodedRustFlagSet -EncodedRustFlags $encoded |
+            Should -BeExactly $encoded
     }
 
     It 'does not consume a dangling codegen option' {

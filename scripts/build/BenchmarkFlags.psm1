@@ -38,7 +38,7 @@ function Get-BenchmarkEncodedRustFlagSet {
         $arguments = @($RustFlags -split '\s+' | Where-Object { $_ -cne '' })
     }
     $kept = [System.Collections.Generic.List[string]]::new()
-    $alignmentPattern = '(^|\s)-align-all-(?:functions|nofallthru-blocks|blocks)=\d+(?=\s|$)'
+    $alignmentPattern = '(^|\s)--?align-all-(?:functions|nofallthru-blocks|blocks)(?:=|\s+)\d+(?=\s|$)'
 
     for ($index = 0; $index -lt $arguments.Count; $index++) {
         $argument = $arguments[$index]
