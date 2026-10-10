@@ -12,14 +12,13 @@ bench TARGET="":
         $target_selector += "{{ TARGET }}"
     }
 
-    # Force 64-byte function alignment so hot loops keep a fixed position relative to the L1
-    # instruction-cache lines across relinks; without it an unrelated dependency bump can reorder
-    # functions and shift a byte-identical loop across a cache-line boundary, showing up as a
-    # phantom wall-clock regression (see constants.env and the cargo-bench-history "Measurement
-    # stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes from constants.env via dotenv. Treat
+    # Force the configured function-entry alignment so relocating a byte-identical function
+    # preserves its cache-line-relative layout. Changes within the generated function, including
+    # untimed setup, can still move its measured loop. See constants.env and cargo-bench-history's
+    # "Measurement stability" guide. $env:BENCH_STABILITY_RUSTFLAGS comes from dotenv. Treat
     # any RUSTFLAGS the caller set as an opaque string: remove only a pre-existing
     # -align-all-functions token (in any -C/--codegen spelling), then append the stability value so
-    # the 64-byte setting always wins - never duplicated, never silently skipped in favour of a
+    # the configured setting always wins - never duplicated, never silently skipped in favour of a
     # stray caller value.
     $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
     $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
