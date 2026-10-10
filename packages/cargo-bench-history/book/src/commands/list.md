@@ -37,3 +37,11 @@ cargo bench-history list blessings --local=./bench-history
   Add `--all` to show the most recent effective blessing per measured benchmark and partition
   across the analysis window, using the same history or branch evidence line as `analyze`.
   The window view describes existing series, not the stored scope's coverage of future partitions.
+
+## Blessing JSON views
+
+The top-level JSON `scope` identifies the view: `head` means records at the single
+selected context commit, and `window` means effective acceptance across the analysis
+window. The `commit` field identifies the selected context; it need not be the checked-out
+`HEAD`. Each row's `discriminant_scope` separately describes which engines, targets and
+machine keys the blessing accepts.

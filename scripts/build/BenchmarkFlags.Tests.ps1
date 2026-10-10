@@ -63,6 +63,26 @@ Describe 'Get-BenchmarkEncodedRustFlagSet' {
             Should -BeExactly (@('-C', 'llvm-args=-inline-threshold=42') -join $script:Separator)
     }
 
+    It 'preserves an alignment-free LLVM value in <Form> form: <ValueName>' -ForEach @(
+        foreach ($form in @('-C', '-C ', '--codegen=', '--codegen ')) {
+            foreach ($value in @(
+                @{ Name = 'empty'; Text = '' },
+                @{ Name = 'whitespace'; Text = '   ' },
+                @{ Name = 'unrelated'; Text = ' -inline-threshold=42 ' }
+            )) {
+                @{ Form = $form; ValueName = $value.Name; Value = $value.Text }
+            }
+        }
+    ) {
+        $encoded = if ($Form.EndsWith(' ')) {
+            @($Form.TrimEnd(), "llvm-args=$Value") -join $script:Separator
+        } else {
+            "${Form}llvm-args=$Value"
+        }
+        Get-BenchmarkEncodedRustFlagSet -EncodedRustFlags $encoded |
+            Should -BeExactly $encoded
+    }
+
     It 'keeps unrelated encoded empty arguments for the compiler to interpret' {
         $encoded = @('--cfg', '', '--cfg=caller') -join $script:Separator
         Get-BenchmarkEncodedRustFlagSet -EncodedRustFlags $encoded | Should -BeExactly $encoded

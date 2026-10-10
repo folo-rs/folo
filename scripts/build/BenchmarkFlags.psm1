@@ -38,6 +38,7 @@ function Get-BenchmarkEncodedRustFlagSet {
         $arguments = @($RustFlags -split '\s+' | Where-Object { $_ -cne '' })
     }
     $kept = [System.Collections.Generic.List[string]]::new()
+    $alignmentPattern = '(^|\s)-align-all-(?:functions|nofallthru-blocks|blocks)=\d+(?=\s|$)'
 
     for ($index = 0; $index -lt $arguments.Count; $index++) {
         $argument = $arguments[$index]
@@ -60,9 +61,17 @@ function Get-BenchmarkEncodedRustFlagSet {
             continue
         }
 
+        # An alignment-free LLVM list is caller input, even when empty. Preserve it exactly.
+        if ($llvmArguments -cnotmatch $alignmentPattern) {
+            $kept.Add($argument)
+            if ($separate) {
+                $kept.Add($arguments[$index])
+            }
+            continue
+        }
+
         # Keep unknown or malformed options for rustc to diagnose rather than hiding errors.
-        $remaining = ($llvmArguments -creplace `
-            '(^|\s)-align-all-(?:functions|nofallthru-blocks|blocks)=\d+(?=\s|$)', '').Trim()
+        $remaining = ($llvmArguments -creplace $alignmentPattern, '').Trim()
         if ($remaining.Length -eq 0) {
             continue
         }

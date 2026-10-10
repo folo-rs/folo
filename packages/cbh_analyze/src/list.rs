@@ -545,8 +545,8 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
 struct BlessingEntry {
     /// Persisted scope in the context view; effective partition in the window view.
     set: BlessingScope,
-    /// The benchmark this row describes; `Some` only in `--all` mode (the HEAD
-    /// view reports each sidecar once, covering whichever benchmarks its prefixes
+    /// The benchmark this row describes; `Some` only in `--all` mode (the context
+    /// view reports each record once, covering whichever benchmarks its prefixes
     /// match).
     benchmark: Option<String>,
     /// Abbreviated commit the blessing was issued at (the re-baseline point).
@@ -554,9 +554,9 @@ struct BlessingEntry {
     /// Committer date of the blessed commit, resolved from git topology; `None`
     /// when git did not report one.
     commit_time: Option<Timestamp>,
-    /// When the blessing was issued; `Some` only in the HEAD view.
+    /// When the blessing was issued; `Some` only in the context view.
     issued_at: Option<Timestamp>,
-    /// Accepted benchmark-id prefixes; populated only in the HEAD view.
+    /// Accepted benchmark-id prefixes; populated only in the context view.
     prefixes: Vec<String>,
 }
 
@@ -936,6 +936,7 @@ fn render_blessings_json(
 
     let document = JsonDocument {
         project,
+        // Keep the view-kind tags stable; `commit` identifies the selected context separately.
         scope: if all { "window" } else { "head" },
         commit: (!all).then_some(head_label),
         blessings,

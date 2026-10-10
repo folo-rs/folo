@@ -1,4 +1,4 @@
-//! Logical acceptance survives changes in measurement availability and partition discovery.
+//! Acceptance scopes survive changes in measurement availability and partition discovery.
 
 use std::num::NonZero;
 use std::path::PathBuf;
@@ -24,18 +24,20 @@ use crate::pipeline_tests::harness::{
     auto, config, feature_chain, master_chain, multi_bench, now_anchor, spawner, ts,
 };
 use crate::prune::prune_with;
-use crate::testing::store_run;
+use crate::testing::run_points_json;
 use crate::{AnalyzeError, BlessingScopeConflictError, Selection};
 
 /// Both identities are measured together so acceptance cannot hide an unrelated series.
 fn seed(storage: &MemoryStorage, set: &DiscriminantSet, commits: &[&str]) {
+    // The loader uses key-derived provenance, so the result projection is reusable across commits.
+    let run = multi_bench(
+        0,
+        commits[0],
+        &[("selected/case", 100.0), ("unrelated/case", 100.0)],
+    );
+    let json = run_points_json(&run);
     for commit in commits {
-        let run = multi_bench(
-            0,
-            commit,
-            &[("selected/case", 100.0), ("unrelated/case", 100.0)],
-        );
-        store_run(storage, &set.clean_key("folo", commit), &run);
+        block_on(storage.put(&set.clean_key("folo", commit), json.as_bytes())).unwrap();
     }
 }
 
@@ -94,6 +96,27 @@ fn series(storage: &MemoryStorage, git: &FakeGitHistory) -> Vec<Series> {
     dataset.series
 }
 
+/// Checks the complete roster before its boundaries so empty or incomplete results cannot pass.
+fn assert_boundaries(
+    actual: &[Series],
+    expected: &[(&DiscriminantSet, &str, Option<&str>, usize)],
+) {
+    assert_eq!(actual.len(), expected.len());
+    for (set, benchmark, anchor, active_start) in expected {
+        let one = actual
+            .iter()
+            .find(|one| &one.set == *set && one.id.qualified() == *benchmark)
+            .unwrap();
+        assert_eq!(
+            one.blessing
+                .as_ref()
+                .map(|blessing| blessing.commit.as_str()),
+            *anchor
+        );
+        assert_eq!(one.active_start, *active_start);
+    }
+}
+
 fn listing(storage: &MemoryStorage, git: &FakeGitHistory, options: ListOptions) -> Value {
     let options = ListOptions {
         subject: ListSubject::Blessings,
@@ -132,30 +155,46 @@ fn revoke(
     ))
 }
 
-#[test]
-fn logical_scope_covers_missing_anchor_and_later_partitions_without_widening_identity() {
+/// Separates discovery timing cases while retaining an anchor-bearing control partition.
+fn assert_scope_without_anchor(discovered_later: bool) {
     let git = master_chain(3);
     let storage = MemoryStorage::new();
     let first = partition(Engine::Callgrind, "linux", "m1");
-    let no_anchor = partition(Engine::Callgrind, "linux", "m2");
-    let later = partition(Engine::Criterion, "windows", "m3");
-    seed(&storage, &first, &["c0", "c1", "c2"]);
-    seed(&storage, &no_anchor, &["c0", "c2"]);
+    let no_anchor = partition(Engine::Criterion, "windows", "m2");
+    seed(&storage, &first, &["c0", "c1"]);
+    if !discovered_later {
+        seed(&storage, &no_anchor, &["c0", "c2"]);
+    }
     issue(&storage, &git, &options());
-    seed(&storage, &later, &["c0", "c2"]);
+    if discovered_later {
+        seed(&storage, &no_anchor, &["c0", "c2"]);
+    }
 
     let actual = series(&storage, &git);
-    assert_eq!(actual.len(), 6);
+    assert_boundaries(
+        &actual,
+        &[
+            (&first, "selected/case", Some("c1"), 1),
+            (&first, "unrelated/case", None, 0),
+            (&no_anchor, "selected/case", Some("c1"), 1),
+            (&no_anchor, "unrelated/case", None, 0),
+        ],
+    );
     for one in &actual {
-        assert_eq!(
-            one.active_start,
-            usize::from(one.id.qualified() == "selected/case")
-        );
-        if let Some(blessing) = &one.blessing {
-            assert_eq!(blessing.commit, "c1");
+        if one.blessing.is_some() {
             assert!(one.points[one.active_start].topo_index >= 1);
         }
     }
+}
+
+#[test]
+fn logical_scope_covers_missing_anchor_without_widening_identity() {
+    assert_scope_without_anchor(false);
+}
+
+#[test]
+fn logical_scope_covers_later_partitions_without_widening_identity() {
+    assert_scope_without_anchor(true);
 }
 
 #[test]
@@ -171,6 +210,8 @@ fn context_audit_preserves_persisted_scope_without_measurements() {
             ..ListOptions::default()
         },
     );
+    // The view tag is independent of which context commit the caller selected.
+    assert_eq!(audit["scope"], "head");
     assert_eq!(audit["blessings"].as_array().unwrap().len(), 1);
     assert_eq!(
         audit["blessings"][0]["discriminant_scope"],
@@ -214,11 +255,9 @@ fn revocation_restores_the_full_measured_history() {
     let git = master_chain(3);
     let storage = MemoryStorage::new();
     issue(&storage, &git, &options());
-    seed(
-        &storage,
-        &partition(Engine::Callgrind, "linux", "m1"),
-        &["c0", "c2"],
-    );
+    let set = partition(Engine::Callgrind, "linux", "m1");
+    let commits = ["c0", "c2"];
+    seed(&storage, &set, &commits);
     revoke(
         &storage,
         &git,
@@ -228,11 +267,15 @@ fn revocation_restores_the_full_measured_history() {
         },
     )
     .unwrap();
-    assert!(
-        series(&storage, &git)
-            .iter()
-            .all(|one| one.blessing.is_none() && one.active_start == 0)
+    let actual = series(&storage, &git);
+    assert_boundaries(
+        &actual,
+        &[
+            (&set, "selected/case", None, 0),
+            (&set, "unrelated/case", None, 0),
+        ],
     );
+    assert!(actual.iter().all(|one| one.points.len() == commits.len()));
 }
 
 /// Each parameter case runs independently to keep interpreter workloads bounded.
@@ -244,19 +287,29 @@ fn assert_explicit_scope(options: &BlessOptions, accepted: &[bool]) {
         partition(Engine::Callgrind, "windows", "m1"),
         partition(Engine::Criterion, "linux", "m1"),
     ];
+    assert_eq!(accepted.len(), sets.len());
     let storage = MemoryStorage::new();
     issue(&storage, &git, options);
+    // Boundary placement and identity narrowing have separate fixtures. This matrix only
+    // needs a measured series per partition to check which ones inherit the stored acceptance.
+    let json = run_points_json(&multi_bench(0, "c2", &[("selected/case", 100.0)]));
     for set in &sets {
-        seed(&storage, set, &["c0", "c2"]);
+        block_on(storage.put(&set.clean_key("folo", "c2"), json.as_bytes())).unwrap();
     }
     let actual = series(&storage, &git);
+    assert_eq!(actual.len(), sets.len());
     for (set, accepted) in sets.iter().zip(accepted) {
         let one = actual
             .iter()
             .find(|one| &one.set == set && one.id.qualified() == "selected/case")
             .unwrap();
-        assert_eq!(one.blessing.is_some(), *accepted);
-        assert_eq!(one.active_start, usize::from(*accepted));
+        assert_eq!(
+            one.blessing
+                .as_ref()
+                .map(|blessing| blessing.commit.as_str()),
+            accepted.then_some("c1")
+        );
+        assert_eq!(one.active_start, 0);
     }
 }
 
@@ -376,9 +429,19 @@ fn legacy_partition_records_coexist_with_scopes_and_keep_their_original_restrict
     ))
     .unwrap();
     issue(&storage, &git, &options());
+    // Measurements at both anchors keep their acceptance boundaries distinct.
     for set in [&first, &other] {
-        seed(&storage, set, &["c0", "c1", "c2"]);
+        seed(&storage, set, &["c1", "c2"]);
     }
+    assert_boundaries(
+        &series(&storage, &git),
+        &[
+            (&first, "selected/case", Some("c2"), 1),
+            (&first, "unrelated/case", Some("c2"), 1),
+            (&other, "selected/case", Some("c1"), 0),
+            (&other, "unrelated/case", None, 0),
+        ],
+    );
 }
 
 #[test]
@@ -387,27 +450,17 @@ fn revoking_a_legacy_record_preserves_other_anchors() {
     let storage = MemoryStorage::new();
     issue(&storage, &git, &options());
     let first = partition(Engine::Callgrind, "linux", "m1");
+    let other = partition(Engine::Callgrind, "linux", "m2");
     let record = BlessingRecord::new("c2".to_owned(), ts(124), Vec::new(), "legacy".to_owned());
-    block_on(storage.put(
-        &first.bless_key("folo", "c2", 124),
-        record.to_json().unwrap().as_bytes(),
-    ))
-    .unwrap();
-    for one in series(&storage, &git) {
-        let expected = if one.set == first {
-            Some("c2")
-        } else if one.id.qualified() == "selected/case" {
-            Some("c1")
-        } else {
-            None
-        };
-        assert_eq!(
-            one.blessing
-                .as_ref()
-                .map(|blessing| blessing.commit.as_str()),
-            expected
-        );
+    let key = first.bless_key("folo", "c2", 124);
+    block_on(storage.put(&key, record.to_json().unwrap().as_bytes())).unwrap();
+    // Removing the newer boundary must restore the measurement at the remaining anchor.
+    let commits = ["c1", "c2"];
+    for set in [&first, &other] {
+        seed(&storage, set, &commits);
     }
+    let mut expected_keys = block_on(storage.list("v1/folo/")).unwrap();
+    expected_keys.retain(|stored| stored != &key);
     revoke(
         &storage,
         &git,
@@ -418,22 +471,18 @@ fn revoking_a_legacy_record_preserves_other_anchors() {
         },
     )
     .unwrap();
-    assert!(
-        listing(
-            &storage,
-            &git,
-            ListOptions {
-                context: Some("c2".to_owned()),
-                target_triple: vec!["all".to_owned()],
-                machine_key: vec!["all".to_owned()],
-                ..ListOptions::default()
-            }
-        )["blessings"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+    assert_eq!(block_on(storage.list("v1/folo/")).unwrap(), expected_keys);
+    let actual = series(&storage, &git);
+    assert_boundaries(
+        &actual,
+        &[
+            (&first, "selected/case", Some("c1"), 0),
+            (&first, "unrelated/case", None, 0),
+            (&other, "selected/case", Some("c1"), 0),
+            (&other, "unrelated/case", None, 0),
+        ],
     );
-    assert_eq!(block_on(storage.list("v1/folo/")).unwrap().len(), 1);
+    assert!(actual.iter().all(|one| one.points.len() == commits.len()));
 }
 
 #[test]
@@ -469,7 +518,8 @@ fn pruning_scoped_blessings_requires_complete_scope_and_respects_dry_run() {
     let storage = MemoryStorage::new();
     issue(&storage, &git, &options());
     let set = partition(Engine::Callgrind, &auto().triple, &auto().machine_key);
-    seed(&storage, &set, &["c0", "c1", "c2"]);
+    // A clean object and a blessing exercise both deletion sets.
+    seed(&storage, &set, &["c0"]);
     let before = block_on(storage.list("v1/folo/")).unwrap();
     let drive = |options: &PruneOptions| {
         block_on(prune_with(
