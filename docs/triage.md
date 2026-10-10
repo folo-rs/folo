@@ -22,6 +22,35 @@ For allocation-sensitive workloads, compare allocator selection and memory
 locality as well as instruction counts. Untimed allocation can affect a later
 read-only traversal through the placement of its data.
 
+### Separate operation cost from measurement context
+
+Equal instruction sequences do not guarantee equal native latency. An allocator
+change can alter data placement or the code surrounding a measured loop without
+adding work to the loop itself. Function alignment does not fix the alignment of
+every basic block within that function. Compare generated code and use controlled
+layout experiments before treating such a finding as extra algorithmic work.
+An alignment experiment is diagnostic evidence, not by itself a reason to change
+the entire suite's build policy.
+
+Inspect the number of simultaneously live inputs in batched benchmarks. Criterion's
+adaptive batch policies can retain different working sets when an allocator changes
+untimed setup throughput. Using the same `BatchSize` variant does not establish that
+those working sets are equal. A fixed input-count control can separate this effect
+while preserving the operation, fresh logical state and cleanup boundary. In a
+delta-export benchmark, every positive-delta input must still contain a positive
+delta; repeatedly exporting the same updated state is not an equivalent control.
+
+Use native counters and component controls to narrow a cause, not to claim more
+than they establish. Simulated cache results do not establish native latency,
+and a no-op provider removes real backend work rather than repairing it.
+Reproduction on one processor model does not establish the exact contribution
+on another. Conversely, failure to reproduce locally does not resolve a finding
+on the reported hardware.
+
+Track the benchmark-boundary changes and representative-hardware follow-up for
+the allocator, notification, export and regional-read investigation in
+[#726](https://github.com/folo-rs/folo/issues/726).
+
 ### Scope an accepted change by its cause
 
 A blessing records acceptance of an expected behavior change, not the location
