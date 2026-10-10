@@ -1,9 +1,8 @@
 use crate::cli::{Conclusion, PendingArgs};
 use crate::marker;
 use crate::model::{Instance, IssueKind};
-use crate::result::{Coverage, Evidence, Outcome, PublicationState};
+use crate::result::{Evidence, Outcome, PublicationState};
 
-const REGRESSION_HEADING: &str = "# Benchmark history";
 const PR_HEADING: &str = "## Benchmark history";
 const WARNING_HEADING: &str = "> [!WARNING]";
 // Readers need report interpretation rather than installation or command navigation.
@@ -27,14 +26,9 @@ pub(crate) fn regression_issue(
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
         marker::state(instance, state.marker_value()),
-        REGRESSION_HEADING.to_owned(),
         ADVISORY.to_owned(),
     ];
     push_result_status(&mut sections, evidence);
-    sections.push(format!(
-        "Analyzed commit: {}",
-        evidence.report.commit.as_str()
-    ));
     sections.push(summary.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
@@ -72,15 +66,10 @@ pub(crate) fn pr_result(
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
         marker::state(instance, state.marker_value()),
-        PR_HEADING.to_owned(),
         ADVISORY.to_owned(),
     ];
     push_result_status(&mut sections, evidence);
     sections.push(format_scope(packages));
-    sections.push(format!(
-        "Analyzed commit: {}",
-        evidence.report.commit.as_str()
-    ));
     sections.push(summary.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
@@ -142,10 +131,7 @@ pub(crate) fn inconclusive_details(
     summary: &str,
     artifact_url: Option<&str>,
 ) -> String {
-    let mut sections = vec![format!(
-        "Analysis at {} could not establish recovery.",
-        evidence.report.commit.as_str()
-    )];
+    let mut sections = vec!["Analysis could not establish recovery.".to_owned()];
     push_result_status(&mut sections, evidence);
     sections.push(summary.to_owned());
     push_links(&mut sections, artifact_url);
@@ -230,7 +216,7 @@ pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
         .any(|line| line == empty_scope || line == failed)
 }
 
-/// Adds coverage qualifications and the outcome headline without replacing domain prose.
+/// Adds platform qualifications and the outcome headline without replacing domain prose.
 fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
     let outcome = evidence.report.outcome;
     if !evidence.platforms.is_complete() {
@@ -239,13 +225,6 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
              > Findings and absence-of-findings statements apply only to completed platforms.",
             evidence.platforms.completed().join(", "),
             evidence.platforms.missing().join(", ")
-        ));
-    }
-    if evidence.report.coverage == Coverage::Partial {
-        sections.push(format!(
-            "{WARNING_HEADING}\n> Some in-scope metric series could not be judged. \
-             See the Coverage section at the end of the full Markdown report \
-             or the JSON report's `census` for counts and reasons."
         ));
     }
     let headline = match outcome {
@@ -298,8 +277,8 @@ mod tests {
     use super::*;
     use crate::cli::RunArgs;
     use crate::model::CommitSha;
-    use crate::result::AnalysisMode;
     use crate::result::tests::evidence;
+    use crate::result::{AnalysisMode, Coverage};
 
     fn instance() -> Instance {
         "default".parse().unwrap()
@@ -338,6 +317,59 @@ mod tests {
             "[How to read this report](https://folo-rs.github.io/folo/",
             "cargo-bench-history/appendix/insights.html)"
         )));
+    }
+
+    #[test]
+    fn completed_reports_rely_on_summary_for_identity_and_series_coverage() {
+        let summary = format!(
+            "# Benchmark history analysis: folo\n\n\
+             - Commit: {}\n\
+             - In-scope series judged: 1 of 2 (see full report for details)\n",
+            sha().as_str()
+        );
+        let mut history = evidence(AnalysisMode::History, Outcome::Findings, true);
+        history.report.coverage = Coverage::Partial;
+        let mut branch = evidence(AnalysisMode::Branch, Outcome::Findings, true);
+        branch.report.coverage = Coverage::Partial;
+        for body in [
+            regression_issue(
+                &instance(),
+                &owner(),
+                &history,
+                PublicationState::Findings,
+                &summary,
+                None,
+            ),
+            pr_result(
+                &instance(),
+                &owner(),
+                &branch,
+                PublicationState::Findings,
+                "foo",
+                &summary,
+                None,
+            ),
+            inconclusive_details(
+                &evidence(AnalysisMode::History, Outcome::Partial, true),
+                &summary,
+                None,
+            ),
+        ] {
+            assert!(body.contains(&summary), "{body}");
+            assert!(
+                body.lines()
+                    .filter(|line| line.starts_with('#'))
+                    .eq(["# Benchmark history analysis: folo"]),
+                "{body}"
+            );
+            let visible_commit_count = body
+                .lines()
+                .filter(|line| !line.starts_with("<!--"))
+                .map(|line| line.matches(sha().as_str()).count())
+                .sum::<usize>();
+            assert_eq!(visible_commit_count, 1, "{body}");
+            assert!(!body.contains(WARNING_HEADING), "{body}");
+        }
     }
 
     #[test]
@@ -485,9 +517,7 @@ mod tests {
             None,
         );
         assert!(body.contains("Notable benchmark changes detected."));
-        assert!(body.contains("Some in-scope metric series could not be judged."));
-        assert!(body.contains("Coverage section at the end of the full Markdown report"));
-        assert!(body.contains("JSON report's `census` for counts and reasons."));
+        assert_eq!(body.matches(WARNING_HEADING).count(), 1);
         assert!(body.contains("Missing: windows."));
         assert!(body.contains("exact tool summary"));
     }

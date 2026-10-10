@@ -1311,7 +1311,13 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
             runs_with_span(input.runs, input.commit_span)
         ),
     ];
-    lines.extend(judged_bullet(&coverage));
+    if let Some(mut bullet) = judged_bullet(&coverage) {
+        // The summary omits detailed coverage beside findings; keep its pointer with the tally.
+        if coverage.judged() < coverage.in_scope() {
+            bullet.push_str(" (see full report for details)");
+        }
+        lines.push(bullet);
+    }
     if !input.findings.is_empty() && coverage.ignored() > 0 {
         lines.push(format!(
             "- Ignored by configuration: {} series",
@@ -2075,7 +2081,10 @@ mod tests {
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(!summary.contains("## Coverage"));
-        assert!(summary.contains("- In-scope series judged: 4 of 7"));
+        assert!(
+            summary.contains("- In-scope series judged: 4 of 7 (see full report for details)\n")
+        );
+        assert!(!markdown.contains("see full report for details"));
     }
 
     #[test]
@@ -2086,6 +2095,39 @@ mod tests {
     #[test]
     fn markdown_coverage_matches_json_for_silent_branch() {
         assert_markdown_coverage_matches_json(AnalysisMode::Branch);
+    }
+
+    #[test]
+    fn summary_coverage_pointer_only_for_unjudged_in_scope_series() {
+        for (census, needs_details) in [
+            (SeriesCensus::default(), false),
+            (
+                census_of(
+                    0,
+                    &[(UnjudgedReason::Ghost, 1), (UnjudgedReason::Ignored, 1)],
+                ),
+                false,
+            ),
+            (
+                census_of(
+                    1,
+                    &[(UnjudgedReason::Ghost, 1), (UnjudgedReason::Ignored, 1)],
+                ),
+                false,
+            ),
+            (census_of(0, &[(UnjudgedReason::TooFewPoints, 1)]), true),
+        ] {
+            let input = ReportInput {
+                census,
+                ..flat_input(&[])
+            };
+            let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+            assert_eq!(
+                summary.contains("(see full report for details)"),
+                needs_details,
+                "{summary}"
+            );
+        }
     }
 
     /// Exercises each state and reason without repeatedly rendering one state per reason.
@@ -2173,7 +2215,7 @@ mod tests {
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(
-            summary.contains("- In-scope series judged: 4 of 7"),
+            summary.contains("- In-scope series judged: 4 of 7 (see full report for details)\n"),
             "{summary}"
         );
         assert!(summary.contains("Not judged: 2 series"), "{summary}");

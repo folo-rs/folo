@@ -114,8 +114,8 @@ The final **Coverage** section in full Markdown and the JSON `census` always con
 **reasons** series went unjudged, including when findings exist. Text and condensed summaries
 list the full reason breakdown only when there are no findings. Configured exclusions
 also receive a compact disclosure beside findings, so an intentional reduction in
-analysis scope stays visible. A GitHub comment's coverage warning points to
-those full outputs in its report bundle. See
+analysis scope stays visible. When in-scope series remain unjudged, the condensed summary's
+coverage bullet points to the full report for details, without a separate GitHub warning. See
 [Reading a silent report](insights.md#reading-a-silent-report) for matching Markdown and JSON
 examples.
 
