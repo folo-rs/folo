@@ -1569,10 +1569,12 @@ There is no manual tag-preparation step or crates.io publication in the action r
 3. The monorepo PR merges. Its asynchronous release workflow publishes packages, then the
    corresponding prebuilt archives. A merge or a successful registry-only publish is not
    evidence that the whole installation path is ready.
-4. The author follows that publication and **reruns the action check** when its exact
-   dependencies are available. Publication in another repository does not automatically rerun
-   failed checks. Use ordinary authenticated maintainer/agent follow-up; no cross-repository
-   dispatch service, polling workflow or stored credential is required.
+4. The paired action PR's existing Local App session wakes hourly, checks whether the monorepo
+   PR has merged, and automatically retries checks failing on its unpublished artifacts.
+   It verifies the current manifest's actual results and clears the follow-up when those
+   checks pass or the pair reaches a terminal disposition, following the
+   [automatic publication policy](../../../docs/benchmark-action-releases.md#automatic-publication-follow-up).
+   No further user prompt, cross-repository dispatch service or stored credential is required.
 5. Once the current action PR passes its required checks and review, it can merge.
 6. The action's release workflow publishes the reviewed version and advances its floating
    major after the final availability gate.

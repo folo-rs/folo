@@ -551,5 +551,8 @@ substantive progress, handoff or blockers, not heartbeats or empty scans. Includ
 decision diagnostics in a collapsible section when posting a summary. Do not
 declare blocked or incomplete work successful. Future admissions, newly
 discovered relationships and unexpected-stop recovery belong to this repository
-automation; PR follow-up belongs to each repair owner, never to a per-PR automation
-or hidden process.
+automation; ordinary PR follow-up belongs to each repair owner, not a per-PR automation
+or hidden process. The paired action session's
+[hourly publication retry](../../../docs/benchmark-action-releases.md#automatic-publication-follow-up)
+is the narrowly scoped exception. Intake neither configures nor monitors that follow-up;
+preserve its requirement when handing off repair scope that needs an action counterpart.

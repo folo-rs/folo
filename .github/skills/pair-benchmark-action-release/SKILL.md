@@ -47,6 +47,8 @@ these working files.
 | `ACTION_BODY`, `MONOREPO_BODY` | Absolute paths to the complete prepared PR descriptions under `WORK_DIR`. |
 | `ACTION_PR`, `MONOREPO_PR` | The discovered or created PR numbers or URLs in their respective repositories. |
 | `ACTION_RUN` | The workflow run for the current action PR revision whose required installation check must be rerun after publication. |
+| `ACTION_JOB` | The failed artifact-dependent job's database ID from the latest attempt of `ACTION_RUN`, not an ID inferred from a browser URL. |
+| `FOLLOWUP_PROMPT` | Durable instruction for the action PR session, containing both exact PR URLs and the Stage 4 eligibility, retry, verification and cleanup rules. |
 
 # Stage 1: Check relevance cheaply
 
@@ -130,6 +132,10 @@ PR blindly. Verify that both returned descriptions contain the correct reciproca
 If readback fails, the pairing remains unverified. Fulfill any deferred cross-link obligation
 when the monorepo PR is created.
 
+Include Stage 4's automatic follow-up in the owning action session's assignment. That session,
+not the monorepo repair owner or intake, must save and verify the hourly session automation
+once both PRs are known. Retain this obligation alongside any deferred reciprocal link.
+
 # Stage 4: Follow publication and the required installation gate
 
 Keep the pair current after any reassessment, including release-history or target recovery. The
@@ -143,17 +149,69 @@ Expected early failure while publication is pending remains merge-blocking for t
 Source dogfooding, source fallback for a promised archive, or an existing binary cache cannot
 substitute for this required check. Unlike an advisory check, it must pass before action merge.
 
-The paired PR's author follows publication and explicitly reruns the failed check after all
-required packages and archives are available:
+## Schedule the action session
 
-> gh run rerun "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --failed
+Follow the [automatic publication policy](../../../docs/benchmark-action-releases.md#automatic-publication-follow-up).
+In the existing action PR session, inspect `get_session_automation`, then use
+`save_session_automation` to save this task's follow-up:
+
+```json
+{"interval":"minutes","every_minutes":60,"prompt":"{{FOLLOWUP_PROMPT}}"}
+```
+
+Read it back with `get_session_automation`; verify the cadence and the prompt's exact pair.
+Reuse an existing follow-up for the same pair, but never overwrite unrelated automation.
+Do not use `save_workflow`, which creates new sessions, or a shell sleep loop.
+Missing tools, conflicting schedules or failed saves are explicit blockers, not a successful
+automatic handoff. This publication retry is the narrow exception to the scheduled-repair
+restriction on per-PR timers; it grants no merge or publication authority.
+
+## Reconcile each invocation
+
+Read the live pair and latest action run, including its attempts and job diagnostics:
+
+> gh pr view "{{MONOREPO_PR}}" --repo folo-rs/folo --json state,mergedAt,url
+>
+> gh pr view "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --json state,headRefOid,body,statusCheckRollup
+>
+> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --json headSha,status,conclusion,attempt,jobs
+>
+> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --log-failed
+
+Use the current PR's manifest and run links, not a saved head or attempt. First apply the
+cleanup conditions below, including checks that already pass. Otherwise, while the parent is
+open, retain the schedule and end the invocation without retries. If the action closes or
+merges, the parent closes unmerged, or the user pauses this work, clear this task's schedule.
+Record a concrete human blocker when recovery needs authority or intervention the session lacks.
+Transient lookup errors remain errors; retain the last verified state for the next invocation.
+
+After the parent merges, automatically retry failed jobs whose logs identify missing packages
+or archives from the paired parent release. Include the required dependent checks in that
+recovery. Do not wait for another user prompt or require a separate availability probe before
+retrying: an incomplete publication can fail again and be reconsidered on the next hourly wake.
+Do not duplicate an active attempt or retry unrelated failures or a superseded action head.
+Use the narrow job rerun:
+
+> gh run rerun --repo folo-rs/cargo-bench-history-action --job "{{ACTION_JOB}}"
+
+GitHub also reruns dependent jobs. Use `gh run rerun "{{ACTION_RUN}}" --repo
+folo-rs/cargo-bench-history-action --failed` only when every failed job in that run is part of
+the artifact dependency. Inspect the result:
+
+> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --json headSha,status,conclusion,attempt,jobs
 >
 > gh pr checks "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --required
 
 Record the actual result for the current action manifest, including pending or failed
-publication dependencies; a rerun request is not a passing check. A failed rerun request
-is a handoff blocker. Preserve the pending follow-up when publication has not completed;
-do not merge or publish anything to unblock it from this skill.
+publication dependencies; a rerun request is not a passing check. Keep the hourly schedule
+while publication is pending or the retry is queued/running. Diagnose retry errors rather
+than counting them as success or blindly repeating an ambiguous request.
+
+Once the current-head artifact-dependent checks pass, clear this task's automation with
+`save_session_automation` input `{"clear":true}` and verify its removal with
+`get_session_automation`. Also clear it for a terminal disposition, explicit pause or concrete
+human-action blocker, preserving unrelated automation. Hand off any remaining normal review
+or merge requirements. Do not merge or publish anything to unblock this follow-up.
 
 # Stage 5: Hand off the verified state and blockers
 
@@ -162,6 +220,9 @@ the affected pins and verified reciprocal PR links, the action-version decision,
 existing PR was reused or a new one was needed, the next publication/check follow-up and
 any access, PR-creation or verification blocker, or the evidence for no affected pins.
 Reference the verified release plan rather than duplicating its version inventory.
+For pending publication, include the owning action session and verified hourly schedule;
+otherwise record why that schedule was cleared or could not be established. An idle action
+session with pending follow-up must not be archived.
 
 When a summary is posted as a GitHub comment, place execution diagnostics in a collapsible
 section. The handoff does not grant merge or

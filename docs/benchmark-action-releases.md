@@ -101,10 +101,46 @@ published-binary availability. Early failure while publication is pending is exp
 This is a required merge check: the action PR cannot merge while it is pending or failed,
 even when unrelated advisory checks would not delay a merge.
 
-External publication does not rerun a failed GitHub check. The paired PR's author follows the
-monorepo release and explicitly reruns the action check after its required packages and archives
-are available, then verifies the actual result for the current manifest. No cross-repository
-dispatch service or stored credential is needed. An action merge triggers its own release
-workflow, which rechecks availability before creating the action release and moving the
-floating major tag. A later successful run never justifies waiving the gate on an untested
-manifest.
+External publication does not rerun a failed GitHub check. The session owning the paired
+action PR automatically follows the monorepo release and retries artifact-dependent failures
+under the [hourly follow-up policy](#automatic-publication-follow-up), without another user
+prompt. No cross-repository dispatch service or stored credential is needed. An action merge
+triggers its own release workflow, which rechecks availability before creating the action
+release and moving the floating major tag. A later successful run never justifies waiving
+the gate on an untested manifest.
+
+## Automatic publication follow-up
+
+The paired action PR's existing Local App session owns a session automation that wakes it
+every 60 minutes. This cadence provides automatic recovery from asynchronous publication
+without continuous polling or creating a new session for each check. The monorepo author
+includes this requirement and the reciprocal PR links in the action session's handoff and
+verifies that the schedule is saved before handing off the pair. A pending monorepo merge
+does not require a human to restart this follow-up.
+
+Each invocation reads the known parent and action PRs directly, including the current action
+head, manifest and latest check attempts. While the parent remains open, retain the schedule
+without retrying publication-dependent failures. Once the parent has merged, inspect failed
+checks and automatically rerun those whose diagnostics identify missing parent-release
+packages or archives, including their required dependent checks. Retry only the affected jobs;
+rerun all failed jobs in a workflow only when every failure belongs to that dependency.
+Do not duplicate a queued or running attempt, retry a superseded head, or treat an unrelated
+failure as a publication delay.
+
+The parent merge permits the retry; it does not establish artifact availability. If publication
+is still incomplete, keep the hourly schedule and reconsider the latest failed attempt on the
+next invocation. A successful rerun request is not a passing check. Verify the actual
+artifact-dependent results for the current manifest before removing the schedule and handing
+off the action PR for its remaining review and merge requirements.
+
+Remove this follow-up when its checks pass, the action PR closes or merges, the parent closes
+without merging, or an explicit pause or concrete human-action blocker stops automatic recovery.
+Record the disposition or required action without repeating unchanged waiting comments.
+Reuse an existing schedule for this pair; do not overwrite or clear unrelated automation.
+If scheduling or retry permissions are unavailable, report that specific blocker rather than
+claiming automatic follow-up is active.
+
+This narrowly scoped session automation is the exception to the scheduled-repair prohibition
+on per-PR timers. It does not replace ordinary foreground CI/review follow-up, authorize merges
+or publication, or enable a general PR watcher. The session stays available until its
+follow-up is cleared; an idle turn is not grounds to archive it.
