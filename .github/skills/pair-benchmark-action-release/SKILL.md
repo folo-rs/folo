@@ -46,7 +46,7 @@ these working files.
 | `ACTION_TITLE` | The action PR title describing the release change. |
 | `ACTION_BODY`, `MONOREPO_BODY` | Absolute paths to the complete prepared PR descriptions under `WORK_DIR`. |
 | `ACTION_PR`, `MONOREPO_PR` | The discovered or created PR numbers or URLs in their respective repositories. |
-| `ACTION_RUN` | The workflow run for the current action PR revision whose required installation check must be rerun after publication. |
+| `ACTION_RUN` | One applicable validation run for the current action PR revision; reconcile each current-head run separately, including separate push and pull-request runs. |
 | `ACTION_JOB` | The failed artifact-dependent job's database ID from the latest attempt of `ACTION_RUN`, not an ID inferred from a browser URL. |
 | `PUBLICATION_RUN` | The parent's publication run or linked recovery run, verified against the parent merge commit and original publication source. |
 | `FOLLOWUP_PROMPT` | Durable instruction for the action PR session, containing both exact PR URLs and the Stage 4 eligibility, retry, verification and cleanup rules. |
@@ -179,7 +179,9 @@ restriction on per-PR timers; it grants no merge or publication authority.
 
 ## Reconcile each invocation
 
-Read the live pair and latest action run, including its attempts and job diagnostics:
+Read the live pair and discover all applicable current-head validation runs from its check
+rollup and run links, including separate push and pull-request runs. For each `ACTION_RUN`,
+read its latest attempt and job diagnostics; job IDs belong to that run and attempt:
 
 > gh pr view "{{MONOREPO_PR}}" --repo folo-rs/folo --json state,mergedAt,mergeCommit,url
 >
@@ -189,7 +191,8 @@ Read the live pair and latest action run, including its attempts and job diagnos
 >
 > gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --log-failed
 
-Use the current PR's manifest and run links, not a saved head or attempt. First apply the
+Use the current PR's manifest and complete current-head run set, not a saved head or attempt.
+Apply the following reconciliation and retry rules to each run. First apply the
 cleanup conditions below, including checks that already pass. Otherwise, while the parent is
 open, retain the schedule and end the invocation without retries. If the action closes or
 merges, the parent closes unmerged, or the user pauses this work, clear this task's schedule.
@@ -233,7 +236,8 @@ publication dependencies; a rerun request is not a passing check. Keep the hourl
 while publication is pending or the retry is queued/running. Diagnose retry errors rather
 than counting them as success or blindly repeating an ambiguous request.
 
-Once the current-head artifact-dependent checks pass, clear this task's automation with
+Once all applicable current-head artifact-dependent checks and their required dependent
+checks pass across those runs, clear this task's automation with
 `save_session_automation` input `{"clear":true}` and verify its removal with
 `get_session_automation`. Also clear it for a terminal disposition, explicit pause or concrete
 human-action blocker, preserving unrelated automation. Hand off any remaining normal review
