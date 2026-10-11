@@ -15,8 +15,12 @@ and report presentation to `cbh_render`.
 Blessing mutation resolves omitted discriminants without host defaults. Project-level records
 persist the requested scope through the ordinary write-once storage port; measurements
 at the context are consulted only for the no-data warning, never to decide that scope.
-Query selection lists project-level blessing records alongside run partitions, rejects off-topology
-anchors before fetching, then decodes scopes through the shared blessing loader.
+Query selection lists project-level blessing records alongside run partitions.
+Analysis and effective-blessing inspection request analysis context: blessing payloads
+and branch comparison windows. Raw run listing and examination reconstruct measurements
+without acquiring this context; acceptance records cannot affect these raw views.
+When requested, blessing loading rejects off-topology anchors before fetching,
+then decodes scopes through the shared blessing loader.
 Only at query time are records applied to matching reconstructed partitions. The
 detector therefore keeps its per-partition input and history/branch boundary logic.
 Exact-current snapshots receive scopes through the same reconstructed-series path.

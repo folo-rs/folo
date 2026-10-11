@@ -24,6 +24,8 @@ benchmark identity and the metric, so pasting them back in is natural.
 `analyze`'s exact data-set selection that never analyze. It runs **no detection and no
 re-baselining** — it has no findings, modes, or blessings — and repeats the listing once per
 matching discriminant set.
+Like `list runs`, its raw measurements remain inspectable independently of blessing
+records, including records whose payloads cannot be decoded.
 
 Configured [benchmark ignores](analyze.md#ignoring-benchmarks) do not apply to this
 raw-data view. An ignored benchmark remains inspectable by its exact qualified ID.
