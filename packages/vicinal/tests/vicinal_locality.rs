@@ -3,11 +3,13 @@
     reason = "This is a test file, documentation is not required."
 )]
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use many_cpus::SystemHardware;
-use vicinal::Pool;
+use many_cpus::{Processor, SystemHardware};
+use new_zealand::nz;
+use vicinal::{Pool, WorkerPolicy};
 
 #[test]
 fn tasks_execute_on_spawning_processor() {
@@ -70,6 +72,40 @@ fn tasks_execute_on_spawning_processor() {
         correct, total,
         "All tasks should execute on the processor they were spawned from"
     );
+}
+
+#[test]
+fn regional_tasks_preserve_region_and_full_eligible_affinity() {
+    testing::with_watchdog(|| {
+        let hardware = SystemHardware::current();
+        let processors = hardware.all_processors();
+        let pool = Pool::builder()
+            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+            .build();
+        let scheduler = pool.scheduler();
+        let threads = processors.spawn_threads(move |processor| {
+            let expected_region = processor.memory_region_id();
+            let handle = scheduler.spawn(move || {
+                let hardware = SystemHardware::current();
+                assert_eq!(hardware.current_memory_region_id(), expected_region);
+                let affinity = hardware.thread_processors().unwrap();
+                let expected = hardware
+                    .all_processors()
+                    .to_builder()
+                    .filter(|p| p.memory_region_id() == expected_region)
+                    .take_all()
+                    .unwrap();
+                assert_eq!(
+                    affinity.iter().map(Processor::id).collect::<BTreeSet<_>>(),
+                    expected.iter().map(Processor::id).collect::<BTreeSet<_>>()
+                );
+            });
+            futures::executor::block_on(handle);
+        });
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    });
 }
 
 ::testing::set_allocator!();

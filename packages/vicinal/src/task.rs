@@ -22,7 +22,7 @@ pub(crate) trait VicinalTask: Send + 'static {
     fn call(self: Pin<&mut Self>);
 }
 
-/// Owning handle to a type-erased task, as stored in a processor's task queue.
+/// Owning handle to a type-erased task, as stored in a worker group's task queue.
 ///
 /// The handle owns its pool slot, so queueing, dequeuing and executing a task need no further
 /// contact with the pool or the lock that guards allocation.

@@ -1,8 +1,8 @@
 [package]
 name = "vicinal"
-description = "Processor-local worker pool that schedules tasks in the vicinity of the caller"
+description = "Worker pool with processor-local or memory-region-local task scheduling"
 publish = true
-version = "0.1.46"
+version = "0.1.47"
 
 authors.workspace = true
 edition.workspace = true

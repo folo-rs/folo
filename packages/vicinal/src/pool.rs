@@ -1,18 +1,13 @@
-//! Pool management and lifecycle.
+//! Pool configuration and ownership.
 
-use std::any::type_name;
 use std::num::NonZero;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle as ThreadJoinHandle};
-use std::{fmt, mem, panic};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use event_listener::{Listener, listener};
-use many_cpus::{ProcessorId, SystemHardware};
+use many_cpus::SystemHardware;
 use new_zealand::nz;
-use tracing::{debug, trace};
 
-use crate::{IterationResult, NEVER_POISONED, ProcessorRegistry, Scheduler, WorkerCore};
+use crate::{PoolInner, Scheduler, WorkerPolicy};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -20,285 +15,55 @@ const DEFAULT_WORKERS_PER_PROCESSOR: NonZero<u32> = nz!(2_u32);
 
 static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(test)]
-type HookFn = dyn Fn() + Send + Sync;
-
-// Test hooks allow deterministic testing of race-condition branches by injecting a
-// synchronization point (typically a pair of barriers) between two operations that
-// normally execute without interruption. Each hook is an optional closure stored
-// behind a Mutex. Tests that install hooks must hold HOOK_SERIALIZATION_MUTEX to
-// prevent interference between concurrent hook-based tests.
-#[cfg(test)]
-static HOOK_SERIALIZATION_MUTEX: Mutex<()> = Mutex::new(());
-#[cfg(test)]
-static HOOK_ENSURE_WORKERS_POST_SPAWN: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
-
-#[cfg(test)]
-thread_local! {
-    /// Marks the current thread as a participant in a hook-based test. Only threads with
-    /// this flag set to `true` will trigger test hooks when they reach a hook callsite.
-    static HOOK_PARTICIPANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-pub(crate) struct PoolInner {
-    pub(crate) pool_id: u64,
-    pub(crate) pool_name: String,
-    pub(crate) hardware: SystemHardware,
-    pub(crate) registry: ProcessorRegistry,
-    pub(crate) workers_per_processor: NonZero<u32>,
-    pub(crate) worker_handles: Mutex<Vec<ThreadJoinHandle<()>>>,
-    pub(crate) shutdown: AtomicBool,
-}
-
-#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
-impl fmt::Debug for PoolInner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let handle_count = self.worker_handles.lock().expect(NEVER_POISONED).len();
-
-        f.debug_struct(type_name::<Self>())
-            .field("pool_id", &self.pool_id)
-            .field("pool_name", &self.pool_name)
-            .field("workers_per_processor", &self.workers_per_processor)
-            .field("worker_count", &handle_count)
-            .finish_non_exhaustive()
-    }
-}
-
-impl PoolInner {
-    #[cfg_attr(test, mutants::skip)] // Removing this causes timeouts (workers never start)
-    pub(crate) fn ensure_workers_spawned(self: &Arc<Self>, processor_id: ProcessorId) {
-        // If the pool is shutting down, we should not spawn new workers.
-        if self.shutdown.load(Ordering::Relaxed) {
-            return;
-        }
-
-        let state = self.registry.get_or_init(processor_id);
-
-        // Acquire on failure to synchronize with the Release on successful exchange.
-        // AcqRel on success ensures:
-        // - Acquire: we see all prior worker spawning activity.
-        // - Release: subsequent worker spawning sees this flag was set.
-        let already_spawned = state
-            .workers_spawned
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err();
-
-        if already_spawned {
-            return;
-        }
-
-        let workers_count = self.workers_per_processor.get();
-        let mut new_handles = Vec::with_capacity(workers_count as usize);
-
-        for worker_index in 0..workers_count {
-            let inner_clone = Arc::clone(self);
-            let handle = thread::Builder::new()
-                .name(format!(
-                    "{}-{}-{}",
-                    inner_clone.pool_name, processor_id, worker_index
-                ))
-                .spawn(move || {
-                    // Callers can run outside the quota-selected subset. Affinity must cover
-                    // every eligible processor; see docs/implementation.md, "Queue and worker lifecycle".
-                    if let Some(processor_set) = inner_clone
-                        .hardware
-                        .all_processors()
-                        .to_builder()
-                        .filter(|p| p.id() == processor_id)
-                        .take_all()
-                    {
-                        processor_set.pin_current_thread_to();
-                    }
-
-                    debug!(
-                        pool_name = inner_clone.pool_name.as_str(),
-                        pool_id = inner_clone.pool_id,
-                        processor_id,
-                        worker_index,
-                        "worker thread started"
-                    );
-                    worker_loop(&inner_clone, processor_id, worker_index);
-                    debug!(
-                        pool_name = inner_clone.pool_name.as_str(),
-                        pool_id = inner_clone.pool_id,
-                        processor_id,
-                        worker_index,
-                        "worker thread exiting"
-                    );
-                })
-                .expect("failed to spawn worker thread: thread spawning failure is not supported");
-
-            new_handles.push(handle);
-        }
-
-        // Test hook: pause here so a concurrent test thread can trigger shutdown
-        // before we acquire the lock below, exercising the re-check branch.
-        #[cfg(test)]
-        if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN.lock().unwrap().clone()
-        {
-            hook();
-        }
-
-        let mut worker_handles = self.worker_handles.lock().expect(NEVER_POISONED);
-
-        // Re-check shutdown flag under the lock to avoid race condition where
-        // join_all_workers() runs concurrently and we add new handles after it
-        // has already taken the existing ones.
-        //
-        // If shutdown is true here, it means join_all_workers() has already
-        // set the flag (and possibly taken the handles). We must not add our
-        // new handles to the list, as they would be leaked. Instead, we join
-        // them immediately.
-        if self.shutdown.load(Ordering::Acquire) {
-            for handle in new_handles {
-                if let Err(payload) = handle.join() {
-                    panic::resume_unwind(payload);
-                }
-            }
-            return;
-        }
-
-        worker_handles.extend(new_handles);
-    }
-
-    #[cfg_attr(test, mutants::skip)] // Removing this causes timeouts; requires timing logic to verify.
-    pub(crate) fn join_all_workers(&self) {
-        // Signal shutdown to prevent new workers from being spawned.
-        // We use Release to ensure this store is visible to ensure_workers_spawned
-        // when it acquires the lock.
-        self.shutdown.store(true, Ordering::Release);
-
-        // Signal all existing workers to exit.
-        self.registry.signal_shutdown_all();
-
-        // We take the handles out of the mutex, ensuring that no other thread can
-        // access them. Because we set the shutdown flag above, we know that
-        // ensure_workers_spawned() will not add any new handles to the list after
-        // we release the lock (or if it does, it will see the shutdown flag and
-        // return early).
-        //
-        // The mutex is held only for the duration of the `mem::take` itself and is
-        // released before we begin joining. Worker threads may still be running user
-        // task code, but the join is not reentrant — no borrow of caller-owned
-        // shared state is held while we wait. A worker that calls back into the
-        // pool (for example to spawn additional workers) sees the shutdown flag and
-        // exits without touching the now-empty handle list.
-        let handles = mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
-
-        for handle in handles {
-            if let Err(payload) = handle.join() {
-                // Worker threads run inside a panic trap and should never panic. If one does,
-                // something is very wrong with the pool infrastructure. We propagate the panic
-                // to ensure this critical failure is not silently ignored.
-                panic::resume_unwind(payload);
-            }
-        }
-    }
-}
-
-#[cfg_attr(test, mutants::skip)] // Removing this causes timeouts; condition logic is race-sensitive
-fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) {
-    let state = inner.registry.get_or_init(processor_id);
-    let core = WorkerCore::new(
-        &state.urgent_queue,
-        &state.regular_queue,
-        &state.shutdown_flag,
-    );
-
-    loop {
-        match core.run_one_iteration() {
-            IterationResult::ExecutedUrgent => {
-                trace!(
-                    pool_name = inner.pool_name.as_str(),
-                    pool_id = inner.pool_id,
-                    processor_id,
-                    worker_index,
-                    "executed urgent task"
-                );
-            }
-            IterationResult::ExecutedRegular => {
-                trace!(
-                    pool_name = inner.pool_name.as_str(),
-                    pool_id = inner.pool_id,
-                    processor_id,
-                    worker_index,
-                    "executed regular task"
-                );
-            }
-            IterationResult::Shutdown => {
-                break;
-            }
-            IterationResult::WaitingForWork => {
-                listener!(state.wake_event => listener);
-
-                // Re-check after registering listener to avoid lost wakeups.
-                // Acquire ordering synchronizes with Release in signal_shutdown and task push.
-                if !state.urgent_queue.lock().expect(NEVER_POISONED).is_empty()
-                    || !state.regular_queue.lock().expect(NEVER_POISONED).is_empty()
-                    || state.shutdown_flag.load(Ordering::Acquire)
-                {
-                    continue;
-                }
-
-                listener.wait();
-            }
-        }
-    }
-}
-
-/// A worker pool that executes tasks on the same processor that spawned them.
+/// A worker pool that executes synchronous tasks near their submitting thread.
 ///
-/// This ensures optimal cache locality and minimizes cross-processor data movement.
+/// By default, tasks execute on the processor sampled during submission, with two workers
+/// per processor. [`WorkerPolicy`] can instead share a fixed worker count across each
+/// submitting memory region. No workers start until the first submission to that destination.
+/// A pool's policy does not change after construction.
 ///
 /// # Lifetime
 ///
-/// When the pool is dropped:
-/// 1. All worker threads are signaled to shut down.
-/// 2. The drop blocks until all currently-executing tasks complete.
-/// 3. Any queued tasks that have not started are abandoned.
+/// Dropping the pool signals shutdown, abandons queued tasks and waits for executing tasks
+/// and worker threads to finish. Abandoned tasks release their resources even if schedulers
+/// remain alive. Awaiting an abandoned task's [`JoinHandle`][crate::JoinHandle] panics.
 ///
-/// To ensure all tasks complete, await their [`JoinHandle`][crate::JoinHandle]s before dropping
-/// the pool.
+/// To ensure all tasks complete, await their join handles before dropping the pool.
 ///
 /// # Example
 ///
-/// ```rust
+/// ```
 /// use vicinal::Pool;
 /// # use futures::executor::block_on;
 ///
 /// # block_on(async {
 /// let pool = Pool::new();
-/// let scheduler = pool.scheduler();
-///
-/// let handle = scheduler.spawn(|| 42);
-/// assert_eq!(handle.await, 42);
+/// assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
 /// # });
 /// ```
 #[derive(Debug)]
 pub struct Pool {
-    inner: Arc<PoolInner>,
+    pub(crate) inner: Arc<PoolInner>,
 }
 
 impl Pool {
-    /// Creates a new pool with default settings.
-    ///
-    /// Use [`Pool::builder()`] for custom configuration.
+    /// Creates a pool with two lazily started workers per submitting processor.
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self::builder().build()
     }
 
     /// Creates a builder for configuring the pool.
     #[must_use]
+    #[inline]
     pub fn builder() -> PoolBuilder {
         PoolBuilder::new()
     }
 
-    /// Returns a scheduler that can be used to spawn tasks on this pool.
-    ///
-    /// The scheduler can be cloned and shared across threads.
+    /// Returns a scheduler that can be cloned and shared across threads.
     #[must_use]
+    #[inline]
     pub fn scheduler(&self) -> Scheduler {
         Scheduler::new(Arc::clone(&self.inner))
     }
@@ -311,7 +76,7 @@ impl Default for Pool {
 }
 
 impl Drop for Pool {
-    #[cfg_attr(test, mutants::skip)] // Removing this causes timeouts; requires timing logic to verify.
+    #[cfg_attr(test, mutants::skip)] // Removing shutdown strands sleeping workers.
     fn drop(&mut self) {
         self.inner.join_all_workers();
     }
@@ -321,7 +86,7 @@ impl Drop for Pool {
 #[derive(Debug)]
 pub struct PoolBuilder {
     name: Option<String>,
-    workers_per_processor: NonZero<u32>,
+    policy: WorkerPolicy,
     hardware: Option<SystemHardware>,
 }
 
@@ -329,19 +94,18 @@ impl PoolBuilder {
     fn new() -> Self {
         Self {
             name: None,
-            workers_per_processor: DEFAULT_WORKERS_PER_PROCESSOR,
+            policy: WorkerPolicy::fixed_per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
             hardware: None,
         }
     }
 
     /// Sets the name of the pool, used as a prefix in worker thread names.
     ///
-    /// Thread names follow the pattern `{name}-{processor_id}-{worker_index}`. For example,
-    /// a pool named `"my_pool"` with two workers on processor 33 will have threads named
-    /// `my_pool-33-0` and `my_pool-33-1`.
+    /// Processor-policy names use `{name}-{processor_id}-{worker_index}`.
+    /// Memory-region-policy names use `{name}-region-{memory_region_id}-{worker_index}`.
+    /// Worker indices start at zero within each destination.
     ///
-    /// When no name is specified, the default is `vicinal-{N}` where `N` is an
-    /// auto-incrementing counter (e.g. `vicinal-0`, `vicinal-1`).
+    /// The default name is `vicinal-{N}`, where `N` is an auto-incrementing counter.
     #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -349,331 +113,97 @@ impl PoolBuilder {
     }
 
     /// Sets the number of worker threads per processor.
+    ///
+    /// Equivalent to `worker_policy(WorkerPolicy::fixed_per_processor(count))`.
+    /// This replaces any previously selected policy; the last policy setter wins.
     #[must_use]
-    pub fn workers_per_processor(mut self, count: NonZero<u32>) -> Self {
-        self.workers_per_processor = count;
+    #[inline]
+    pub fn workers_per_processor(self, count: NonZero<u32>) -> Self {
+        self.worker_policy(WorkerPolicy::fixed_per_processor(count))
+    }
+
+    /// Sets the pool's worker count and locality policy.
+    ///
+    /// Replaces any previous policy, including one set by [`Self::workers_per_processor`].
+    /// The default is two workers per processor.
+    #[must_use]
+    pub fn worker_policy(mut self, policy: WorkerPolicy) -> Self {
+        self.policy = policy;
         self
     }
 
-    /// Sets the [`SystemHardware`] instance that the pool uses to determine hardware topology.
+    /// Sets the hardware instance used for topology and locality.
     ///
-    /// By default the pool uses [`SystemHardware::current()`], which queries the real hardware
-    /// of the system. Pass a custom instance (for example one created via
-    /// `SystemHardware::fake()`) to override this.
+    /// Defaults to [`SystemHardware::current()`]. A custom instance can provide simulated
+    /// hardware. The pool does not refresh topology or operating-system restrictions.
     #[must_use]
     pub fn hardware(mut self, hardware: SystemHardware) -> Self {
-        self.hardware = hardware.into();
+        self.hardware = Some(hardware);
         self
     }
 
-    /// Builds the pool with the configured settings.
+    /// Builds the pool without starting worker threads.
     #[must_use]
     pub fn build(self) -> Pool {
         let hardware = self
             .hardware
             .unwrap_or_else(|| SystemHardware::current().clone());
-
         let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
         let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
 
-        let inner = Arc::new(PoolInner {
-            pool_id,
-            pool_name,
-            registry: ProcessorRegistry::new(&hardware),
-            hardware,
-            workers_per_processor: self.workers_per_processor,
-            worker_handles: Mutex::new(Vec::new()),
-            shutdown: AtomicBool::new(false),
-        });
-
-        Pool { inner }
+        Pool {
+            inner: Arc::new(PoolInner::new(pool_id, pool_name, hardware, self.policy)),
+        }
     }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::num::NonZero;
-    use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Barrier};
-    use std::thread;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use futures::executor::block_on;
-    use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
-    use new_zealand::nz;
     use static_assertions::assert_impl_all;
 
-    use crate::{Pool, PoolBuilder};
+    use super::*;
+    use crate::GroupId;
 
-    assert_impl_all!(Pool: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Pool: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PoolBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
-    fn pool_new_creates_pool() {
-        let pool = Pool::new();
-        drop(pool);
-    }
-
-    #[test]
-    fn pool_builder_allows_configuration() {
-        let pool = Pool::builder()
-            .workers_per_processor(NonZero::new(4).unwrap())
+    fn default_and_policy_setter_order() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+        let default = Pool::builder().hardware(hardware.clone()).build();
+        let region = Pool::builder()
+            .hardware(hardware.clone())
+            .workers_per_processor(nz!(3))
+            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
             .build();
-        drop(pool);
-    }
+        let processor = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .workers_per_processor(nz!(3))
+            .build();
 
-    #[test]
-    fn pool_builder_accepts_custom_hardware() {
-        let hardware =
-            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
-        drop(pool);
-    }
-
-    /// Verifies worker affinity even when the caller is outside the quota-selected subset.
-    #[test]
-    fn workers_pin_to_spawning_processors_despite_resource_quota() {
-        // A minimal multi-region topology with a quota that excludes an eligible processor.
-        const PROCESSOR_COUNT: NonZero<usize> = nz!(2);
-        const MEMORY_REGION_COUNT: NonZero<usize> = PROCESSOR_COUNT;
-        const MAX_PROCESSOR_TIME: f64 = 1.0;
-
-        testing::with_watchdog(|| {
-            let hardware = SystemHardware::fake(
-                HardwareBuilder::from_counts(PROCESSOR_COUNT, MEMORY_REGION_COUNT)
-                    .max_processor_time(MAX_PROCESSOR_TIME),
-            );
-            let processors = hardware.all_processors();
-            assert!(hardware.processors().len() < processors.len());
-
-            let pool = Pool::builder()
-                .hardware(hardware.clone())
-                // Each task checks the sole worker for its submitting processor.
-                .workers_per_processor(nz!(1_u32))
-                .build();
-            let scheduler = pool.scheduler();
-
-            let handles = processors.spawn_threads(move |processor| {
-                let handle = scheduler.spawn({
-                    let hardware = hardware.clone();
-                    move || hardware.thread_processors()
-                });
-
-                // Recorded affinity cannot pass by chance when an unpinned worker happens
-                // to execute on the expected processor.
-                let affinity = block_on(handle).unwrap();
-                assert!(affinity.iter().eq([&processor]));
-            });
-
-            for handle in handles {
-                handle.join().unwrap();
-            }
-        });
-    }
-
-    #[test]
-    fn scheduler_can_be_obtained() {
-        let pool = Pool::new();
-        let _scheduler = pool.scheduler();
-    }
-
-    #[test]
-    fn pool_default_creates_pool() {
-        let pool = Pool::default();
-        let _scheduler = pool.scheduler();
-    }
-
-    #[test]
-    fn ensure_workers_spawned_returns_early_when_shutdown() {
-        let hardware =
-            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
-
-        let pool_id = super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
-        let inner = Arc::new(super::PoolInner {
-            pool_id,
-            pool_name: format!("vicinal-{pool_id}"),
-            registry: super::ProcessorRegistry::new(&hardware),
-            hardware,
-            workers_per_processor: nz!(1_u32),
-            worker_handles: super::Mutex::new(Vec::new()),
-            shutdown: AtomicBool::new(false),
-        });
-
-        // Trigger shutdown so the flag is set.
-        inner.join_all_workers();
-
-        // Now call ensure_workers_spawned - it should return immediately
-        // because the shutdown flag is already true.
-        inner.ensure_workers_spawned(0);
-
-        assert!(inner.worker_handles.lock().unwrap().is_empty());
-    }
-
-    /// Installs a hook closure and runs the test body while holding the
-    /// serialization mutex. The hook is always removed on exit.
-    fn with_hook(
-        hook: &super::Mutex<Option<Arc<super::HookFn>>>,
-        closure: Arc<super::HookFn>,
-        body: impl FnOnce(),
-    ) {
-        let guard = super::HOOK_SERIALIZATION_MUTEX.lock().unwrap();
-        *hook.lock().unwrap() = Some(closure);
-
-        // We catch panics from the test body so that we can clean up the hook and
-        // drop the serialization guard while not panicking, preventing mutex poisoning.
-        let result = catch_unwind(AssertUnwindSafe(body));
-
-        *hook.lock().unwrap() = None;
-        drop(guard);
-
-        if let Err(payload) = result {
-            resume_unwind(payload);
-        }
-    }
-
-    struct BarrierHook {
-        /// Signaled when the hook fires, indicating that the hooked code
-        /// has reached the synchronization point.
-        entered: Arc<Barrier>,
-
-        /// Waited on before the hook returns, giving the test thread a
-        /// window to perform a racing operation.
-        proceed: Arc<Barrier>,
-
-        /// The closure to install as a hook.
-        hook: Arc<super::HookFn>,
-    }
-
-    /// Creates a two-barrier hook closure that pauses execution at a
-    /// synchronization point, giving the test thread a window to perform
-    /// a racing operation.
-    fn barrier_hook() -> BarrierHook {
-        let entered = Arc::new(Barrier::new(2));
-        let proceed = Arc::new(Barrier::new(2));
-        let e = Arc::clone(&entered);
-        let p = Arc::clone(&proceed);
-        let hook: Arc<super::HookFn> = Arc::new(move || {
-            e.wait();
-            p.wait();
-        });
-        BarrierHook {
-            entered,
-            proceed,
-            hook,
+        for (pool, destination, count) in [
+            (&default, GroupId::Processor(0), nz!(2)),
+            (&region, GroupId::MemoryRegion(0), nz!(1)),
+            (&processor, GroupId::Processor(0), nz!(3)),
+        ] {
+            assert_eq!(pool.inner.policy.destination(&hardware), destination);
+            assert_eq!(pool.inner.policy.count(), count);
+            assert_eq!(pool.inner.registry.initialized().count(), 0);
+            assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
         }
     }
 
     #[test]
-    fn ensure_workers_spawned_joins_inline_on_concurrent_shutdown() {
-        testing::with_watchdog(|| {
-            let BarrierHook {
-                entered,
-                proceed,
-                hook,
-            } = barrier_hook();
-
-            with_hook(&super::HOOK_ENSURE_WORKERS_POST_SPAWN, hook, || {
-                let hardware =
-                    SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
-
-                let pool_id = super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
-                let inner = Arc::new(super::PoolInner {
-                    pool_id,
-                    pool_name: format!("vicinal-{pool_id}"),
-                    registry: super::ProcessorRegistry::new(&hardware),
-                    hardware,
-                    workers_per_processor: nz!(1_u32),
-                    worker_handles: super::Mutex::new(Vec::new()),
-                    shutdown: AtomicBool::new(false),
-                });
-
-                let inner_clone = Arc::clone(&inner);
-
-                // Spawn ensure_workers_spawned on a background thread.
-                // It will spawn workers then pause at the hook before
-                // acquiring the worker_handles lock.
-                let spawner = thread::spawn(move || {
-                    super::HOOK_PARTICIPANT.set(true);
-                    inner_clone.ensure_workers_spawned(0);
-                });
-
-                // Wait for the hook to fire (workers spawned, lock not
-                // yet acquired).
-                entered.wait();
-
-                // Trigger shutdown while the spawner is paused.
-                inner.join_all_workers();
-
-                // Release the spawner. It will see shutdown=true under
-                // the lock and join its handles inline.
-                proceed.wait();
-
-                spawner.join().unwrap();
-
-                // All handles should have been joined (none leaked).
-                assert!(inner.worker_handles.lock().unwrap().is_empty());
-            });
-        });
-    }
-
-    #[test]
-    fn pool_builder_accepts_custom_name() {
-        let pool = Pool::builder().name("my_pool").build();
-        assert_eq!(pool.inner.pool_name, "my_pool");
-    }
-
-    #[test]
-    fn pool_default_name_uses_vicinal_prefix() {
-        let pool = Pool::new();
-        assert!(pool.inner.pool_name.starts_with("vicinal-"));
-    }
-
-    #[test]
-    fn worker_threads_use_custom_pool_name() {
-        testing::with_watchdog(|| {
-            let hardware =
-                SystemHardware::fake(HardwareBuilder::from_counts(nz!(1_usize), nz!(1_usize)));
-
-            let pool = Pool::builder()
-                .name("test_pool")
-                .hardware(hardware)
-                .workers_per_processor(nz!(1_u32))
-                .build();
-
-            let scheduler = pool.scheduler();
-
-            let thread_name =
-                block_on(scheduler.spawn(|| thread::current().name().unwrap().to_owned()));
-
-            assert!(
-                thread_name.starts_with("test_pool-"),
-                "expected thread name to start with 'test_pool-', got: {thread_name}"
-            );
-        });
-    }
-
-    #[test]
-    fn worker_threads_use_default_name_when_none_specified() {
-        testing::with_watchdog(|| {
-            let hardware =
-                SystemHardware::fake(HardwareBuilder::from_counts(nz!(1_usize), nz!(1_usize)));
-
-            let pool = Pool::builder()
-                .hardware(hardware)
-                .workers_per_processor(nz!(1_u32))
-                .build();
-
-            let scheduler = pool.scheduler();
-
-            let thread_name =
-                block_on(scheduler.spawn(|| thread::current().name().unwrap().to_owned()));
-
-            assert!(
-                thread_name.starts_with("vicinal-"),
-                "expected thread name to start with 'vicinal-', got: {thread_name}"
-            );
-        });
+    fn pool_names() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+        let default = Pool::builder().hardware(hardware.clone()).build();
+        let named = Pool::builder().hardware(hardware).name("named").build();
+        assert!(default.inner.pool_name.starts_with("vicinal-"));
+        assert_eq!(named.inner.pool_name, "named");
     }
 }

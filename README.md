@@ -43,9 +43,10 @@ blindly - now we spawn specific threads for specific processors or groups of pro
 how work and data are spread between processors, when applied to different algorithms. This
 allows you to judge when it matters and by how much.
 
-[`vicinal`][vicinal] allows you to schedule synchronous tasks on the same processor, providing
-an easy way to preserve data locality for work that must be detached from the primary application
-threads (e.g. because it is blocking code not suitable for an async application thread).
+[`vicinal`][vicinal] schedules synchronous tasks on the submitting processor by default, or
+shares a fixed worker count within each submitting memory region. This preserves the chosen
+locality for work detached from primary application threads, such as blocking code not
+suitable for an async application thread.
 
 ![](doc/region_cached.png)
 

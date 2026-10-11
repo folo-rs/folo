@@ -1,17 +1,25 @@
 # vicinal
 
-Processor-local worker pool that schedules tasks in the vicinity of the caller.
+Worker pool with processor-local or memory-region-local task scheduling.
 
-This crate provides a worker pool where each task is executed on the same processor that
-spawned it, ensuring optimal cache locality and minimizing cross-processor data movement.
+Tasks execute synchronously on the processor sampled during submission by default, with
+two workers per processor. A regional policy shares a fixed worker count across all
+submitting processors in each memory region. Workers start on first use of a destination
+and persist until shutdown.
 
 ## Example
 
 ```rust
-use vicinal::Pool;
+use new_zealand::nz;
+use vicinal::{Pool, WorkerPolicy};
 
 #[tokio::main]
 async fn main() {
+    processor_local().await;
+    memory_region_local().await;
+}
+
+async fn processor_local() {
     let pool = Pool::new();
     let scheduler = pool.scheduler();
 
@@ -25,7 +33,21 @@ async fn main() {
 
     assert_eq!(task3.await.await, 55);
 }
+
+async fn memory_region_local() {
+    let pool = Pool::builder()
+        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+        .build();
+
+    assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
+}
 ```
+
+The regional count is per region, not per processor. Workers can move among eligible
+processors within that region, even during one task; they do not steal work from other
+regions. Same-region execution may also use the submitting processor.
+`workers_per_processor(count)` is an alias for the corresponding `WorkerPolicy`; the last
+policy setter wins. Counts may exceed processor counts for blocking work.
 
 ## Tradeoffs
 
@@ -34,6 +56,14 @@ async fn main() {
 - Workers may use any processor permitted by hard operating-system restrictions.
   Processor-time quotas do not limit worker placement or adjust the configured worker count.
   The pool does not guarantee avoidance of quota throttling.
+- Task code must preserve worker affinity. Affinity does not bind memory allocations,
+  move data or guarantee cache hits. Topology and restriction refresh are not supported.
+
+## Shutdown
+
+Dropping the pool releases queued tasks and waits for executing tasks and workers.
+Abandoned join handles disconnect and panic when awaited, even if scheduler clones remain.
+Await required work before dropping the pool.
 
 ## Platform support
 
@@ -43,8 +73,8 @@ The package is tested on the following operating systems:
 * Windows Server 2022 x64
 * Ubuntu 24.04 x64
 
-On non-Windows non-Linux platforms (e.g. mac OS), the package will not uphold the processor
-locality guarantees, but will otherwise function correctly as a worker pool.
+On non-Windows non-Linux platforms (e.g. mac OS), the package retains functional worker-pool
+behavior without physical locality guarantees. The fallback topology has one memory region.
 
 ## See also
 

@@ -1,10 +1,11 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Worker pool that schedules tasks on the same processor that spawned them.
+//! Worker pool with processor-local or memory-region-local task scheduling.
 //!
-//! This crate provides a worker pool where each task is executed on the same processor that
-//! spawned it, ensuring optimal cache locality and minimizing cross-processor data movement.
+//! Tasks execute synchronously on the processor sampled during submission by default.
+//! [`WorkerPolicy`] can instead share workers across the caller's memory region.
+//! Both policies start their fixed worker count lazily on first use of each destination.
 //!
 //! # Quick start
 //!
@@ -35,6 +36,9 @@
 //! - Workers may use any processor permitted by hard operating-system restrictions.
 //!   Processor-time quotas do not limit worker placement or adjust the configured worker count.
 //!   The pool does not guarantee avoidance of quota throttling.
+//! - Regional workers may migrate within their selected region, even during one task.
+//!   Task code must preserve worker affinity. Affinity does not bind allocations, move data
+//!   or guarantee cache hits. Topology and restriction refresh are not supported.
 //!
 //! # Shutdown behavior
 //!
@@ -57,28 +61,33 @@
 //! * Windows Server 2022 x64
 //! * Ubuntu 24.04 x64
 //!
-//! On non-Windows non-Linux platforms (e.g. mac OS), the package will not uphold the processor
-//! locality guarantees, but will otherwise function correctly as a worker pool.
+//! On non-Windows non-Linux platforms (e.g. mac OS), the package retains functional worker-pool
+//! behavior without physical locality guarantees. The fallback topology has one memory region.
 
 mod constants;
+mod group_id;
+mod group_registry;
 mod join_handle;
 mod metrics;
 mod pool;
-mod processor_registry;
-mod processor_state;
+mod pool_inner;
 mod scheduler;
 mod task;
 mod worker;
+mod worker_group;
+mod worker_policy;
 
 pub(crate) use constants::NEVER_POISONED;
+pub(crate) use group_id::*;
+pub(crate) use group_registry::*;
 pub use join_handle::*;
-pub(crate) use pool::PoolInner;
 pub use pool::*;
-pub(crate) use processor_registry::ProcessorRegistry;
-pub(crate) use processor_state::ProcessorState;
+pub(crate) use pool_inner::PoolInner;
 pub use scheduler::*;
 pub(crate) use task::*;
 pub(crate) use worker::*;
+pub(crate) use worker_group::*;
+pub use worker_policy::*;
 
 #[cfg(test)]
 ::testing::set_allocator!();

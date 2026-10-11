@@ -21,7 +21,7 @@ pub(crate) enum IterationResult {
 
 /// The body of a worker thread's main loop, isolated from thread management.
 ///
-/// It borrows only the parts of a processor's state that executing work needs, which lets a
+/// It borrows only the parts of a group's state that executing work needs, which lets a
 /// single iteration be driven directly by tests without spawning a thread or constructing a
 /// pool. Priority between the two queues lives here and nowhere else.
 pub(crate) struct WorkerCore<'a> {

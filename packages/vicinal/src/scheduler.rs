@@ -2,19 +2,18 @@
 
 use std::sync::Arc;
 
-use tracing::trace;
-
 use crate::metrics::CLOCK;
 use crate::{
-    ErasedTaskHandle, JoinHandle, NEVER_POISONED, PoolInner, ProcessorState, VicinalTask,
-    init_task, wrap_task,
+    ErasedTaskHandle, JoinHandle, NEVER_POISONED, PoolInner, VicinalTask, WorkerGroup, init_task,
+    wrap_task, wrap_task_and_forget,
 };
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
-/// The scheduler determines which processor to execute tasks on based on the processor
-/// that called `spawn()` or `spawn_urgent()`. This ensures cache locality by keeping
-/// data close to the code that processes it.
+/// Every submission samples its destination once according to the pool's
+/// [`WorkerPolicy`][crate::WorkerPolicy]: the current logical processor by default, or the current
+/// memory region for a regional policy. All submission methods use the same policy.
+/// Tasks execute synchronously and must preserve worker affinity.
 ///
 /// # Cloning
 ///
@@ -53,10 +52,10 @@ impl Scheduler {
         Self { inner }
     }
 
-    /// Spawns a task to be executed on the current processor.
+    /// Spawns a task near the caller, according to the pool's worker policy.
     ///
     /// The task will be added to the regular (normal-priority) queue and executed
-    /// by a worker thread associated with the processor that called this method.
+    /// by a worker assigned to the sampled processor or memory region.
     ///
     /// Spawned tasks may be executed in any order. Urgent tasks are scheduled
     /// preferentially but there is no hard guarantee that they will preempt all
@@ -78,7 +77,7 @@ impl Scheduler {
         self.spawn_internal(task, false)
     }
 
-    /// Spawns an urgent (high-priority) task to be executed on the current processor.
+    /// Spawns an urgent task near the caller, according to the worker policy.
     ///
     /// Urgent tasks are executed before regular tasks. Use this for time-sensitive
     /// operations that should not wait behind a queue of regular work.
@@ -103,7 +102,7 @@ impl Scheduler {
         self.spawn_internal(task, true)
     }
 
-    /// Spawns a fire-and-forget task on the current processor.
+    /// Spawns a fire-and-forget task according to the pool's worker policy.
     ///
     /// Unlike [`spawn`](Self::spawn), this method does not return a [`JoinHandle`].
     /// The task's result is discarded, and panics are logged rather than propagated.
@@ -125,7 +124,7 @@ impl Scheduler {
         self.spawn_internal_and_forget(task, false);
     }
 
-    /// Spawns an urgent fire-and-forget task on the current processor.
+    /// Spawns an urgent fire-and-forget task according to the worker policy.
     ///
     /// This is the fire-and-forget equivalent of [`spawn_urgent`](Self::spawn_urgent).
     /// The task is added to the high-priority queue but does not return a [`JoinHandle`].
@@ -152,12 +151,8 @@ impl Scheduler {
         // Capture spawn time for metrics.
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
-        let processor_id = self.inner.hardware.current_processor_id();
-
-        // Ensure workers are spawned for this processor (lazy initialization).
-        self.inner.ensure_workers_spawned(processor_id);
-
-        let state = self.inner.registry.get_or_init(processor_id);
+        let destination = self.inner.policy.destination(&self.inner.hardware);
+        let state = self.inner.ensure_workers_spawned(destination);
 
         // Rent a oneshot channel for the result.
         let (sender, receiver) = state.result_channel_pool.rent();
@@ -167,38 +162,7 @@ impl Scheduler {
 
         let dyn_task = allocate_task(state, wrapped);
 
-        // Push to the appropriate queue.
-        if urgent {
-            state
-                .urgent_queue
-                .lock()
-                .expect(NEVER_POISONED)
-                .push_back(dyn_task);
-            trace!(
-                pool_name = self.inner.pool_name.as_str(),
-                pool_id = self.inner.pool_id,
-                processor_id,
-                "spawned urgent task"
-            );
-        } else {
-            state
-                .regular_queue
-                .lock()
-                .expect(NEVER_POISONED)
-                .push_back(dyn_task);
-            trace!(
-                pool_name = self.inner.pool_name.as_str(),
-                pool_id = self.inner.pool_id,
-                processor_id,
-                "spawned regular task"
-            );
-        }
-
-        // Record the spawn for metrics.
-        state.record_task_spawned();
-
-        // Notify one worker that work is available.
-        state.wake_event.notify(1);
+        self.inner.enqueue(destination, state, dyn_task, urgent);
 
         JoinHandle::new(receiver)
     }
@@ -208,60 +172,23 @@ impl Scheduler {
     where
         F: FnOnce() + Send + 'static,
     {
-        use crate::wrap_task_and_forget;
-
         // Capture spawn time for metrics.
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
-        let processor_id = self.inner.hardware.current_processor_id();
-
-        // Ensure workers are spawned for this processor (lazy initialization).
-        self.inner.ensure_workers_spawned(processor_id);
-
-        let state = self.inner.registry.get_or_init(processor_id);
+        let destination = self.inner.policy.destination(&self.inner.hardware);
+        let state = self.inner.ensure_workers_spawned(destination);
 
         // Wrap the task to capture panics and log them.
         let wrapped = wrap_task_and_forget(task, spawn_time);
 
         let dyn_task = allocate_task(state, wrapped);
 
-        // Push to the appropriate queue.
-        if urgent {
-            state
-                .urgent_queue
-                .lock()
-                .expect(NEVER_POISONED)
-                .push_back(dyn_task);
-            trace!(
-                pool_name = self.inner.pool_name.as_str(),
-                pool_id = self.inner.pool_id,
-                processor_id,
-                "spawned urgent fire-and-forget task"
-            );
-        } else {
-            state
-                .regular_queue
-                .lock()
-                .expect(NEVER_POISONED)
-                .push_back(dyn_task);
-            trace!(
-                pool_name = self.inner.pool_name.as_str(),
-                pool_id = self.inner.pool_id,
-                processor_id,
-                "spawned fire-and-forget task"
-            );
-        }
-
-        // Record the spawn for metrics.
-        state.record_task_spawned();
-
-        // Notify one worker that work is available.
-        state.wake_event.notify(1);
+        self.inner.enqueue(destination, state, dyn_task, urgent);
     }
 }
 
 /// Allocates and initializes a task without invoking task code under the pool lock.
-fn allocate_task<T: VicinalTask>(state: &ProcessorState, task: T) -> ErasedTaskHandle {
+fn allocate_task<T: VicinalTask>(state: &WorkerGroup, task: T) -> ErasedTaskHandle {
     let slot = {
         let pool = state.task_pool.lock().expect(NEVER_POISONED);
         pool.try_alloc_uninit_box()
@@ -282,6 +209,9 @@ mod tests {
 
     use events_once::EventPool;
     use futures::executor::block_on;
+    use many_cpus::SystemHardware;
+    use many_cpus::fake::HardwareBuilder;
+    use new_zealand::nz;
     use static_assertions::assert_impl_all;
     use testing::assert_panics;
 
@@ -289,9 +219,19 @@ mod tests {
 
     assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
 
+    fn fake_pool() -> Pool {
+        Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .workers_per_processor(nz!(1))
+            .build()
+    }
+
     #[test]
     fn spawn_returns_join_handle() {
-        let pool = Pool::new();
+        let pool = fake_pool();
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| 42);
@@ -302,7 +242,7 @@ mod tests {
 
     #[test]
     fn spawn_urgent_returns_join_handle() {
-        let pool = Pool::new();
+        let pool = fake_pool();
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn_urgent(|| "urgent result");
@@ -313,7 +253,7 @@ mod tests {
 
     #[test]
     fn scheduler_is_cloneable() {
-        let pool = Pool::new();
+        let pool = fake_pool();
         let scheduler = pool.scheduler();
         let scheduler2 = scheduler.clone();
 
@@ -326,7 +266,7 @@ mod tests {
 
     #[test]
     fn spawn_captures_panic() {
-        let pool = Pool::new();
+        let pool = fake_pool();
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| {
@@ -338,7 +278,7 @@ mod tests {
 
     #[test]
     fn spawn_accepts_not_unpin_task() {
-        let pool = Pool::new();
+        let pool = fake_pool();
         let scheduler = pool.scheduler();
 
         // Create a !Unpin task by capturing a !Unpin future.
@@ -354,7 +294,7 @@ mod tests {
 
     #[test]
     fn spawn_and_forget_completes() {
-        let pool = Pool::new();
+        let pool = fake_pool();
         let scheduler = pool.scheduler();
         let event_pool = EventPool::<()>::new();
 
@@ -368,7 +308,7 @@ mod tests {
 
     #[test]
     fn spawn_urgent_and_forget_completes() {
-        let pool = Pool::new();
+        let pool = fake_pool();
         let scheduler = pool.scheduler();
         let event_pool = EventPool::<()>::new();
 
