@@ -27,6 +27,11 @@ failed writes, and listing ignores the reserved staging prefix after an interrup
 Published files use ordinary file-creation permissions, including the process umask on Unix.
 On Windows, canonicalizing the existing parent supplies extended-length paths to native publication.
 Key validation rejects NUL before native publication APIs can truncate a path.
+Staging-directory selection and publication-error classification are synchronous, in-process
+decisions. A bare filename stages in the current directory; other paths retain their parent.
+Only an already-existing destination during a write-once publication becomes a collision.
+Other publication failures retain the destination path and underlying I/O cause.
+Unit tests cover these decisions without filesystem access or changes to the current directory.
 Native integration tests exercise competing writes, collision reporting and cleanup.
 
 Azure operations retain SDK diagnostics,

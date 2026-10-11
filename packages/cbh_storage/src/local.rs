@@ -209,10 +209,7 @@ async fn write_atomic(
     // tempfile exposes synchronous platform-specific no-clobber publication, so keep the
     // complete filesystem operation off the async worker rather than wrapping each syscall.
     tokio::task::spawn_blocking(move || -> Result<(), StorageError> {
-        let parent = target
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
+        let parent = staging_directory(&target);
         // Windows canonicalization supplies the extended-length path form needed by
         // tempfile's native publication API. The destination itself need not exist.
         #[cfg(windows)]
@@ -247,24 +244,109 @@ async fn write_atomic(
         };
         match published {
             Ok(_) => Ok(()),
-            Err(error) if !overwrite && error.error.kind() == io::ErrorKind::AlreadyExists => {
-                Err(ObjectAlreadyExistsError::caused_by(key, error.error).into())
-            }
-            Err(error) => Err(WriteLocalObjectError::caused_by(target, error.error).into()),
+            Err(error) => Err(classify_publication_error(
+                key,
+                target,
+                overwrite,
+                error.error,
+            )),
         }
     })
     .await
     .map_err(|error| WriteLocalObjectError::caused_by(error_path, error))?
 }
 
+/// Keeps staging beside the destination without resolving paths through the filesystem.
+fn staging_directory(target: &Path) -> &Path {
+    target
+        .parent()
+        // A bare filename has an empty parent, but tempfile needs the current directory.
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+/// Preserves publication context while exposing only write-once collisions to callers.
+fn classify_publication_error(
+    key: String,
+    target: PathBuf,
+    overwrite: bool,
+    error: io::Error,
+) -> StorageError {
+    match error {
+        error if !overwrite && error.kind() == io::ErrorKind::AlreadyExists => {
+            ObjectAlreadyExistsError::caused_by(key, error).into()
+        }
+        error => WriteLocalObjectError::caused_by(target, error).into(),
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::path::MAIN_SEPARATOR_STR;
+
     use ohno::ErrorExt as _;
     use tempfile::tempdir;
 
     use super::*;
     use crate::InvalidStorageKeyError;
+
+    #[test]
+    fn staging_directory_keeps_relative_and_rooted_parents() {
+        for parent in [
+            PathBuf::from("."),
+            Path::new("store").join("nested"),
+            Path::new(MAIN_SEPARATOR_STR).join("store").join("nested"),
+        ] {
+            let target = parent.join("object.json");
+            assert_eq!(staging_directory(&target), parent);
+        }
+    }
+
+    #[test]
+    fn staging_directory_uses_current_directory_for_a_bare_filename() {
+        assert_eq!(staging_directory(Path::new("object.json")), Path::new("."));
+    }
+
+    #[test]
+    fn publication_errors_preserve_collision_identity_and_io_context() {
+        let key = "nested/object.json";
+        let target = Path::new("store").join("nested").join("object.json");
+        // Cover each overwrite/collision combination. Missing paths and denied access are
+        // publication failures, not object absence or write-once collisions.
+        for (overwrite, kind, collision) in [
+            (false, io::ErrorKind::AlreadyExists, true),
+            (true, io::ErrorKind::AlreadyExists, false),
+            (false, io::ErrorKind::PermissionDenied, false),
+            (true, io::ErrorKind::PermissionDenied, false),
+            (false, io::ErrorKind::NotFound, false),
+            (true, io::ErrorKind::NotFound, false),
+        ] {
+            let error = classify_publication_error(
+                key.to_owned(),
+                target.clone(),
+                overwrite,
+                io::Error::from(kind),
+            );
+            assert_eq!(error.find_source::<io::Error>().unwrap().kind(), kind);
+            assert!(!error.is_not_found());
+            if collision {
+                assert_eq!(error.already_existing_key(), Some(key));
+                assert_eq!(
+                    error.find_source::<ObjectAlreadyExistsError>().unwrap().key,
+                    key
+                );
+                assert!(error.find_source::<WriteLocalObjectError>().is_none());
+            } else {
+                assert_eq!(error.already_existing_key(), None);
+                assert_eq!(
+                    error.find_source::<WriteLocalObjectError>().unwrap().path,
+                    target
+                );
+                assert!(error.find_source::<ObjectAlreadyExistsError>().is_none());
+            }
+        }
+    }
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
