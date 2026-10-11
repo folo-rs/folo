@@ -133,7 +133,13 @@ PR blindly. Verify that both returned descriptions contain the correct reciproca
 If readback fails, the pairing remains unverified. Fulfill any deferred cross-link obligation
 when the monorepo PR is created.
 
-Include Stage 4's automatic follow-up in the owning action session's assignment. That session,
+Before assigning follow-up, use `list_sessions_and_chats` to locate the existing action PR
+session and `get_session` to verify its repository and linked PR match `ACTION_PR`.
+Reuse that verified owner; do not infer ownership from a session name. A missing, ambiguous,
+archived or inaccessible owner is an explicit handoff blocker, not permission to create a
+replacement or claim that automatic follow-up is active.
+
+Include Stage 4's automatic follow-up in the verified action session's assignment. That session,
 not the monorepo repair owner or intake, must save and verify the hourly session automation
 once both PRs are known. Retain this obligation alongside any deferred reciprocal link.
 
