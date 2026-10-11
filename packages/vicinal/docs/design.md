@@ -9,6 +9,11 @@ Each task is assigned to the current processor when it is spawned. Workers assoc
 that processor execute the task. Platforms without processor-pinning support retain worker
 pool behavior without the locality guarantee.
 
+Every processor permitted by hard operating-system restrictions is eligible for workers.
+Processor-time quotas do not narrow this set: a caller outside a quota-selected subset
+still requires workers on its own processor. The configured worker count is fixed per
+processor and does not guarantee avoidance of processor-time quota throttling.
+
 Workers are created lazily because single-task latency on an otherwise idle pool is the
 primary optimization target.
 
