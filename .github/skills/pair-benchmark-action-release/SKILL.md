@@ -47,7 +47,8 @@ these working files.
 | `ACTION_BODY`, `MONOREPO_BODY` | Absolute paths to the complete prepared PR descriptions under `WORK_DIR`. |
 | `ACTION_PR`, `MONOREPO_PR` | The discovered or created PR numbers or URLs in their respective repositories. |
 | `ACTION_RUN` | One applicable validation run for the current action PR revision; reconcile each current-head run separately, including separate push and pull-request runs. |
-| `ACTION_JOB` | The failed artifact-dependent job's database ID from the latest attempt of `ACTION_RUN`, not an ID inferred from a browser URL. |
+| `ACTION_JOB` | The database ID of the newest execution of a failed artifact-dependent job in `ACTION_RUN`, not an ID inferred from a browser URL. |
+| `ACTION_ATTEMPT` | The selected `ACTION_JOB` execution's `run_attempt`, which can precede the run's latest targeted retry. |
 | `PUBLICATION_RUN` | The parent's publication run or linked recovery run, verified against the parent merge commit and original publication source. |
 | `FOLLOWUP_PROMPT` | Durable instruction for the action PR session, containing both exact PR URLs and the Stage 4 eligibility, retry, verification and cleanup rules. |
 
@@ -181,7 +182,8 @@ restriction on per-PR timers; it grants no merge or publication authority.
 
 Read the live pair and discover all applicable current-head validation runs from its check
 rollup and run links, including separate push and pull-request runs. For each `ACTION_RUN`,
-read its latest attempt and job diagnostics; job IDs belong to that run and attempt:
+read its current status and all job executions; targeted retries may omit other jobs from
+the latest attempt:
 
 > gh pr view "{{MONOREPO_PR}}" --repo folo-rs/folo --json state,mergedAt,mergeCommit,url
 >
@@ -189,7 +191,14 @@ read its latest attempt and job diagnostics; job IDs belong to that run and atte
 >
 > gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --json headSha,status,conclusion,attempt,jobs
 >
-> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --log-failed
+> gh api --paginate "repos/folo-rs/cargo-bench-history-action/actions/runs/{{ACTION_RUN}}/jobs?filter=all&per_page=100"
+
+From the complete job list, retain the newest execution of each logical job, distinguishing
+matrix variants and reusable-workflow jobs. Do not drop an unretried failure merely because
+its execution belongs to an earlier attempt. Resolve ambiguous job identities before retrying
+or claiming success. Read each selected failed job's own logs:
+
+> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --attempt "{{ACTION_ATTEMPT}}" --job "{{ACTION_JOB}}" --log-failed
 
 Use the current PR's manifest and complete current-head run set, not a saved head or attempt.
 Apply the following reconciliation and retry rules to each run. First apply the
@@ -206,7 +215,10 @@ any linked recovery's original publication source, as described in
 
 > gh run view "{{PUBLICATION_RUN}}" --repo folo-rs/folo --json headSha,status,conclusion,attempt,jobs,url
 >
-> gh run view "{{PUBLICATION_RUN}}" --repo folo-rs/folo --log-failed
+> gh api --paginate "repos/folo-rs/folo/actions/runs/{{PUBLICATION_RUN}}/jobs?filter=all&per_page=100"
+
+Apply the same newest-per-job reconciliation to publication attempts and read the affected
+failed jobs' logs with their own job IDs and attempt numbers.
 
 Distinguish pending publication or an active recovery from a failed dependency that requires
 operator action. For the latter, record the affected artifacts, run link and required action,
@@ -231,17 +243,22 @@ the artifact dependency. Inspect the result:
 >
 > gh pr checks "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --required
 
+Refresh the complete job list and newest-per-job results after every targeted retry.
 Record the actual result for the current action manifest, including pending or failed
 publication dependencies; a rerun request is not a passing check. Keep the hourly schedule
 while publication is pending or the retry is queued/running. Diagnose retry errors rather
 than counting them as success or blindly repeating an ambiguous request.
 
 Once all applicable current-head artifact-dependent checks and their required dependent
-checks pass across those runs, clear this task's automation with
-`save_session_automation` input `{"clear":true}` and verify its removal with
-`get_session_automation`. Also clear it for a terminal disposition, explicit pause or concrete
-human-action blocker, preserving unrelated automation. Hand off any remaining normal review
-or merge requirements. Do not merge or publish anything to unblock this follow-up.
+checks pass across those runs, clear this task's automation. Also clear it for a terminal
+disposition, explicit pause or concrete human-action blocker.
+
+Immediately before clearing, reread `get_session_automation` and compare its cadence and
+prompt with this exact pair's saved follow-up. If absent, no clear is needed. If it differs,
+leave it untouched and report the conflict. Only a matching follow-up may be cleared with
+`save_session_automation` input `{"clear":true}`; then verify its removal with
+`get_session_automation`. Hand off any remaining normal review or merge requirements.
+Do not merge or publish anything to unblock this follow-up.
 
 # Stage 5: Hand off the verified state and blockers
 

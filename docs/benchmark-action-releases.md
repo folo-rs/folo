@@ -131,6 +131,10 @@ rerun all failed jobs in a workflow only when every failure belongs to that depe
 Do not duplicate a queued or running attempt, retry a superseded head, or treat an unrelated
 failure as a publication delay.
 
+Targeted reruns execute only selected jobs and their dependents. Reconcile the newest
+execution of every logical job across attempts, preserving matrix variants and failures
+that have not been retried. A missing job in the latest attempt is not a passing result.
+
 The parent merge permits the retry; it does not establish artifact availability. If publication
 is incomplete, inspect the associated publication run's latest attempt and any linked recovery.
 Keep the hourly schedule for pending publication or active recovery. If an affected dependency
@@ -149,6 +153,8 @@ Remove this follow-up when its checks pass, the action PR closes or merges, the 
 without merging, or an explicit pause or concrete human-action blocker stops automatic recovery.
 Record the disposition or required action without repeating unchanged waiting comments.
 Reuse an existing schedule for this pair; do not overwrite or clear unrelated automation.
+Immediately before cleanup, reread the schedule and compare its cadence and prompt with this
+pair's saved follow-up. Leave a different schedule untouched and report the conflict.
 If scheduling or retry permissions are unavailable, report that specific blocker rather than
 claiming automatic follow-up is active.
 
