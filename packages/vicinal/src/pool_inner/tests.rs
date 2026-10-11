@@ -463,24 +463,52 @@ fn retained_scheduler_releases_queued_captures_and_disconnects_handles() {
 
 /// All variants abandon synchronously after the owner stops the pool.
 fn assert_retained_scheduler(scheduler: &Scheduler) {
-    assert_panics(|| block_on(scheduler.spawn(|| panic!())));
-    assert_panics(|| block_on(scheduler.spawn_urgent(|| panic!())));
     let dropped = Arc::new(AtomicUsize::new(0));
-    for urgent in [false, true] {
+    let executed = Arc::new(AtomicUsize::new(0));
+    let task = || {
         let capture = OnDrop(Some(Box::new({
             let dropped = Arc::clone(&dropped);
             move || {
                 dropped.fetch_add(1, Ordering::Relaxed);
             }
         })));
-        let task = move || drop(capture);
-        if urgent {
-            scheduler.spawn_urgent_and_forget(task);
-        } else {
-            scheduler.spawn_and_forget(task);
+        let executed = Arc::clone(&executed);
+        move || {
+            executed.fetch_add(1, Ordering::Relaxed);
+            drop(capture);
         }
+    };
+    // Submission must return normally; only awaiting an abandoned handle panics.
+    let ordinary = scheduler.spawn(task());
+    let urgent = scheduler.spawn_urgent(task());
+    scheduler.spawn_and_forget(task());
+    scheduler.spawn_urgent_and_forget(task());
+    assert_eq!(dropped.load(Ordering::Relaxed), 4);
+    assert_eq!(executed.load(Ordering::Relaxed), 0);
+    assert_panics(|| block_on(ordinary));
+    assert_panics(|| block_on(urgent));
+}
+
+#[test]
+fn shutdown_abandons_submissions_to_a_failed_destination() {
+    for policy in [
+        WorkerPolicy::fixed_per_processor(nz!(1)),
+        WorkerPolicy::fixed_per_memory_region(nz!(1)),
+    ] {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+        let destination = policy.destination(&hardware);
+        let pool = Pool::builder()
+            .hardware(hardware)
+            .worker_policy(policy)
+            .build();
+        let scheduler = pool.scheduler();
+        assert_panics(|| {
+            pool.inner
+                .ensure_workers_spawned_with(destination, |_| panic!("injected startup failure"));
+        });
+        drop(pool);
+        assert_retained_scheduler(&scheduler);
     }
-    assert_eq!(dropped.load(Ordering::Relaxed), 2);
 }
 
 #[test]

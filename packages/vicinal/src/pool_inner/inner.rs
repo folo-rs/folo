@@ -68,8 +68,9 @@ impl PoolInner {
     ) -> &WorkerGroup {
         let state = self.registry.get_or_init(destination);
         if let Some(result) = state.startup.get() {
+            // Shutdown abandons submissions even if this destination failed while active.
             assert!(
-                result.is_ok(),
+                result.is_ok() || self.shutdown.load(Ordering::Acquire),
                 "worker group {destination:?} failed to start"
             );
             return state;

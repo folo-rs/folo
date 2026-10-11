@@ -20,6 +20,18 @@ use crate::{
 /// Schedulers are cheaply cloneable and can be shared across threads. All clones
 /// reference the same underlying pool.
 ///
+/// # Lifetime
+///
+/// Scheduler clones do not keep worker threads running after their [`Pool`][crate::Pool]
+/// is dropped. Submissions after shutdown are abandoned without execution and release
+/// their captures before returning. Awaiting a returned [`JoinHandle`] panics.
+///
+/// # Worker startup
+///
+/// While the pool is active, submission panics if its destination cannot start the
+/// configured workers with the required affinity. Subsequent submissions to that
+/// destination also panic until the pool shuts down.
+///
 /// # Example
 ///
 /// ```rust
@@ -67,6 +79,8 @@ impl Scheduler {
     ///
     /// # Panics
     ///
+    /// This call panics on [worker startup failure](Self#worker-startup).
+    ///
     /// If the task panics, the panic will be captured and re-thrown when the
     /// [`JoinHandle`] is awaited.
     pub fn spawn<R, F>(&self, task: F) -> JoinHandle<R>
@@ -92,6 +106,8 @@ impl Scheduler {
     ///
     /// # Panics
     ///
+    /// This call panics on [worker startup failure](Self#worker-startup).
+    ///
     /// If the task panics, the panic will be captured and re-thrown when the
     /// [`JoinHandle`] is awaited.
     pub fn spawn_urgent<R, F>(&self, task: F) -> JoinHandle<R>
@@ -115,6 +131,8 @@ impl Scheduler {
     ///
     /// # Panics
     ///
+    /// This call panics on [worker startup failure](Self#worker-startup).
+    ///
     /// If the task panics, the panic will be caught and logged via `tracing::error!`
     /// but will not be propagated to the caller.
     pub fn spawn_and_forget<F>(&self, task: F)
@@ -132,6 +150,8 @@ impl Scheduler {
     /// Use this for time-sensitive operations where the result is not needed.
     ///
     /// # Panics
+    ///
+    /// This call panics on [worker startup failure](Self#worker-startup).
     ///
     /// If the task panics, the panic will be caught and logged via `tracing::error!`
     /// but will not be propagated to the caller.

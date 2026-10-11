@@ -51,6 +51,8 @@ queue lock. A group created after the shutdown scan cannot start workers or reta
 Draining pops tasks under the queue lock and destroys them outside it; reentrant callbacks
 observe the terminal pool state. Cleanup continues after a destructor or worker panic,
 propagating the first failure only after resources are released and handles joined.
+The terminal pool state takes precedence over a group's startup failure so every retained
+scheduler follows the same abandonment path after shutdown.
 
 Result channels use a separate typed pool because their layout and lifecycle do not
 require heterogeneous task storage. Disconnecting abandoned senders completes pending

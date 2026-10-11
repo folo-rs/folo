@@ -27,6 +27,7 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// Dropping the pool signals shutdown, abandons queued tasks and waits for executing tasks
 /// and worker threads to finish. Abandoned tasks release their resources even if schedulers
 /// remain alive. Awaiting an abandoned task's [`JoinHandle`][crate::JoinHandle] panics.
+/// Later submissions through retained schedulers are immediately abandoned as well.
 ///
 /// To ensure all tasks complete, await their join handles before dropping the pool.
 ///

@@ -66,7 +66,11 @@ Dropping the pool signals its workers and waits for tasks that are already execu
 Queued tasks may be abandoned. Callers that require completion await the corresponding
 join handles before dropping the pool. Abandonment releases captured resources and
 disconnects result handles even when schedulers retain the pool's storage.
+Submissions through retained schedulers after shutdown are immediately abandoned without
+execution. Submission returns normally; awaiting an abandoned handle panics.
 
 Worker startup must establish the full configured count and affinity before accepting
-work for a destination. Thread creation or affinity failure is reported to the submitting
-caller rather than permitting unpinned execution or work with no functioning workers.
+work for a destination. Thread creation or affinity failure panics on the submitting
+thread rather than permitting unpinned execution or work with no functioning workers.
+The failed destination rejects further submissions with a panic while the pool is active.
+After shutdown, submissions are abandoned regardless of earlier startup failures.
