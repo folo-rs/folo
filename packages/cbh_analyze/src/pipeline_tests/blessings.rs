@@ -717,6 +717,7 @@ fn raw_views(storage: &MemoryStorage, git: &FakeGitHistory) -> [Value; 2] {
 }
 
 /// Undecodable acceptance cannot hide measured commits or alter their values.
+/// A measured tip and an earlier unmeasured blessing anchor keep the Miri fixture small.
 fn assert_raw_views_ignore_invalid_blessing(git: &FakeGitHistory, commits: &[&str], legacy: bool) {
     let storage = MemoryStorage::new();
     let set = partition(Engine::Callgrind, &auto().triple, &auto().machine_key);
@@ -804,22 +805,22 @@ fn branch_consumers_reject_invalid_scoped_blessings() {
 
 #[test]
 fn history_raw_views_ignore_invalid_scoped_blessings() {
-    assert_raw_views_ignore_invalid_blessing(&master_chain(2), &["c0", "c1"], false);
+    assert_raw_views_ignore_invalid_blessing(&master_chain(2), &["c1"], false);
 }
 
 #[test]
 fn history_raw_views_ignore_invalid_legacy_blessings() {
-    assert_raw_views_ignore_invalid_blessing(&master_chain(2), &["c0", "c1"], true);
+    assert_raw_views_ignore_invalid_blessing(&master_chain(2), &["c1"], true);
 }
 
 #[test]
 fn branch_raw_views_ignore_invalid_scoped_blessings() {
-    assert_raw_views_ignore_invalid_blessing(&feature_chain(2, 0), &["c0", "f2"], false);
+    assert_raw_views_ignore_invalid_blessing(&feature_chain(2, 0), &["f2"], false);
 }
 
 #[test]
 fn branch_raw_views_ignore_invalid_legacy_blessings() {
-    assert_raw_views_ignore_invalid_blessing(&feature_chain(2, 0), &["c0", "f2"], true);
+    assert_raw_views_ignore_invalid_blessing(&feature_chain(2, 0), &["f2"], true);
 }
 
 #[test]
