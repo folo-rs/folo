@@ -761,6 +761,9 @@ command uses identical defaults or admission policies. Selection parameters that
 to analysis-style data selection stay aligned, and `list` omits only the analysis-only
 flags. `list runs` reports, per discriminant set, the run / series / per-commit counts of the
 selected runs (each commit's clean/dirty split), oldest-first by topology.
+Like `examine`, this raw-data view is independent of blessing records, including
+records whose payloads cannot be decoded. Analysis and blessing inspection still
+validate the acceptance records they use.
 
 `list discriminants` is a different view: a **discovery catalog** of the sets present in
 storage, which requires **no repository** and so ignores the timeline and data-filtering

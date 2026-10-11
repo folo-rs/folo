@@ -4,7 +4,8 @@ use std::num::NonZero;
 use std::path::PathBuf;
 
 use cbh_command::{
-    AnalyzeOptions, BlessOptions, ListOptions, ListSubject, PruneOptions, UnblessOptions,
+    AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, ListSubject, PruneOptions,
+    UnblessOptions,
 };
 use cbh_detect::{AnalysisMode, Series, SeriesFilter, apply_base_blessings, apply_blessings};
 use cbh_diag::RecordingReporter;
@@ -19,13 +20,15 @@ use serde_json::Value;
 
 use crate::bless::{bless_with, unbless_with};
 use crate::dataset::select_dataset;
+use crate::examine::examine_with;
 use crate::list::list_with;
+use crate::pipeline::analyze_with;
 use crate::pipeline_tests::harness::{
     auto, config, feature_chain, master_chain, multi_bench, now_anchor, spawner, ts,
 };
 use crate::prune::prune_with;
 use crate::testing::run_points_json;
-use crate::{AnalyzeError, BlessingScopeConflictError, Selection};
+use crate::{AnalyzeError, BlessingScopeConflictError, InvalidBlessingError, Selection};
 
 /// Both identities are measured together so acceptance cannot hide an unrelated series.
 fn seed(storage: &MemoryStorage, set: &DiscriminantSet, commits: &[&str]) {
@@ -557,6 +560,267 @@ fn pruning_scoped_blessings_requires_complete_scope_and_respects_dry_run() {
     })
     .unwrap();
     assert!(block_on(storage.list("v1/folo/")).unwrap().is_empty());
+}
+
+/// Each gate has an eligible control, and the complete object roster verifies preservation.
+fn assert_pruning_preserves_scoped_blessing(
+    git: &FakeGitHistory,
+    options: PruneOptions,
+    preserved_commit: &str,
+    removed_commit: &str,
+) {
+    let storage = MemoryStorage::new();
+    let keys = [preserved_commit, removed_commit].map(|commit| {
+        let record = ScopedBlessingRecord {
+            // Issuance time is deliberately unrelated to the commit-date cutoff.
+            record: BlessingRecord::new(commit.to_owned(), ts(123), Vec::new(), "test".to_owned()),
+            scope: BlessingScope::default(),
+        };
+        let key = record.key("folo");
+        block_on(storage.put(&key, record.to_json().unwrap().as_bytes())).unwrap();
+        key
+    });
+    let set = partition(Engine::Callgrind, &auto().triple, &auto().machine_key);
+    // Blessing-only pruning must preserve even a run at the selected anchor.
+    seed(&storage, &set, &[removed_commit]);
+    let before = block_on(storage.list("v1/folo/")).unwrap();
+    let options = PruneOptions {
+        include_blessings: true,
+        target_triple: vec!["all".to_owned()],
+        machine_key: vec!["all".to_owned()],
+        no_text: true,
+        json: Some(PathBuf::from("unused.json")),
+        ..options
+    };
+    for dry_run in [true, false] {
+        let report = block_on(prune_with(
+            git,
+            &storage,
+            "folo",
+            &config(),
+            &PruneOptions {
+                dry_run,
+                ..options.clone()
+            },
+            &auto(),
+            now_anchor(),
+            &RecordingReporter::quiet(),
+        ))
+        .unwrap();
+        let report: Value = serde_json::from_str(report.json.as_ref().unwrap()).unwrap();
+        assert_eq!(report["totals"]["runs"], 0);
+        assert_eq!(report["totals"]["blessings"], 1);
+        let sets = report["sets"].as_array().unwrap();
+        assert_eq!(sets.len(), 1);
+        let commits = sets[0]["commits"].as_array().unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0]["commit"], removed_commit);
+        assert_eq!(commits[0]["keys"], serde_json::json!([keys[1]]));
+        let expected: Vec<_> = before
+            .iter()
+            .filter(|key| dry_run || **key != keys[1])
+            .cloned()
+            .collect();
+        assert_eq!(block_on(storage.list("v1/folo/")).unwrap(), expected);
+    }
+}
+
+#[test]
+fn pruning_scoped_blessings_preserves_off_history_anchors() {
+    assert_pruning_preserves_scoped_blessing(
+        &feature_chain(3, 0),
+        PruneOptions::default(),
+        "c2",
+        "f2",
+    );
+}
+
+#[test]
+fn pruning_scoped_blessings_preserves_shared_base_anchors() {
+    assert_pruning_preserves_scoped_blessing(
+        &feature_chain(3, 0),
+        PruneOptions::default(),
+        "c0",
+        "f2",
+    );
+}
+
+#[test]
+fn pruning_scoped_blessings_preserves_unselected_commits() {
+    assert_pruning_preserves_scoped_blessing(
+        &master_chain(3),
+        PruneOptions {
+            prune_base: true,
+            commit: vec!["c2".to_owned()],
+            ..PruneOptions::default()
+        },
+        "c1",
+        "c2",
+    );
+}
+
+#[test]
+fn pruning_scoped_blessings_preserves_anchors_before_cutoff() {
+    assert_pruning_preserves_scoped_blessing(
+        &master_chain(3),
+        PruneOptions {
+            prune_base: true,
+            // The retained commit precedes this cutoff; the control is exactly on it.
+            since: Some(ts(2).to_string()),
+            ..PruneOptions::default()
+        },
+        "c1",
+        "c2",
+    );
+}
+
+/// Raw query outputs depend on measurements, not acceptance-record payloads.
+fn raw_views(storage: &MemoryStorage, git: &FakeGitHistory) -> [Value; 2] {
+    let runs = block_on(list_with(
+        git,
+        storage,
+        "folo",
+        &config(),
+        &ListOptions {
+            subject: ListSubject::Runs,
+            no_text: true,
+            json: Some(PathBuf::from("unused.json")),
+            ..ListOptions::default()
+        },
+        &auto(),
+        now_anchor(),
+        &RecordingReporter::quiet(),
+        &spawner(),
+        NonZero::new(1).unwrap(),
+    ))
+    .unwrap();
+    let points = block_on(examine_with(
+        git,
+        storage,
+        "folo",
+        &config(),
+        &ExamineOptions {
+            benchmark: "selected/case".to_owned(),
+            metric: "instruction_count".to_owned(),
+            no_text: true,
+            json: Some(PathBuf::from("unused.json")),
+            ..ExamineOptions::default()
+        },
+        &auto(),
+        now_anchor(),
+        &RecordingReporter::quiet(),
+        &spawner(),
+        NonZero::new(1).unwrap(),
+    ))
+    .unwrap();
+    [runs, points].map(|report| serde_json::from_str(report.json.as_ref().unwrap()).unwrap())
+}
+
+/// Undecodable acceptance cannot hide measured commits or alter their values.
+/// A measured tip and an earlier unmeasured blessing anchor keep the Miri fixture small.
+fn assert_raw_views_ignore_invalid_blessing(git: &FakeGitHistory, commits: &[&str], legacy: bool) {
+    let storage = MemoryStorage::new();
+    let set = partition(Engine::Callgrind, &auto().triple, &auto().machine_key);
+    seed(&storage, &set, commits);
+    let record = ScopedBlessingRecord {
+        record: BlessingRecord::new("c0".to_owned(), ts(123), Vec::new(), "test".to_owned()),
+        scope: BlessingScope::default(),
+    };
+    let key = if legacy {
+        set.bless_key("folo", "c0", 123)
+    } else {
+        record.key("folo")
+    };
+    block_on(storage.put(&key, b"not JSON")).unwrap();
+    let actual = raw_views(&storage, git);
+    assert_eq!(actual[0]["totals"]["runs"], commits.len());
+    assert_eq!(actual[0]["totals"]["series"], 2);
+    assert_eq!(actual[1]["sets"].as_array().unwrap().len(), 1);
+    let points = actual[1]["sets"][0]["points"].as_array().unwrap();
+    let measured: Vec<_> = points
+        .iter()
+        .filter(|point| !point["value"].is_null())
+        .map(|point| {
+            assert_eq!(point["value"], 100.0);
+            point["commit"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(measured, commits);
+}
+
+/// Consumers validate acceptance even when no measurements project its scope.
+fn assert_consumers_reject_invalid_blessing(git: &FakeGitHistory) {
+    let storage = MemoryStorage::new();
+    let record = ScopedBlessingRecord {
+        record: BlessingRecord::new("c0".to_owned(), ts(123), Vec::new(), "test".to_owned()),
+        scope: BlessingScope::default(),
+    };
+    block_on(storage.put(&record.key("folo"), b"not JSON")).unwrap();
+    let analysis = block_on(analyze_with(
+        git,
+        &storage,
+        "folo",
+        &config(),
+        &AnalyzeOptions::default(),
+        &auto(),
+        now_anchor(),
+        &RecordingReporter::quiet(),
+        false,
+        &spawner(),
+        NonZero::new(1).unwrap(),
+    ))
+    .err()
+    .unwrap();
+    assert!(analysis.find_source::<InvalidBlessingError>().is_some());
+    let inspection = block_on(list_with(
+        git,
+        &storage,
+        "folo",
+        &config(),
+        &ListOptions {
+            subject: ListSubject::Blessings,
+            all: true,
+            ..ListOptions::default()
+        },
+        &auto(),
+        now_anchor(),
+        &RecordingReporter::quiet(),
+        &spawner(),
+        NonZero::new(1).unwrap(),
+    ))
+    .err()
+    .unwrap();
+    assert!(inspection.find_source::<InvalidBlessingError>().is_some());
+}
+
+#[test]
+fn history_consumers_reject_invalid_scoped_blessings() {
+    assert_consumers_reject_invalid_blessing(&master_chain(2));
+}
+
+#[test]
+fn branch_consumers_reject_invalid_scoped_blessings() {
+    assert_consumers_reject_invalid_blessing(&feature_chain(2, 0));
+}
+
+#[test]
+fn history_raw_views_ignore_invalid_scoped_blessings() {
+    assert_raw_views_ignore_invalid_blessing(&master_chain(2), &["c1"], false);
+}
+
+#[test]
+fn history_raw_views_ignore_invalid_legacy_blessings() {
+    assert_raw_views_ignore_invalid_blessing(&master_chain(2), &["c1"], true);
+}
+
+#[test]
+fn branch_raw_views_ignore_invalid_scoped_blessings() {
+    assert_raw_views_ignore_invalid_blessing(&feature_chain(2, 0), &["f2"], false);
+}
+
+#[test]
+fn branch_raw_views_ignore_invalid_legacy_blessings() {
+    assert_raw_views_ignore_invalid_blessing(&feature_chain(2, 0), &["f2"], true);
 }
 
 #[test]

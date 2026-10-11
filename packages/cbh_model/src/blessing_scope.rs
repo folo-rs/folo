@@ -120,6 +120,9 @@ mod tests {
         assert!(!concrete.contains(&engine));
         assert!(concrete.intersects(&engine));
         assert!(engine.intersects(&concrete));
+        assert!(all.intersects(&concrete));
+        assert!(concrete.intersects(&all));
+        assert!(all.intersects(&all));
         assert_eq!(all.labels(), ["all", "all", "all"]);
         assert_eq!(concrete.to_string(), "callgrind/target/m1");
 
@@ -134,12 +137,34 @@ mod tests {
             },
             BlessingScope {
                 machine_key: vec!["m2".to_owned()],
-                ..all
+                ..all.clone()
             },
         ] {
             assert!(!scope.matches(&partition));
             assert!(!scope.contains(&concrete));
+            assert!(!scope.intersects(&concrete));
+            assert!(!concrete.intersects(&scope));
+            assert!(scope.intersects(&all));
+            assert!(all.intersects(&scope));
         }
+    }
+
+    #[test]
+    fn intersection_accepts_a_shared_alternative_on_every_axis() {
+        let left = BlessingScope {
+            engine: vec!["criterion".to_owned(), "callgrind".to_owned()],
+            target_triple: vec!["linux".to_owned(), "windows".to_owned()],
+            machine_key: vec!["m1".to_owned(), "m2".to_owned()],
+        };
+        let right = BlessingScope {
+            engine: vec!["other".to_owned(), "CALLGRIND".to_owned()],
+            target_triple: vec!["other".to_owned(), "WINDOWS".to_owned()],
+            machine_key: vec!["other".to_owned(), "M2".to_owned()],
+        };
+        assert!(left.intersects(&right));
+        assert!(right.intersects(&left));
+        assert!(!left.contains(&right));
+        assert!(!right.contains(&left));
     }
 
     #[test]

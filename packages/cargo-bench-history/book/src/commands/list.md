@@ -7,6 +7,9 @@ no subject is an error that names the three.
 
 The preview includes [ignored benchmarks](analyze.md#ignoring-benchmarks) and ghosts:
 these are exclusions from analysis, not from stored-data inspection.
+`list runs` and [`examine`](examine.md) show raw measurements independently of blessing
+records. Their output remains available when a blessing payload cannot be decoded;
+analysis and blessing inspection still validate the acceptance records they use.
 
 ```console
 # Per discriminant set, the run / series / per-commit counts of the selected runs.

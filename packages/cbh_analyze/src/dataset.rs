@@ -115,6 +115,9 @@ pub(crate) struct SiblingObservation {
 /// Resolves the git topology, selects the comparable commits, and loads the
 /// in-selection objects into a [`SelectedDataSet`]. Requires a repository: the
 /// timeline is reconstructed from git history, not from stored timestamps.
+///
+/// Analysis and effective-blessing inspection request analysis context: blessing
+/// records and branch comparison windows. Raw run and point views do not use it.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
@@ -130,7 +133,7 @@ pub(crate) async fn select_dataset<G, S>(
     config: &Config,
     selection: &Selection<'_>,
     filter: SeriesFilter<'_>,
-    load_branch_base_windows: bool,
+    load_analysis_context: bool,
     auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
@@ -152,7 +155,7 @@ where
         storage,
         project_id,
         &discriminants,
-        load_branch_base_windows,
+        load_analysis_context,
         reporter,
     )
     .await?;
@@ -263,7 +266,7 @@ where
         )
     });
 
-    let base_ref_history = if mode == AnalysisMode::Branch && load_branch_base_windows {
+    let base_ref_history = if mode == AnalysisMode::Branch && load_analysis_context {
         Some(resolve_base_ref_history(git, &base_commit, reporter).await?)
     } else {
         None
@@ -475,12 +478,14 @@ where
         )
     });
 
+    // Raw views do not consume acceptance, so they must not acquire its payloads.
+    // See docs/implementation.md for the analysis-context boundary.
     // Load blessing sidecars into the topology the active analysis uses. History
     // positions them on the context line; branch detection positions them on the base
     // ref's own first-parent line so pre-blessing base evidence is excluded even after
     // the feature branch diverged.
     let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
-    if mode == AnalysisMode::History || load_branch_base_windows {
+    if load_analysis_context {
         let blessing_started = Instant::now();
         // Phase 1 — key-only filtering: drop blessings whose commit is not on the
         // analyzed history before fetching, in candidate order.
