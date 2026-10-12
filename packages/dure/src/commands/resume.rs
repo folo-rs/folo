@@ -1,5 +1,8 @@
 //! `dure resume`.
 
+use std::fmt::Arguments;
+use std::io;
+
 use ohno::AppError;
 
 use crate::attach::attach;
@@ -57,7 +60,7 @@ where
     // ends (design.md, "Session identity").
     let record = require_live_session(store, processes, id, trace)?;
     // Refused before the console is taken over and before a pipe is opened: a
-    // supervisor from another build would answer with frames this one cannot
+    // supervisor speaking another protocol would answer with frames this one cannot
     // read, and an unreadable frame is a worse thing to show a user than a
     // sentence saying which session cannot be resumed and how to end it.
     // Ref: docs/transport.md.
@@ -123,14 +126,27 @@ fn prompt_for_session<C>(
 where
     C: LocalConsole,
 {
+    prompt_for_session_with(console, live, now_unix_ms, print_prompt)
+}
+
+/// Requires the complete selection UI before allowing a blocking input read.
+fn prompt_for_session_with<C: LocalConsole>(
+    console: &C,
+    live: &[SessionRecord],
+    now_unix_ms: u64,
+    mut write: impl FnMut(Arguments<'_>) -> io::Result<()>,
+) -> Result<SessionId, AppError> {
     if !console.stdin_is_terminal() {
         return Err(PromptFailedError::new().into());
     }
-    note_line(format_args!("{}", format_list(live, now_unix_ms)));
     // The read below blocks, so say what is being waited for. A prompt the user
     // cannot see is not worth blocking a read on, so a stream that refuses it
     // fails the command instead.
-    print_prompt(format_args!("Session id to resume: ")).map_err(OutputFailedError::caused_by)?;
+    write(format_args!(
+        "{}\nSession id to resume: ",
+        format_list(live, now_unix_ms)
+    ))
+    .map_err(OutputFailedError::caused_by)?;
     let line = console
         .read_prompt_line()
         .map_err(PromptFailedError::caused_by)?;
@@ -164,22 +180,57 @@ mod tests {
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
     use crate::pal::processes::{MockProcesses, ProcessLiveness};
     use crate::pal::pseudoconsole::WindowSize;
-    use crate::pal::session_store::{FsSessionStore, MemorySessionStore, SessionStore};
+    use crate::pal::session_store::{MemorySessionStore, MockSessionStore, SessionStore};
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::Message;
     use crate::session_record::ProcessIdentity;
     use crate::{InvalidSessionIdError, PromptFailedError, SessionId};
 
+    /// Supplies a prepared launch directory without consulting the filesystem.
+    fn selection_store(records: &MemorySessionStore) -> MockSessionStore {
+        let mut store = MockSessionStore::new();
+        store.expect_list().returning({
+            let records = records.clone();
+            move || records.list()
+        });
+        store
+            .expect_list_reservations()
+            .returning(|| Ok(Vec::new()));
+        store.expect_read().returning({
+            let records = records.clone();
+            move |id| records.read(id)
+        });
+        store
+            .expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/work")));
+        store
+            .expect_canonicalize()
+            .returning(|path| Ok(path.to_path_buf()));
+        store
+    }
+
+    #[test]
+    fn failed_selection_output_does_not_read_input() {
+        let mut console = MockLocalConsole::new();
+        console.expect_stdin_is_terminal().return_const(true);
+        console.expect_read_prompt_line().never();
+        let error = prompt_for_session_with(&console, &[], SOME_NOW_MS, |_message| {
+            Err(io::ErrorKind::BrokenPipe.into())
+        })
+        .unwrap_err();
+        assert!(error.find_source::<OutputFailedError>().is_some());
+    }
+
     /// Publishes two sessions whose launch directories never match the current
     /// directory, so auto-detect reports an ambiguous result.
-    fn publish_ambiguous_sessions(store: &FsSessionStore) {
+    fn publish_ambiguous_sessions(store: &MemorySessionStore) {
         for name in ["one", "two"] {
             let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
             store
                 .publish(&SessionRecord {
                     id,
                     supervisor: ProcessIdentity {
-                        pid: 10,
+                        pid: 10_u32.try_into().unwrap(),
                         creation_time: 100,
                     },
                     pipe_name: name.to_string(),
@@ -194,11 +245,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn no_live_sessions_fails() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = selection_store(&MemorySessionStore::new());
         let processes = MockProcesses::new();
         let transport = MemoryTransport::new();
         let mut console = MockLocalConsole::new();
@@ -245,11 +293,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn missing_explicit_id_fails() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         let processes = MockProcesses::new();
         let transport = MemoryTransport::new();
         let mut console = MockLocalConsole::new();
@@ -269,17 +314,14 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
-    fn a_session_from_another_build_is_refused_before_anything_is_taken_over() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+    fn an_incompatible_protocol_is_refused_before_anything_is_taken_over() {
+        let store = MemorySessionStore::new();
         let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store
             .publish(&SessionRecord {
                 id,
                 supervisor: ProcessIdentity {
-                    pid: 10,
+                    pid: 10_u32.try_into().unwrap(),
                     creation_time: 100,
                 },
                 pipe_name: "pipe".to_string(),
@@ -317,22 +359,17 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory and
-    // the relay threads' blocking recv is guarded by a watchdog thread.
-    #[cfg_attr(miri, ignore)]
     fn unique_launch_directory_attaches() {
         testing::with_watchdog(|| {
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
-            let cwd = store.current_dir().unwrap();
-            let launch_directory = store.canonicalize(&cwd).unwrap();
+            let store = MemorySessionStore::new();
+            let launch_directory = PathBuf::from("/work");
             let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
             let pipe = "resume-unique";
             store
                 .publish(&SessionRecord {
                     id,
                     supervisor: ProcessIdentity {
-                        pid: 10,
+                        pid: 10_u32.try_into().unwrap(),
                         creation_time: 100,
                     },
                     pipe_name: pipe.to_string(),
@@ -343,6 +380,7 @@ mod tests {
                     protocol_version: PROTOCOL_VERSION,
                 })
                 .unwrap();
+            let store = selection_store(&store);
             let mut processes = MockProcesses::new();
             processes
                 .expect_probe()
@@ -372,9 +410,13 @@ mod tests {
                 let reader_cancelled = Arc::clone(&reader_cancelled);
                 move || {
                     let (cancelled, changed) = &*reader_cancelled;
-                    let mut cancelled = cancelled.lock().unwrap();
+                    let mut cancelled = cancelled
+                        .lock()
+                        .expect("the cancellation flag has no callbacks or assertions");
                     while !*cancelled {
-                        cancelled = changed.wait(cancelled).unwrap();
+                        cancelled = changed
+                            .wait(cancelled)
+                            .expect("the cancellation flag has no callbacks or assertions");
                     }
                     Err(PalError::new(PalErrorKind::Disconnected))
                 }
@@ -383,7 +425,9 @@ mod tests {
                 let reader_cancelled = Arc::clone(&reader_cancelled);
                 move || {
                     let (cancelled, changed) = &*reader_cancelled;
-                    *cancelled.lock().unwrap() = true;
+                    *cancelled
+                        .lock()
+                        .expect("the cancellation flag has no callbacks or assertions") = true;
                     changed.notify_all();
                     Ok(())
                 }
@@ -405,12 +449,10 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn ambiguous_without_terminal_does_not_prompt() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         publish_ambiguous_sessions(&store);
+        let store = selection_store(&store);
         let mut processes = MockProcesses::new();
         processes
             .expect_probe()
@@ -434,12 +476,10 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn ambiguous_with_terminal_reads_selection() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         publish_ambiguous_sessions(&store);
+        let store = selection_store(&store);
         let mut processes = MockProcesses::new();
         processes
             .expect_probe()

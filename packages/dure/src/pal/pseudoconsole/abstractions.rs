@@ -18,9 +18,9 @@ use crate::pal::ids::PtyId;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WindowSize {
     /// Width in columns.
-    pub cols: NonZero<u16>,
+    cols: NonZero<u16>,
     /// Height in rows.
-    pub rows: NonZero<u16>,
+    rows: NonZero<u16>,
 }
 
 /// The largest console dimension any layer below accepts.
@@ -42,6 +42,16 @@ impl WindowSize {
             return None;
         };
         Some(Self { cols, rows })
+    }
+
+    /// Width in columns, within the console's checked dimension range.
+    pub(crate) const fn cols(self) -> NonZero<u16> {
+        self.cols
+    }
+
+    /// Height in rows, within the console's checked dimension range.
+    pub(crate) const fn rows(self) -> NonZero<u16> {
+        self.rows
     }
 }
 

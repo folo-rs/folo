@@ -37,6 +37,7 @@ fn encode(value: &OsStr) -> Vec<u16> {
     value.encode_wide().collect()
 }
 
+/// Quotes one encoded argument without narrowing Windows path code units.
 fn quote_wide(arg: &[u16]) -> Vec<u16> {
     if arg.is_empty() {
         return vec![QUOTE, QUOTE];
@@ -56,6 +57,7 @@ fn quote_wide(arg: &[u16]) -> Vec<u16> {
             continue;
         }
         if *unit == QUOTE {
+            // Preserve the preceding backslashes and escape the embedded quote.
             quoted.extend(iter::repeat_n(
                 BACKSLASH,
                 backslashes.saturating_mul(2).saturating_add(1),
@@ -68,6 +70,7 @@ fn quote_wide(arg: &[u16]) -> Vec<u16> {
         quoted.push(*unit);
         backslashes = 0;
     }
+    // Preserve trailing backslashes without escaping the closing delimiter.
     quoted.extend(iter::repeat_n(BACKSLASH, backslashes.saturating_mul(2)));
     quoted.push(QUOTE);
     quoted

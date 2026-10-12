@@ -430,7 +430,7 @@ mod tests {
             .returning(|| Ok(PathBuf::from("dure.exe")));
         processes.expect_spawn_supervisor().returning(|_| {
             Ok(ProcessIdentity {
-                pid: 10,
+                pid: 10_u32.try_into().unwrap(),
                 creation_time: 100,
             })
         });
@@ -475,7 +475,7 @@ mod tests {
                 let pipe = transport.pipe_name("startup-nonce");
                 _ = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
                 Ok(ProcessIdentity {
-                    pid: 10,
+                    pid: 10_u32.try_into().unwrap(),
                     creation_time: 100,
                 })
             }
@@ -530,7 +530,7 @@ mod tests {
                     )
                     .unwrap();
                 Ok(ProcessIdentity {
-                    pid: 10,
+                    pid: 10_u32.try_into().unwrap(),
                     creation_time: 100,
                 })
             }
@@ -583,7 +583,7 @@ mod tests {
                     .unwrap();
                 transport.disconnect(conn);
                 Ok(ProcessIdentity {
-                    pid: 10,
+                    pid: 10_u32.try_into().unwrap(),
                     creation_time: 100,
                 })
             }
@@ -641,7 +641,7 @@ mod tests {
                     )
                     .unwrap();
                 Ok(ProcessIdentity {
-                    pid: 10,
+                    pid: 10_u32.try_into().unwrap(),
                     creation_time: 100,
                 })
             }

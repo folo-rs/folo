@@ -2,21 +2,26 @@
 
 use std::collections::VecDeque;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::AtomicUsize;
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
-use std::vec;
+use std::{thread, vec};
 
+use ohno::AppError;
 use testing::with_watchdog;
 
 use super::*;
 use crate::durability::LauncherTie;
 use crate::pal::error::{PalError, PalErrorKind};
-use crate::pal::ids::{ConnId, ListenerId};
+use crate::pal::ids::{ConnId, ListenerId, RelayLeaseId};
 use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
 use crate::pal::pseudoconsole::WindowSize;
-use crate::pal::transport::MemoryTransport;
+use crate::pal::transport::{MemoryTransport, Transport};
 use crate::protocol::Message;
+use crate::{
+    AttachFailedError, DisplacedError, NoConsoleError, Outcome, PalFailedError, RelayFailedError,
+    ResumeTimeoutError, SessionId, SupervisorLostError,
+};
 
 const SAMPLE_SIZE: WindowSize = WindowSize::new(80, 24).expect("a fixture size is not empty");
 
@@ -50,7 +55,10 @@ impl ConsoleScript {
     }
 
     fn read(&self) -> Result<Vec<u8>, PalError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .expect("script bookkeeping invokes no callbacks or assertions");
         loop {
             if state.cancelled {
                 return Err(PalError::new(PalErrorKind::Disconnected));
@@ -58,12 +66,18 @@ impl ConsoleScript {
             if let Some(next) = state.input.pop_front() {
                 return next.map_err(PalError::new);
             }
-            state = self.changed.wait(state).unwrap();
+            state = self
+                .changed
+                .wait(state)
+                .expect("script bookkeeping invokes no callbacks or assertions");
         }
     }
 
     fn cancel(&self) {
-        self.state.lock().unwrap().cancelled = true;
+        self.state
+            .lock()
+            .expect("script bookkeeping invokes no callbacks or assertions")
+            .cancelled = true;
         self.changed.notify_all();
     }
 }
@@ -655,11 +669,12 @@ fn failed_input_sends_stop_the_reader() {
         let client = transport.connect("pipe", Duration::ZERO).unwrap();
         let supervisor = transport.accept(listener).unwrap();
         transport.disconnect(supervisor);
-        let console = TestConsole {
-            input: vec![Ok(b"input".to_vec())],
-            ..TestConsole::new()
-        }
-        .build();
+        let mut console = MockLocalConsole::new();
+        console
+            .expect_read_input()
+            .times(1)
+            .returning(|| Ok(b"input".to_vec()));
+        let console = LocalConsoleFacade::from_mock(console);
         let input_failed = Arc::new(AtomicBool::new(false));
 
         spawn_input_reader(&transport, &console, client, &input_failed)

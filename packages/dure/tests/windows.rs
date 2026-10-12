@@ -9,6 +9,8 @@
 //! `dure` binary end to end.
 
 #![cfg(windows)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::fs;
 use std::sync::mpsc::Receiver;
@@ -37,6 +39,9 @@ const BEL: char = '\u{7}';
 ///
 /// The dimensions are distinct so swapping them cannot accidentally pass.
 const DISTINCT_RESIZED_SIZE: (u16, u16) = (91, 37);
+
+/// Different from both the session default and later resize, with unequal axes.
+const DISTINCT_INITIAL_SIZE: (u16, u16) = (103, 31);
 
 /// Strip the control sequences a pseudoconsole typically injects around app text.
 ///
@@ -336,22 +341,24 @@ fn keyboard_input_does_not_hide_a_later_resize() {
     assert_resize_reaches_app(Some(b"x"));
 }
 
+/// Checks initial attach and a later resize, optionally with intervening input
+/// records that the size watcher must not consume or wait behind.
 fn assert_resize_reaches_app(input_before_resize: Option<&'static [u8]>) {
     with_watchdog(move || {
         let dir = TempDir::new().unwrap();
-        let client =
-            DureCommand::run(dir.path(), Scenario::ReportSizeAfterResize).spawn(dir.path());
+        let client = DureCommand::run(dir.path(), Scenario::ReportSizeAfterResize)
+            .spawn_sized(dir.path(), DISTINCT_INITIAL_SIZE);
         let mut watching = Console::watching(&client);
-        // The app's first report proves the attach carried a size at all; the
-        // session starts on a default geometry that the first attach replaces.
-        // Ref: docs/design.md, "Terminal pass-through".
-        let attached_at = watching.until("size:");
-        let attach_size = last_reported_size(&attached_at).expect("the app reports its size");
-
-        // A size no default is, so a stale geometry cannot pass for the new
-        // one. Deliberately smaller in one dimension and larger in the other,
-        // so a report that swapped them would not match either.
-        let resized = (attach_size.0.saturating_add(11), 17_u16);
+        _ = watching.until(HELPER_READY);
+        // Input can reach the app only after attach. Its fresh measurement
+        // therefore cannot accidentally observe the pre-attach default.
+        release(&client);
+        let attached_at = watching.until(RESIZE_READY);
+        assert_eq!(
+            last_reported_size(&attached_at),
+            Some(DISTINCT_INITIAL_SIZE)
+        );
+        let resized = DISTINCT_RESIZED_SIZE;
         if let Some(input) = input_before_resize {
             client.write_input(input);
         }

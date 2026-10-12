@@ -26,22 +26,22 @@ pub(crate) enum ProcessLiveness {
 #[derive(Clone, Debug)]
 pub(crate) struct SupervisorSpawn {
     /// Path of this `dure` binary.
-    pub exe: PathBuf,
+    pub(crate) exe: PathBuf,
     /// Arguments after the program name, including the hidden subcommand.
-    pub args: Vec<String>,
+    pub(crate) args: Vec<String>,
 }
 
 /// Request to spawn the app attached to a pseudoconsole and lifetime job.
 #[derive(Clone, Debug)]
 pub(crate) struct AppSpawn {
     /// Command argv.
-    pub command: AppCommand,
+    pub(crate) command: AppCommand,
     /// Working directory and relative-path resolution root.
-    pub launch_directory: PathBuf,
+    pub(crate) launch_directory: PathBuf,
     /// Pseudoconsole the app should attach to.
-    pub pty: PtyId,
+    pub(crate) pty: PtyId,
     /// Kill-on-close job the app is born into.
-    pub job: JobId,
+    pub(crate) job: JobId,
 }
 
 /// Spawn a detached supervisor, identify processes, own the app-lifetime job.
@@ -57,10 +57,9 @@ pub(crate) trait Processes: Send + Sync + fmt::Debug + 'static {
 
     /// What the job this process is directly in says about its lifetime.
     ///
-    /// Breakaway leaves only the immediate job, so the supervisor asks about the
-    /// job it actually landed in. Windows reports job membership only to the
-    /// process itself, so no other process can answer this, and it exposes no
-    /// ancestor jobs, so an outer job is never ruled out.
+    /// Breakaway walks permitting parent jobs until a restrictive ancestor stops
+    /// it. The supervisor inspects the immediate job it actually landed in;
+    /// that query does not enumerate ancestors, so an outer job is never ruled out.
     ///
     /// Ref: docs/job-breakaway.md.
     fn launcher_tie(&self) -> LauncherTie;

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write;
 use std::mem::size_of;
+use std::num::NonZero;
 use std::os::windows::ffi::{OsStrExt, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,10 +26,10 @@ use windows::Win32::System::JobObjects::{
 use windows::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-    GetCurrentProcessId, GetExitCodeProcess, GetProcessId, GetProcessTimes, INFINITE,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess,
-    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_ACCESS_RIGHTS,
-    PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    GetExitCodeProcess, GetProcessId, GetProcessTimes, INFINITE, InitializeProcThreadAttributeList,
+    LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_ACCESS_RIGHTS, PROCESS_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
@@ -107,9 +108,7 @@ fn identity_of(handle: HANDLE) -> Result<ProcessIdentity, PalError> {
         // SAFETY: `handle` is a valid process handle owned by the caller.
         unsafe { GetProcessId(handle) }
     };
-    if pid == 0 {
-        return Err(PalError::new(PalErrorKind::InspectFailed));
-    }
+    let pid = NonZero::new(pid).ok_or_else(|| PalError::new(PalErrorKind::InspectFailed))?;
     let mut creation = FILETIME::default();
     let mut exit = FILETIME::default();
     let mut kernel = FILETIME::default();
@@ -137,7 +136,7 @@ fn open_verified(
 ) -> Result<HANDLE, PalError> {
     // SAFETY: pid is a numeric process id; OpenProcess does not retain aliasing
     // of Rust references.
-    let opened = unsafe { OpenProcess(access, false, identity.pid) };
+    let opened = unsafe { OpenProcess(access, false, identity.pid.get()) };
     let Ok(handle) = opened else {
         // SAFETY: immediately after the failed OpenProcess.
         let err = unsafe { GetLastError() };
@@ -218,10 +217,11 @@ fn process_in_a_job(process: HANDLE) -> Result<bool, PalError> {
 ///
 /// Membership and limits are separate questions with separate failure modes, and
 /// callers answer an unreadable job differently from no job at all.
+#[derive(Clone, Copy)]
 enum JobLimits {
     /// The process belongs to no job object.
     None,
-    /// The process belongs to a job whose limits could not be read.
+    /// Membership or the immediate job's limits could not be established.
     Unknown,
     /// The limit flags of the job the process is directly in.
     Known(JOB_OBJECT_LIMIT),
@@ -265,13 +265,10 @@ fn immediate_job_limits() -> JobLimits {
 /// Windows reports a refused breakaway as a plain access-denied error, and an
 /// unreadable image reports the same thing. Only a job that withholds
 /// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` can have refused one, so this is what tells
-/// the two apart. A job whose limits cannot be read is assumed to be the cause,
-/// because a process outside a job never sees this question at all.
-#[cfg_attr(coverage_nightly, coverage(off))]
-fn breakaway_forbidden() -> bool {
-    match immediate_job_limits() {
-        JobLimits::None => false,
-        JobLimits::Unknown => true,
+/// the two apart. Unknown policy is not evidence of denied breakaway.
+fn breakaway_forbidden(limits: JobLimits) -> bool {
+    match limits {
+        JobLimits::None | JobLimits::Unknown => false,
         JobLimits::Known(flags) => (flags & JOB_OBJECT_LIMIT_BREAKAWAY_OK).0 == 0,
     }
 }
@@ -289,8 +286,8 @@ impl BuildTargetProcesses {
     /// Create a chain of nested jobs, outermost first.
     ///
     /// A process spawned into the chain joins every job in it, so the last
-    /// policy is the one its breakaway is evaluated against and the earlier ones
-    /// stay behind as ancestors.
+    /// policy is checked first. Breakaway continues through permitting parents
+    /// until a restrictive ancestor stops it.
     ///
     /// Ref: docs/job-breakaway.md.
     pub(crate) fn create_job_chain(policies: &[Breakaway]) -> Result<JobId, PalError> {
@@ -393,7 +390,9 @@ impl Processes for BuildTargetProcesses {
             // an unreadable image produces too. The job's breakaway policy
             // separates the two, so `run` can name the cause instead of
             // guessing at it.
-            if error.code() == ERROR_ACCESS_DENIED.to_hresult() && breakaway_forbidden() {
+            if error.code() == ERROR_ACCESS_DENIED.to_hresult()
+                && breakaway_forbidden(immediate_job_limits())
+            {
                 PalError::new(PalErrorKind::BreakawayDenied)
             } else {
                 PalError::new(PalErrorKind::Other)
@@ -682,12 +681,7 @@ impl Processes for BuildTargetProcesses {
         // SAFETY: GetCurrentProcess returns a pseudo-handle that does not need
         // to be closed and is valid for the calling process.
         let handle = unsafe { GetCurrentProcess() };
-        let mut identity = identity_of(handle)?;
-        identity.pid = {
-            // SAFETY: no preconditions.
-            unsafe { GetCurrentProcessId() }
-        };
-        Ok(identity)
+        identity_of(handle)
     }
 
     fn resolve_executable(&self, command: &str, launch_directory: &Path) -> ResolvedCommand {
@@ -716,7 +710,16 @@ impl Processes for BuildTargetProcesses {
 /// reaches the launch directory; a bare name is a search-path lookup only.
 pub(crate) fn search_path(command: &str, extension: &str) -> Option<PathBuf> {
     let search_path = env::var_os("PATH")?;
-    let search_path = wide_os(search_path.as_os_str());
+    search_path_in(search_path.as_os_str(), command, extension)
+}
+
+/// Searches an explicit path list, also used by controlled native search tests.
+pub(crate) fn search_path_in(
+    search_path: &OsStr,
+    command: &str,
+    extension: &str,
+) -> Option<PathBuf> {
+    let search_path = wide_os(search_path);
     let name = wide(command);
     // The extension is applied only when the name carries no extension of its
     // own, which is what makes `dure run -- copilot` behave like typing it in a shell.
@@ -756,6 +759,18 @@ mod tests {
     use std::os::windows::ffi::OsStringExt;
 
     use super::*;
+
+    #[test]
+    fn breakaway_diagnosis_requires_known_restrictive_policy() {
+        assert!(!breakaway_forbidden(JobLimits::None));
+        assert!(!breakaway_forbidden(JobLimits::Unknown));
+        assert!(!breakaway_forbidden(JobLimits::Known(
+            JOB_OBJECT_LIMIT_BREAKAWAY_OK
+        )));
+        assert!(breakaway_forbidden(JobLimits::Known(
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )));
+    }
 
     #[test]
     fn os_strings_reach_win32_without_replacing_unpaired_surrogates() {

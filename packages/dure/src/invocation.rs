@@ -2,8 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::app_command::AppCommand;
-use crate::session_id::SessionId;
+use crate::{AppCommand, SessionId};
 
 /// Parsed command the binary should execute.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,7 +38,7 @@ pub enum Command {
         id: SessionId,
     },
     /// Supervisor process spawned by `run`. Not a user-facing subcommand.
-    #[doc(hidden)]
+    #[cfg_attr(docsrs, doc(hidden))]
     Supervisor {
         /// One-shot startup pipe name created by the client.
         startup_pipe: String,
@@ -69,7 +68,8 @@ pub struct Invocation {
     ///
     /// Available only through the private test surface.
     #[cfg(any(test, feature = "private-test-util"))]
-    #[doc(hidden)]
+    // Like the crate root, retain this field in JSON used by external-type checks.
+    #[cfg_attr(docsrs, doc(hidden))]
     pub store_root: Option<PathBuf>,
     /// Subcommand to execute.
     pub command: Command,

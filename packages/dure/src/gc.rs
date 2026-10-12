@@ -58,7 +58,7 @@ pub(crate) fn live_sessions(
                     record.id,
                     record.supervisor.pid
                 );
-                return Err(InspectProcessError::for_pid(record.supervisor.pid).into());
+                return Err(InspectProcessError::for_pid(record.supervisor.pid.get()).into());
             }
         }
     }
@@ -151,7 +151,7 @@ pub(crate) fn require_live_session(
             Err(SessionNotFoundError::for_id(id).into())
         }
         ProcessLiveness::InspectFailed => {
-            Err(InspectProcessError::for_pid(record.supervisor.pid).into())
+            Err(InspectProcessError::for_pid(record.supervisor.pid.get()).into())
         }
     }
 }
@@ -172,7 +172,7 @@ mod tests {
         SessionRecord {
             id,
             supervisor: ProcessIdentity {
-                pid,
+                pid: pid.try_into().unwrap(),
                 creation_time: creation,
             },
             pipe_name: format!("pipe-{id}"),
@@ -196,7 +196,7 @@ mod tests {
         processes
             .expect_probe()
             .returning(|identity: &ProcessIdentity| {
-                if identity.pid == 10 {
+                if identity.pid.get() == 10 {
                     ProcessLiveness::Live
                 } else {
                     ProcessLiveness::Dead
@@ -255,7 +255,7 @@ mod tests {
         processes
             .expect_probe()
             .times(1)
-            .withf(|identity: &ProcessIdentity| identity.pid == 10)
+            .withf(|identity: &ProcessIdentity| identity.pid.get() == 10)
             .returning(|_| ProcessLiveness::Live);
 
         let found = require_live_session(&store, &processes, live_id, Trace::default()).unwrap();
@@ -280,8 +280,6 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn reaps_a_reservation_whose_owner_is_gone() {
         let store = MemorySessionStore::new();
         let orphan = store.allocate_id(&ProcessIdentity::for_test(12)).unwrap();
@@ -305,8 +303,6 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn keeps_a_reservation_whose_owner_is_still_initializing() {
         let store = MemorySessionStore::new();
         let owner = ProcessIdentity::for_test(12);
@@ -326,8 +322,6 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn an_unreadable_reservation_owner_is_left_alone() {
         let store = MemorySessionStore::new();
         let owner = ProcessIdentity::for_test(12);

@@ -1,5 +1,6 @@
 //! Facade over transport PAL implementations.
 
+use std::any::type_name;
 use std::fmt;
 use std::time::Duration;
 
@@ -28,9 +29,15 @@ static TARGET: BuildTargetTransport = BuildTargetTransport;
 impl fmt::Debug for TransportFacade {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Target(_) => f.debug_struct(stringify!(Target)).finish(),
+            Self::Target(_) => f
+                .debug_struct(type_name::<Self>())
+                .field("variant", &"Target")
+                .finish(),
             #[cfg(test)]
-            Self::Memory(_) => f.debug_struct(stringify!(Memory)).finish(),
+            Self::Memory(_) => f
+                .debug_struct(type_name::<Self>())
+                .field("variant", &"Memory")
+                .finish(),
         }
     }
 }

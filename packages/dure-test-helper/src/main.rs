@@ -12,6 +12,15 @@ use std::io::{self, IsTerminal, Read, Write};
 #[cfg(windows)]
 use std::{env, fs, process};
 
+#[cfg(windows)]
+use windows::Win32::System::Console::{
+    CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
+    ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_WINDOW_INPUT,
+    FlushConsoleInputBuffer, GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle,
+    INPUT_RECORD, KEY_EVENT, ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+};
+
 // Executables own allocator selection; library dependencies must not impose it.
 // Ref: docs/testing.md, "Executable allocators".
 #[cfg(not(miri))]
@@ -46,8 +55,23 @@ fn main() {
             io::stdout().flush().expect("flush stdout");
             wait_for_byte();
         }
+        Some("flood-output") => {
+            // Exceeds ordinary pipe bursts so startup rollback encounters an
+            // app still writing after its harness consumes the first burst.
+            let bytes = vec![b'x'; 64 * 1024];
+            io::stdout()
+                .write_all(&bytes)
+                .expect("write startup output");
+            io::stdout().flush().expect("flush startup output");
+            wait_for_byte();
+        }
         Some("report-size-after-resize") => {
+            println!("ready");
+            io::stdout().flush().expect("flush stdout");
+            wait_for_key_then_flush_input();
             print_console_size();
+            println!("{}", dure_test_helper::RESIZE_READY);
+            io::stdout().flush().expect("flush stdout");
             wait_for_resize();
             print_console_size();
         }
@@ -67,7 +91,7 @@ fn main() {
             );
             io::stdout().flush().expect("flush stdout");
             let expected = dure_test_helper::SAMPLE_TERMINAL_INPUT;
-            let mut actual = vec![0_u8; expected.len()];
+            let mut actual = [0_u8; dure_test_helper::SAMPLE_TERMINAL_INPUT.len()];
             io::stdin()
                 .read_exact(&mut actual)
                 .expect("read terminal input sample");
@@ -95,7 +119,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: dure-test-helper echo-line | print-and-wait | exit [code] | \
+                "usage: dure-test-helper echo-line | print-and-wait | flood-output | exit [code] | \
                  has-console | print-non-ascii | report-size-after-input-and-resize | \
                  report-size-after-resize | verify-terminal-input | wait-has-console | \
                  wait-exit [code]"
@@ -123,12 +147,6 @@ fn wait_for_byte() {
 /// Configures the helper to receive terminal reports as VT bytes.
 #[cfg(windows)]
 fn enable_vt_input() {
-    use windows::Win32::System::Console::{
-        CONSOLE_MODE, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
-        ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
-        SetConsoleMode,
-    };
-
     // SAFETY: asks for this process's own standard input handle.
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) }.expect("std input handle");
     let mut mode = CONSOLE_MODE::default();
@@ -143,14 +161,11 @@ fn enable_vt_input() {
     unsafe { SetConsoleMode(handle, vt_mode) }.expect("enable VT input");
 }
 
-/// Waits for a key record, then removes every record queued before readiness.
+/// Establishes a post-input resize boundary so an attach event cannot satisfy
+/// the test's later resize.
 #[cfg(windows)]
 fn wait_for_key_then_flush_input() {
-    use windows::Win32::System::Console::{
-        FlushConsoleInputBuffer, GetStdHandle, INPUT_RECORD, KEY_EVENT, ReadConsoleInputW,
-        STD_INPUT_HANDLE,
-    };
-
+    enable_window_input();
     // SAFETY: asks for this process's own standard input handle.
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) }.expect("std input handle");
     loop {
@@ -166,18 +181,15 @@ fn wait_for_key_then_flush_input() {
             break;
         }
     }
+    // Remove attach-time resize events before signaling readiness. Subsequent
+    // events are retained because window input is already enabled.
     // SAFETY: `handle` remains this process's live console input handle.
     unsafe { FlushConsoleInputBuffer(handle) }.expect("flush console input");
 }
 
-/// Blocks until the app's console reports a resize.
+/// Enables resize records before publishing the readiness signal.
 #[cfg(windows)]
-fn wait_for_resize() {
-    use windows::Win32::System::Console::{
-        CONSOLE_MODE, ENABLE_WINDOW_INPUT, GetConsoleMode, GetStdHandle, INPUT_RECORD,
-        ReadConsoleInputW, STD_INPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
-    };
-
+fn enable_window_input() {
     // SAFETY: asks for this process's own standard input handle.
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) }.expect("std input handle");
     let mut mode = CONSOLE_MODE::default();
@@ -187,7 +199,13 @@ fn wait_for_resize() {
     // every existing bit and adds resize notifications.
     unsafe { SetConsoleMode(handle, CONSOLE_MODE(mode.0 | ENABLE_WINDOW_INPUT.0)) }
         .expect("enable window input");
+}
 
+/// Blocks until the app's console reports a resize after readiness.
+#[cfg(windows)]
+fn wait_for_resize() {
+    // SAFETY: asks for this process's own standard input handle.
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) }.expect("std input handle");
     loop {
         let mut records = [INPUT_RECORD::default()];
         let mut read = 0_u32;
@@ -210,10 +228,6 @@ fn wait_for_resize() {
 /// it.
 #[cfg(windows)]
 fn print_console_size() {
-    use windows::Win32::System::Console::{
-        CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
-    };
-
     // SAFETY: asks for this process's own standard output handle, which the
     // call either returns or reports a failure for.
     let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.expect("std output handle");

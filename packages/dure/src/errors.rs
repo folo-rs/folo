@@ -184,10 +184,10 @@ pub(crate) struct SupervisorLostError;
 #[display("Failed to restore the console; run `cmd /c cls` or open a new terminal")]
 pub(crate) struct ConsoleRestoreError;
 
-/// The session was started by a different build of `dure`.
+/// The session speaks an incompatible protocol version.
 #[ohno::error]
 #[display(
-    "Session {id} was started by a different version of dure and cannot be resumed by this one; \
+    "Session {id} uses an incompatible dure protocol and cannot be resumed by this version; \
      use `dure kill {id}` to end it"
 )]
 pub(crate) struct ProtocolMismatchError {

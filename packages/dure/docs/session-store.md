@@ -11,7 +11,7 @@ those terms — claim an id, publish a session, read one, list them, remove one
 that still belongs to a named owner — and nothing above it needs to know that
 the real implementation is a directory of files.
 
-Two invariants belong to the store rather than to any one implementation:
+The following invariants belong to the store rather than any one implementation:
 
 * A session it hands back is the session the caller asked for. A record whose
   own id disagrees with the key it was found under is not surfaced.
@@ -21,8 +21,8 @@ Two invariants belong to the store rather than to any one implementation:
 
 ## Claimed and published
 
-A session id passes through two states, and the store keeps them in one place so
-they cannot disagree.
+A session id starts as a claim before becoming a published session. The store
+keeps that state in one place so competing descriptions cannot disagree.
 
 A **claim** is what a supervisor takes before it has everything a session record
 needs. It names the process that made it, which is what lets a claim left behind
@@ -38,6 +38,7 @@ Per-session files under the PAL store root — by default the per-user
 supervisor process creation time, pipe name, launch directory, command, and
 session start time. One file holds either a claim or a published session, and
 either way it names the process it belongs to.
+Supervisor pids, like session ids, must be positive in records and claims.
 
 Liveness and termination open the pid once and verify the process creation time
 on that handle, then confirm that it is still running. A missing, exited, or

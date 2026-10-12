@@ -2,7 +2,7 @@
 name = "dure"
 description = "Detachable Windows console sessions that outlive the terminal"
 publish = true
-version = "0.2.15"
+version = "0.2.16"
 
 authors.workspace = true
 edition.workspace = true
@@ -17,6 +17,7 @@ rust-version.workspace = true
 # keeps the rendered page the tool's own introduction rather than an empty Linux build, where
 # `#![cfg(windows)]` removes the crate.
 [package.metadata.docs.rs]
+all-features = true
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 
@@ -103,13 +104,21 @@ tempfile = { workspace = true }
 # private feature. Declaring the requirement here is what makes that visible: a `cargo test -p
 # dure` without the feature skips those targets and says so, rather than building empty ones and
 # reporting success for coverage it never compiled. The package's own validation
-# (`just package=dure validate-local`) enables all features, so both suites always run there.
+# (`just package=dure validate-local`) enables all features, so these suites run there.
 [[test]]
 name = "windows"
 required-features = ["private-test-util"]
 
 [[test]]
 name = "cli"
+required-features = ["private-test-util"]
+
+[[test]]
+name = "native_platform"
+required-features = ["private-test-util"]
+
+[[test]]
+name = "native_store"
 required-features = ["private-test-util"]
 
 [lints]

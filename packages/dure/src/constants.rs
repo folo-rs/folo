@@ -69,6 +69,12 @@ pub(crate) const MAX_OUTPUT_CHUNK_BYTES: NonZero<usize> =
 /// Ref: docs/transport.md.
 pub(crate) const MAX_CLIENT_BACKLOG_BYTES: usize = 4 * 1024 * 1024;
 
+/// Shared input/output console burst, larger than ordinary keys or VT sequences.
+///
+/// Both directions use the same arbitrary buffer size so neither imposes a
+/// smaller burst than the other. This is not a protocol bound.
+pub(crate) const CONSOLE_READ_BUF: usize = 4096;
+
 /// Subdirectory under the per-user `LocalAppData` known folder that holds
 /// session records.
 ///

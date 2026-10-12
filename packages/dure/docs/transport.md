@@ -10,10 +10,10 @@ window-size changes, attach and displacement outcomes, and app exit status.
 
 The framed protocol carries a version. A supervisor stamps the version it
 speaks into its session record, and a client refuses a session whose version
-differs rather than connecting and negotiating. Two `dure` builds therefore
-never have to agree on a wire format between them: an upgrade leaves the
-sessions started by the previous build resumable only by that build, and the
-mismatch is reported instead of appearing as a decode failure mid-relay.
+differs rather than connecting and negotiating. Builds with matching protocol
+versions can resume each other's sessions. Message-layout or message-meaning
+changes require a protocol-version increment, so incompatibility is reported
+before it can appear as a decode failure mid-relay.
 Records written before the version existed are assigned an incompatible
 sentinel version, because they carry no evidence that their wire format matches.
 
@@ -37,8 +37,9 @@ second client can connect while the first is still relaying.
 An accept therefore does two things, and the order matters. The accepted
 instance becomes a connection first, because a client already owns the other end
 and may have sent its attach; only then is the replacement listener created. A
-failure creating that replacement closes the connection rather than leaving it
-in the listener slot, so a client is never left waiting on a pipe nobody serves.
+failure creating that replacement retires both the connection and the listener,
+releasing all server-side owners of the accepted endpoint so the peer is not
+left waiting on a pipe nobody serves.
 
 ## Handle ownership and cancellation
 
@@ -59,6 +60,19 @@ operation either becomes pending in time to be cancelled or is refused and
 reported as a disconnect. Refusing is only possible where issuing an operation
 does not block, which is why it covers the overlapped transport handles and not
 the synchronous pseudoconsole ones.
+
+Issuance catches a panic inside the cancellation guard and propagates it only
+after unlocking. The cancellation flag is unchanged, so cleanup can still cancel
+other outstanding operations.
+
+Each connection keeps its encoding buffer under the whole-frame write lock.
+Encoding reuses capacity grown by earlier sends, and the buffer remains borrowed
+until the write completes or cancellation has completed.
+
+Frame accumulation is separate from native reads. It requires positive progress,
+checks the length before allocating the body and rejects overreported transfers.
+The Windows reader retains its event, operation and buffer until completion or
+completed cancellation, using one deadline across all frame components.
 
 Because these are stack-allocated overlapped structures paired with an event
 handle that is closed on return, no path may abandon an operation the kernel

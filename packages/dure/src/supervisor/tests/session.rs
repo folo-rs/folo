@@ -222,7 +222,7 @@ fn teardown_ends_the_job_before_it_closes_the_console() {
         let store = MemorySessionStore::new();
         let exit = Arc::new((Mutex::new(true), Condvar::new()));
         let teardown = Arc::new(Mutex::new(Vec::new()));
-        pty.on_close({
+        pty.on_finish({
             let teardown = Arc::clone(&teardown);
             move |_| teardown.lock().expect("teardown log").push(Torn::Console)
         });
@@ -257,9 +257,7 @@ fn teardown_ends_the_job_before_it_closes_the_console() {
         phase_reporter.report("waiting for supervisor shutdown");
         assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
 
-        // The same order rollback uses, for the same reason: descendants stay
-        // attached to the console until their job is gone, and closing a
-        // console waits for whoever is attached.
+        // Observe console finishing, not just the later endpoint release.
         // Ref: docs/supervisor.md, "Teardown".
         assert_eq!(*teardown.lock().unwrap(), [Torn::Job, Torn::Console]);
     });

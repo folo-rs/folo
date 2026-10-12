@@ -38,7 +38,8 @@ use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{ConnId, ListenerId};
 use crate::pal::raw_handle::PipeHandle;
 use crate::pal::transport::Transport;
-use crate::protocol::{Message, decode_body, encode, payload_len_ok};
+use crate::pal::transport::framing::read_frame;
+use crate::protocol::{Message, encode_into};
 
 struct PipeTable {
     listeners: HashMap<ListenerId, Listener>,
@@ -54,9 +55,10 @@ struct Listener {
 ///
 /// `write` serializes complete frames so output, displacement, and app-exit
 /// cannot interleave length prefixes on this byte-mode pipe.
+#[derive(Clone)]
 struct Conn {
     handle: Arc<PipeHandle>,
-    write: Arc<Mutex<()>>,
+    write: Arc<Mutex<Vec<u8>>>,
 }
 
 /// Tracks one total timeout across a multi-step overlapped operation.
@@ -357,73 +359,63 @@ fn connect_instance(pipe: &PipeHandle, deadline: Option<Deadline>) -> Result<(),
     completed.map_err(|error| PalError::with_source(PalErrorKind::Disconnected, error))
 }
 
-fn read_exact_until(
+/// Completes or cancels one native read before releasing its borrowed storage.
+fn read_some_until(
     pipe: &PipeHandle,
     buf: &mut [u8],
     deadline: Option<Deadline>,
-) -> Result<(), PalError> {
+) -> Result<usize, PalError> {
+    if let Some(deadline) = deadline {
+        _ = deadline.wait_millis()?;
+    }
     let handle = pipe.as_handle();
-    let mut filled = 0_usize;
-    while filled < buf.len() {
-        let event = create_event()?;
-        let mut overlapped = OVERLAPPED {
-            hEvent: event,
-            ..Default::default()
+    let event = create_event()?;
+    let mut overlapped = OVERLAPPED {
+        hEvent: event,
+        ..Default::default()
+    };
+    let mut transferred = 0_u32;
+    // SAFETY: `handle` is a connected overlapped pipe. `buf` is exclusive
+    // for the duration of this call.
+    let Some(ok) = pipe.issue(|handle| unsafe {
+        ReadFile(
+            handle,
+            Some(buf),
+            Some(&raw mut transferred),
+            Some(&raw mut overlapped),
+        )
+    }) else {
+        close(event);
+        return Err(PalError::new(PalErrorKind::Disconnected));
+    };
+    if ok.is_err() {
+        let err = {
+            // SAFETY: immediately after the failed ReadFile.
+            unsafe { GetLastError() }
         };
-        let mut transferred = 0_u32;
-        let dest = buf
-            .get_mut(filled..)
-            .ok_or_else(|| PalError::new(PalErrorKind::Other))?;
-        // SAFETY: `handle` is a connected overlapped pipe. `dest` is exclusive
-        // for the duration of this call.
-        let Some(ok) = pipe.issue(|handle| unsafe {
-            ReadFile(
-                handle,
-                Some(dest),
-                Some(&raw mut transferred),
-                Some(&raw mut overlapped),
-            )
-        }) else {
+        if err != ERROR_IO_PENDING {
             close(event);
-            return Err(PalError::new(PalErrorKind::Disconnected));
-        };
-        if ok.is_err() {
+            return Err(PalError::new(io_error_kind(err)));
+        }
+        if let Err(error) = wait_pending(handle, event, &overlapped, deadline) {
+            close(event);
+            return Err(error);
+        }
+        // SAFETY: the wait succeeded; `overlapped` still addresses this read. Waiting rather
+        // than polling means a result that is somehow not in yet is awaited, not abandoned.
+        if unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, true) }
+            .is_err()
+        {
             let err = {
-                // SAFETY: immediately after the failed ReadFile.
+                // SAFETY: immediately after the failed GetOverlappedResult.
                 unsafe { GetLastError() }
             };
-            if err != ERROR_IO_PENDING {
-                close(event);
-                return Err(PalError::new(io_error_kind(err)));
-            }
-            if let Err(error) = wait_pending(handle, event, &overlapped, deadline) {
-                close(event);
-                return Err(error);
-            }
-            // SAFETY: the wait succeeded; `overlapped` still addresses this read. Waiting rather
-            // than polling means a result that is somehow not in yet is awaited, not abandoned.
-            if unsafe {
-                GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, true)
-            }
-            .is_err()
-            {
-                let err = {
-                    // SAFETY: immediately after the failed GetOverlappedResult.
-                    unsafe { GetLastError() }
-                };
-                close(event);
-                return Err(PalError::new(io_error_kind(err)));
-            }
+            close(event);
+            return Err(PalError::new(io_error_kind(err)));
         }
-        close(event);
-        if transferred == 0 {
-            return Err(PalError::new(PalErrorKind::Disconnected));
-        }
-        filled = filled
-            .checked_add(transferred as usize)
-            .ok_or_else(|| PalError::new(PalErrorKind::Other))?;
     }
-    Ok(())
+    close(event);
+    Ok(transferred as usize)
 }
 
 fn write_all(pipe: &PipeHandle, mut buf: &[u8]) -> Result<(), PalError> {
@@ -498,17 +490,29 @@ fn conn_handle(conn: ConnId) -> Result<Arc<PipeHandle>, PalError> {
         .ok_or_else(|| PalError::new(PalErrorKind::NotFound))
 }
 
-fn conn_write(conn: ConnId) -> Result<(Arc<PipeHandle>, Arc<Mutex<()>>), PalError> {
+fn conn_write(conn: ConnId) -> Result<Conn, PalError> {
     table()
         .lock()
         .expect("the pipe table is only inserted into and looked up, never held across a panic")
         .conns
         .get(&conn)
-        .map(|conn| (Arc::clone(&conn.handle), Arc::clone(&conn.write)))
+        .cloned()
         .ok_or_else(|| PalError::new(PalErrorKind::NotFound))
 }
 
+/// Transfers the accepted pipe and replenishes the listener for the next client.
+///
+/// A failed replacement retires both owners of the unserved endpoint.
 fn accept_connection(listener: ListenerId, timeout: Option<Duration>) -> Result<ConnId, PalError> {
+    accept_with_replacement(listener, timeout, |name| create_instance(name, false))
+}
+
+/// Keeps replacement failure injectable without changing native pipe behavior.
+pub(crate) fn accept_with_replacement(
+    listener: ListenerId,
+    timeout: Option<Duration>,
+    replace: impl FnOnce(&[u16]) -> Result<HANDLE, PalError>,
+) -> Result<ConnId, PalError> {
     let deadline = timeout.map(Deadline::after);
     let (pending, name) = {
         let table = table().lock().expect(
@@ -539,18 +543,26 @@ fn accept_connection(listener: ListenerId, timeout: Option<Duration>) -> Result<
         id,
         Conn {
             handle: pending,
-            write: Arc::new(Mutex::new(())),
+            write: Arc::new(Mutex::new(Vec::new())),
         },
     );
     // After each accept, create the next server instance so another client
     // can connect while this connection is still live (steal).
-    let next = match create_instance(&name, false) {
+    let next = match replace(&name) {
         Ok(next) => next,
         Err(error) => {
             // Nothing will serve this connection, so it is closed rather than
             // left for a client to wait on: a dropped pipe tells that client to
             // try again, where silence would hold it until teardown.
-            table.conns.remove(&id);
+            let conn = table.conns.remove(&id);
+            let listener = table.listeners.remove(&listener);
+            drop(table);
+            if let Some(conn) = conn {
+                conn.handle.cancel();
+            }
+            // Cancellation is not peer closure: release the listener's second
+            // reference as well before reporting failure.
+            drop(listener);
             return Err(error);
         }
     };
@@ -563,25 +575,11 @@ fn accept_connection(listener: ListenerId, timeout: Option<Duration>) -> Result<
     Ok(id)
 }
 
+/// Receives a validated frame with one deadline spanning every component read.
 fn recv_message(conn: ConnId, timeout: Option<Duration>) -> Result<Message, PalError> {
     let deadline = timeout.map(Deadline::after);
     let handle = conn_handle(conn)?;
-    let mut header = [0_u8; 4];
-    read_exact_until(&handle, &mut header, deadline)?;
-    let len = u32::from_le_bytes(header);
-    if !payload_len_ok(len) {
-        return Err(PalError::new(PalErrorKind::Other));
-    }
-    // The kind byte is read on its own so the body arrives in an allocation
-    // the message can simply take. Ref: docs/transport.md.
-    let mut kind = [0_u8; 1];
-    read_exact_until(&handle, &mut kind, deadline)?;
-    let body_len = (len as usize)
-        .checked_sub(kind.len())
-        .ok_or_else(|| PalError::new(PalErrorKind::Other))?;
-    let mut body = vec![0_u8; body_len];
-    read_exact_until(&handle, &mut body, deadline)?;
-    decode_body(kind[0], body).map_err(|_error| PalError::new(PalErrorKind::Other))
+    read_frame(|buf| read_some_until(&handle, buf, deadline))
 }
 
 /// Real Windows named-pipe transport.
@@ -693,7 +691,7 @@ impl Transport for BuildTargetTransport {
                     id,
                     Conn {
                         handle: PipeHandle::new(handle),
-                        write: Arc::new(Mutex::new(())),
+                        write: Arc::new(Mutex::new(Vec::new())),
                     },
                 );
             return Ok(id);
@@ -701,11 +699,11 @@ impl Transport for BuildTargetTransport {
     }
 
     fn send(&self, conn: ConnId, message: &Message) -> Result<(), PalError> {
-        let frame = encode(message);
-        let (handle, write) = conn_write(conn)?;
-        let _guard = write.lock().expect(
-            "a pipe write holds the lock only across the write itself, which does not panic",
+        let Conn { handle, write } = conn_write(conn)?;
+        let mut frame = write.lock().expect(
+            "frame encoding and native writes do not invoke callbacks while holding the buffer",
         );
+        encode_into(message, &mut frame);
         write_all(&handle, &frame)
     }
 

@@ -22,10 +22,9 @@ use crate::pal::pseudoconsole::WindowSize;
 /// The wire format this build speaks.
 ///
 /// A supervisor outlives the terminal that started it, so a `dure` upgraded in
-/// the meantime can meet a supervisor from the previous build. Cross-build
-/// resume is not supported: the message layouts below are free to change, and
-/// pretending otherwise would turn a layout change into a corrupt frame rather
-/// than a clear refusal.
+/// the meantime can meet a supervisor from another build. Matching protocol
+/// versions permit resume across builds; different versions are refused before
+/// incompatible frames are exchanged.
 ///
 /// A supervisor records the version it speaks when it publishes its session, so
 /// a client can refuse before it connects and say why. Bump this whenever a
@@ -150,16 +149,25 @@ const KIND_STARTUP_COMMIT: u8 = 10;
 
 /// Encodes a message as a length-prefixed frame.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn encode(message: &Message) -> Vec<u8> {
-    // The frame is built in its final allocation: the length is written last,
-    // over the room reserved for it here, so the body is copied once.
-    let mut frame = vec![0_u8; size_of::<u32>()];
-    let payload = &mut frame;
+    let mut frame = Vec::new();
+    encode_into(message, &mut frame);
+    frame
+}
+
+/// Encodes a frame while retaining capacity for the connection's next send.
+pub(crate) fn encode_into(message: &Message, frame: &mut Vec<u8>) {
+    // Reserve the prefix first and fill it last, avoiding a separate payload
+    // copy. Capacity grows with actual traffic rather than the maximum frame.
+    frame.clear();
+    frame.resize(size_of::<u32>(), 0);
+    let payload = &mut *frame;
     match message {
         Message::Attach { size } => {
             payload.push(KIND_ATTACH);
-            payload.extend_from_slice(&size.cols.get().to_le_bytes());
-            payload.extend_from_slice(&size.rows.get().to_le_bytes());
+            payload.extend_from_slice(&size.cols().get().to_le_bytes());
+            payload.extend_from_slice(&size.rows().get().to_le_bytes());
         }
         Message::Input(data) => {
             payload.push(KIND_INPUT);
@@ -167,8 +175,8 @@ pub(crate) fn encode(message: &Message) -> Vec<u8> {
         }
         Message::Resize { size } => {
             payload.push(KIND_RESIZE);
-            payload.extend_from_slice(&size.cols.get().to_le_bytes());
-            payload.extend_from_slice(&size.rows.get().to_le_bytes());
+            payload.extend_from_slice(&size.cols().get().to_le_bytes());
+            payload.extend_from_slice(&size.rows().get().to_le_bytes());
         }
         Message::Attached { session_id } => {
             payload.push(KIND_ATTACHED);
@@ -223,7 +231,6 @@ pub(crate) fn encode(message: &Message) -> Vec<u8> {
         .split_at_mut_checked(size_of::<u32>())
         .expect("the length prefix was reserved above");
     prefix.copy_from_slice(&len.to_le_bytes());
-    frame
 }
 
 /// Failure while decoding a frame.
@@ -352,6 +359,27 @@ fn decode_i32(rest: &[u8]) -> Result<i32, DecodeError> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoding_reuses_storage_without_changing_the_wire() {
+        let mut frame = Vec::new();
+        encode_into(
+            &Message::Output(b"longer initial output".to_vec()),
+            &mut frame,
+        );
+        let capacity = frame.capacity();
+        let allocation = frame.as_ptr();
+        encode_into(&Message::Input(b"x".to_vec()), &mut frame);
+        assert_eq!(frame, [2, 0, 0, 0, 2, b'x']);
+        assert_eq!(frame.capacity(), capacity);
+        assert_eq!(frame.as_ptr(), allocation);
+        encode_into(&Message::Displaced, &mut frame);
+        assert_eq!(
+            decode_payload(frame.get(4..).unwrap()).unwrap(),
+            Message::Displaced
+        );
+        assert_eq!(frame.capacity(), capacity);
+    }
     use crate::pal::pseudoconsole::MAX_DIMENSION;
 
     /// Decodes a whole payload, kind byte and all.

@@ -8,6 +8,8 @@
 //! every package in the workspace tolerate having no tests.
 
 #![cfg(not(windows))]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 #[test]
 fn there_is_nothing_to_supervise_here() {}

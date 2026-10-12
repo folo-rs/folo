@@ -2,6 +2,7 @@
 
 mod abstractions;
 mod facade;
+mod framing;
 // A fake used only to drive unit tests, so it is test infrastructure rather
 // than product code and carries no coverage expectations of its own.
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -19,5 +20,7 @@ pub(crate) use facade::*;
 #[cfg(test)]
 pub(crate) use memory::*;
 // Exposed so a test can ask who the session pipes are restricted to.
+#[cfg(any(test, feature = "private-test-util"))]
+pub(crate) use windows::accept_with_replacement;
 #[cfg(any(test, feature = "private-test-util"))]
 pub(crate) use windows::current_user_sid_string;

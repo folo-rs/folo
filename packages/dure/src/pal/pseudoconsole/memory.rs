@@ -1,5 +1,6 @@
 //! In-memory pseudoconsole for unit tests.
 
+use std::any::type_name;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,6 +36,7 @@ struct Inner {
     ptys: Mutex<HashMap<PtyId, PtyState>>,
     cond: Condvar,
     on_close: Mutex<Option<CloseObserver>>,
+    on_finish: Mutex<Option<CloseObserver>>,
 }
 
 /// Byte-pump stand-in for a pseudoconsole.
@@ -45,7 +47,7 @@ pub(crate) struct MemoryPseudoconsole {
 
 impl fmt::Debug for MemoryPseudoconsole {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MemoryPseudoconsole").finish()
+        f.debug_struct(type_name::<Self>()).finish()
     }
 }
 
@@ -57,13 +59,29 @@ impl MemoryPseudoconsole {
                 ptys: Mutex::new(HashMap::new()),
                 cond: Condvar::new(),
                 on_close: Mutex::new(None),
+                on_finish: Mutex::new(None),
             }),
         }
     }
 
     /// Report every close to `observer`, in the order they happen.
     pub(crate) fn on_close(&self, observer: impl Fn(PtyId) + Send + Sync + 'static) {
-        *self.inner.on_close.lock().expect("close observer lock") = Some(Arc::new(observer));
+        *self
+            .inner
+            .on_close
+            .lock()
+            .expect("observers are copied under the lock and invoked only after unlocking") =
+            Some(Arc::new(observer));
+    }
+
+    /// Reports console shutdown separately from the later endpoint release.
+    pub(crate) fn on_finish(&self, observer: impl Fn(PtyId) + Send + Sync + 'static) {
+        *self
+            .inner
+            .on_finish
+            .lock()
+            .expect("observers are copied under the lock and invoked only after unlocking") =
+            Some(Arc::new(observer));
     }
 
     /// Push output as if the app wrote to its console.
@@ -75,8 +93,11 @@ impl MemoryPseudoconsole {
     /// scenario it names, so the mistake is reported here rather than as an
     /// unexplained absence of output later.
     pub(crate) fn push_output(&self, pty: PtyId, data: &[u8]) {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
-        let state = ptys.get_mut(&pty).expect("pushing output into a live pty");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
+        let Some(state) = ptys.get_mut(&pty) else {
+            drop(ptys);
+            panic!("pushing output into a live pty");
+        };
         state.output.extend(data.iter().copied());
         self.inner.cond.notify_all();
     }
@@ -90,10 +111,11 @@ impl MemoryPseudoconsole {
     ///
     /// Panics when `pty` is not live, for the same reason as `push_output`.
     pub(crate) fn withhold_output(&self, pty: PtyId) {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
-        let state = ptys
-            .get_mut(&pty)
-            .expect("withholding output from a live pty");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
+        let Some(state) = ptys.get_mut(&pty) else {
+            drop(ptys);
+            panic!("withholding output from a live pty");
+        };
         state.withheld = true;
     }
 
@@ -103,8 +125,11 @@ impl MemoryPseudoconsole {
     ///
     /// Panics when `pty` is not live, for the same reason as `push_output`.
     pub(crate) fn fail_output(&self, pty: PtyId) {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
-        let state = ptys.get_mut(&pty).expect("failing output from a live pty");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
+        let Some(state) = ptys.get_mut(&pty) else {
+            drop(ptys);
+            panic!("failing output from a live pty");
+        };
         state.read_failed = true;
         self.inner.cond.notify_all();
     }
@@ -116,14 +141,17 @@ impl MemoryPseudoconsole {
     /// Panics when `pty` is not live: an empty result would otherwise be
     /// indistinguishable from the supervisor having written nothing.
     pub(crate) fn take_input(&self, pty: PtyId) -> Vec<u8> {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
-        let state = ptys.get_mut(&pty).expect("taking input from a live pty");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
+        let Some(state) = ptys.get_mut(&pty) else {
+            drop(ptys);
+            panic!("taking input from a live pty");
+        };
         state.input.drain(..).collect()
     }
 
     /// Current size last applied to this pty.
     pub(crate) fn size(&self, pty: PtyId) -> Option<WindowSize> {
-        let ptys = self.inner.ptys.lock().expect("pty map lock");
+        let ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
         ptys.get(&pty).map(|state| state.size)
     }
 
@@ -137,11 +165,13 @@ impl MemoryPseudoconsole {
     /// Panics unless exactly one pseudoconsole is live, which means the test
     /// reached this point in a state it did not intend.
     pub(crate) fn only_pty(&self) -> PtyId {
-        let ptys = self.inner.ptys.lock().expect("pty map lock");
+        let ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
         let mut live = ptys.keys();
-        let only = *live.next().expect("exactly one live pty");
-        assert!(live.next().is_none(), "exactly one live pty");
-        only
+        let only = live.next().copied();
+        let more = live.next().is_some();
+        drop(ptys);
+        assert!(!more, "exactly one live pty");
+        only.expect("exactly one live pty")
     }
 }
 
@@ -154,7 +184,7 @@ impl Default for MemoryPseudoconsole {
 impl Pseudoconsole for MemoryPseudoconsole {
     fn create(&self, size: WindowSize) -> Result<PtyId, PalError> {
         let id = PtyId(self.inner.next_id.fetch_add(1, Ordering::Relaxed));
-        self.inner.ptys.lock().expect("pty map lock").insert(
+        self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking").insert(
             id,
             PtyState {
                 size,
@@ -169,7 +199,7 @@ impl Pseudoconsole for MemoryPseudoconsole {
     }
 
     fn resize(&self, pty: PtyId, size: WindowSize) -> Result<(), PalError> {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
         let state = ptys
             .get_mut(&pty)
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
@@ -178,7 +208,7 @@ impl Pseudoconsole for MemoryPseudoconsole {
     }
 
     fn write_input(&self, pty: PtyId, data: &[u8]) -> Result<(), PalError> {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
         let state = ptys
             .get_mut(&pty)
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
@@ -194,7 +224,7 @@ impl Pseudoconsole for MemoryPseudoconsole {
     // wake hangs tests because watchdogs are disabled under cargo-mutants.
     #[cfg_attr(test, mutants::skip)]
     fn read_output(&self, pty: PtyId) -> Result<Option<Vec<u8>>, PalError> {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
         loop {
             let Some(state) = ptys.get_mut(&pty) else {
                 return Err(PalError::new(PalErrorKind::NotFound));
@@ -210,20 +240,30 @@ impl Pseudoconsole for MemoryPseudoconsole {
             if state.closed {
                 return Ok(None);
             }
-            ptys = self.inner.cond.wait(ptys).expect("pty condvar");
+            ptys = self.inner.cond.wait(ptys).expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
         }
     }
 
     fn finish(&self, pty: PtyId) {
-        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
+        let mut ptys = self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking");
         if let Some(state) = ptys.get_mut(&pty) {
             state.closed = true;
         }
         self.inner.cond.notify_all();
+        drop(ptys);
+        let observer = self
+            .inner
+            .on_finish
+            .lock()
+            .expect("observers are copied under the lock and invoked only after unlocking")
+            .clone();
+        if let Some(observer) = observer {
+            observer(pty);
+        }
     }
 
     fn close(&self, pty: PtyId) {
-        self.inner.ptys.lock().expect("pty map lock").remove(&pty);
+        self.inner.ptys.lock().expect("pty bookkeeping has no callbacks; rejected fixture preconditions panic after unlocking").remove(&pty);
         self.inner.cond.notify_all();
         // Outside every lock this type holds: an observer is user code as far
         // as this type is concerned. Ref: docs/callback-safety.md.
@@ -231,7 +271,7 @@ impl Pseudoconsole for MemoryPseudoconsole {
             .inner
             .on_close
             .lock()
-            .expect("close observer lock")
+            .expect("observers are copied under the lock and invoked only after unlocking")
             .clone();
         if let Some(observer) = observer {
             observer(pty);
@@ -243,6 +283,28 @@ impl Pseudoconsole for MemoryPseudoconsole {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_fixture_operations_leave_the_map_usable() {
+        let host = MemoryPseudoconsole::new();
+        let missing = PtyId(404);
+        testing::assert_panics(|| host.only_pty());
+        testing::assert_panics(|| host.push_output(missing, b"out"));
+        testing::assert_panics(|| host.withhold_output(missing));
+        testing::assert_panics(|| host.fail_output(missing));
+        testing::assert_panics(|| host.take_input(missing));
+        let size = WindowSize::new(80, 24).unwrap();
+        let pty = host.create(size).unwrap();
+        let extra = host.create(size).unwrap();
+        testing::assert_panics(|| host.only_pty());
+        host.close(extra);
+        assert_eq!(host.only_pty(), pty);
+        host.push_output(pty, b"out");
+        host.finish(pty);
+        assert_eq!(host.read_output(pty).unwrap(), Some(b"out".to_vec()));
+        assert_eq!(host.read_output(pty).unwrap(), None);
+        host.close(pty);
+    }
 
     #[test]
     fn pumps_bytes_and_tracks_size() {

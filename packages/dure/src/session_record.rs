@@ -1,6 +1,7 @@
 //! The session metadata the whole crate works with.
 
 use std::fmt;
+use std::num::NonZero;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -17,9 +18,20 @@ use crate::{AppCommand, SessionId};
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct ProcessIdentity {
     /// Operating-system process id of the supervisor.
-    pub pid: u32,
+    pub(crate) pid: NonZero<u32>,
     /// Process creation time as a Windows `FILETIME` integer, or 0 on tests.
-    pub creation_time: u64,
+    pub(crate) creation_time: u64,
+}
+
+impl ProcessIdentity {
+    /// Builds an arbitrary positive identity for equality-based test scenarios.
+    #[cfg(test)]
+    pub(crate) fn for_test(pid: u32) -> Self {
+        Self {
+            pid: NonZero::new(pid).unwrap(),
+            creation_time: 0,
+        }
+    }
 }
 
 /// Description of one live session.
@@ -36,29 +48,29 @@ pub(crate) struct ProcessIdentity {
 #[serde(try_from = "StoredRecord", into = "StoredRecord")]
 pub(crate) struct SessionRecord {
     /// Session id, unique among live sessions for this user.
-    pub id: SessionId,
+    pub(crate) id: SessionId,
     /// The supervisor process that owns this session.
-    pub supervisor: ProcessIdentity,
+    pub(crate) supervisor: ProcessIdentity,
     /// Named-pipe path the client connects to.
-    pub pipe_name: String,
+    pub(crate) pipe_name: String,
     /// Canonical absolute launch directory from `dure run`.
-    pub launch_directory: PathBuf,
+    pub(crate) launch_directory: PathBuf,
     /// Command executed directly, not through a shell.
-    pub command: AppCommand,
+    pub(crate) command: AppCommand,
     /// Unix time in milliseconds when the session was published.
-    pub started_at_unix_ms: u64,
+    pub(crate) started_at_unix_ms: u64,
     /// Whether the supervisor currently has a client connection.
     ///
     /// Advisory. It is published after ownership has already transferred and a
     /// failed write is tolerated, so it is what `list` shows rather than
     /// something any decision is made from.
-    pub attached: bool,
+    pub(crate) attached: bool,
     /// The wire format this session's supervisor speaks.
     ///
-    /// Recorded so a client from a different build can refuse the session and
-    /// say why, rather than connecting and failing on a frame it cannot read.
+    /// Recorded so a client speaking an incompatible protocol can refuse before
+    /// connecting and failing on a frame it cannot read.
     /// Ref: docs/transport.md.
-    pub protocol_version: u32,
+    pub(crate) protocol_version: u32,
 }
 
 /// The shape a session record has on disk.
@@ -96,7 +108,7 @@ pub(crate) struct MalformedRecord;
 
 impl fmt::Display for MalformedRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a session record names a positive session id")
+        f.write_str("a session record names a positive session id and supervisor pid")
     }
 }
 
@@ -110,7 +122,7 @@ impl TryFrom<StoredRecord> for SessionRecord {
             // one a session could have had.
             id: SessionId::from_u32(stored.id).ok_or(MalformedRecord)?,
             supervisor: ProcessIdentity {
-                pid: stored.supervisor_pid,
+                pid: NonZero::new(stored.supervisor_pid).ok_or(MalformedRecord)?,
                 creation_time: stored.supervisor_creation_time,
             },
             pipe_name: stored.pipe_name,
@@ -127,7 +139,7 @@ impl From<SessionRecord> for StoredRecord {
     fn from(record: SessionRecord) -> Self {
         Self {
             id: record.id.get(),
-            supervisor_pid: record.supervisor.pid,
+            supervisor_pid: record.supervisor.pid.get(),
             supervisor_creation_time: record.supervisor.creation_time,
             pipe_name: record.pipe_name,
             launch_directory: record.launch_directory,
@@ -135,18 +147,6 @@ impl From<SessionRecord> for StoredRecord {
             started_at_unix_ms: record.started_at_unix_ms,
             attached: record.attached,
             protocol_version: record.protocol_version,
-        }
-    }
-}
-
-impl ProcessIdentity {
-    /// Identity of an arbitrary process, for tests that only need identities
-    /// that compare equal or unequal to each other.
-    #[cfg(test)]
-    pub(crate) fn for_test(pid: u32) -> Self {
-        Self {
-            pid,
-            creation_time: 0,
         }
     }
 }
@@ -161,7 +161,7 @@ mod tests {
         SessionRecord {
             id: SessionId::MIN,
             supervisor: ProcessIdentity {
-                pid: 42,
+                pid: NonZero::new(42).unwrap(),
                 creation_time: 99,
             },
             pipe_name: r"\\.\pipe\dure-abc".to_string(),
@@ -179,6 +179,14 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         let parsed: SessionRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, record);
+    }
+
+    #[test]
+    fn a_zero_supervisor_pid_is_rejected_in_records_and_reservations() {
+        let mut stored = serde_json::to_value(sample()).unwrap();
+        *stored.get_mut("supervisor_pid").unwrap() = 0.into();
+        serde_json::from_value::<SessionRecord>(stored).unwrap_err();
+        serde_json::from_str::<ProcessIdentity>(r#"{"pid":0,"creation_time":1}"#).unwrap_err();
     }
 
     #[test]
