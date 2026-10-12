@@ -1,4 +1,8 @@
 //! Helpers for Windows integration tests. Not part of the product.
+//!
+//! A Windows security identifier (SID) names an account. Its discretionary
+//! access control list (DACL) specifies permissions. Security Descriptor
+//! Definition Language (SDDL) represents those descriptors as text.
 
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
@@ -102,6 +106,7 @@ pub fn dacl_sddl(object: &str) -> String {
     text
 }
 
+/// Normalizes expected and observed permission lists through the same formatter.
 fn descriptor_dacl_sddl(descriptor: PSECURITY_DESCRIPTOR) -> String {
     let mut sddl = PWSTR::null();
     // SAFETY: `descriptor` is the descriptor returned above. On success `sddl`
@@ -158,7 +163,19 @@ impl ConsoleProcess {
     /// session provides (docs/job-breakaway.md).
     #[must_use]
     pub fn spawn(exe: &Path, args: &[String], cwd: &Path) -> Self {
-        Self::spawn_in_jobs(exe, args, cwd, &[Breakaway::Permitted])
+        Self::spawn_sized(
+            exe,
+            args,
+            cwd,
+            DEFAULT_PTY_COLS.get(),
+            DEFAULT_PTY_ROWS.get(),
+        )
+    }
+
+    /// Starts a process with a chosen initial terminal geometry.
+    #[must_use]
+    pub fn spawn_sized(exe: &Path, args: &[String], cwd: &Path, cols: u16, rows: u16) -> Self {
+        Self::spawn_in_jobs(exe, args, cwd, &[Breakaway::Permitted], (cols, rows))
     }
 
     /// Spawn `exe` the way a launcher that confines its children would.
@@ -168,15 +185,19 @@ impl ConsoleProcess {
     /// (docs/job-breakaway.md).
     #[must_use]
     pub fn spawn_confined(exe: &Path, args: &[String], cwd: &Path) -> Self {
-        Self::spawn_in_jobs(exe, args, cwd, &[Breakaway::Forbidden])
+        Self::spawn_in_jobs(
+            exe,
+            args,
+            cwd,
+            &[Breakaway::Forbidden],
+            (DEFAULT_PTY_COLS.get(), DEFAULT_PTY_ROWS.get()),
+        )
     }
 
     /// Spawn `exe` inside a permissive job that itself sits in a confining one.
     ///
-    /// Breakaway is evaluated against the immediate job only, so `CreateProcessW`
-    /// succeeds here and leaves the supervisor a member of the outer job. This
-    /// models the case `dure run` can only detect after the spawn
-    /// (docs/job-breakaway.md).
+    /// Breakaway leaves the permitting inner job and stops at its restrictive
+    /// parent, leaving the supervisor inside the outer job.
     #[must_use]
     pub fn spawn_confined_by_ancestor(exe: &Path, args: &[String], cwd: &Path) -> Self {
         Self::spawn_in_jobs(
@@ -184,18 +205,26 @@ impl ConsoleProcess {
             args,
             cwd,
             &[Breakaway::Forbidden, Breakaway::Permitted],
+            (DEFAULT_PTY_COLS.get(), DEFAULT_PTY_ROWS.get()),
         )
     }
 
-    fn spawn_in_jobs(exe: &Path, args: &[String], cwd: &Path, jobs: &[Breakaway]) -> Self {
+    /// Owns the job topology and console shared by the harness launch variants.
+    fn spawn_in_jobs(
+        exe: &Path,
+        args: &[String],
+        cwd: &Path,
+        jobs: &[Breakaway],
+        size: (u16, u16),
+    ) -> Self {
         let processes = ProcessesFacade::target();
         let pty_host = PseudoconsoleFacade::target();
         let job = BuildTargetProcesses::create_job_chain(jobs).expect("create test job");
         let pty = pty_host
-            .create(WindowSize {
-                cols: DEFAULT_PTY_COLS,
-                rows: DEFAULT_PTY_ROWS,
-            })
+            .create(
+                WindowSize::new(size.0, size.1)
+                    .expect("the harness geometry fits the Windows console limits"),
+            )
             .expect("create test pseudoconsole");
         let mut argv = Vec::with_capacity(args.len().saturating_add(1));
         argv.push(exe.to_string_lossy().into_owned());
@@ -300,15 +329,13 @@ impl ConsoleProcess {
         status
     }
 
+    /// Idempotent lifetime cleanup for explicit waits and early drops.
     fn shutdown(&mut self) {
         if self.closed {
             return;
         }
-        // Same ordering the supervisor's teardown relies on: the child stays
-        // attached to the pseudoconsole until the job that owns its lifetime is
-        // closed, and closing a pseudoconsole waits for its attached clients. A
-        // drop while the child is still running would otherwise never reach
-        // `close_job`.
+        // Stop the child and its descendants before abandoning their console.
+        // Ref: docs/console.md, "Ending it in two steps".
         ProcessesFacade::target().close_job(self.job);
         self.pty_host.close(self.pty);
         self.closed = true;

@@ -16,9 +16,10 @@ pub(crate) enum DetectOutcome {
     None,
     /// Exactly one live session was launched from the current directory.
     Unique(SessionId),
-    /// Zero or several matches for this directory, so the caller has to ask which
-    /// session to take. The candidates are the live sessions the caller already
-    /// holds, so none are carried here.
+    /// The caller must ask which session to take.
+    ///
+    /// Zero or several sessions match this directory. The candidates are the
+    /// live sessions the caller already holds, so none are carried here.
     NeedsSelection,
 }
 
@@ -127,7 +128,7 @@ mod tests {
         SessionRecord {
             id,
             supervisor: ProcessIdentity {
-                pid: 1,
+                pid: 1_u32.try_into().unwrap(),
                 creation_time: 1,
             },
             pipe_name: format!("pipe-{id}"),

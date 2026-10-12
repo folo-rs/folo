@@ -10,6 +10,8 @@
 // crate is gated here rather than carrying per-item platform stubs, matching
 // `dure` itself (`dure/docs/implementation.md`, "Platform gate").
 #![cfg(windows)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
 
 mod locate;
 mod non_ascii;

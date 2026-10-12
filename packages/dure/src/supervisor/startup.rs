@@ -21,10 +21,9 @@ use crate::{BreakawayDeniedError, SessionId, StartupFailedError, StoreError};
 /// VGA text-mode geometry (`DEFAULT_PTY_COLS` by `DEFAULT_PTY_ROWS`). The first
 /// attach always resizes to the client's real size (design.md, "Terminal
 /// pass-through").
-pub(crate) const DEFAULT_PTY_SIZE: WindowSize = WindowSize {
-    cols: DEFAULT_PTY_COLS,
-    rows: DEFAULT_PTY_ROWS,
-};
+pub(crate) const DEFAULT_PTY_SIZE: WindowSize =
+    WindowSize::new(DEFAULT_PTY_COLS.get(), DEFAULT_PTY_ROWS.get())
+        .expect("the default text-mode geometry fits the Windows console limits");
 /// Resources that must be torn down if initialization fails.
 pub(crate) struct InitGuard<'a, P: Processes, S: SessionStore, T: Transport, C: Pseudoconsole> {
     pub(crate) processes: &'a P,
@@ -51,9 +50,8 @@ impl<P: Processes, S: SessionStore, T: Transport, C: Pseudoconsole> Drop
         if let Some((id, owner)) = self.session {
             _ = self.store.delete_owned_by(id, &owner);
         }
-        // Descendants of the app stay attached to the pseudoconsole until the
-        // job that owns their lifetime is closed, and closing a pseudoconsole
-        // waits for its attached clients.
+        // Stop the app and its descendants before abandoning the console and
+        // its undelivered output. Ref: docs/console.md, "Ending it in two steps".
         if let Some(job) = self.job {
             self.processes.close_job(job);
         }
@@ -63,6 +61,9 @@ impl<P: Processes, S: SessionStore, T: Transport, C: Pseudoconsole> Drop
     }
 }
 
+/// Acquired session resources, still owned by the uncommitted startup guard.
+///
+/// The caller commits only after the startup exchange. Ref: docs/supervisor.md.
 pub(crate) struct Initialized {
     pub(crate) session_id: SessionId,
     pub(crate) identity: ProcessIdentity,
@@ -85,6 +86,10 @@ pub(crate) struct FailedStartup {
     pub(crate) error: AppError,
 }
 
+/// Acquires and publishes a session while retaining rollback ownership.
+///
+/// Returns the resources for the handshake and serving path without committing
+/// them. Ref: docs/supervisor.md, "Startup".
 pub(crate) fn initialize<P, S, T, C>(
     guard: &mut InitGuard<'_, P, S, T, C>,
     processes: &P,

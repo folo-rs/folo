@@ -1,5 +1,6 @@
 //! Facade over pseudoconsole PAL implementations.
 
+use std::any::type_name;
 use std::fmt;
 
 use crate::pal::error::PalError;
@@ -26,9 +27,15 @@ static TARGET: BuildTargetPseudoconsole = BuildTargetPseudoconsole;
 impl fmt::Debug for PseudoconsoleFacade {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Target(_) => f.debug_struct("PseudoconsoleFacade::Target").finish(),
+            Self::Target(_) => f
+                .debug_struct(type_name::<Self>())
+                .field("variant", &"Target")
+                .finish(),
             #[cfg(test)]
-            Self::Memory(_) => f.debug_struct("PseudoconsoleFacade::Memory").finish(),
+            Self::Memory(_) => f
+                .debug_struct(type_name::<Self>())
+                .field("variant", &"Memory")
+                .finish(),
         }
     }
 }

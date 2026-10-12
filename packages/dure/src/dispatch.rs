@@ -21,6 +21,15 @@ pub fn run(input: &Invocation) -> Result<Outcome, AppError> {
 }
 
 pub(crate) fn dispatch(input: &Invocation, pal: &Pal) -> Result<Outcome, AppError> {
+    dispatch_with_clock(input, pal, unix_now_ms)
+}
+
+/// Dispatches against an explicit clock source so routing tests stay in-process.
+fn dispatch_with_clock(
+    input: &Invocation,
+    pal: &Pal,
+    now: impl Fn() -> u64,
+) -> Result<Outcome, AppError> {
     let trace = Trace::new(input.verbose);
     trace!(
         trace,
@@ -46,11 +55,11 @@ pub(crate) fn dispatch(input: &Invocation, pal: &Pal) -> Result<Outcome, AppErro
             &pal.transport,
             &pal.console,
             *id,
-            unix_now_ms(),
+            now(),
             trace,
         ),
         Command::List => {
-            commands::list::execute(&pal.store, &pal.processes, unix_now_ms(), trace)?;
+            commands::list::execute(&pal.store, &pal.processes, now(), trace)?;
             Ok(Outcome::Success)
         }
         Command::Kill { id } => {
@@ -70,7 +79,7 @@ pub(crate) fn dispatch(input: &Invocation, pal: &Pal) -> Result<Outcome, AppErro
             SessionSpec {
                 launch_directory: launch_directory.clone(),
                 command: command.clone(),
-                started_at_unix_ms: unix_now_ms(),
+                started_at_unix_ms: now(),
             },
         ),
     }
@@ -90,6 +99,11 @@ mod tests {
     use crate::protocol::PROTOCOL_VERSION;
     use crate::session_record::{ProcessIdentity, SessionRecord};
     use crate::{AppCommand, SessionId, SessionNotFoundError};
+
+    /// Routes prepared requests with a fixed, irrelevant display timestamp.
+    fn dispatch(input: &Invocation, pal: &Pal) -> Result<Outcome, AppError> {
+        dispatch_with_clock(input, pal, || 0)
+    }
 
     fn pal_with(store: MockSessionStore, processes: MockProcesses) -> Pal {
         Pal {
@@ -114,9 +128,6 @@ mod tests {
     }
 
     #[test]
-    // The dispatcher reads the wall clock for the commands that render an age,
-    // which Miri's isolation refuses. What this test checks is routing.
-    #[cfg_attr(miri, ignore)]
     fn resume_reaches_the_resume_command() {
         let mut store = MockSessionStore::new();
         store.expect_read().returning(|_| Ok(None));
@@ -141,7 +152,7 @@ mod tests {
             Ok(Some(SessionRecord {
                 id,
                 supervisor: ProcessIdentity {
-                    pid: 10,
+                    pid: 10_u32.try_into().unwrap(),
                     creation_time: 100,
                 },
                 pipe_name: "pipe".to_string(),

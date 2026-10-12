@@ -1,8 +1,8 @@
 //! How a session id's state is encoded where it is stored.
 //!
-//! An id passes through two states, and both live in one place so they cannot
-//! disagree: a *claim*, taken before the supervisor has everything a session
-//! needs, and a *published session*. A claim names the process that made it,
+//! An id starts as a *claim*, taken before the supervisor has everything a session
+//! needs, and becomes a *published session*. The store keeps this state in one
+//! place so competing descriptions cannot disagree. A claim names the process that made it,
 //! which is what lets one left behind by a supervisor that died
 //! mid-initialization be reaped instead of occupying the id forever.
 //!
@@ -40,7 +40,7 @@ mod tests {
         SessionRecord {
             id: SessionId::MIN,
             supervisor: ProcessIdentity {
-                pid: 42,
+                pid: 42_u32.try_into().unwrap(),
                 creation_time: 99,
             },
             pipe_name: "p".to_string(),
@@ -58,7 +58,7 @@ mod tests {
         // proved abandoned, and the id would stay taken for the logon session.
         let stored = StoredSession::Reserved {
             owner: ProcessIdentity {
-                pid: 7,
+                pid: 7_u32.try_into().unwrap(),
                 creation_time: 8,
             },
         };

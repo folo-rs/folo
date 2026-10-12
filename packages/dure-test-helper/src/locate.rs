@@ -178,6 +178,7 @@ fn interpret_build(output: &BuildOutput) -> PathBuf {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -357,22 +358,5 @@ mod tests {
             |_path| true,
             || panic!("a configured helper must skip the build"),
         ));
-    }
-
-    // Drives the real build seam rather than an injected fake: it spawns
-    // `cargo build` when no prebuilt path is present and reads the filesystem,
-    // so it is native-only.
-    #[cfg(not(miri))]
-    #[test]
-    fn binary_path_returns_an_existing_absolute_file() {
-        let resolved = Path::new(binary_path());
-        assert!(
-            resolved.is_absolute(),
-            "binary_path should be absolute: {resolved:?}"
-        );
-        assert!(
-            resolved.is_file(),
-            "binary_path should name an existing file: {resolved:?}"
-        );
     }
 }

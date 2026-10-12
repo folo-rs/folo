@@ -11,16 +11,11 @@ use windows::Win32::System::Console::{
 };
 use windows::Win32::System::Pipes::CreatePipe;
 
+use crate::constants::CONSOLE_READ_BUF;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::PtyId;
 use crate::pal::pseudoconsole::{Pseudoconsole, WindowSize};
 use crate::pal::raw_handle::PipeHandle;
-
-/// One console `ReadFile` burst from the host end of the app's output pipe.
-///
-/// Sized to match the client's input burst so neither direction of the relay is
-/// the narrower one; `ReadFile` may return less.
-const OUTPUT_READ_BUF: usize = 4096;
 
 /// One live pseudoconsole and its host pipe endpoints.
 ///
@@ -64,9 +59,9 @@ fn close_handle(handle: HANDLE) {
 
 fn to_coord(size: WindowSize) -> Result<COORD, PalError> {
     Ok(COORD {
-        X: i16::try_from(size.cols.get())
+        X: i16::try_from(size.cols().get())
             .map_err(|error| PalError::with_source(PalErrorKind::Other, error))?,
-        Y: i16::try_from(size.rows.get())
+        Y: i16::try_from(size.rows().get())
             .map_err(|error| PalError::with_source(PalErrorKind::Other, error))?,
     })
 }
@@ -200,7 +195,7 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
             .get(&pty.0)
             .map(|pty| Arc::clone(&pty.host_output))
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
-        let mut buf = vec![0_u8; OUTPUT_READ_BUF];
+        let mut buf = vec![0_u8; CONSOLE_READ_BUF];
         let mut transferred = 0_u32;
         // SAFETY: `handle` is the host output pipe for a pty and this reference
         // keeps it open across the call; `buf` is exclusive for this call.
@@ -229,10 +224,9 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
     }
 
     fn finish(&self, pty: PtyId) {
-        // The HPCON is taken under the lock but closed outside it. Closing waits
-        // for the clients attached to the pseudoconsole, and those clients can
-        // only make progress while `read_output` keeps emptying the output pipe,
-        // which needs this same lock.
+        // Closing can wait for buffered output to drain on older Windows.
+        // Keep the table available to `read_output` throughout that wait.
+        // Ref: docs/console.md, "Ending it in two steps".
         let taken = table()
             .lock()
             .expect("the pseudoconsole table is only inserted into and looked up, never held across a panic")
@@ -263,17 +257,25 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
         let Some(entry) = table().lock().expect("the pseudoconsole table is only inserted into and looked up, never held across a panic").ptys.remove(&pty.0) else {
             return;
         };
-        if let Some(hpcon) = entry.hpcon {
+        let Pty {
+            hpcon,
+            host_input,
+            host_output,
+        } = entry;
+        host_input.cancel();
+        host_output.cancel();
+        // Startup rollback has no output reader. Close its endpoint before
+        // ClosePseudoConsole, which can wait for undrained output on older
+        // Windows hosts. Normal teardown has already called finish and drained
+        // the output. Ref: docs/console.md, "Ending it in two steps".
+        drop(host_output);
+        drop(host_input);
+        if let Some(hpcon) = hpcon {
             // SAFETY: `entry` was removed from the table, so `hpcon` is not
             // reachable from anywhere else and is not used after this call.
             unsafe {
                 ClosePseudoConsole(hpcon);
             }
         }
-        // A relay thread may be blocked reading or writing these handles.
-        // Cancelling releases it; the handles close once it drops its
-        // references, which is what keeps this from freeing a handle in use.
-        entry.host_input.cancel();
-        entry.host_output.cancel();
     }
 }

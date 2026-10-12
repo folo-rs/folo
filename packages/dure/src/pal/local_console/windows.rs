@@ -20,6 +20,7 @@ use windows::Win32::System::IO::CancelIoEx;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects};
 use windows::core::{BOOL, HRESULT};
 
+use crate::constants::CONSOLE_READ_BUF;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::RelayLeaseId;
 use crate::pal::local_console::LocalConsole;
@@ -29,10 +30,6 @@ use crate::pal::raw_handle::RawHandle;
 /// Real Windows console attached to this process.
 #[derive(Debug, Default)]
 pub(crate) struct BuildTargetConsole;
-
-/// One console `ReadFile` burst. Larger than a typical key or CSI sequence;
-/// `ReadFile` may return less. Not a protocol bound.
-const INPUT_READ_BUF: usize = 4096;
 
 /// Wait result for the input handle, which follows cancellation in the wait set.
 const WAIT_INPUT: WAIT_EVENT = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
@@ -100,6 +97,7 @@ impl CancelEvent {
         self.read_active.store(false, Ordering::SeqCst);
     }
 
+    /// Waits for the reader to retire its operation before it can be joined.
     fn await_read_end(&self, deadline: Instant) -> Result<(), PalError> {
         while self.read_active.load(Ordering::SeqCst) {
             if Instant::now() >= deadline {
@@ -110,6 +108,10 @@ impl CancelEvent {
         Ok(())
     }
 
+    /// Releases a waiting or active reader, including active-read retirement.
+    ///
+    /// Success covers the completion handoff, not just the cancellation request.
+    /// Ref: docs/console.md, "Reading input".
     fn cancel(&self, input: HANDLE) -> Result<(), PalError> {
         self.cancelled.store(true, Ordering::SeqCst);
         // SAFETY: this value owns the live event handle for its whole call.
@@ -413,21 +415,22 @@ impl LocalConsole for BuildTargetConsole {
     }
 
     fn end_raw_relay(&self, lease: RelayLeaseId) -> Result<(), PalError> {
-        let taken = {
-            let mut held = relay_lease()
-                .lock()
-                .expect("the relay lease is only replaced, never held across a panic");
-            match held.as_ref() {
-                Some((id, _taken)) if *id == lease => held
-                    .take()
-                    .map(|(_id, taken)| taken)
-                    .ok_or_else(|| PalError::new(PalErrorKind::Other))?,
-                // A lease this console never issued, or one already handed
-                // back, must not restore state a live relay owns.
-                _ => return Err(PalError::new(PalErrorKind::Other)),
-            }
+        let mut held = relay_lease()
+            .lock()
+            .expect("console state changes return errors without unwinding through the lease");
+        let Some((id, taken)) = held.as_ref() else {
+            return Err(PalError::new(PalErrorKind::Other));
         };
-        hand_back_console(&taken)
+        // A lease this console never issued, or one already handed back, must
+        // not restore state a live relay owns.
+        if *id != lease {
+            return Err(PalError::new(PalErrorKind::Other));
+        }
+        // Takeover cannot capture or overwrite the console's state until every
+        // restoration attempt has finished. Ref: docs/console.md.
+        let result = hand_back_console(taken);
+        *held = None;
+        result
     }
 
     fn window_size(&self) -> Result<WindowSize, PalError> {
@@ -450,7 +453,7 @@ impl LocalConsole for BuildTargetConsole {
         if !cancel_event.begin_read() {
             return Err(PalError::new(PalErrorKind::Disconnected));
         }
-        let mut buf = vec![0_u8; INPUT_READ_BUF];
+        let mut buf = vec![0_u8; CONSOLE_READ_BUF];
         let mut transferred = 0_u32;
         // SAFETY: `handle` is stdin; `buf` is exclusive for this call.
         let read = unsafe {

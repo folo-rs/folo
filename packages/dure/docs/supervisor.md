@@ -27,9 +27,9 @@ lookup problem for a session that is up and running.
 
 ## What is shared
 
-A live session runs four things at once — an accept loop, a relay reading
+A live session runs an accept loop, a relay reading
 whichever client owns the console, a pump reading the app's output, and a wait
-on the app — and they meet in one shared value. Three questions are decided
+on the app. They meet in one shared value. The following questions are decided
 there, each with its own lock, because they are answered at different moments:
 
 * **Who owns the console.** The client slot, serialized by the attach lock.
@@ -76,6 +76,11 @@ receive was in flight cannot reach the pseudoconsole afterwards. Pseudoconsole
 input lands in the console host's buffer, which the host drains independently of
 the app, so that hold is bounded.
 
+Attach, message application, detach and stopping have finite operations separate
+from their blocking receive loops. A PAL or transport-clone panic propagates only
+after releasing ownership guards; common relay cleanup removes the failed owner
+and abandons its connection. A displaced owner is never restored.
+
 `dure kill <id>` opens the recorded pid, verifies the process creation time and
 running state, and terminates that process handle, then waits for the process to
 signal before reporting success. It never needs the session connection. A
@@ -91,15 +96,16 @@ straight on to relaying. A newly attached client's first keystrokes therefore
 never wait for the filesystem, and a wedged store cannot hold up a steal.
 
 Each client-slot change assigns a generation to its update, and the writer
-publishes an update only while its generation is still the current ownership
-state. An update that waited behind store I/O is therefore dropped rather than
-overwriting the attach that overtook it.
+skips queued updates whose generation is already obsolete. Ownership can change
+after that check while publication is in flight, so the advisory flag can
+temporarily be stale. Store I/O never holds the ownership lock.
 
 Teardown stops the writer and waits for it, then deletes the record. Stopping
 is an instruction rather than the queue closing, because a relay thread can
 outlive teardown still holding the means to queue an update: everything handed
-over before the stop is published, everything after it is dropped. That is what
-makes the delete final, including over a session id that is later reused.
+over before the stop is considered, with obsolete updates skipped; everything
+after it is dropped. That makes the delete final, including over a session id
+that is later reused.
 
 ## Teardown
 

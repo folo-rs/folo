@@ -5,49 +5,6 @@ use std::{fmt, iter};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Quotes one argv element for `CommandLineToArgvW`.
-///
-/// Empty arguments become `""`. Arguments without whitespace or quotes are
-/// copied unchanged. Otherwise the argument is wrapped in quotes and internal
-/// quotes are escaped by doubling preceding backslashes, matching the Windows
-/// argv rules.
-#[must_use]
-pub(crate) fn quote_windows_arg(arg: &str) -> String {
-    if arg.is_empty() {
-        return "\"\"".to_string();
-    }
-    let needs_quotes = arg
-        .bytes()
-        .any(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'"'));
-    if !needs_quotes {
-        return arg.to_string();
-    }
-
-    let mut quoted = String::from("\"");
-    let mut backslashes = 0_usize;
-    for ch in arg.chars() {
-        if ch == '\\' {
-            backslashes = backslashes.saturating_add(1);
-            continue;
-        }
-        if ch == '"' {
-            quoted.extend(iter::repeat_n(
-                '\\',
-                backslashes.saturating_mul(2).saturating_add(1),
-            ));
-            quoted.push('"');
-            backslashes = 0;
-            continue;
-        }
-        quoted.extend(iter::repeat_n('\\', backslashes));
-        quoted.push(ch);
-        backslashes = 0;
-    }
-    quoted.extend(iter::repeat_n('\\', backslashes.saturating_mul(2)));
-    quoted.push('"');
-    quoted
-}
-
 /// An executable and the arguments it is launched with.
 ///
 /// A session always runs something, so the executable is carried separately
@@ -118,7 +75,7 @@ impl AppCommand {
 /// the screen (design.md, "Listing sessions").
 impl fmt::Display for AppCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, token) in self.argv().iter().enumerate() {
+        for (index, token) in iter::once(&self.exe).chain(self.args.iter()).enumerate() {
             if index > 0 {
                 f.write_str(" ")?;
             }
@@ -136,10 +93,10 @@ impl fmt::Display for AppCommand {
     }
 }
 
-/// Stored as a flat argv array, which is what the record file has always held.
+/// Stores the command as the record format's flat argv array.
 impl Serialize for AppCommand {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.argv().serialize(serializer)
+        serializer.collect_seq(iter::once(&self.exe).chain(self.args.iter()))
     }
 }
 
@@ -149,6 +106,46 @@ impl<'de> Deserialize<'de> for AppCommand {
         Self::from_argv(argv)
             .ok_or_else(|| D::Error::custom("a session command names an executable"))
     }
+}
+
+/// Quotes one argv element for `CommandLineToArgvW`.
+///
+/// Empty arguments become `""`. Arguments without whitespace or quotes are
+/// copied unchanged. Otherwise Windows quoting preserves token boundaries.
+#[must_use]
+pub(crate) fn quote_windows_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "\"\"".to_string();
+    }
+    let needs_quotes = arg
+        .bytes()
+        .any(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'"'));
+    if !needs_quotes {
+        return arg.to_string();
+    }
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0_usize;
+    for ch in arg.chars() {
+        if ch == '\\' {
+            backslashes = backslashes.saturating_add(1);
+            continue;
+        }
+        if ch == '"' {
+            quoted.extend(iter::repeat_n(
+                '\\',
+                backslashes.saturating_mul(2).saturating_add(1),
+            ));
+            quoted.push('"');
+            backslashes = 0;
+            continue;
+        }
+        quoted.extend(iter::repeat_n('\\', backslashes));
+        quoted.push(ch);
+        backslashes = 0;
+    }
+    quoted.extend(iter::repeat_n('\\', backslashes.saturating_mul(2)));
+    quoted.push('"');
+    quoted
 }
 
 #[cfg(test)]

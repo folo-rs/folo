@@ -14,18 +14,17 @@ use crate::protocol::Message;
 
 /// Everything the supervisor's threads coordinate through.
 ///
-/// A live session runs four things at once: an accept loop waiting for the next
+/// A live session runs an accept loop waiting for the next
 /// client, a relay reading whichever client currently owns the console, a pump
 /// reading the app's output, and a wait on the app itself. They meet only here,
 /// and the fields below are the whole of what they share.
 ///
-/// Three questions are decided in this struct, each with its own lock, and they
+/// The following questions each have their own lock, and they
 /// are separate because they are answered at different moments:
 ///
 /// * **Who owns the console** — `client`, serialized by `attach`. An attach is
 ///   one transaction: acknowledge, install, displace. `attached_generation`
-///   names each successive answer so a slower observer cannot publish a stale
-///   one.
+///   names each successive answer so the writer can skip obsolete queued updates.
 /// * **Whether anyone has come for the session yet** — `first_attach`. An app
 ///   that exits immediately must not be torn down before the client that
 ///   started it arrives.
@@ -55,8 +54,8 @@ pub(crate) struct Shared<T: Transport, C> {
     /// Monotonic identity of the latest client-slot ownership state.
     ///
     /// Advisory store updates carry the generation assigned under the client
-    /// slot, so an older update that waited for store I/O cannot overwrite a
-    /// newer attach or detach.
+    /// slot, so obsolete queued updates can be skipped. An update already in
+    /// flight can temporarily publish stale state.
     pub(crate) attached_generation: Arc<AtomicU64>,
     /// Output the app produced before anyone attached, kept for the first
     /// client. Taken under the client slot, which is what orders it ahead of
@@ -91,7 +90,7 @@ impl<T: Transport> Clone for Client<T> {
 /// An app that exits immediately would otherwise be torn down before `dure run`
 /// finishes attaching, losing both its output and its exit status. The
 /// supervisor therefore holds the session open after the app exits until one of
-/// these two flags is set: a client has completed an attach, or the startup
+/// these flags is set: a client has completed an attach, or the startup
 /// connection the initiating `dure run` held has closed.
 /// Ref: docs/design.md, "Commands"; docs/implementation.md, "Process split".
 #[derive(Debug, Default)]
@@ -146,7 +145,14 @@ impl<T: Transport, C> Shared<T, C> {
     pub(crate) fn client(&self) -> MutexGuard<'_, Option<Client<T>>> {
         self.client
             .lock()
-            .expect("client slot is only copied or replaced, never held across a panic")
+            .expect("slot bookkeeping invokes no callbacks; PAL panics propagate after unlocking")
+    }
+
+    /// Serializes attach and stop while keeping PAL panics outside the guard.
+    pub(crate) fn attach(&self) -> MutexGuard<'_, ()> {
+        self.attach
+            .lock()
+            .expect("attach catches PAL panics and releases its guard before propagating them")
     }
 
     /// Advances the identity of the client-slot ownership state.

@@ -8,7 +8,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use super::windows::search_path;
+use crate::pal::processes::windows::search_path;
 
 /// The extension a bare command name is completed with.
 ///
@@ -34,13 +34,22 @@ pub(crate) enum HowResolved {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedCommand {
     /// The path handed to `CreateProcessW`.
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// Which rule produced it.
-    pub how: HowResolved,
+    pub(crate) how: HowResolved,
 }
 
 /// Resolves `command` to the executable image `dure run` will launch.
 pub(crate) fn resolve_executable(command: &str, launch_directory: &Path) -> ResolvedCommand {
+    resolve_with(command, launch_directory, search_path)
+}
+
+/// Separates path decisions from the ambient executable search.
+fn resolve_with(
+    command: &str,
+    launch_directory: &Path,
+    search: impl FnOnce(&str, &str) -> Option<PathBuf>,
+) -> ResolvedCommand {
     let path = Path::new(command);
     if path.is_absolute() {
         return ResolvedCommand {
@@ -60,7 +69,7 @@ pub(crate) fn resolve_executable(command: &str, launch_directory: &Path) -> Reso
             how: HowResolved::RelativeToLaunchDirectory,
         };
     }
-    match search_path(command, EXECUTABLE_EXTENSION) {
+    match search(command, EXECUTABLE_EXTENSION) {
         Some(found) => ResolvedCommand {
             path: found,
             how: HowResolved::SearchPath,
@@ -137,11 +146,12 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: reads the process search path.
-    #[cfg_attr(miri, ignore)]
     fn a_bare_name_is_looked_up_on_the_search_path() {
-        // Present on every Windows installation this can run on.
-        let resolved = resolve("cmd");
+        let resolved = resolve_with("app", Path::new(LAUNCH), |name, extension| {
+            assert_eq!(name, "app");
+            assert_eq!(extension, ".exe");
+            Some(PathBuf::from(r"D:\tools\app.exe"))
+        });
         assert_eq!(resolved.how, HowResolved::SearchPath);
         assert!(resolved.path.is_absolute());
         // A bare name must not be satisfied from the launch directory.
@@ -149,11 +159,9 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: reads the process search path.
-    #[cfg_attr(miri, ignore)]
     fn a_bare_name_that_is_nowhere_keeps_its_own_spelling() {
-        let resolved = resolve("no-such-executable-anywhere");
+        let resolved = resolve_with("missing", Path::new(LAUNCH), |_, _| None);
         assert_eq!(resolved.how, HowResolved::NotFound);
-        assert_eq!(resolved.path, PathBuf::from("no-such-executable-anywhere"));
+        assert_eq!(resolved.path, PathBuf::from("missing"));
     }
 }

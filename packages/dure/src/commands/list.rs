@@ -36,12 +36,10 @@ pub(crate) fn execute(
 mod tests {
     use std::path::Path;
 
-    use tempfile::TempDir;
-
     use super::*;
     use crate::AppCommand;
     use crate::pal::processes::{MockProcesses, ProcessLiveness};
-    use crate::pal::session_store::{FsSessionStore, SessionStore};
+    use crate::pal::session_store::{MemorySessionStore, SessionStore};
     use crate::protocol::PROTOCOL_VERSION;
     use crate::session_record::{ProcessIdentity, SessionRecord};
 
@@ -49,13 +47,13 @@ mod tests {
     /// its own tests in `list_fmt`.
     const SOME_NOW_MS: u64 = 60_000;
 
-    fn publish_session(store: &FsSessionStore, dir: &Path) {
+    fn publish_session(store: &MemorySessionStore, dir: &Path) {
         let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store
             .publish(&SessionRecord {
                 id,
                 supervisor: ProcessIdentity {
-                    pid: 10,
+                    pid: 10_u32.try_into().unwrap(),
                     creation_time: 100,
                 },
                 pipe_name: "pipe".to_string(),
@@ -69,22 +67,16 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn empty_store_succeeds() {
-        let dir = TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         let processes = MockProcesses::new();
         execute(&store, &processes, SOME_NOW_MS, Trace::default()).unwrap();
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn live_session_is_kept() {
-        let dir = TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
-        publish_session(&store, dir.path());
+        let store = MemorySessionStore::new();
+        publish_session(&store, Path::new("/work"));
         let mut processes = MockProcesses::new();
         processes
             .expect_probe()
@@ -94,12 +86,9 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn dead_session_is_reaped() {
-        let dir = TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
-        publish_session(&store, dir.path());
+        let store = MemorySessionStore::new();
+        publish_session(&store, Path::new("/work"));
         let mut processes = MockProcesses::new();
         processes
             .expect_probe()

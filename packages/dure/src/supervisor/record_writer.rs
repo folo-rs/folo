@@ -16,13 +16,11 @@ use crate::pal::session_store::SessionStore;
 /// serializing a record, writing a file, and replacing it. Doing that on the
 /// relay would make a newly attached client's first keystrokes wait for
 /// filesystem I/O, and doing it under a lock teardown also wants would make
-/// deleting the record wait for the same. One writer holds both problems: the
-/// relay hands over an update and moves on, and the delete is simply the last
-/// thing this writer does.
+/// deleting the record wait for the same. The relay hands over an update and
+/// moves on; supervisor teardown stops and joins the writer before deleting.
 ///
-/// Ordering is what makes the delete final. An update queued before it is
-/// applied first, and one queued after cannot exist, because the delete
-/// consumes the writer.
+/// Joining makes supervisor-owned deletion final: no later update can recreate
+/// the record.
 pub(crate) struct RecordWriter {
     updates: Sender<Command>,
     worker: JoinHandle<()>,
@@ -52,9 +50,8 @@ impl RecordWriter {
 
     /// Hands over an attached-flag change without waiting for it.
     ///
-    /// The change is published only while it is still the current ownership
-    /// state, so an update that waited behind store I/O cannot overwrite a
-    /// newer attach or detach.
+    /// Obsolete queued changes are skipped. A publication already in flight
+    /// can temporarily leave a stale flag; ownership never waits for store I/O.
     pub(crate) fn set_attached(&self) -> impl Fn(u64, bool) + Clone + Send + 'static {
         let updates = self.updates.clone();
         move |generation: u64, attached: bool| {
@@ -71,8 +68,8 @@ impl RecordWriter {
     ///
     /// Relay threads can outlive teardown still holding the means to queue an
     /// update, so stopping is an instruction rather than the queue closing.
-    /// Everything handed over before it is published; everything after it is
-    /// dropped. The record can then be deleted knowing nothing will publish it
+    /// Earlier queued changes are considered; obsolete ones are skipped and
+    /// later ones are dropped. The record can then be deleted knowing nothing will publish it
     /// again — including over a session id that has since been reused.
     pub(crate) fn finish(self) {
         // A worker that already ended leaves nothing to wait for.

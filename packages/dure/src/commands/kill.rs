@@ -64,7 +64,7 @@ mod tests {
         SessionRecord {
             id,
             supervisor: ProcessIdentity {
-                pid,
+                pid: pid.try_into().unwrap(),
                 creation_time: creation,
             },
             pipe_name: format!("pipe-{id}"),
@@ -97,7 +97,9 @@ mod tests {
             .returning(|_| ProcessLiveness::Live);
         processes
             .expect_terminate()
-            .withf(|identity: &ProcessIdentity| identity.pid == 10 && identity.creation_time == 100)
+            .withf(|identity: &ProcessIdentity| {
+                identity.pid.get() == 10 && identity.creation_time == 100
+            })
             .returning(|_| Ok(()));
 
         execute(&store, &processes, id, Trace::default()).unwrap();

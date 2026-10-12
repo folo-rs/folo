@@ -83,7 +83,7 @@ pub(crate) struct MemoryTransport {
 
 impl fmt::Debug for MemoryTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(stringify!(MemoryTransport)).finish()
+        f.debug_struct(std::any::type_name::<Self>()).finish()
     }
 }
 
@@ -109,15 +109,17 @@ impl MemoryTransport {
 
     /// Make sends on `conn` block until it is disconnected or resumed.
     pub(crate) fn stall(&self, conn: ConnId) {
-        let mut conns = self.inner.conns.lock().expect("conn map lock");
-        let state = conns
-            .get_mut(&conn)
-            .expect("tests only stall a live connection");
-        assert!(!state.stalled, "a connection cannot be stalled twice");
-        assert_eq!(
-            state.stalled_senders, 0,
-            "a connection cannot be rearmed before prior senders resume"
+        let mut conns = self.inner.conns.lock().expect(
+            "connection bookkeeping has no callbacks; rejected preconditions panic after unlocking",
         );
+        let Some(state) = conns.get_mut(&conn) else {
+            drop(conns);
+            panic!("tests only stall a live connection");
+        };
+        if state.stalled || state.stalled_senders != 0 {
+            drop(conns);
+            panic!("a connection must be unstalled and drained before rearming");
+        }
         state.stalled = true;
         self.inner.conn_cond.notify_all();
     }
@@ -127,11 +129,17 @@ impl MemoryTransport {
     /// Draining the parked-sender count before returning makes the connection
     /// safe to stall again without observing a sender from the previous stall.
     pub(crate) fn resume(&self, conn: ConnId) {
-        let mut conns = self.inner.conns.lock().expect("conn map lock");
-        let state = conns
-            .get_mut(&conn)
-            .expect("tests only resume a live connection");
-        assert!(state.stalled, "only a stalled connection can be resumed");
+        let mut conns = self.inner.conns.lock().expect(
+            "connection bookkeeping has no callbacks; rejected preconditions panic after unlocking",
+        );
+        let Some(state) = conns.get_mut(&conn) else {
+            drop(conns);
+            panic!("tests only resume a live connection");
+        };
+        if !state.stalled {
+            drop(conns);
+            panic!("only a stalled connection can be resumed");
+        }
         state.stalled = false;
         self.inner.conn_cond.notify_all();
         loop {
@@ -141,25 +149,28 @@ impl MemoryTransport {
             if state.stalled_senders == 0 {
                 return;
             }
-            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
+            conns = self.inner.conn_cond.wait(conns).expect("connection bookkeeping has no callbacks; rejected preconditions panic after unlocking");
         }
     }
 
     /// Block until a send has parked on `conn`'s injected stall.
     pub(crate) fn wait_for_stalled_send(&self, conn: ConnId) {
-        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        let mut conns = self.inner.conns.lock().expect(
+            "connection bookkeeping has no callbacks; rejected preconditions panic after unlocking",
+        );
         loop {
-            let state = conns
-                .get(&conn)
-                .expect("tests only observe a live connection");
-            assert!(
-                state.stalled,
-                "the connection must be stalled before waiting"
-            );
+            let Some(state) = conns.get(&conn) else {
+                drop(conns);
+                panic!("tests only observe a live connection");
+            };
+            if !state.stalled {
+                drop(conns);
+                panic!("the connection must be stalled before waiting");
+            }
             if state.stalled_senders != 0 {
                 return;
             }
-            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
+            conns = self.inner.conn_cond.wait(conns).expect("connection bookkeeping has no callbacks; rejected preconditions panic after unlocking");
         }
     }
 
@@ -172,7 +183,7 @@ impl MemoryTransport {
         self.inner
             .listener_state
             .lock()
-            .expect("listener state lock")
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics")
             .len()
     }
 
@@ -202,7 +213,7 @@ impl MemoryTransport {
             self.inner
                 .faults
                 .lock()
-                .expect("fault map lock")
+                .expect("fault bookkeeping neither invokes callbacks nor deliberately panics")
                 .entry(pipe.to_string())
                 .or_default(),
         );
@@ -212,7 +223,11 @@ impl MemoryTransport {
 
     /// Consumes one armed failure of the kind `take` selects, if any.
     fn take_fault(&self, pipe: &str, take: impl FnOnce(&mut Faults) -> &mut usize) -> bool {
-        let mut faults = self.inner.faults.lock().expect("fault map lock");
+        let mut faults = self
+            .inner
+            .faults
+            .lock()
+            .expect("fault bookkeeping neither invokes callbacks nor deliberately panics");
         let Some(pipe_faults) = faults.get_mut(pipe) else {
             return false;
         };
@@ -231,7 +246,7 @@ impl MemoryTransport {
             .inner
             .listener_state
             .lock()
-            .expect("listener state lock");
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics");
         loop {
             let Some(listener_state) = state.get_mut(&listener) else {
                 return Err(PalError::new(PalErrorKind::NotFound));
@@ -243,16 +258,17 @@ impl MemoryTransport {
             if bounded && self.take_fault(&pipe, |faults| &mut faults.expire_accepts) {
                 return Err(PalError::new(PalErrorKind::Timeout));
             }
-            state = self
-                .inner
-                .listener_cond
-                .wait(state)
-                .expect("listener condvar");
+            state =
+                self.inner.listener_cond.wait(state).expect(
+                    "listener bookkeeping neither invokes callbacks nor deliberately panics",
+                );
         }
     }
 
     fn recv_inner(&self, conn: ConnId, bounded: bool) -> Result<Message, PalError> {
-        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        let mut conns = self.inner.conns.lock().expect(
+            "connection bookkeeping has no callbacks; rejected preconditions panic after unlocking",
+        );
         loop {
             let Some(state) = conns.get_mut(&conn) else {
                 return Err(PalError::new(PalErrorKind::NotFound));
@@ -267,7 +283,7 @@ impl MemoryTransport {
             if bounded && self.take_fault(&pipe, |faults| &mut faults.expire_recvs) {
                 return Err(PalError::new(PalErrorKind::Timeout));
             }
-            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
+            conns = self.inner.conn_cond.wait(conns).expect("connection bookkeeping has no callbacks; rejected preconditions panic after unlocking");
         }
     }
 }
@@ -281,7 +297,11 @@ impl Default for MemoryTransport {
 impl Transport for MemoryTransport {
     fn listen(&self, name: &str) -> Result<ListenerId, PalError> {
         let id = ListenerId(self.alloc_id());
-        let mut listeners = self.inner.listeners.lock().expect("listener map lock");
+        let mut listeners = self
+            .inner
+            .listeners
+            .lock()
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics");
         if listeners.contains_key(name) {
             return Err(PalError::new(PalErrorKind::Other));
         }
@@ -289,7 +309,7 @@ impl Transport for MemoryTransport {
         self.inner
             .listener_state
             .lock()
-            .expect("listener state lock")
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics")
             .insert(
                 id,
                 ListenerState {
@@ -309,7 +329,11 @@ impl Transport for MemoryTransport {
     }
 
     fn connect(&self, name: &str, _timeout: Duration) -> Result<ConnId, PalError> {
-        let listeners = self.inner.listeners.lock().expect("listener map lock");
+        let listeners = self
+            .inner
+            .listeners
+            .lock()
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics");
         // No listener means nothing to connect to, which is not the same as a
         // wait that was spent: `Timeout` is reserved for a deadline that
         // actually elapsed. Ref: docs/transport.md.
@@ -321,7 +345,7 @@ impl Transport for MemoryTransport {
         let server = ConnId(self.alloc_id());
         let client = ConnId(self.alloc_id());
         {
-            let mut conns = self.inner.conns.lock().expect("conn map lock");
+            let mut conns = self.inner.conns.lock().expect("connection bookkeeping has no callbacks; rejected preconditions panic after unlocking");
             conns.insert(
                 server,
                 ConnState {
@@ -350,7 +374,7 @@ impl Transport for MemoryTransport {
             .inner
             .listener_state
             .lock()
-            .expect("listener state lock");
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics");
         let Some(listener_state) = state.get_mut(&listener) else {
             drop(state);
             self.disconnect(server);
@@ -362,7 +386,9 @@ impl Transport for MemoryTransport {
     }
 
     fn send(&self, conn: ConnId, message: &Message) -> Result<(), PalError> {
-        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        let mut conns = self.inner.conns.lock().expect(
+            "connection bookkeeping has no callbacks; rejected preconditions panic after unlocking",
+        );
         if let Some(state) = conns.get(&conn) {
             let pipe = state.pipe.clone();
             if self.take_fault(&pipe, |faults| &mut faults.fail_sends) {
@@ -393,7 +419,7 @@ impl Transport for MemoryTransport {
                 waiting = true;
                 self.inner.conn_cond.notify_all();
             }
-            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
+            conns = self.inner.conn_cond.wait(conns).expect("connection bookkeeping has no callbacks; rejected preconditions panic after unlocking");
         };
         let Some(state) = conns.get_mut(&peer) else {
             return Err(PalError::new(PalErrorKind::NotFound));
@@ -418,7 +444,9 @@ impl Transport for MemoryTransport {
     }
 
     fn disconnect(&self, conn: ConnId) {
-        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        let mut conns = self.inner.conns.lock().expect(
+            "connection bookkeeping has no callbacks; rejected preconditions panic after unlocking",
+        );
         let peer = conns.get(&conn).map(|state| state.peer);
         if let Some(state) = conns.get_mut(&conn) {
             state.closed = true;
@@ -435,13 +463,13 @@ impl Transport for MemoryTransport {
         self.inner
             .listeners
             .lock()
-            .expect("listener map lock")
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics")
             .retain(|_, id| *id != listener);
         let pending = self
             .inner
             .listener_state
             .lock()
-            .expect("listener state lock")
+            .expect("listener bookkeeping neither invokes callbacks nor deliberately panics")
             .remove(&listener)
             .map_or_else(VecDeque::new, |state| state.pending);
         self.inner.listener_cond.notify_all();
@@ -466,6 +494,27 @@ mod tests {
 
     /// A duration this transport never reads; only an armed expiry ends a wait.
     const ANY_TIMEOUT: Duration = Duration::ZERO;
+
+    #[test]
+    fn rejected_stall_operations_leave_connections_usable() {
+        let transport = MemoryTransport::new();
+        let missing = ConnId(404);
+        testing::assert_panics(|| transport.stall(missing));
+        testing::assert_panics(|| transport.resume(missing));
+        testing::assert_panics(|| transport.wait_for_stalled_send(missing));
+        let listener = transport.listen("session").unwrap();
+        let client = transport.connect("session", ANY_TIMEOUT).unwrap();
+        let server = transport.accept(listener).unwrap();
+        testing::assert_panics(|| transport.resume(client));
+        testing::assert_panics(|| transport.wait_for_stalled_send(client));
+        transport.stall(client);
+        testing::assert_panics(|| transport.stall(client));
+        transport.resume(client);
+        transport.send(client, &Message::StartupCommit).unwrap();
+        assert_eq!(transport.recv(server).unwrap(), Message::StartupCommit);
+        transport.disconnect(client);
+        transport.close_listener(listener);
+    }
 
     #[test]
     fn an_armed_accept_expiry_reports_a_timeout() {

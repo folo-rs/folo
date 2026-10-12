@@ -121,14 +121,15 @@ impl<T: Transport + Clone> Outbox<T> {
     /// store record, job, or pseudoconsole, so a client that never drains its
     /// pipe delays nothing beyond this process outliving it.
     pub(crate) fn wait_for_writer(&self) {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
-            .expect("the writer handle is only taken by this wait, never across a panic");
-        if let Some(handle) = writer.take() {
+            .expect("the writer handle is taken before joining or propagating a worker panic")
+            .take();
+        if let Some(handle) = writer {
             handle
                 .join()
-                .expect("the outbox writer thread cannot panic");
+                .expect("a transport panic in the outbox writer is propagated to its waiter");
         }
     }
 
@@ -205,6 +206,19 @@ mod tests {
         let server = transport.accept(listener).unwrap();
         transport.close_listener(listener);
         (transport, server, client)
+    }
+
+    #[test]
+    fn a_writer_panic_does_not_poison_subsequent_waits() {
+        let outbox = Outbox {
+            transport: MemoryTransport::new(),
+            conn: ConnId(1),
+            state: Mutex::new(OutboxState::default()),
+            changed: Condvar::new(),
+            writer: Mutex::new(Some(thread::spawn(|| panic!("writer failure")))),
+        };
+        testing::assert_panics(|| outbox.wait_for_writer());
+        outbox.wait_for_writer();
     }
 
     #[test]

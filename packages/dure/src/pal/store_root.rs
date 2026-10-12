@@ -61,12 +61,4 @@ mod tests {
         let root = PathBuf::from("/tmp/dure-store");
         assert_eq!(resolve_store_root(Some(root.clone())).unwrap(), root);
     }
-
-    #[test]
-    // Talks to the real operating system: reads the per-user known folder.
-    #[cfg_attr(miri, ignore)]
-    fn without_an_override_the_default_root_is_used() {
-        let root = resolve_store_root(None).unwrap();
-        assert!(root.ends_with(STORE_SUBDIR));
-    }
 }

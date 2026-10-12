@@ -22,7 +22,7 @@ const HEADERS: [&str; 6] = [
     "COMMAND",
 ];
 
-/// Blank columns between one field and the next.
+/// Separation that keeps adjacent values distinct without making the table wide.
 const COLUMN_GAP: usize = 2;
 
 const SECONDS_PER_MINUTE: u64 = 60;
@@ -170,7 +170,7 @@ mod tests {
         SessionRecord {
             id,
             supervisor: ProcessIdentity {
-                pid: 99,
+                pid: 99_u32.try_into().unwrap(),
                 creation_time: 1,
             },
             pipe_name: "pipe".to_string(),

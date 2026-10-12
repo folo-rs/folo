@@ -1,5 +1,6 @@
 //! Facade over process PAL implementations.
 
+use std::any::type_name;
 use std::fmt;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -32,9 +33,15 @@ static TARGET: BuildTargetProcesses = BuildTargetProcesses;
 impl fmt::Debug for ProcessesFacade {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Target(_) => f.debug_struct("ProcessesFacade::Target").finish(),
+            Self::Target(_) => f
+                .debug_struct(type_name::<Self>())
+                .field("variant", &"Target")
+                .finish(),
             #[cfg(test)]
-            Self::Mock(_) => f.debug_struct("ProcessesFacade::Mock").finish(),
+            Self::Mock(_) => f
+                .debug_struct(type_name::<Self>())
+                .field("variant", &"Mock")
+                .finish(),
         }
     }
 }
@@ -177,7 +184,7 @@ mod tests {
         let facade = ProcessesFacade::from_mock(mock);
         assert_eq!(
             facade.probe(&ProcessIdentity {
-                pid: 1,
+                pid: 1_u32.try_into().unwrap(),
                 creation_time: 1,
             }),
             ProcessLiveness::Live

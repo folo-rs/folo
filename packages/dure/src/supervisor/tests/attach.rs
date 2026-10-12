@@ -150,9 +150,8 @@ fn a_stalled_detach_update_does_not_block_or_overwrite_a_steal() {
         phase_reporter.report("waiting for the final detach update");
         assert!(!updated_rx.recv().unwrap());
         second_relay.join().unwrap();
-        // The stale detach queued behind the steal cannot have overwritten it:
-        // updates are published in the order they were handed over, and only
-        // while they are still the current ownership state.
+        // Finishing drains the queued work, including the final detach. An
+        // in-flight stale write is permitted; the last publication is current.
         writer.finish();
         assert!(!store.read(id).unwrap().unwrap().attached);
     });

@@ -17,3 +17,5 @@ pub(crate) use facade::*;
 pub(crate) use fs_store::*;
 #[cfg(test)]
 pub(crate) use memory::*;
+#[cfg(any(test, feature = "private-test-util"))]
+pub(crate) use stored::StoredSession;

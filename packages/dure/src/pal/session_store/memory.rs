@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::SessionId;
 use crate::pal::error::{PalError, PalErrorKind};
@@ -46,13 +46,27 @@ impl MemorySessionStore {
         Self::default()
     }
 
+    fn stall(&self) -> MutexGuard<'_, PublishStall> {
+        self.inner
+            .publish_stall
+            .lock()
+            .expect("gate precondition panics occur after unlocking")
+    }
+
+    fn records(&self) -> MutexGuard<'_, BTreeMap<SessionId, StoredSession>> {
+        self.inner
+            .records
+            .lock()
+            .expect("record bookkeeping neither calls callbacks nor deliberately panics")
+    }
+
+    /// Arms publication blocking after the previous gate has drained.
     pub(crate) fn stall_publishes(&self) {
-        let mut stall = self.inner.publish_stall.lock().unwrap();
-        assert!(!stall.enabled);
-        assert_eq!(
-            stall.waiting, 0,
-            "the publish stall cannot be rearmed before prior publishers resume"
-        );
+        let mut stall = self.stall();
+        if stall.enabled || stall.waiting != 0 {
+            drop(stall);
+            panic!("the publish stall must be disabled and drained before rearming");
+        }
         stall.enabled = true;
     }
 
@@ -64,36 +78,54 @@ impl MemorySessionStore {
         self.inner.fail_next_delete.store(true, Ordering::SeqCst);
     }
 
+    /// Waits for a publisher to reach the armed gate.
     pub(crate) fn wait_for_stalled_publish(&self) {
-        let mut stall = self.inner.publish_stall.lock().unwrap();
-        assert!(
-            stall.enabled,
-            "the publish stall must be enabled before waiting"
-        );
+        let mut stall = self.stall();
+        if !stall.enabled {
+            drop(stall);
+            panic!("the publish stall must be enabled before waiting");
+        }
         while stall.waiting == 0 {
-            stall = self.inner.publish_stall_changed.wait(stall).unwrap();
+            stall = self
+                .inner
+                .publish_stall_changed
+                .wait(stall)
+                .expect("gate precondition panics occur after unlocking");
         }
     }
 
+    /// Releases the armed gate and drains its publishers before returning.
     pub(crate) fn resume_publishes(&self) {
-        let mut stall = self.inner.publish_stall.lock().unwrap();
-        assert!(stall.enabled);
+        let mut stall = self.stall();
+        if !stall.enabled {
+            drop(stall);
+            panic!("only an enabled publish stall can be resumed");
+        }
         stall.enabled = false;
         self.inner.publish_stall_changed.notify_all();
         while stall.waiting != 0 {
-            stall = self.inner.publish_stall_changed.wait(stall).unwrap();
+            stall = self
+                .inner
+                .publish_stall_changed
+                .wait(stall)
+                .expect("gate precondition panics occur after unlocking");
         }
     }
 
+    /// Parks one publisher while exposing its arrival and departure to tests.
     fn await_publish_permission(&self) {
-        let mut stall = self.inner.publish_stall.lock().unwrap();
+        let mut stall = self.stall();
         if !stall.enabled {
             return;
         }
         stall.waiting = stall.waiting.checked_add(1).unwrap();
         self.inner.publish_stall_changed.notify_all();
         while stall.enabled {
-            stall = self.inner.publish_stall_changed.wait(stall).unwrap();
+            stall = self
+                .inner
+                .publish_stall_changed
+                .wait(stall)
+                .expect("gate precondition panics occur after unlocking");
         }
         stall.waiting = stall.waiting.checked_sub(1).unwrap();
         self.inner.publish_stall_changed.notify_all();
@@ -107,7 +139,7 @@ impl SessionStore for MemorySessionStore {
     }
 
     fn allocate_id(&self, owner: &ProcessIdentity) -> Result<SessionId, PalError> {
-        let mut records = self.inner.records.lock().unwrap();
+        let mut records = self.records();
         let mut id = SessionId::MIN;
         while records.contains_key(&id) {
             id = id
@@ -125,16 +157,13 @@ impl SessionStore for MemorySessionStore {
             return Err(PalError::new(PalErrorKind::Other));
         }
         self.await_publish_permission();
-        self.inner
-            .records
-            .lock()
-            .unwrap()
+        self.records()
             .insert(record.id, StoredSession::Published(record.clone()));
         Ok(())
     }
 
     fn read(&self, id: SessionId) -> Result<Option<SessionRecord>, PalError> {
-        let records = self.inner.records.lock().unwrap();
+        let records = self.records();
         Ok(match records.get(&id) {
             Some(StoredSession::Published(record)) => Some(record.clone()),
             Some(StoredSession::Reserved { .. }) | None => None,
@@ -142,7 +171,7 @@ impl SessionStore for MemorySessionStore {
     }
 
     fn list(&self) -> Result<Vec<SessionRecord>, PalError> {
-        let records = self.inner.records.lock().unwrap();
+        let records = self.records();
         Ok(records
             .values()
             .filter_map(|stored| match stored {
@@ -153,7 +182,7 @@ impl SessionStore for MemorySessionStore {
     }
 
     fn list_reservations(&self) -> Result<Vec<(SessionId, ProcessIdentity)>, PalError> {
-        let records = self.inner.records.lock().unwrap();
+        let records = self.records();
         Ok(records
             .iter()
             .filter_map(|(id, stored)| match stored {
@@ -167,7 +196,7 @@ impl SessionStore for MemorySessionStore {
         if self.inner.fail_next_delete.swap(false, Ordering::SeqCst) {
             return Err(PalError::new(PalErrorKind::Other));
         }
-        let mut records = self.inner.records.lock().unwrap();
+        let mut records = self.records();
         let owned = match records.get(&id) {
             Some(StoredSession::Reserved { owner: current }) => current == owner,
             Some(StoredSession::Published(record)) => record.supervisor == *owner,
@@ -191,6 +220,7 @@ impl SessionStore for MemorySessionStore {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::thread;
 
@@ -199,6 +229,18 @@ mod tests {
     use super::*;
     use crate::AppCommand;
     use crate::protocol::PROTOCOL_VERSION;
+
+    #[test]
+    fn rejected_gate_operations_leave_the_gate_usable() {
+        let store = MemorySessionStore::new();
+        testing::assert_panics(|| store.wait_for_stalled_publish());
+        testing::assert_panics(|| store.resume_publishes());
+        store.stall_publishes();
+        testing::assert_panics(|| store.stall_publishes());
+        store.resume_publishes();
+        store.stall_publishes();
+        store.resume_publishes();
+    }
 
     #[test]
     fn publish_stall_reports_each_rearmed_publisher() {

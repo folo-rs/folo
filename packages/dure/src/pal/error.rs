@@ -4,6 +4,7 @@
 //! that says which of the outcomes logic distinguishes occurred, and, where the
 //! platform gave one, the underlying error as its source.
 
+use std::any::type_name;
 use std::error::Error;
 use std::{fmt, io};
 
@@ -72,7 +73,7 @@ impl PalError {
 #[cfg_attr(test, mutants::skip)]
 impl fmt::Debug for PalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PalError")
+        f.debug_struct(type_name::<Self>())
             .field("kind", &self.kind)
             .field("source", &self.source)
             .finish()

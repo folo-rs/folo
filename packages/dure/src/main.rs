@@ -22,8 +22,9 @@ use dure::{Cli, Outcome, run};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// `dure` drives Windows consoles and has no meaning elsewhere
-/// (docs/implementation.md, "Platform gate"), so the binary refuses to run rather
+/// Refuses to run where Windows console sessions are unavailable.
+///
+/// Ref: docs/implementation.md, "Platform gate". The binary refuses to run rather
 /// than reporting a success it did not deliver.
 // Mutation testing runs on Windows, where this stub is not compiled and no test
 // can observe a mutation of it.

@@ -8,6 +8,8 @@
 //! `dure` is a Windows-only binary; on other platforms it only reports that it
 //! is unsupported.
 #![cfg(windows)]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::ffi::{OsStr, OsString};
 use std::process::{Command, Output};

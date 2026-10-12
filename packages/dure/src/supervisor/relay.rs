@@ -2,6 +2,7 @@
 //!
 //! Ref: docs/supervisor.md, "Relay".
 
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -9,7 +10,6 @@ use std::thread;
 use ohno::AppError;
 
 use crate::constants::CONNECT_TIMEOUT;
-use crate::outbox::Outbox;
 use crate::pal::error::PalError;
 use crate::pal::ids::{ConnId, JobId, ListenerId};
 use crate::pal::processes::Processes;
@@ -17,8 +17,11 @@ use crate::pal::pseudoconsole::Pseudoconsole;
 use crate::pal::session_store::SessionStore;
 use crate::pal::transport::Transport;
 use crate::protocol::Message;
+use crate::supervisor::ownership::{
+    apply_client_message, attach_client, detach_client, stop_clients,
+};
 use crate::supervisor::record_writer::RecordWriter;
-use crate::supervisor::shared::{Client, FirstAttach, Shared, preamble_messages};
+use crate::supervisor::shared::{FirstAttach, Shared};
 use crate::supervisor::startup::Initialized;
 use crate::{PalFailedError, StoreError};
 
@@ -122,9 +125,8 @@ where
         }
 
         transport.close_listener(listener);
-        // Descendants of the app stay attached to the pseudoconsole until this
-        // job ends them, and closing a pseudoconsole waits for its attached
-        // clients. The pump may already have ended it after a failed read.
+        // End descendants before finishing their console; the output pump
+        // remains active while the console flushes its final output.
         close_job_once(processes, job, &job_closed);
         // The app has exited, so ending the pseudoconsole flushes what it still
         // holds and lets the output loop finish those bytes before clean EOF.
@@ -140,14 +142,7 @@ where
         // whole attach transaction. An attach therefore either completes
         // before the slot is claimed here and receives the outcome, or observes
         // the stop and is refused.
-        let client = {
-            let _attach = shared
-                .attach
-                .lock()
-                .expect("the attach lock guards no data, so it is never poisoned by its guard");
-            shared.stopping.store(true, Ordering::SeqCst);
-            shared.client().take()
-        };
+        let client = stop_clients(&shared);
         if let Some(client) = &client {
             if pumped.is_ok()
                 && let Ok(status) = &waited
@@ -232,138 +227,29 @@ pub(crate) fn client_loop<T, C>(
     T: Transport + Clone,
     C: Pseudoconsole,
 {
-    match shared.transport.recv_timeout(conn, CONNECT_TIMEOUT) {
-        Ok(Message::Attach { size }) => {
-            // One serialized attach transaction: acknowledge, take ownership,
-            // and displace the previous client without another attach
-            // interleaving between the acknowledgement and the transfer.
-            let _attach = shared
-                .attach
-                .lock()
-                .expect("the attach lock guards no data, so it is never poisoned by its guard");
-            // The exit status is routed to whoever owns the slot at the moment
-            // teardown claims it, under this same lock. An attach that installed
-            // itself afterwards would own a session that has already given up
-            // its record, job, and pseudoconsole, and would lose the supervisor
-            // without ever being told the app exited. Refusing before
-            // acknowledging is what makes `resume` report a session that is gone
-            // instead of a relay that broke.
-            if shared.stopping.load(Ordering::SeqCst) {
-                shared.transport.disconnect(conn);
-                return;
-            }
-            let outbox = Outbox::start(shared.transport.clone(), conn);
-            let (previous, generation) = {
-                let mut slot = shared.client();
-                // Queued, never written here. The acknowledgement is the first
-                // thing on this connection's queue, and delivery is FIFO, so
-                // the client sees `Attached` before any output or exit status
-                // without this critical section waiting on a pipe write. A
-                // client that is already gone is detected by that write failing
-                // on the writer thread, which abandons the connection and ends
-                // this loop.
-                outbox.send(Message::Attached {
-                    session_id: shared.session_id,
-                });
-                if let Some(held) = shared.take_preamble() {
-                    for message in preamble_messages(&held) {
-                        outbox.send(message);
-                    }
-                }
-                let previous = slot.replace(Client {
-                    conn,
-                    outbox: Arc::clone(&outbox),
-                });
-                let generation = shared.next_attached_generation();
-                (previous, generation)
-            };
-            // The client owns the slot now. Signaling the supervisor's
-            // first-attach lifetime gate lets it finish delivering an
-            // already-exited app's output and status before the advisory store
-            // update below can encounter durable I/O.
-            shared.note_claimed();
-            if let Some(old) = previous {
-                // Queued rather than written here, so a client that stopped
-                // reading cannot hold up the steal that is replacing it. The
-                // displaced client may already have disconnected; steal still
-                // proceeds, because last-attach-wins does not depend on this
-                // notice.
-                //
-                // A client that is alive but has stopped draining leaves its
-                // writer blocked here until the client's own process exits and
-                // closes the pipe. That is accepted: the notice is what tells a
-                // user why their screen went quiet, and it is worth more than
-                // reclaiming the thread promptly.
-                // Ref: docs/supervisor.md, "Displacement".
-                old.outbox.send(Message::Displaced);
-                old.outbox.finish();
-            }
-            // Applied only once this connection owns the client slot: the app
-            // redraws in response to a size change, and that redraw belongs to
-            // the client that asked for the size. Resize failure means the pty
-            // is already gone; wait_app and read_output observe that and stop
-            // the relay.
-            // Ref: docs/console.md, "Window size".
-            _ = shared.pty_host.resize(shared.pty, size);
-            // Store I/O is not part of the serialized ownership transfer. A
-            // stalled durable write must not prevent teardown or another client
-            // from acquiring the attach lock.
-            drop(_attach);
-            set_attached(generation, true);
-        }
-        _ => {
-            // Anything else — a client that connected and then said nothing
-            // within the connect budget, or one that opened with a message
-            // that is not an attach — never becomes the live console, so it is
-            // dropped rather than left holding a relay thread.
+    // A panicking PAL ends this relay but still releases any ownership it
+    // acquired. The ownership helpers release their guards before propagating.
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let Ok(Message::Attach { size }) = shared.transport.recv_timeout(conn, CONNECT_TIMEOUT)
+        else {
             shared.transport.disconnect(conn);
             return;
-        }
-    }
-
-    while let Ok(message) = shared.transport.recv(conn) {
-        // Ownership is checked and the message applied under one lock: a client
-        // displaced while its receive was in flight must not reach the app
-        // after the new client became the live console. Holding the lock across
-        // the write is bounded because the console host drains its input pipe
-        // whether or not the app reads it.
-        // Ref: docs/supervisor.md, "Displacement".
-        let slot = shared.client();
-        if slot.as_ref().map(|client| client.conn) != Some(conn) {
-            break;
-        }
-        match message {
-            Message::Input(data) => {
-                // Input after the app has exited is dropped. wait_app publishes
-                // AppExited to the live client.
-                _ = shared.pty_host.write_input(shared.pty, &data);
+        };
+        let Some(generation) = attach_client(shared, conn, size) else {
+            return;
+        };
+        set_attached(generation, true);
+        while let Ok(message) = shared.transport.recv(conn) {
+            if !apply_client_message(shared, conn, message) {
+                break;
             }
-            Message::Resize { size } => {
-                _ = shared.pty_host.resize(shared.pty, size);
-            }
-            _ => break,
         }
-        drop(slot);
-    }
-    let (departing, generation) = {
-        let mut slot = shared.client();
-        if slot.as_ref().map(|client| client.conn) == Some(conn) {
-            let departing = slot.take();
-            let generation = shared.next_attached_generation();
-            (departing, Some(generation))
-        } else {
-            (None, None)
-        }
-    };
-    if let Some(generation) = generation {
-        // Store I/O is serialized by generation rather than by the client slot.
-        // A stalled advisory write therefore cannot block ownership transfer.
+    }));
+    if let Some(generation) = detach_client(shared, conn) {
         set_attached(generation, false);
     }
-    if let Some(departing) = departing {
-        // The peer is gone or misbehaving, so nothing still queued for it is
-        // worth waiting on.
-        departing.outbox.abandon();
+    if let Err(panic) = result {
+        resume_unwind(panic);
     }
 }
 
@@ -379,23 +265,26 @@ where
         let Some(bytes) = shared.pty_host.read_output(shared.pty)? else {
             return Ok(());
         };
-        // Queued, never written here: a client that stopped reading must not be
-        // able to hold the pump, which the exit teardown joins. A write failure
-        // is handled by the outbox dropping the connection, which ends the
-        // client's own loop and clears the slot.
-        let client = {
-            let slot = shared.client();
-            match slot.as_ref() {
-                Some(client) => Some(client.clone()),
-                None => {
-                    shared.hold_for_first_client(&bytes);
-                    None
-                }
-            }
-        };
-        if let Some(client) = client {
-            client.outbox.send(Message::Output(bytes));
-        }
+        route_output(shared, bytes);
     }
     Ok(())
+}
+
+/// Routes one output burst without blocking on its eventual pipe write.
+// Removing delivery strands the concurrent relay tests on their expected output.
+#[cfg_attr(test, mutants::skip)]
+pub(crate) fn route_output<T: Transport + Clone, C>(shared: &Shared<T, C>, bytes: Vec<u8>) {
+    let client = {
+        let slot = shared.client();
+        match slot.as_ref() {
+            Some(client) => Some(client.clone()),
+            None => {
+                shared.hold_for_first_client(&bytes);
+                None
+            }
+        }
+    };
+    if let Some(client) = client {
+        client.outbox.send(Message::Output(bytes));
+    }
 }

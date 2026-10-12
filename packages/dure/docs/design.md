@@ -13,7 +13,7 @@ running. SSH is the mainstream case, not a privileged one.
 ```mermaid
 flowchart LR
   terminal[terminal] --> client[dure client]
-  client <--> supervisor[dure supervisor]
+  client <--> supervisor[dure __supervisor]
   supervisor --> app[app]
 ```
 
@@ -80,7 +80,7 @@ session that would die with the launcher. Ordinary shells, including the one an
 SSH session provides, permit breakaway.
 
 Once the session is running, the supervisor inspects the job it landed in and
-reports one of three things, which `dure run` passes on:
+reports an outcome that `dure run` passes on:
 
 * a **confirmed tie**: a job that ends the session when the launcher's job
   closes. `dure run` warns, names that cause, and starts the session anyway.
@@ -322,6 +322,8 @@ session to take, so the id being typed is chosen from the same information
 `list` gives. That table and its prompt go to stderr, because they are the
 command asking a question rather than the command's result.
 
+Both the table and the prompt must be written successfully before reading an id.
+
 A session is described, never obeyed. A command may have been launched with
 arguments carrying control characters, and a terminal would act on them, so they
 print in escaped form: a session occupies one row whatever it was launched with,
@@ -349,11 +351,10 @@ broken away, which is the same rule as losing a terminal, applied twice.
 A machine configured to log the user off when their interactive session ends
 makes the product impossible; `dure` cannot outlive a logoff.
 
-A session belongs to the `dure` build that started it. Replacing `dure` while a
-session is running leaves that session held by the supervisor already in
-memory; the new build reports the session as one it cannot resume rather than
-attaching to it. Detaching before upgrading and killing what is left afterwards
-is the way through.
+Replacing `dure` leaves running sessions held by their existing supervisors.
+The replacement build can resume them when it speaks the same protocol version,
+the identifier for compatible message layouts and meanings. A different protocol
+version is refused before connecting; the session remains reachable by `kill`.
 
 ## Isolation
 

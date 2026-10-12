@@ -6,9 +6,10 @@ can honestly say about having done so. Part of the `dure`
 
 ## Two places, two policies
 
-Breakaway is evaluated against the job a process is directly in, so the policy
-matters in two places and the process PAL takes it as an explicit parameter
-rather than a fixed choice.
+Breakaway starts at the immediate job and continues through permitting parent
+jobs until a restrictive parent stops it. The process PAL takes job policy as
+an explicit parameter because the session and launcher have different needs.
+See Microsoft's [nested-job breakaway rules](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs).
 
 The **session job permits breakaway**, so a nested `dure run` inside the app can
 create an independent inner supervisor; other apps that deliberately request
@@ -22,14 +23,15 @@ cargo.
 
 Diagnosing a denied breakaway needs care, because Windows reports it as a plain
 access-denied failure from `CreateProcessW`. Only that error code, and only
-while the job the caller is in withholds the breakaway permission, is reported
+while inspected job policy withholds the breakaway permission, is reported
 as denied breakaway; every other failure keeps its own identity instead of being
 misattributed to a job policy. The resulting message names the job as the cause
 and tells the user to launch `dure.exe` directly.
+Unknown membership or unreadable limits preserve the original platform failure.
 
 ## What the supervisor can establish
 
-Because breakaway only leaves the *immediate* job, a permissive job nested inside
+Because a restrictive parent stops breakaway, a permissive job nested inside
 a restrictive one lets `CreateProcessW` succeed while the supervisor stays a
 member of the outer job. Whether the supervisor escaped is therefore confirmed
 rather than assumed, and confirmed by the supervisor, because Windows reports a
@@ -42,7 +44,7 @@ Terminals and remote-session hosts routinely place every process in an ambient
 job without that limit, and treating those as doomed would condemn nearly every
 real session.
 
-The inspection has three outcomes, and all three are carried to the client
+The inspection outcomes are carried to the client
 unchanged rather than collapsed into a yes or no:
 
 | Outcome | Means | Client says |

@@ -34,10 +34,11 @@ pseudoconsole.
 
 ### Ending it in two steps
 
-Teardown closes the lifetime job before the pseudoconsole. Descendants of the
-app stay attached to the pseudoconsole until the job ends them, and closing a
-pseudoconsole waits for its attached clients, so the other order can stall on a
-grandchild that outlived the app.
+Teardown closes the lifetime job before finishing the pseudoconsole, ending the
+app and its descendants while the output pump remains active. On Windows
+versions before Windows 11 24H2, `ClosePseudoConsole` can block while the console
+host flushes output. The output pump must keep draining during that close.
+See [Microsoft's closure contract](https://learn.microsoft.com/en-us/windows/console/closepseudoconsole).
 
 The pseudoconsole then ends in two steps, because the app's last bytes and the
 handles that carry them have different lifetimes. Finishing closes the
@@ -47,7 +48,9 @@ and then report the end of the stream. Only once the output pump has run to that
 end are the handles released. Releasing them in one step instead would cancel
 whatever read was in flight, and bytes the app had already written would be lost
 in favour of its exit status. Closing on its own remains the abandon path, used
-when a session is torn down before it ever served anyone.
+when a session is torn down before it ever served anyone. That startup rollback
+has no output pump: it releases the undrained output endpoint before closing the
+pseudoconsole, so buffered output cannot block the close.
 
 Reaching the end of the app's output and failing to read it are different
 outcomes, and the pseudoconsole reports them differently. A failed read leaves
@@ -57,8 +60,8 @@ what the app said.
 Only the input side is cancelled by finishing. A relay blocked writing to an app
 that is gone has nothing left to deliver, while the output side still holds
 bytes worth reading. The pseudoconsole handle is taken out of the table under
-the lock and closed outside it, since closing waits for attached clients and
-those clients only make progress while the output pump keeps emptying the pipe.
+the lock and closed outside it, so the output pump can keep looking up and draining
+the pipe while closure completes.
 
 ## The client's console
 
@@ -72,6 +75,10 @@ The client takes the console over as one operation that returns a lease, and
 hands it back through that lease. The console is process-wide state, so a second
 lease is refused rather than sharing the first one's saved state and restoring
 it out from under a live relay.
+
+The lease remains occupied, and takeover remains serialized, until every
+restoration attempt finishes. No caller can capture partially restored console
+state as its own baseline.
 
 The lease records what each step actually changed, so a takeover that fails
 halfway is handed back exactly as far as it got, and every recorded change is

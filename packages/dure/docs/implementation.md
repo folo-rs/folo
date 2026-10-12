@@ -21,14 +21,14 @@ This guide follows the workspace rules for
 ## Process split
 
 The same binary implements both roles. `dure run` spawns the hidden
-`dure supervisor` subcommand, then the original process stays the client and
+`dure __supervisor` subcommand, then the original process stays the client and
 attaches. Windows has no `exec`. The subcommand is hidden from help rather than
 private: it is a real command path, and `dure run` composes the argv for it.
 
 ```mermaid
 sequenceDiagram
   participant C as dure run (client)
-  participant S as dure supervisor
+  participant S as dure __supervisor
   participant A as app
   C->>S: spawn, detached and broken out of the job
   S->>S: create lifetime job + pseudoconsole
@@ -189,7 +189,7 @@ without a console:
   explain. The `trace!` macro evaluates nothing when tracing is off, which
   matters because several call sites render paths and command lines.
 
-Two policies govern writing to the user's streams, because the two kinds of
+Separate policies govern writing to the user's streams, because the kinds of
 output want different answers to a stream that fails. Result output — the
 session table, the resume prompt — is what the command was asked for, so a
 stream that cannot take it fails the command. Diagnostics — verbose notes,
@@ -232,7 +232,7 @@ reaches the user is covered in [job breakaway](job-breakaway.md).
 
 ## Session serving
 
-Once initialized, a supervisor runs four things at once: an accept loop, a relay
+Once initialized, a supervisor runs an accept loop, a relay
 for whichever client owns the console, a pump reading the app's output, and a
 wait on the app. They meet in one shared value, and the ordering rules that make
 attach, steal, and teardown safe against each other are the substance of
@@ -259,8 +259,8 @@ production behavior that does not change under `cfg(test)` except by swapping
 PAL implementations.
 
 Logic above the PAL is unit-tested against mocks so it stays Miri-compatible.
-Startup-failure tests inject directory resolution through the session-store mock, and kill-command
-tests retain and remove records in the in-memory store. Neither needs a real session directory.
+Command tests use in-memory records and prepared directory results. The dispatcher
+accepts a clock source, so routing tests also avoid reading the host clock.
 Those tests cover command parsing, session discovery and garbage collection,
 the supervisor steal loop, and the client attach handshake, including failure
 paths that must not delete a live supervisor record.
@@ -275,6 +275,16 @@ for. The transport reads no clock: a test that wants a bounded wait to expire
 arms that expiry on the pipe it means, so a regression fails its assertion at
 once rather than spending a production timeout first, and an unrelated operation
 cannot consume the injected failure.
+
+Fixture misuse is reported after releasing synchronization guards, leaving the
+fixture usable after a caught precondition panic. Observer callbacks likewise run
+outside the fixture's state locks.
+
+Bounded generated tests exercise partial frame reads and sequential supervisor
+operations. Their readers provide explicit progress, cancellation and expiry;
+their ownership model checks displacement, opening-output retention and lifetime
+gates without reproducing the Windows implementation. Focused concurrency tests
+remain responsible for particular thread interleavings.
 
 ### Integration tests
 
@@ -296,6 +306,17 @@ session from one that is still attached, a session pipe admits nobody but the
 user who made it, `run` refuses a launcher whose job forbids breakaway, and
 `run` warns when an ancestor job it cannot leave would end the session. Tests
 wait on process and pipe events inside the workspace watchdog.
+
+Filesystem scenarios, known-folder lookup, controlled executable search, native
+cancellation and helper-binary discovery run as integration tests. Narrow
+test-support adapters keep their PAL implementation types internal. Native fault
+cases observe peer closure after listener replacement fails and uncommitted
+startup rollback with app output but no serving pump.
+
+Initial geometry is measured after input has traversed the completed attach, in
+a terminal whose size differs from the session default. Resize tests enable
+notifications and discard earlier events before announcing readiness, so only the
+subsequent resize satisfies the wait.
 
 Where a scenario needs the session to be up, it waits for the app's own greeting
 rather than for anything `dure` prints, and it releases an app parked on input

@@ -22,3 +22,5 @@ pub(crate) use resolve::{HowResolved, ResolvedCommand};
 #[cfg(any(test, feature = "private-test-util"))]
 pub(crate) use windows::Breakaway;
 pub(crate) use windows::BuildTargetProcesses;
+#[cfg(any(test, feature = "private-test-util"))]
+pub(crate) use windows::search_path_in;
