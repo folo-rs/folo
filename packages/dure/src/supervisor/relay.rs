@@ -247,6 +247,10 @@ pub(crate) fn client_loop<T, C>(
     }));
     if let Some(generation) = detach_client(shared, conn) {
         set_attached(generation, false);
+    } else if result.is_err() {
+        // An initial-receive panic has no outbox to close its connection.
+        // Nonpanicking displaced relays leave queued delivery to their outbox.
+        shared.transport.disconnect(conn);
     }
     if let Err(panic) = result {
         resume_unwind(panic);

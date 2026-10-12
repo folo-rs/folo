@@ -79,7 +79,8 @@ the app, so that hold is bounded.
 Attach, message application, detach and stopping have finite operations separate
 from their blocking receive loops. A PAL or transport-clone panic propagates only
 after releasing ownership guards; common relay cleanup removes the failed owner
-and abandons its connection. A displaced owner is never restored.
+and abandons its connection, including when the initial receive panics before
+ownership is installed. A displaced owner is never restored.
 
 `dure kill <id>` opens the recorded pid, verifies the process creation time and
 running state, and terminates that process handle, then waits for the process to
