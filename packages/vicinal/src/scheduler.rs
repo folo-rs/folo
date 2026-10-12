@@ -10,9 +10,10 @@ use crate::{
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
-/// Every submission samples its destination once according to the pool's
-/// [`WorkerPolicy`][crate::WorkerPolicy]: the current logical processor by default, or the current
-/// memory region for a regional policy. All submission methods use the same policy.
+/// Every submission samples its processor once according to the pool's
+/// [`WorkerPolicy`][crate::WorkerPolicy]: tasks use that processor by default, or its memory
+/// region for a regional policy. Regional affinity accumulates the processors that submit
+/// accepted work to this pool. All submission methods use the same policy.
 /// Tasks execute synchronously and must preserve worker affinity.
 ///
 /// # Cloning
@@ -23,14 +24,19 @@ use crate::{
 /// # Lifetime
 ///
 /// Scheduler clones do not keep worker threads running after their [`Pool`][crate::Pool]
-/// is dropped. Submissions after shutdown are abandoned without execution and release
+/// is dropped. Submissions after clean shutdown are abandoned without execution and release
 /// their captures before returning. Awaiting a returned [`JoinHandle`] panics.
 ///
-/// # Worker startup
+/// # Worker failures
 ///
-/// While the pool is active, submission panics if its destination cannot start the
-/// configured workers with the required affinity. Subsequent submissions to that
-/// destination also panic until the pool shuts down.
+/// Infrastructure failures, including thread creation and affinity setup or refresh,
+/// are logged and stop the entire pool. Queued tasks are abandoned and executing tasks
+/// may finish. The pool becomes permanently poisoned: every subsequent submission panics
+/// synchronously, including through retained schedulers after the pool is dropped.
+///
+/// A failure detected during submission panics on that call. A worker-side failure may
+/// occur after the triggering submission returns and is propagated when the pool is dropped.
+/// Task panics retain their separate joined/fire-and-forget behavior and do not poison the pool.
 ///
 /// # Example
 ///
@@ -79,7 +85,7 @@ impl Scheduler {
     ///
     /// # Panics
     ///
-    /// This call panics on [worker startup failure](Self#worker-startup).
+    /// This call panics on [worker failure](Self#worker-failures).
     ///
     /// If the task panics, the panic will be captured and re-thrown when the
     /// [`JoinHandle`] is awaited.
@@ -88,7 +94,7 @@ impl Scheduler {
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
     {
-        self.spawn_internal(task, false)
+        self.inner.submit(|| self.spawn_internal(task, false))
     }
 
     /// Spawns an urgent task near the caller, according to the worker policy.
@@ -106,7 +112,7 @@ impl Scheduler {
     ///
     /// # Panics
     ///
-    /// This call panics on [worker startup failure](Self#worker-startup).
+    /// This call panics on [worker failure](Self#worker-failures).
     ///
     /// If the task panics, the panic will be captured and re-thrown when the
     /// [`JoinHandle`] is awaited.
@@ -115,7 +121,7 @@ impl Scheduler {
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
     {
-        self.spawn_internal(task, true)
+        self.inner.submit(|| self.spawn_internal(task, true))
     }
 
     /// Spawns a fire-and-forget task according to the pool's worker policy.
@@ -131,7 +137,7 @@ impl Scheduler {
     ///
     /// # Panics
     ///
-    /// This call panics on [worker startup failure](Self#worker-startup).
+    /// This call panics on [worker failure](Self#worker-failures).
     ///
     /// If the task panics, the panic will be caught and logged via `tracing::error!`
     /// but will not be propagated to the caller.
@@ -139,7 +145,8 @@ impl Scheduler {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.spawn_internal_and_forget(task, false);
+        self.inner
+            .submit(|| self.spawn_internal_and_forget(task, false));
     }
 
     /// Spawns an urgent fire-and-forget task according to the worker policy.
@@ -151,7 +158,7 @@ impl Scheduler {
     ///
     /// # Panics
     ///
-    /// This call panics on [worker startup failure](Self#worker-startup).
+    /// This call panics on [worker failure](Self#worker-failures).
     ///
     /// If the task panics, the panic will be caught and logged via `tracing::error!`
     /// but will not be propagated to the caller.
@@ -159,7 +166,8 @@ impl Scheduler {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.spawn_internal_and_forget(task, true);
+        self.inner
+            .submit(|| self.spawn_internal_and_forget(task, true));
     }
 
     /// Internal implementation of spawn.
@@ -172,7 +180,7 @@ impl Scheduler {
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
         let destination = self.inner.policy.destination(&self.inner.hardware);
-        let state = self.inner.ensure_workers_spawned(destination);
+        let state = self.inner.registry.get_or_init(destination.group);
 
         // Rent a oneshot channel for the result.
         let (sender, receiver) = state.result_channel_pool.rent();
@@ -196,7 +204,7 @@ impl Scheduler {
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
         let destination = self.inner.policy.destination(&self.inner.hardware);
-        let state = self.inner.ensure_workers_spawned(destination);
+        let state = self.inner.registry.get_or_init(destination.group);
 
         // Wrap the task to capture panics and log them.
         let wrapped = wrap_task_and_forget(task, spawn_time);

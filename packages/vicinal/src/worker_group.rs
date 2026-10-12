@@ -1,11 +1,12 @@
 //! Shared state for workers assigned to one locality destination.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use event_listener::Event;
 use events_once::EventLake;
+use many_cpus::ProcessorSet;
 use plurality::MultiPool;
 
 use crate::ErasedTaskHandle;
@@ -31,6 +32,10 @@ pub(crate) struct WorkerGroup {
     /// Published only after every worker acknowledges affinity, or startup fails permanently.
     pub(crate) startup: OnceLock<Result<(), ()>>,
 
+    /// The admitted regional mask. Workers clone it only when its revision changes.
+    pub(crate) affinity: Mutex<Option<Arc<ProcessorSet>>>,
+    pub(crate) affinity_revision: AtomicUsize,
+
     /// Backing storage for the task objects queued in this group.
     ///
     /// `MultiPool` is not `Sync`, so the mutex serializes allocation by scheduler threads.
@@ -52,6 +57,8 @@ impl WorkerGroup {
             wake_event: Event::new(),
             shutdown_flag: AtomicBool::new(false),
             startup: OnceLock::new(),
+            affinity: Mutex::new(None),
+            affinity_revision: AtomicUsize::new(0),
             task_pool: Mutex::new(MultiPool::new()),
             result_channel_pool: EventLake::new(),
             tasks_spawned: AtomicU64::new(0),

@@ -25,6 +25,7 @@ async fn processor_local() {
 }
 
 async fn memory_region_local() {
+    // Workers share each region's cumulative set of submitting processors.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
         .build();

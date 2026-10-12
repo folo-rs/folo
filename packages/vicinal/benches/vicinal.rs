@@ -574,6 +574,9 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                             let finish = Arc::clone(&finish);
                             move || {
                                 affinity.pin_current_thread_to();
+                                // Membership expansion and initial slot/channel allocation are
+                                // setup, not steady-state dispatch contention.
+                                block_on(scheduler.spawn(|| {}));
                                 let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
                                 // First rendezvous reports readiness; the second releases work.
                                 start.wait();

@@ -1,4 +1,4 @@
-//! Demonstrates workers that share a caller's memory region without requiring its processor.
+//! Demonstrates regional workers following a stable quota-aware set of submitting processors.
 
 use futures::executor::block_on;
 use many_cpus::SystemHardware;
@@ -7,22 +7,23 @@ use vicinal::{Pool, WorkerPolicy};
 
 fn main() {
     let hardware = SystemHardware::current();
-    // Keep the caller's region stable between observing it and submitting the task.
-    let caller = hardware
-        .all_processors()
-        .take(nz!(1))
-        .expect("the system has a processor");
-    caller.pin_current_thread_to();
-    let caller_region = hardware.current_memory_region_id();
+    // Select the orchestrator's stable CPU set once. Worker placement follows this set;
+    // fractional quotas and unrelated process work may still cause throttling.
+    let submitters = hardware.processors();
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
         .build();
-    let region = block_on(
-        pool.scheduler()
-            .spawn(|| SystemHardware::current().current_memory_region_id()),
-    );
-    assert_eq!(region, caller_region);
-    println!("Task executed in memory region {region}");
+    let scheduler = pool.scheduler();
+    let callers = submitters.spawn_threads(move |processor| {
+        let caller_region = processor.memory_region_id();
+        let region =
+            block_on(scheduler.spawn(|| SystemHardware::current().current_memory_region_id()));
+        assert_eq!(region, caller_region);
+        println!("Task executed in memory region {region}");
+    });
+    for caller in callers {
+        caller.join().expect("submitting thread must succeed");
+    }
 }
 
 ::testing::set_allocator!();

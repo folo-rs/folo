@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures::executor::block_on;
 use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use vicinal::{Pool, WorkerPolicy};
@@ -55,7 +56,7 @@ fn tasks_execute_on_spawning_processor() {
             // Wait for all tasks to complete.
             for handle in task_handles {
                 // We use block_on from futures crate for simplicity in this example.
-                futures::executor::block_on(handle);
+                block_on(handle);
             }
         }
     });
@@ -75,7 +76,7 @@ fn tasks_execute_on_spawning_processor() {
 }
 
 #[test]
-fn regional_tasks_preserve_region_and_full_eligible_affinity() {
+fn regional_tasks_use_only_submitting_processors() {
     testing::with_watchdog(|| {
         let hardware = SystemHardware::current();
         let processors = hardware.all_processors();
@@ -83,27 +84,43 @@ fn regional_tasks_preserve_region_and_full_eligible_affinity() {
             .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
             .build();
         let scheduler = pool.scheduler();
-        let threads = processors.spawn_threads(move |processor| {
+        // Sequential CPU registration makes each expected cumulative mask deterministic.
+        let mut submitted = BTreeSet::new();
+        for processor in &processors {
+            let caller = processors
+                .to_builder()
+                .filter(|p| p.id() == processor.id())
+                .take_all()
+                .unwrap();
+            submitted.insert(processor.id());
             let expected_region = processor.memory_region_id();
-            let handle = scheduler.spawn(move || {
-                let hardware = SystemHardware::current();
-                assert_eq!(hardware.current_memory_region_id(), expected_region);
-                let affinity = hardware.thread_processors().unwrap();
-                let expected = hardware
-                    .all_processors()
-                    .to_builder()
-                    .filter(|p| p.memory_region_id() == expected_region)
-                    .take_all()
-                    .unwrap();
-                assert_eq!(
-                    affinity.iter().map(Processor::id).collect::<BTreeSet<_>>(),
-                    expected.iter().map(Processor::id).collect::<BTreeSet<_>>()
-                );
-            });
-            futures::executor::block_on(handle);
-        });
-        for thread in threads {
-            thread.join().unwrap();
+            let expected: BTreeSet<_> = processors
+                .iter()
+                .filter(|p| p.memory_region_id() == expected_region && submitted.contains(&p.id()))
+                .map(Processor::id)
+                .collect();
+            caller
+                .spawn_thread({
+                    let scheduler = scheduler.clone();
+                    move |_| {
+                        block_on(scheduler.spawn(move || {
+                            let hardware = SystemHardware::current();
+                            assert_eq!(hardware.current_memory_region_id(), expected_region);
+                            let affinity = hardware
+                                .all_processors()
+                                .to_builder()
+                                .where_available_for_current_thread()
+                                .take_all()
+                                .unwrap();
+                            assert_eq!(
+                                affinity.iter().map(Processor::id).collect::<BTreeSet<_>>(),
+                                expected
+                            );
+                        }));
+                    }
+                })
+                .join()
+                .unwrap();
         }
     });
 }

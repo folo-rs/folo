@@ -58,7 +58,7 @@ pub(crate) type TaskResult<R> = Result<R, Box<dyn Any + Send>>;
 ///
 /// Handles both `&str` and `String` panic payloads, which are the most common
 /// panic types produced by the `panic!` macro.
-fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
+pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {

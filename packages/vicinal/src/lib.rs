@@ -33,10 +33,12 @@
 //!
 //! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
 //!   short-lived so that the pool is often idle.
-//! - Workers may use any processor permitted by hard operating-system restrictions.
-//!   Processor-time quotas do not limit worker placement or adjust the configured worker count.
-//!   The pool does not guarantee avoidance of quota throttling.
-//! - Regional workers may migrate within their selected region, even during one task.
+//! - Regional workers use only processors that submitted accepted work to their pool and region.
+//!   A stable, quota-appropriate submitter set keeps worker placement within that set; membership
+//!   grows if new processors submit work and never shrinks. Quotas do not adjust worker counts.
+//!   Fractional quotas and other process work can still cause throttling.
+//! - Regional affinity expands at task boundaries, without preempting running tasks.
+//!   Workers may migrate within their permitted set, even during one task.
 //!   Task code must preserve worker affinity. Affinity does not bind allocations, move data
 //!   or guarantee cache hits. Topology and restriction refresh are not supported.
 //!
@@ -48,6 +50,9 @@
 //!
 //! If you need to ensure all spawned tasks complete before shutdown, await their [`JoinHandle`]s
 //! before dropping the pool.
+//! Infrastructure failures log the failure and stop the entire pool, abandoning queued work.
+//! The pool then remains poisoned and all further submissions panic synchronously.
+//! Already executing tasks may finish; task panics do not poison the pool.
 //!
 //! # Panics
 //!

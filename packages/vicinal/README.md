@@ -35,6 +35,7 @@ async fn processor_local() {
 }
 
 async fn memory_region_local() {
+    // Workers share each region's cumulative set of submitting processors.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
         .build();
@@ -43,9 +44,11 @@ async fn memory_region_local() {
 }
 ```
 
-The regional count is per region, not per processor. Workers can move among eligible
-processors within that region, even during one task; they do not steal work from other
-regions. Same-region execution may also use the submitting processor.
+The regional count is per region, not per processor. Workers start on the first submitting
+processor. New submitting processors expand that region's permitted set without adding
+workers; never-submitting processors remain excluded. Membership is per pool and cumulative.
+Workers refresh affinity at task boundaries, without preempting running tasks. They may
+move within their permitted set even during one task, but never steal work from other regions.
 `workers_per_processor(count)` is an alias for the corresponding `WorkerPolicy`; the last
 policy setter wins. Counts may exceed processor counts for blocking work.
 
@@ -53,9 +56,10 @@ policy setter wins. Counts may exceed processor counts for blocking work.
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
   short-lived so that the pool is often idle.
-- Workers may use any processor permitted by hard operating-system restrictions.
-  Processor-time quotas do not limit worker placement or adjust the configured worker count.
-  The pool does not guarantee avoidance of quota throttling.
+- Regional workers stay within the submitting processors. A stable, quota-appropriate
+  submitter set keeps worker placement within that set; changing submitters can grow the
+  cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
+  quotas and other process work can still cause throttling.
 - Task code must preserve worker affinity. Affinity does not bind memory allocations,
   move data or guarantee cache hits. Topology and restriction refresh are not supported.
 
@@ -64,6 +68,11 @@ policy setter wins. Counts may exceed processor counts for blocking work.
 Dropping the pool releases queued tasks and waits for executing tasks and workers.
 Abandoned join handles disconnect and panic when awaited, even if scheduler clones remain.
 Await required work before dropping the pool.
+
+Infrastructure failures, including worker startup and affinity refresh, log the failure
+and stop the entire pool. Queued tasks are abandoned; executing tasks may finish.
+The pool remains poisoned and every later submission panics synchronously, including
+after the pool is dropped. Task panics do not poison the pool.
 
 ## Platform support
 

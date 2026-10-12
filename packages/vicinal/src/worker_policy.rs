@@ -2,7 +2,7 @@ use std::num::NonZero;
 
 use many_cpus::SystemHardware;
 
-use crate::GroupId;
+use crate::{GroupId, SubmissionTarget};
 
 /// Configures worker counts and the locality of submitted tasks.
 ///
@@ -12,7 +12,7 @@ use crate::GroupId;
 /// the number of processors, allowing oversubscription for blocking work.
 ///
 /// Locality requires task code to preserve worker affinity. It does not bind allocations,
-/// move data, guarantee cache hits or avoid processor-time quota throttling.
+/// move data or guarantee cache hits. Policies do not enforce processor-time quotas.
 #[derive(Clone, Debug)]
 pub struct WorkerPolicy {
     kind: PolicyKind,
@@ -33,9 +33,18 @@ impl WorkerPolicy {
 
     /// Uses a fixed number of workers shared by each submitting memory region.
     ///
-    /// Each task is routed to the [`many_cpus::MemoryRegionId`] sampled during submission.
-    /// Workers may run on any eligible processor in that region, including migrating
-    /// during one task. There is no cross-region work stealing.
+    /// Each task is routed to its submitting processor's [`many_cpus::MemoryRegionId`].
+    /// Workers may run only on processors in that region that have submitted accepted work
+    /// to this pool. The first submission starts the configured workers on its processor;
+    /// new submitting processors expand the permitted set without adding workers.
+    ///
+    /// Workers refresh affinity at task boundaries. A running task may finish with the
+    /// previous narrower set and may migrate within that set. Membership is cumulative:
+    /// processors are never removed, and there is no cross-region work stealing.
+    ///
+    /// Submitters using a stable, quota-appropriate processor set keep worker placement
+    /// within that set. Changing submitter processors can grow the accumulated set.
+    /// This does not guarantee avoidance of throttling from fractional quotas or other work.
     ///
     /// # Example
     ///
@@ -60,11 +69,26 @@ impl WorkerPolicy {
     }
 
     /// Samples only the identity used by this policy, avoiding inconsistent topology samples.
-    pub(crate) fn destination(&self, hardware: &SystemHardware) -> GroupId {
+    pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
         match self.kind {
-            PolicyKind::Processor => GroupId::Processor(hardware.current_processor_id()),
-            PolicyKind::MemoryRegion => GroupId::MemoryRegion(hardware.current_memory_region_id()),
+            PolicyKind::Processor => {
+                let processor = hardware.current_processor_id();
+                SubmissionTarget {
+                    group: GroupId::Processor(processor),
+                    processor,
+                }
+            }
+            PolicyKind::MemoryRegion => {
+                hardware.with_current_processor(|processor| SubmissionTarget {
+                    group: GroupId::MemoryRegion(processor.memory_region_id()),
+                    processor: processor.id(),
+                })
+            }
         }
+    }
+
+    pub(crate) fn is_regional(&self) -> bool {
+        matches!(self.kind, PolicyKind::MemoryRegion)
     }
 
     /// Sizes the sparse index space, not the number of populated groups.

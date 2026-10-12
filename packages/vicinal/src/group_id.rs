@@ -33,3 +33,10 @@ impl fmt::Display for GroupId {
         }
     }
 }
+
+/// A destination and its submitting CPU, derived from one topology observation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SubmissionTarget {
+    pub(crate) group: GroupId,
+    pub(crate) processor: ProcessorId,
+}

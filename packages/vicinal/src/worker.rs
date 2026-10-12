@@ -43,7 +43,16 @@ impl<'a> WorkerCore<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn run_one_iteration(&self) -> IterationResult {
+        self.run_one_iteration_with(|| true)
+    }
+
+    /// Refreshes thread-local state and confirms admission after dequeueing, outside the queue lock.
+    pub(crate) fn run_one_iteration_with(
+        &self,
+        before_task: impl FnOnce() -> bool,
+    ) -> IterationResult {
         // We first check with Relaxed to minimize overhead, as this will be called often.
         if self.shutdown_flag.load(Ordering::Relaxed) {
             // Acquire ordering synchronizes with Release in signal_shutdown, ensuring we see
@@ -55,12 +64,18 @@ impl<'a> WorkerCore<'a> {
 
         let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
+            if !before_task() {
+                return IterationResult::Shutdown;
+            }
             task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
         let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
+            if !before_task() {
+                return IterationResult::Shutdown;
+            }
             task.as_pin_mut().call();
             return IterationResult::ExecutedRegular;
         }
@@ -129,6 +144,32 @@ mod tests {
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
         assert_eq!(core.run_one_iteration(), IterationResult::Shutdown);
+    }
+
+    #[test]
+    fn boundary_shutdown_abandons_dequeued_task_outside_queue_lock() {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
+        let shutdown = AtomicBool::new(false);
+        let pool = MultiPool::new();
+        for queue in [&regular, &urgent] {
+            queue
+                .lock()
+                .unwrap()
+                .push_back(alloc_task(&pool, CountingTask::new(&COUNTER)));
+            let core = WorkerCore::new(&urgent, &regular, &shutdown);
+            assert_eq!(
+                core.run_one_iteration_with(|| {
+                    drop(urgent.try_lock().unwrap());
+                    drop(regular.try_lock().unwrap());
+                    false
+                }),
+                IterationResult::Shutdown
+            );
+            assert_eq!(COUNTER.load(Ordering::Relaxed), 0);
+            assert!(pool.is_empty());
+        }
     }
 
     #[test]

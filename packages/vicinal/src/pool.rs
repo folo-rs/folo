@@ -20,6 +20,8 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// By default, tasks execute on the processor sampled during submission, with two workers
 /// per processor. [`WorkerPolicy`] can instead share a fixed worker count across each
 /// submitting memory region. No workers start until the first submission to that destination.
+/// Regional workers use the cumulative set of processors that submitted accepted work
+/// to their pool and region, refreshing affinity at task boundaries without adding workers.
 /// A pool's policy does not change after construction.
 ///
 /// # Lifetime
@@ -27,7 +29,9 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// Dropping the pool signals shutdown, abandons queued tasks and waits for executing tasks
 /// and worker threads to finish. Abandoned tasks release their resources even if schedulers
 /// remain alive. Awaiting an abandoned task's [`JoinHandle`][crate::JoinHandle] panics.
-/// Later submissions through retained schedulers are immediately abandoned as well.
+/// After clean shutdown, retained schedulers immediately abandon submissions as well.
+/// An infrastructure failure stops and permanently poisons the entire pool; all further
+/// submissions then panic synchronously, even after the pool is dropped.
 ///
 /// To ensure all tasks complete, await their join handles before dropping the pool.
 ///
@@ -192,7 +196,7 @@ mod tests {
             (&region, GroupId::MemoryRegion(0), nz!(1)),
             (&processor, GroupId::Processor(0), nz!(3)),
         ] {
-            assert_eq!(pool.inner.policy.destination(&hardware), destination);
+            assert_eq!(pool.inner.policy.destination(&hardware).group, destination);
             assert_eq!(pool.inner.policy.count(), count);
             assert_eq!(pool.inner.registry.initialized().count(), 0);
             assert!(pool.inner.worker_handles.lock().unwrap().is_empty());

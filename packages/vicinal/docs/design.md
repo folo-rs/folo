@@ -23,12 +23,19 @@ let regional_pool = Pool::builder()
     .build();
 ```
 
-A task is assigned to the current processor or `many_cpus` memory region sampled once
-during submission. Processor-policy workers are pinned to that processor. Regional workers
-share work from every submitting processor in the selected region and may float among
-that region's eligible processors, even during one task. Running on the submitting
-processor remains valid; migration is permitted, not required. Work never moves to another
-region to obtain an idle worker.
+A task is assigned using one processor observation during submission; regional routing
+derives the `many_cpus` memory region from that same processor. Processor-policy workers
+are pinned to the sampled processor. Regional workers share work from every submitting
+processor in the selected region.
+
+Each pool and region accumulates the processors that submitted accepted work. First use
+starts workers with the submitting processor's singleton affinity. A new submitting
+processor expands the permitted set without adding workers. Repeated submissions from
+known processors do not change the set. Processors are never removed.
+
+Workers refresh their affinity at task boundaries; executing tasks may finish with the
+previous narrower mask. Migration within the permitted mask is allowed even during a task,
+but is not required. Work never moves to another region to obtain an idle worker.
 
 Each destination starts its configured worker count once, on first use. Construction
 starts no workers. Workers persist until shutdown, and a regional count is not multiplied
@@ -37,10 +44,15 @@ processor count, supporting blocking workloads.
 
 ## Locality boundaries
 
-Every processor permitted by hard operating-system restrictions is eligible for workers.
-Processor-time quotas do not narrow this set: a caller outside a quota-selected subset
-still requires local workers. The fixed worker count does not guarantee avoidance of
-processor-time quota throttling.
+Every processor permitted by hard operating-system restrictions is a valid submission
+destination. Processor-time quotas do not narrow destination eligibility: a caller outside
+a quota-selected subset still requires local workers.
+
+Regional workers stay within the cumulative submitting-processor set. An orchestrator
+using a suitable stable quota-obeying set therefore keeps worker placement within that
+set. Changing the orchestrator's processors can grow accumulated membership. The pool
+does not enforce a quota, shrink membership or clamp the worker count. Fractional quotas
+and other process work can still cause throttling.
 
 Affinity does not bind memory allocations, move existing data or guarantee cache hits.
 Task code must preserve worker affinity. Dynamic topology and restriction refresh are not
@@ -66,11 +78,20 @@ Dropping the pool signals its workers and waits for tasks that are already execu
 Queued tasks may be abandoned. Callers that require completion await the corresponding
 join handles before dropping the pool. Abandonment releases captured resources and
 disconnects result handles even when schedulers retain the pool's storage.
-Submissions through retained schedulers after shutdown are immediately abandoned without
+Submissions through retained schedulers after clean shutdown are immediately abandoned without
 execution. Submission returns normally; awaiting an abandoned handle panics.
 
-Worker startup must establish the full configured count and affinity before accepting
-work for a destination. Thread creation or affinity failure panics on the submitting
-thread rather than permitting unpinned execution or work with no functioning workers.
-The failed destination rejects further submissions with a panic while the pool is active.
-After shutdown, submissions are abandoned regardless of earlier startup failures.
+## Infrastructure failures
+
+Any infrastructure failure logs the problem, stops the entire pool and permanently
+poisons it against further submissions. Queued tasks are abandoned and their joined
+handles disconnect and panic when awaited. Already executing synchronous tasks may finish;
+the pool does not forcibly terminate threads. Every later submission panics synchronously,
+even after the pool is dropped. Task panics retain their separate behavior and do not
+poison the pool.
+
+Worker startup establishes the full configured count and singleton affinity before
+accepting work for a destination. Failures detected during submission, including thread
+creation and initial affinity setup, panic on the submitting call. A later affinity
+refresh failure occurs on a worker, so the triggering submission may already have returned.
+Dropping the pool joins every worker and propagates worker failures after cleanup.

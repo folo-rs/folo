@@ -14,7 +14,8 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use crate::{
-    ErasedTaskHandle, GroupId, Pool, Scheduler, VicinalTask, WorkerGroup, WorkerPolicy, init_task,
+    ErasedTaskHandle, GroupId, Pool, Scheduler, SubmissionTarget, VicinalTask, WorkerGroup,
+    WorkerPolicy, init_task,
 };
 
 /// Sparse regions with multiple eligible CPUs and a quota that excludes some of them.
@@ -31,7 +32,10 @@ fn hardware() -> SystemHardware {
 /// Records the permitted mask, rather than a CPU observed by chance.
 fn affinity(hardware: &SystemHardware) -> BTreeSet<u32> {
     hardware
-        .thread_processors()
+        .all_processors()
+        .to_builder()
+        .where_available_for_current_thread()
+        .take_all()
         .unwrap()
         .iter()
         .map(Processor::id)
@@ -67,73 +71,9 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
 }
 
 #[test]
-fn regional_policy_shares_groups_for_every_submission_variant() {
-    with_watchdog(|| {
-        let hardware = hardware();
-        let processors = hardware.all_processors();
-        let pool = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
-            .build();
-        let scheduler = pool.scheduler();
-        let handles = processors.spawn_threads({
-            let processors = processors.clone();
-            move |processor| {
-                let expected: BTreeSet<_> = processors
-                    .iter()
-                    .filter(|p| p.memory_region_id() == processor.memory_region_id())
-                    .map(Processor::id)
-                    .collect();
-                let ordinary = scheduler.spawn({
-                    let hardware = hardware.clone();
-                    move || affinity(&hardware)
-                });
-                let urgent = scheduler.spawn_urgent({
-                    let hardware = hardware.clone();
-                    move || affinity(&hardware)
-                });
-                let (sent, received) = mpsc::channel();
-                scheduler.spawn_and_forget({
-                    let hardware = hardware.clone();
-                    let sent = sent.clone();
-                    move || sent.send(affinity(&hardware)).unwrap()
-                });
-                scheduler.spawn_urgent_and_forget({
-                    let hardware = hardware.clone();
-                    move || sent.send(affinity(&hardware)).unwrap()
-                });
-                assert_eq!(block_on(ordinary), expected);
-                assert_eq!(block_on(urgent), expected);
-                assert_eq!(received.recv().unwrap(), expected);
-                assert_eq!(received.recv().unwrap(), expected);
-            }
-        });
-        for handle in handles {
-            handle.join().unwrap();
-        }
-        assert_eq!(pool.inner.registry.initialized().count(), 2);
-        assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 2);
-        assert_eq!(
-            pool.inner
-                .registry
-                .get_or_init(GroupId::MemoryRegion(2))
-                .get_tasks_spawned(),
-            8
-        );
-        assert_eq!(
-            pool.inner
-                .registry
-                .get_or_init(GroupId::MemoryRegion(5))
-                .get_tasks_spawned(),
-            4
-        );
-    });
-}
-
-#[test]
 fn concurrent_first_submissions_start_exact_configured_count() {
     // More workers than processors proves that intentional oversubscription is retained.
-    const WORKERS: u32 = 3;
+    const WORKERS: u32 = 2;
     with_watchdog(|| {
         for regional in [false, true] {
             let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
@@ -215,7 +155,12 @@ fn shutdown_before_lazy_state_creation_starts_no_workers() {
         .build();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
-    let state = inner.ensure_workers_spawned_with(GroupId::MemoryRegion(2), |_| panic!());
+    let target = SubmissionTarget {
+        group: GroupId::MemoryRegion(2),
+        processor: 0,
+    };
+    let state = inner.registry.get_or_init(target.group);
+    inner.enqueue_with(target, state, probe(state, || {}), false, |_| panic!());
     assert!(state.startup.get().is_none());
     assert!(inner.worker_handles.lock().unwrap().is_empty());
 }
@@ -233,9 +178,16 @@ fn shutdown_accounts_for_in_progress_startup() {
         let starter = thread::spawn({
             let inner = Arc::clone(&inner);
             move || {
-                inner.ensure_workers_spawned_with(GroupId::Processor(0), |handles| {
+                let target = SubmissionTarget {
+                    group: GroupId::Processor(0),
+                    processor: 0,
+                };
+                let state = inner.registry.get_or_init(target.group);
+                let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
+                let task = init_task(slot, NoopTask);
+                inner.enqueue_with(target, state, task, false, |handles| {
                     inner.start_workers(
-                        GroupId::Processor(0),
+                        target,
                         handles,
                         thread::Builder::spawn,
                         ProcessorSet::pin_current_thread_to,
@@ -265,17 +217,21 @@ fn shutdown_accounts_for_in_progress_startup() {
 }
 
 #[test]
-fn partial_thread_creation_failure_is_terminal_and_does_not_poison() {
+fn partial_thread_creation_failure_does_not_poison_locks() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
             .workers_per_processor(nz!(2))
             .build();
         let inner = &pool.inner;
-        let destination = GroupId::Processor(0);
+        let destination = SubmissionTarget {
+            group: GroupId::Processor(0),
+            processor: 0,
+        };
+        let state = inner.registry.get_or_init(destination.group);
         let mut attempts = 0_u32;
         assert_panics(|| {
-            inner.ensure_workers_spawned_with(destination, |handles| {
+            inner.enqueue_with(destination, state, probe(state, || {}), false, |handles| {
                 inner.start_workers(
                     destination,
                     handles,
@@ -293,12 +249,9 @@ fn partial_thread_creation_failure_is_terminal_and_does_not_poison() {
         });
         assert_eq!(attempts, 2);
         assert_eq!(inner.worker_handles.lock().unwrap().len(), 1);
-        assert_eq!(
-            inner.registry.get_or_init(destination).startup.get(),
-            Some(&Err(()))
-        );
+        assert_eq!(state.startup.get(), Some(&Err(())));
         assert_panics(|| {
-            inner.ensure_workers_spawned(destination);
+            inner.enqueue(destination, state, probe(state, || {}), false);
         });
         inner.join_all_workers();
         assert!(inner.worker_handles.lock().unwrap().is_empty());
@@ -313,19 +266,22 @@ fn affinity_failure_is_reported_before_admission() {
             .workers_per_processor(nz!(1))
             .build();
         let inner = &pool.inner;
-        let destination = GroupId::Processor(0);
+        let destination = SubmissionTarget {
+            group: GroupId::Processor(0),
+            processor: 0,
+        };
+        let state = inner.registry.get_or_init(destination.group);
         assert_panics(|| {
-            inner.ensure_workers_spawned_with(destination, |handles| {
+            inner.enqueue_with(destination, state, probe(state, || {}), false, |handles| {
                 inner.start_workers(destination, handles, thread::Builder::spawn, |_| {
                     panic!("injected affinity failure")
                 });
             });
         });
-        let state = inner.registry.get_or_init(destination);
         assert_eq!(state.startup.get(), Some(&Err(())));
         assert_eq!(state.get_tasks_spawned(), 0);
         assert_panics(|| {
-            inner.ensure_workers_spawned(destination);
+            inner.enqueue(destination, state, probe(state, || {}), false);
         });
         inner.join_all_workers();
         assert!(inner.worker_handles.lock().unwrap().is_empty());
@@ -340,9 +296,22 @@ fn empty_region_never_starts_unpinned_workers() {
         .build();
     // The sparse index space contains this ID, but no eligible processor belongs to it.
     assert_panics(|| {
-        pool.inner.ensure_workers_spawned(GroupId::MemoryRegion(4));
+        let target = SubmissionTarget {
+            group: GroupId::MemoryRegion(4),
+            processor: 0,
+        };
+        let state = pool.inner.registry.get_or_init(target.group);
+        pool.inner
+            .enqueue(target, state, probe(state, || {}), false);
     });
     assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+}
+
+/// Startup-race work may legitimately execute before shutdown closes admission.
+struct NoopTask;
+
+impl VicinalTask for NoopTask {
+    fn call(self: Pin<&mut Self>) {}
 }
 
 /// Detects abandoned captures and can re-enter the pool during destruction.
@@ -387,7 +356,15 @@ fn shutdown_racing_enqueue_drops_outside_locks() {
         }
     });
     drop(pool);
-    inner.enqueue(destination, state, task, false);
+    inner.enqueue(
+        SubmissionTarget {
+            group: destination,
+            processor: 0,
+        },
+        state,
+        task,
+        false,
+    );
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.regular_queue.lock().unwrap().is_empty());
 }
@@ -490,7 +467,7 @@ fn assert_retained_scheduler(scheduler: &Scheduler) {
 }
 
 #[test]
-fn shutdown_abandons_submissions_to_a_failed_destination() {
+fn poisoned_pool_rejects_submissions_even_after_drop() {
     for policy in [
         WorkerPolicy::fixed_per_processor(nz!(1)),
         WorkerPolicy::fixed_per_memory_region(nz!(1)),
@@ -503,12 +480,104 @@ fn shutdown_abandons_submissions_to_a_failed_destination() {
             .build();
         let scheduler = pool.scheduler();
         assert_panics(|| {
+            let state = pool.inner.registry.get_or_init(destination.group);
             pool.inner
-                .ensure_workers_spawned_with(destination, |_| panic!("injected startup failure"));
+                .enqueue_with(destination, state, probe(state, || {}), false, |_| {
+                    panic!("injected startup failure")
+                });
         });
         drop(pool);
-        assert_retained_scheduler(&scheduler);
+        assert_panics(|| scheduler.spawn(|| {}));
+        assert_panics(|| scheduler.spawn_urgent(|| {}));
+        assert_panics(|| scheduler.spawn_and_forget(|| {}));
+        assert_panics(|| scheduler.spawn_urgent_and_forget(|| {}));
     }
+}
+
+#[test]
+fn startup_failure_stops_every_group() {
+    with_watchdog(|| {
+        for policy in [
+            WorkerPolicy::fixed_per_processor(nz!(1)),
+            WorkerPolicy::fixed_per_memory_region(nz!(1)),
+        ] {
+            let hardware = hardware();
+            let other_region = hardware
+                .all_processors()
+                .to_builder()
+                .filter(|processor| processor.id() == 3)
+                .take_all()
+                .unwrap();
+            other_region.pin_current_thread_to();
+            let pool = Pool::builder()
+                .hardware(hardware.clone())
+                .worker_policy(policy.clone())
+                .build();
+            let scheduler = pool.scheduler();
+            let (entered, arrivals) = mpsc::channel();
+            let (release, wait) = mpsc::channel();
+            let running = scheduler.spawn(move || {
+                entered.send(()).unwrap();
+                wait.recv().unwrap();
+            });
+            arrivals.recv().unwrap();
+            let capture = OnDrop(Some(Box::new({
+                let scheduler = scheduler.clone();
+                move || {
+                    assert_panics(|| scheduler.spawn(|| {}));
+                    release.send(()).unwrap();
+                }
+            })));
+            let abandoned = scheduler.spawn(move || drop(capture));
+
+            hardware
+                .all_processors()
+                .to_builder()
+                .filter(|processor| processor.id() == 0)
+                .take_all()
+                .unwrap()
+                .pin_current_thread_to();
+            let target = policy.destination(&hardware);
+            let state = pool.inner.registry.get_or_init(target.group);
+            assert_panics(|| {
+                pool.inner
+                    .enqueue_with(target, state, probe(state, || {}), false, |_| {
+                        panic!("injected startup failure")
+                    });
+            });
+            block_on(running);
+            assert_panics(|| block_on(abandoned));
+            for state in pool.inner.registry.initialized() {
+                assert!(state.shutdown_flag.load(Ordering::Acquire));
+            }
+            other_region.pin_current_thread_to();
+            assert_panics(|| scheduler.spawn(|| {}));
+        }
+    });
+}
+
+#[test]
+fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
+    with_watchdog(|| {
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .workers_per_processor(nz!(1))
+            .build();
+        let scheduler = pool.scheduler();
+        assert_panics(|| block_on(scheduler.spawn(|| panic!("task panic"))));
+        scheduler.spawn_and_forget(|| panic!("fire-and-forget task panic"));
+        block_on(scheduler.spawn(|| {}));
+        assert!(!pool.inner.poisoned.load(Ordering::Acquire));
+
+        // This is the common boundary for topology, result-channel and task-slot failures.
+        assert_panics(|| {
+            pool.inner
+                .submit(|| panic!("injected infrastructure failure"))
+        });
+        assert!(pool.inner.poisoned.load(Ordering::Acquire));
+        assert!(pool.inner.shutdown.load(Ordering::Acquire));
+        assert_panics(|| scheduler.spawn(|| {}));
+    });
 }
 
 #[test]
@@ -518,10 +587,15 @@ fn separate_enqueues_notify_separate_waiters() {
     let state = pool.inner.registry.get_or_init(destination);
     let first = state.wake_event.listen();
     let second = state.wake_event.listen();
+    // No OS workers are needed to verify the notification protocol.
+    state.startup.set(Ok(())).unwrap();
+    let target = SubmissionTarget {
+        group: destination,
+        processor: 0,
+    };
     pool.inner
-        .enqueue(destination, state, probe(state, || {}), false);
-    pool.inner
-        .enqueue(destination, state, probe(state, || {}), true);
+        .enqueue(target, state, probe(state, || {}), false);
+    pool.inner.enqueue(target, state, probe(state, || {}), true);
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), Some(()));
 }
