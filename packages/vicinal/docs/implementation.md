@@ -25,6 +25,11 @@ corresponding queue lock, then executes it after releasing the lock. User task c
 therefore runs without any processor-state lock held.
 
 Worker threads are created once per active processor and tracked by the owning pool.
+Their affinity is selected from `SystemHardware::all_processors()` so a processor sampled
+at submission remains eligible even when it is outside the quota-limited `processors()`
+set. This retains the hardware layer's hard processor restrictions without using its
+processor-time quota to limit worker placement.
+
 Shutdown prevents new worker creation, wakes existing workers and joins every worker
 thread. Result channels use a separate typed pool because their layout and lifecycle do
 not require heterogeneous task storage.

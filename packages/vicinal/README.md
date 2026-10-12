@@ -31,6 +31,9 @@ async fn main() {
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
   short-lived so that the pool is often idle.
+- Workers may use any processor permitted by hard operating-system restrictions.
+  Processor-time quotas do not limit worker placement or adjust the configured worker count.
+  The pool does not guarantee avoidance of quota throttling.
 
 ## Platform support
 

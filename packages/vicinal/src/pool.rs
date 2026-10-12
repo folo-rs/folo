@@ -98,10 +98,11 @@ impl PoolInner {
                     inner_clone.pool_name, processor_id, worker_index
                 ))
                 .spawn(move || {
-                    // Pin worker thread to the target processor for cache locality.
+                    // Callers can run outside the quota-selected subset. Affinity must cover
+                    // every eligible processor; see docs/implementation.md, "Queue and worker lifecycle".
                     if let Some(processor_set) = inner_clone
                         .hardware
-                        .processors()
+                        .all_processors()
                         .to_builder()
                         .filter(|p| p.id() == processor_id)
                         .take_all()
@@ -398,6 +399,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
 
+    use futures::executor::block_on;
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
@@ -428,6 +430,47 @@ mod tests {
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
         let pool = Pool::builder().hardware(hardware).build();
         drop(pool);
+    }
+
+    /// Verifies worker affinity even when the caller is outside the quota-selected subset.
+    #[test]
+    fn workers_pin_to_spawning_processors_despite_resource_quota() {
+        // A minimal multi-region topology with a quota that excludes an eligible processor.
+        const PROCESSOR_COUNT: NonZero<usize> = nz!(2);
+        const MEMORY_REGION_COUNT: NonZero<usize> = PROCESSOR_COUNT;
+        const MAX_PROCESSOR_TIME: f64 = 1.0;
+
+        testing::with_watchdog(|| {
+            let hardware = SystemHardware::fake(
+                HardwareBuilder::from_counts(PROCESSOR_COUNT, MEMORY_REGION_COUNT)
+                    .max_processor_time(MAX_PROCESSOR_TIME),
+            );
+            let processors = hardware.all_processors();
+            assert!(hardware.processors().len() < processors.len());
+
+            let pool = Pool::builder()
+                .hardware(hardware.clone())
+                // Each task checks the sole worker for its submitting processor.
+                .workers_per_processor(nz!(1_u32))
+                .build();
+            let scheduler = pool.scheduler();
+
+            let handles = processors.spawn_threads(move |processor| {
+                let handle = scheduler.spawn({
+                    let hardware = hardware.clone();
+                    move || hardware.thread_processors()
+                });
+
+                // Recorded affinity cannot pass by chance when an unpinned worker happens
+                // to execute on the expected processor.
+                let affinity = block_on(handle).unwrap();
+                assert!(affinity.iter().eq([&processor]));
+            });
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
     }
 
     #[test]
@@ -601,9 +644,8 @@ mod tests {
 
             let scheduler = pool.scheduler();
 
-            let thread_name = futures::executor::block_on(
-                scheduler.spawn(|| thread::current().name().unwrap().to_owned()),
-            );
+            let thread_name =
+                block_on(scheduler.spawn(|| thread::current().name().unwrap().to_owned()));
 
             assert!(
                 thread_name.starts_with("test_pool-"),
@@ -625,9 +667,8 @@ mod tests {
 
             let scheduler = pool.scheduler();
 
-            let thread_name = futures::executor::block_on(
-                scheduler.spawn(|| thread::current().name().unwrap().to_owned()),
-            );
+            let thread_name =
+                block_on(scheduler.spawn(|| thread::current().name().unwrap().to_owned()));
 
             assert!(
                 thread_name.starts_with("vicinal-"),
