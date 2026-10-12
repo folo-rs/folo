@@ -3,6 +3,9 @@
 
 //! Worker pool with processor-local or memory-region-local task scheduling.
 //!
+//! A memory region is the processor/memory locality grouping reported by [`many_cpus`]:
+//! its processors are associated with local physical memory.
+//!
 //! Tasks execute synchronously on the processor sampled during submission by default.
 //! [`WorkerPolicy`] can instead share workers across the caller's memory region.
 //! Both policies start their fixed worker count lazily on first use of each destination.
@@ -66,7 +69,7 @@
 //! * Windows Server 2022 x64
 //! * Ubuntu 24.04 x64
 //!
-//! On non-Windows non-Linux platforms (e.g. mac OS), the package retains functional worker-pool
+//! On non-Windows non-Linux platforms (e.g. macOS), the package retains functional worker-pool
 //! behavior without physical locality guarantees. The fallback topology has one memory region.
 
 mod constants;

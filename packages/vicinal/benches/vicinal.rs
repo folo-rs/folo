@@ -494,6 +494,8 @@ fn entrypoint(c: &mut Criterion) {
 /// Compares locality routing with one submission and a short queued batch.
 fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession) {
     let mut group = c.benchmark_group("vicinal/policy_dispatch");
+    // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
+    // tasks. This benchmark count does not track future changes to the pool's default.
     for (policy_name, policy) in [
         ("processor", WorkerPolicy::fixed_per_processor(nz!(2_u32))),
         ("region", WorkerPolicy::fixed_per_memory_region(nz!(2_u32))),
@@ -545,6 +547,8 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
     // A single submitter is the control; competing submitters expose regional queue contention.
     for callers in [1_usize, 2] {
         group.bench_function(format!("callers/{callers}"), |b| {
+            // Use the same fixed destination capacity as policy_dispatch so contention is
+            // measured without changing the amount of worker parallelism.
             let pool = Pool::builder()
                 .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
                 .build();

@@ -1,59 +1,54 @@
-//! Exact-mask and admission regressions for cumulative regional affinity.
+//! Exact affinity, group sharing and wake notification coverage.
 
 use std::collections::BTreeSet;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 
 use futures::FutureExt;
 use futures::executor::block_on;
-use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
-use many_cpus::{Processor, SystemHardware};
+use many_cpus::Processor;
 use new_zealand::nz;
-use testing::{assert_panics, with_watchdog};
+use testing::with_watchdog;
 
+use super::helpers::{NoopTask, affinity, hardware, pin, probe, regional_hardware};
 use crate::pool_inner::refresh_affinity;
-use crate::{GroupId, Pool, SubmissionTarget, VicinalTask, WorkerPolicy, init_task};
+use crate::{GroupId, Pool, SubmissionTarget, WorkerPolicy, init_task};
 
-/// A larger region than the submitter set, plus a distinct sparse region.
-fn hardware() -> SystemHardware {
-    let mut builder = HardwareBuilder::new().max_processor_time(1.0);
-    for id in [0, 1, 2, 3, 7] {
-        builder = builder.processor(ProcessorBuilder::new().id(id).memory_region(2));
-    }
-    builder = builder.processor(ProcessorBuilder::new().id(8).memory_region(5));
-    SystemHardware::fake(builder)
+/// Checks singleton worker affinity against quota-independent eligible topology.
+#[test]
+fn workers_pin_to_spawning_processors_despite_resource_quota() {
+    with_watchdog(|| {
+        let hardware = hardware();
+        let processors = hardware.all_processors();
+        assert!(hardware.processors().len() < processors.len());
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .workers_per_processor(nz!(1))
+            .build();
+        let scheduler = pool.scheduler();
+        let handles = processors.spawn_threads(move |processor| {
+            let handle = scheduler.spawn({
+                let hardware = hardware.clone();
+                move || affinity(&hardware)
+            });
+            assert_eq!(block_on(handle), BTreeSet::from([processor.id()]));
+        });
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(
+            pool.inner.worker_handles.lock().unwrap().len(),
+            processors.len()
+        );
+    });
 }
 
-/// Pins submitters through the same fake PAL used to inspect workers' configured masks.
-fn pin(hardware: &SystemHardware, processor: u32) {
-    hardware
-        .all_processors()
-        .to_builder()
-        .filter(|p| p.id() == processor)
-        .take_all()
-        .unwrap()
-        .pin_current_thread_to();
-}
-
-/// `thread_processors()` is region-granular; query the PAL to see restricted multi-CPU masks.
-fn mask(hardware: &SystemHardware) -> BTreeSet<u32> {
-    hardware
-        .all_processors()
-        .to_builder()
-        .where_available_for_current_thread()
-        .take_all()
-        .unwrap()
-        .iter()
-        .map(Processor::id)
-        .collect()
-}
-
+/// Every admission path must publish membership before its task observes the worker mask.
 #[test]
 fn every_submission_variant_grows_the_region_mask() {
     with_watchdog(|| {
-        let hardware = hardware();
+        let hardware = regional_hardware();
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
@@ -67,7 +62,7 @@ fn every_submission_variant_grows_the_region_mask() {
             let (sent, received) = mpsc::channel();
             let task = {
                 let hardware = hardware.clone();
-                move || sent.send(mask(&hardware)).unwrap()
+                move || sent.send(affinity(&hardware)).unwrap()
             };
             match processor {
                 0 => block_on(scheduler.spawn(task)),
@@ -84,10 +79,11 @@ fn every_submission_variant_grows_the_region_mask() {
     });
 }
 
+/// A submitter registered elsewhere must not widen this pool's or another region's mask.
 #[test]
 fn membership_is_isolated_by_pool_and_region() {
     with_watchdog(|| {
-        let hardware = hardware();
+        let hardware = regional_hardware();
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
@@ -103,23 +99,24 @@ fn membership_is_isolated_by_pool_and_region() {
         assert_eq!(
             block_on(independent.scheduler().spawn({
                 let hardware = hardware.clone();
-                move || mask(&hardware)
+                move || affinity(&hardware)
             })),
             BTreeSet::from([3])
         );
         pin(&hardware, 8);
         assert_eq!(
-            block_on(scheduler.spawn(move || mask(&hardware))),
+            block_on(scheduler.spawn(move || affinity(&hardware))),
             BTreeSet::from([8])
         );
         assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 2);
     });
 }
 
+/// Blocking all workers lets concurrent submitters widen one group before execution resumes.
 #[test]
 fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
     with_watchdog(|| {
-        let hardware = hardware();
+        let hardware = regional_hardware();
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
@@ -132,9 +129,9 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
         let running = scheduler.spawn({
             let hardware = hardware.clone();
             move || {
-                entered.send(mask(&hardware)).unwrap();
+                entered.send(affinity(&hardware)).unwrap();
                 wait.recv().unwrap();
-                mask(&hardware)
+                affinity(&hardware)
             }
         });
         assert_eq!(arrivals.recv().unwrap(), BTreeSet::from([0]));
@@ -147,7 +144,7 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
                 move || {
                     pin(&hardware, processor);
                     start.wait();
-                    scheduler.spawn(move || mask(&hardware))
+                    scheduler.spawn(move || affinity(&hardware))
                 }
             })
         });
@@ -164,17 +161,11 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
     });
 }
 
-/// Allows an injected thread adapter to initialize a group with ordinary executable work.
-struct NoopTask;
-
-impl VicinalTask for NoopTask {
-    fn call(self: Pin<&mut Self>) {}
-}
-
+/// Pin acknowledgments prove idle workers refresh without needing one task per worker.
 #[test]
 fn idle_workers_refresh_even_without_a_task_for_each_worker() {
     with_watchdog(|| {
-        let hardware = hardware();
+        let hardware = regional_hardware();
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
@@ -204,9 +195,10 @@ fn idle_workers_refresh_even_without_a_task_for_each_worker() {
     });
 }
 
+/// A registered listener detects unnecessary broadcasts independently of task consumption.
 #[test]
 fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
-    let hardware = hardware();
+    let hardware = regional_hardware();
     let pool = Pool::builder()
         .hardware(hardware)
         .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
@@ -253,101 +245,23 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     });
 }
 
+/// Separate listeners represent workers that must each wake for separately blocking work.
 #[test]
-fn post_shutdown_submissions_do_not_expand_or_activate() {
-    let hardware = hardware();
-    pin(&hardware, 0);
-    let pool = Pool::builder()
-        .hardware(hardware.clone())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
-        .build();
-    let scheduler = pool.scheduler();
-    block_on(scheduler.spawn(|| {}));
-    let inner = Arc::clone(&pool.inner);
-    drop(pool);
-    for processor in [1, 8] {
-        pin(&hardware, processor);
-        let task = scheduler.spawn(|| panic!("abandoned work must not execute"));
-        assert_panics(|| block_on(task));
-    }
-    let existing = inner.registry.get_or_init(GroupId::MemoryRegion(2));
-    assert_eq!(existing.affinity_revision.load(Ordering::Acquire), 1);
-    let unused = inner.registry.get_or_init(GroupId::MemoryRegion(5));
-    assert!(unused.startup.get().is_none());
-    assert_eq!(unused.affinity_revision.load(Ordering::Acquire), 0);
-    assert!(inner.worker_handles.lock().unwrap().is_empty());
-}
-
-/// Tracks cleanup of queued work after a worker fails its affinity refresh.
-struct OnDrop {
-    dropped: Arc<AtomicUsize>,
-}
-
-impl Drop for OnDrop {
-    fn drop(&mut self) {
-        self.dropped.fetch_add(1, Ordering::Release);
-    }
-}
-
-#[test]
-fn refresh_failure_stops_pool_and_disconnects_accepted_work() {
-    with_watchdog(|| {
-        let hardware = hardware();
-        pin(&hardware, 0);
-        let pool = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
-            .build();
-        let target = pool.inner.policy.destination(&hardware);
-        let state = pool.inner.registry.get_or_init(target.group);
-        let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
-        pool.inner
-            .enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
-                pool.inner
-                    .start_workers(target, handles, thread::Builder::spawn, |set| {
-                        assert_eq!(set.len(), 1);
-                        set.pin_current_thread_to();
-                    });
-            });
-        let scheduler = pool.scheduler();
-        let (entered, arrivals) = mpsc::channel();
-        let (release, wait) = mpsc::channel();
-        let running = scheduler.spawn(move || {
-            entered.send(()).unwrap();
-            wait.recv().unwrap();
-        });
-        arrivals.recv().unwrap();
-        let dropped = Arc::new(AtomicUsize::new(0));
-        let task = || {
-            let capture = OnDrop {
-                dropped: Arc::clone(&dropped),
-            };
-            move || drop(capture)
-        };
-        let ordinary = scheduler.spawn(task());
-        pin(&hardware, 8);
-        let (other_entered, other_arrivals) = mpsc::channel();
-        let (other_release, other_wait) = mpsc::channel();
-        let other_running = scheduler.spawn(move || {
-            other_entered.send(()).unwrap();
-            other_wait.recv().unwrap();
-        });
-        other_arrivals.recv().unwrap();
-        let other_queued = scheduler.spawn(task());
-        pin(&hardware, 1);
-        let expansion = scheduler.spawn_urgent(task());
-        release.send(()).unwrap();
-        block_on(running);
-        // Failure closes and drains the queues before it becomes merely a Pool-drop concern.
-        assert_panics(|| block_on(ordinary));
-        assert_panics(|| block_on(expansion));
-        assert_panics(|| block_on(other_queued));
-        assert_eq!(dropped.load(Ordering::Acquire), 3);
-        pin(&hardware, 8);
-        assert_panics(|| scheduler.spawn_and_forget(|| {}));
-        other_release.send(()).unwrap();
-        block_on(other_running);
-        assert_panics(|| drop(pool));
-        assert_panics(|| scheduler.spawn(|| {}));
-    });
+fn separate_enqueues_notify_separate_waiters() {
+    let pool = Pool::builder().hardware(hardware()).build();
+    let destination = GroupId::Processor(0);
+    let state = pool.inner.registry.get_or_init(destination);
+    let first = state.wake_event.listen();
+    let second = state.wake_event.listen();
+    // No OS workers are needed to verify the notification protocol.
+    state.startup.set(Ok(())).unwrap();
+    let target = SubmissionTarget {
+        group: destination,
+        processor: 0,
+    };
+    pool.inner
+        .enqueue(target, state, probe(state, || {}), false);
+    pool.inner.enqueue(target, state, probe(state, || {}), true);
+    assert_eq!(first.now_or_never(), Some(()));
+    assert_eq!(second.now_or_never(), Some(()));
 }

@@ -77,6 +77,12 @@ queue lock. A group created after the shutdown scan cannot start workers or reta
 Draining pops tasks under the queue lock and destroys them outside it; reentrant callbacks
 observe the terminal pool state. Cleanup continues after a destructor or worker panic,
 propagating the first failure only after resources are released and handles joined.
+Task preparation and rejected-startup cleanup catch the infrastructure failure before
+destroying an owned task, so a panicking capture cannot cause a double panic during unwinding.
+Suppressed panic payloads are also destroyed behind an unwind boundary. If that destruction
+panics, its replacement payload is deliberately retained: recursively destroying arbitrary
+payloads cannot provide bounded cleanup. This exceptional retention lets the remaining
+tasks and worker handles be released while preserving the original failure.
 Clean shutdown permits retained schedulers to abandon submissions normally. Poisoning
 takes precedence over shutdown, permanently rejecting every submission with a panic.
 

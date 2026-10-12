@@ -1,10 +1,11 @@
 //! Worker thread logic for executing tasks from queues.
 
 use std::collections::VecDeque;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
-use crate::{ErasedTaskHandle, NEVER_POISONED};
+use crate::{ErasedTaskHandle, NEVER_POISONED, discard_task_after_failure};
 
 /// What one pass of a worker's main loop accomplished, and thus what the loop does next.
 ///
@@ -48,7 +49,7 @@ impl<'a> WorkerCore<'a> {
         self.run_one_iteration_with(|| true)
     }
 
-    /// Refreshes thread-local state and confirms admission after dequeueing, outside the queue lock.
+    /// Refreshes thread-local state and confirms admission outside the queue lock after dequeueing.
     pub(crate) fn run_one_iteration_with(
         &self,
         before_task: impl FnOnce() -> bool,
@@ -63,24 +64,37 @@ impl<'a> WorkerCore<'a> {
         }
 
         let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
-        if let Some(mut task) = task {
-            if !before_task() {
+        if let Some(task) = task {
+            if !execute_task(task, before_task) {
                 return IterationResult::Shutdown;
             }
-            task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
         let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
-        if let Some(mut task) = task {
-            if !before_task() {
+        if let Some(task) = task {
+            if !execute_task(task, before_task) {
                 return IterationResult::Shutdown;
             }
-            task.as_pin_mut().call();
             return IterationResult::ExecutedRegular;
         }
 
         IterationResult::WaitingForWork
+    }
+}
+
+/// Keeps affinity failure and capture destruction in separate unwind boundaries.
+fn execute_task(mut task: ErasedTaskHandle, before_task: impl FnOnce() -> bool) -> bool {
+    match panic::catch_unwind(AssertUnwindSafe(before_task)) {
+        Ok(true) => {
+            task.as_pin_mut().call();
+            true
+        }
+        Ok(false) => false,
+        Err(payload) => {
+            discard_task_after_failure(task);
+            panic::resume_unwind(payload);
+        }
     }
 }
 
@@ -93,6 +107,7 @@ mod tests {
     use plurality::MultiPool;
 
     use super::*;
+    use crate::pool_inner::{OnDrop, PanickingPayload};
     use crate::{VicinalTask, init_task};
 
     fn alloc_task(pool: &MultiPool, task: impl VicinalTask) -> ErasedTaskHandle {
@@ -168,6 +183,35 @@ mod tests {
                 IterationResult::Shutdown
             );
             assert_eq!(COUNTER.load(Ordering::Relaxed), 0);
+            assert!(pool.is_empty());
+        }
+    }
+
+    /// Preparation failure must survive a capture that also fails while being abandoned.
+    #[test]
+    fn boundary_failure_contains_panicking_capture_and_payload() {
+        struct AffinityFailure;
+
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
+        let shutdown = AtomicBool::new(false);
+        let pool = MultiPool::new();
+        for queue in [&urgent, &regular] {
+            queue.lock().unwrap().push_back(alloc_task(
+                &pool,
+                OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload)))),
+            ));
+            let core = WorkerCore::new(&urgent, &regular, &shutdown);
+            let payload = panic::catch_unwind(AssertUnwindSafe(|| {
+                core.run_one_iteration_with(|| {
+                    drop(urgent.try_lock().unwrap());
+                    drop(regular.try_lock().unwrap());
+                    panic::panic_any(AffinityFailure);
+                })
+            }))
+            .unwrap_err();
+            assert!(payload.is::<AffinityFailure>());
+            assert!(queue.lock().unwrap().is_empty());
             assert!(pool.is_empty());
         }
     }

@@ -7,5 +7,4 @@ pub(crate) use inner::*;
 mod tests;
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod regional_tests;
+pub(crate) use tests::helpers::{OnDrop, PanickingPayload};

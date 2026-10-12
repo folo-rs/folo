@@ -13,7 +13,8 @@ use tracing::{debug, error, trace};
 
 use crate::{
     ErasedTaskHandle, GroupId, GroupRegistry, IterationResult, NEVER_POISONED, SubmissionTarget,
-    WorkerCore, WorkerGroup, WorkerPolicy, extract_panic_message,
+    WorkerCore, WorkerGroup, WorkerPolicy, discard_panic, discard_task_after_failure,
+    extract_panic_message,
 };
 
 /// Keeps schedulers' shared storage alive while the owning pool controls worker lifetime.
@@ -60,7 +61,8 @@ impl PoolInner {
     }
 
     /// Covers topology, task storage and admission failures without catching task execution.
-    #[cfg_attr(test, mutants::skip)] // Missing failure cleanup can strand accepted work.
+    // Missing failure cleanup can strand accepted work.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn submit<R>(&self, action: impl FnOnce() -> R) -> R {
         assert!(!self.poisoned.load(Ordering::Acquire));
         match panic::catch_unwind(panic::AssertUnwindSafe(action)) {
@@ -94,7 +96,8 @@ impl PoolInner {
     }
 
     /// Separates the startup adapter for deterministic failure and registration-race tests.
-    #[cfg_attr(test, mutants::skip)] // Broken startup/registration can strand workers or submissions.
+    // Broken startup/registration can strand workers or submissions.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn enqueue_with(
         self: &Arc<Self>,
         target: SubmissionTarget,
@@ -103,57 +106,73 @@ impl PoolInner {
         urgent: bool,
         start: impl FnOnce(&mut Vec<ThreadJoinHandle<()>>),
     ) {
-        let regional = matches!(target.group, GroupId::MemoryRegion(_));
-        let known = !regional || self.membership(target.processor).load(Ordering::Acquire);
         // Keep task ownership outside all guards so rejection never drops captures under a lock.
         let mut task = Some(task);
-        let (accepted, expanded) = if known && state.startup.get().is_some() {
-            self.admit(target, state, &mut task, urgent, None)
-        } else {
-            // Only first use of a group/CPU takes this lock. It serializes expansion with
-            // shutdown and initial readiness; no other submitter can overtake first admission.
-            let mut handles = self.worker_handles.lock().expect(NEVER_POISONED);
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                assert!(!self.poisoned.load(Ordering::Acquire));
-                if self.shutdown.load(Ordering::Acquire) {
-                    return (false, false);
-                }
-                if state.startup.get().is_none() {
-                    let result =
-                        panic::catch_unwind(panic::AssertUnwindSafe(|| start(&mut handles)));
-                    state
-                        .startup
-                        .set(if result.is_ok() { Ok(()) } else { Err(()) })
-                        .expect("startup is published once under the worker handle lock");
-                    if let Err(payload) = result {
-                        panic::resume_unwind(payload);
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let regional = matches!(target.group, GroupId::MemoryRegion(_));
+            let known = !regional || self.membership(target.processor).load(Ordering::Acquire);
+            if known && state.startup.get().is_some() {
+                self.admit(target, state, &mut task, urgent, None)
+            } else {
+                // Only first use of a group/CPU takes this lock. It serializes expansion with
+                // shutdown and initial readiness; no other submitter can overtake first admission.
+                let mut handles = self.worker_handles.lock().expect(NEVER_POISONED);
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    assert!(!self.poisoned.load(Ordering::Acquire));
+                    if self.shutdown.load(Ordering::Acquire) {
+                        return (false, false);
                     }
+                    if state.startup.get().is_none() {
+                        let result =
+                            panic::catch_unwind(panic::AssertUnwindSafe(|| start(&mut handles)));
+                        state
+                            .startup
+                            .set(if result.is_ok() { Ok(()) } else { Err(()) })
+                            .expect("startup is published once under the worker handle lock");
+                        if let Err(payload) = result {
+                            panic::resume_unwind(payload);
+                        }
+                    }
+                    let expanded =
+                        regional && !self.membership(target.processor).load(Ordering::Acquire);
+                    let affinity = expanded.then(|| {
+                        Arc::new(
+                            self.hardware
+                                .all_processors()
+                                .to_builder()
+                                .filter(|processor| {
+                                    target.group.contains(processor)
+                                        && (processor.id() == target.processor
+                                            || self
+                                                .membership(processor.id())
+                                                .load(Ordering::Acquire))
+                                })
+                                .take_all()
+                                .expect("the sampled submitting processor belongs to its region"),
+                        )
+                    });
+                    self.admit(target, state, &mut task, urgent, affinity)
+                }));
+                if result.is_err() {
+                    self.poisoned.store(true, Ordering::Release);
+                    self.shutdown.store(true, Ordering::Release);
                 }
-                let expanded =
-                    regional && !self.membership(target.processor).load(Ordering::Acquire);
-                let affinity = expanded.then(|| {
-                    Arc::new(
-                        self.hardware
-                            .all_processors()
-                            .to_builder()
-                            .filter(|processor| {
-                                target.group.contains(processor)
-                                    && (processor.id() == target.processor
-                                        || self.membership(processor.id()).load(Ordering::Acquire))
-                            })
-                            .take_all()
-                            .expect("the sampled submitting processor belongs to its region"),
-                    )
-                });
-                self.admit(target, state, &mut task, urgent, affinity)
-            }));
-            if result.is_err() {
-                self.poisoned.store(true, Ordering::Release);
+                drop(handles);
+                match result {
+                    Ok(accepted) => accepted,
+                    Err(payload) => panic::resume_unwind(payload),
+                }
             }
-            drop(handles);
-            match result {
-                Ok(accepted) => accepted,
-                Err(payload) => self.poison(payload),
+        }));
+        let (accepted, expanded) = match result {
+            Ok(outcome) => outcome,
+            Err(payload) => {
+                self.poisoned.store(true, Ordering::Release);
+                self.shutdown.store(true, Ordering::Release);
+                if let Some(task) = task.take() {
+                    discard_task_after_failure(task);
+                }
+                self.poison(payload);
             }
         };
         if expanded {
@@ -170,7 +189,8 @@ impl PoolInner {
     }
 
     /// Pins every new worker to the first submitter before admitting any work.
-    #[cfg_attr(test, mutants::skip)] // Thread/acknowledgment mutations can block startup indefinitely.
+    // Thread/acknowledgment mutations can block startup indefinitely.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn start_workers(
         self: &Arc<Self>,
         target: SubmissionTarget,
@@ -240,7 +260,8 @@ impl PoolInner {
     }
 
     /// Publishes membership only with an accepted task, under its queue's admission lock.
-    #[cfg_attr(test, mutants::skip)] // Accepting after shutdown/failure strands joined handles.
+    // Accepting after shutdown/failure strands joined handles.
+    #[cfg_attr(test, mutants::skip)]
     fn admit(
         &self,
         target: SubmissionTarget,
@@ -284,7 +305,8 @@ impl PoolInner {
     }
 
     /// Stops every group without joining the reporting worker or dropping captures under locks.
-    #[cfg_attr(test, mutants::skip)] // Missing terminal cleanup can strand workers and joined handles.
+    // Missing terminal cleanup can strand workers and joined handles.
+    #[cfg_attr(test, mutants::skip)]
     fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
         self.poisoned.store(true, Ordering::Release);
         self.shutdown.store(true, Ordering::Release);
@@ -308,7 +330,8 @@ impl PoolInner {
     }
 
     /// Stops admission and releases abandoned tasks even when schedulers retain the storage.
-    #[cfg_attr(test, mutants::skip)] // Removing shutdown/join can leave sleeping workers forever.
+    // Removing shutdown/join can leave sleeping workers forever.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn join_all_workers(&self) {
         let handles = {
             let mut handles = self.worker_handles.lock().expect(NEVER_POISONED);
@@ -335,6 +358,7 @@ impl PoolInner {
                     pool_id = self.pool_id,
                     "worker or task cleanup panicked during unwinding"
                 );
+                discard_panic(payload);
             } else {
                 panic::resume_unwind(payload);
             }
@@ -357,7 +381,8 @@ impl fmt::Debug for PoolInner {
 type WorkerEntry = Box<dyn FnOnce() + Send>;
 
 /// Drains the live queue without running user destructors under a lock.
-#[cfg_attr(test, mutants::skip)] // Skipping cleanup leaves abandoned receivers pending.
+// Skipping cleanup leaves abandoned receivers pending.
+#[cfg_attr(test, mutants::skip)]
 fn discard_queue(
     queue: &Mutex<VecDeque<ErasedTaskHandle>>,
     failure: &mut ThreadResult<()>,
@@ -386,12 +411,14 @@ fn record_failure(first: &mut ThreadResult<()>, result: ThreadResult<()>, poison
             *first = Err(payload);
         } else {
             error!("additional panic while shutting down worker pool");
+            discard_panic(payload);
         }
     }
 }
 
-/// Drives the unchanged priority executor with this group's queues and wake signal.
-#[cfg_attr(test, mutants::skip)] // Broken wakeup coordination can strand workers indefinitely.
+/// Drives `WorkerCore` with this group's queues and wake signal.
+// Broken wakeup coordination can strand workers indefinitely.
+#[cfg_attr(test, mutants::skip)]
 fn worker_loop(
     inner: &PoolInner,
     destination: GroupId,
@@ -423,12 +450,19 @@ fn worker_loop(
             !inner.shutdown.load(Ordering::Acquire)
         }) {
             IterationResult::ExecutedUrgent | IterationResult::ExecutedRegular => {
-                trace!(pool_id = inner.pool_id, group = ?destination, worker_index, "executed task");
+                trace!(
+                    pool_id = inner.pool_id,
+                    group = ?destination,
+                    worker_index,
+                    "executed task"
+                );
             }
 
             IterationResult::Shutdown => break,
             IterationResult::WaitingForWork => {
                 listener!(state.wake_event => listener);
+                // Changes between the executor's empty observation and listener registration
+                // cannot notify this listener. Recheck after registration to cover that gap.
                 if !state.urgent_queue.lock().expect(NEVER_POISONED).is_empty()
                     || !state.regular_queue.lock().expect(NEVER_POISONED).is_empty()
                     || state.shutdown_flag.load(Ordering::Acquire)

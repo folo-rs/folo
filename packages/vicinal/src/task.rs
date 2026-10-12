@@ -1,6 +1,7 @@
 //! Task representation and the wrappers that adapt user-provided closures to it.
 
 use std::any::Any;
+use std::mem;
 use std::mem::MaybeUninit;
 use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
@@ -65,6 +66,27 @@ pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
         s.clone()
     } else {
         "unknown panic payload".to_string()
+    }
+}
+
+/// Disposes of a suppressed failure without allowing its destructor to interrupt pool cleanup.
+pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
+    if let Err(replacement) = panic::catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+        // A replacement can itself have a panicking destructor. Retain it rather than
+        // recursively disposing of arbitrary user payloads; see docs/implementation.md.
+        mem::forget(replacement);
+        tracing::error!("panic payload destruction failed; replacement payload retained");
+    }
+}
+
+/// Releases task captures outside an active unwind while preserving an earlier failure.
+pub(crate) fn discard_task_after_failure(task: ErasedTaskHandle) {
+    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
+        tracing::error!(
+            message = extract_panic_message(&payload),
+            "task cleanup failed while handling an infrastructure failure"
+        );
+        discard_panic(payload);
     }
 }
 
@@ -142,6 +164,7 @@ where
             if let Err(payload) = result {
                 let message = extract_panic_message(&payload);
                 tracing::error!(message, "fire-and-forget task panicked");
+                discard_panic(payload);
             }
         },
         spawn_time,
