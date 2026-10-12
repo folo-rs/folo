@@ -1,9 +1,8 @@
 //! Pool-wide infrastructure failure and user-task panic isolation.
 
-use std::panic;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
-use std::thread;
+use std::{panic, thread};
 
 use futures::executor::block_on;
 use new_zealand::nz;
