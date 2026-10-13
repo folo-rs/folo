@@ -5,3 +5,4 @@ pub(crate) mod helpers;
 mod shutdown;
 mod startup;
 mod topology;
+mod worker_loop;

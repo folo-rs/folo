@@ -432,7 +432,7 @@ fn record_failure(first: &mut ThreadResult<()>, result: ThreadResult<()>, poison
 /// Drives `WorkerCore` with this group's queues and wake signal.
 // Broken wakeup coordination can strand workers indefinitely.
 #[cfg_attr(test, mutants::skip)]
-fn worker_loop(
+pub(crate) fn worker_loop(
     inner: &PoolInner,
     destination: GroupId,
     worker_index: u32,
