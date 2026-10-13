@@ -46,6 +46,19 @@ starts no workers. Workers persist until shutdown, and a regional count is not m
 by the number of submitting processors. Counts must be nonzero but may exceed the
 processor count, supporting blocking workloads.
 
+## Worker initialization
+
+`PoolBuilder::thread_init` lets the pool owner configure thread-local state on each worker.
+The optional function runs once per worker, after initial affinity setup and before that
+worker executes any tasks. Building an unused pool does not invoke it. Repeated setters
+replace the function.
+
+Initialization on different workers may overlap, and submission does not wait for it.
+Workers can therefore initialize independently, and an initializer may submit work to its
+pool. Initializers must preserve affinity, must not wait for work submitted to the same
+pool and must not shut down that pool. A panic is an infrastructure failure that stops and
+poisons the pool, rather than a task failure.
+
 ## Locality boundaries
 
 Every processor permitted by hard operating-system restrictions is a valid submission

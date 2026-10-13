@@ -58,6 +58,16 @@ Configure concurrency with `WorkerPolicy`; counts may exceed processor counts fo
 Each pool counts workers independently, while scheduler clones share their pool's workers.
 Regions describe processor locality, not the task's allocations or data.
 
+## Worker initialization
+
+Use [`PoolBuilder::thread_init`](https://docs.rs/vicinal/latest/vicinal/struct.PoolBuilder.html#method.thread_init)
+to configure thread-local state on every worker. The function runs once per worker, after
+initial affinity setup and before executing tasks. It starts lazily with the workers and
+may run concurrently on different threads. Submission does not wait for initialization.
+The function must preserve worker affinity and must not wait for work submitted to the
+same pool or shut down the pool. Initialization panics follow the infrastructure-failure
+behavior described below.
+
 ## Tradeoffs
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are

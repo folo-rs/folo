@@ -2,6 +2,7 @@
 
 mod failures;
 pub(crate) mod helpers;
+mod initialization;
 mod shutdown;
 mod startup;
 mod topology;
