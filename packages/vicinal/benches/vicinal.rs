@@ -553,7 +553,8 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                 .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
                 .build();
             let scheduler = pool.scheduler();
-            block_on(scheduler.spawn(|| {}));
+            // Only producers submit, including during setup, so the controller cannot expand
+            // worker affinity beyond this case's intended caller processors.
             b.iter_custom(|iterations| {
                 thread::scope(|scope| {
                     // The controller participates in both rendezvous barriers.
