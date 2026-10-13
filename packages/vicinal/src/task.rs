@@ -53,7 +53,33 @@ pub(crate) fn init_task<T: VicinalTask>(
 
 /// Outcome of running a task to completion: either its return value or the payload of the
 /// panic that unwound out of it.
-pub(crate) type TaskResult<R> = Result<R, Box<dyn Any + Send>>;
+pub(crate) type TaskResult<R> = Result<R, TaskPanic>;
+
+/// Keeps discarded task panics isolated from infrastructure, on either result-channel endpoint.
+#[derive(Debug)]
+pub(crate) struct TaskPanic {
+    payload: Option<Box<dyn Any + Send>>,
+}
+
+impl TaskPanic {
+    pub(crate) fn new(payload: Box<dyn Any + Send>) -> Self {
+        Self {
+            payload: Some(payload),
+        }
+    }
+
+    pub(crate) fn into_payload(mut self) -> Box<dyn Any + Send> {
+        self.payload.take().expect("a task panic is consumed once")
+    }
+}
+
+impl Drop for TaskPanic {
+    fn drop(&mut self) {
+        if let Some(payload) = self.payload.take() {
+            discard_panic(payload);
+        }
+    }
+}
 
 /// Extracts a human-readable message from a panic payload.
 ///
@@ -80,7 +106,7 @@ pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
 }
 
 /// Releases task captures outside an active unwind while preserving an earlier failure.
-pub(crate) fn discard_task_after_failure(task: ErasedTaskHandle) {
+pub(crate) fn discard_task_after_failure<T>(task: T) {
     if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
         tracing::error!(
             message = extract_panic_message(&payload),
@@ -118,7 +144,9 @@ where
     fn call(self: Pin<&mut Self>) {
         let this = self.project();
 
-        let Some(task) = this.task.take() else { return };
+        if this.task.is_none() {
+            return;
+        }
 
         // Record scheduling delay: time from spawn to execution start.
         let scheduling_delay = CLOCK.with_borrow_mut(|clock| this.spawn_time.elapsed(clock));
@@ -126,6 +154,11 @@ where
 
         // Execute the task and record execution time.
         let start = CLOCK.with_borrow_mut(fast_time::Clock::now);
+        // Leave captures in their owning handle until fallible metric preparation completes.
+        let task = this
+            .task
+            .take()
+            .expect("an unexecuted task remains available");
         task();
         let elapsed = CLOCK.with_borrow_mut(|clock| start.elapsed(clock));
         EXECUTION_TIME_MS.with(|e| e.observe_millis(elapsed));
@@ -143,7 +176,7 @@ where
 {
     TaskWrapper::new(
         move || {
-            let result = panic::catch_unwind(AssertUnwindSafe(task));
+            let result = panic::catch_unwind(AssertUnwindSafe(task)).map_err(TaskPanic::new);
             sender.send(result);
         },
         spawn_time,
@@ -283,7 +316,7 @@ mod tests {
         Box::pin(wrapped).as_mut().call();
 
         let result = block_on(receiver).unwrap();
-        let panic_payload = result.unwrap_err();
+        let panic_payload = result.unwrap_err().into_payload();
 
         // The panic payload should contain our message.
         let message = panic_payload

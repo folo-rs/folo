@@ -3,8 +3,8 @@
 
 //! Worker pool with processor-local or memory-region-local task scheduling.
 //!
-//! A memory region is the processor/memory locality grouping reported by [`many_cpus`]:
-//! its processors are associated with local physical memory.
+//! A memory region groups processors with their local physical memory, as reported by
+//! [`many_cpus`]. Access to memory local to a processor can be faster than access across regions.
 //!
 //! Tasks execute synchronously on the processor sampled during submission by default.
 //! [`WorkerPolicy`] can instead share workers across the caller's memory region.
@@ -32,6 +32,23 @@
 //! # });
 //! ```
 //!
+//! # Memory regions and worker counts
+//!
+//! Systems with non-uniform memory access (NUMA) have processors connected to different physical
+//! memory modules. A memory region represents one such locality group; many systems have only one.
+//! Regions are identified by [`many_cpus::MemoryRegionId`], not by a task's allocations or data.
+//!
+//! With a regional [`WorkerPolicy`], submissions from processors in the same region share one
+//! configured worker count. The first submission activates those workers; further submissions
+//! from that region do not add workers. Each pool accounts for its regions independently,
+//! and scheduler clones share their pool's workers.
+//!
+//! Worker placement is tracked separately from concurrency. Workers use only processors that have
+//! submitted accepted work to that pool and region. This set starts with the first submitter and
+//! grows when another processor in the region submits work. Worker concurrency is configured
+//! explicitly, rather than calculated from this set or from a processor-time quota.
+//! This controls where tasks run, not where their memory is allocated.
+//!
 //! # Tradeoffs
 //!
 //! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
@@ -39,7 +56,9 @@
 //! - Regional workers use only processors that submitted accepted work to their pool and region.
 //!   A stable, quota-appropriate submitter set keeps worker placement within that set; membership
 //!   grows if new processors submit work and never shrinks. Quotas do not adjust worker counts.
-//!   Fractional quotas and other process work can still cause throttling.
+//!   Fractional quotas and other process work can still cause throttling: operating-system
+//!   delays after the process exceeds its processor-time allowance. See
+//!   [avoiding operating system quota penalties] for guidance on choosing the submitter set.
 //! - Regional affinity expands at task boundaries, without preempting running tasks.
 //!   Workers may migrate within their permitted set, even during one task.
 //!   Task code must preserve worker affinity. Affinity does not bind allocations, move data
@@ -47,7 +66,7 @@
 //!
 //! # Shutdown behavior
 //!
-//! When the [`Pool`] is dropped, it signals all worker threads to shut down and waits for any
+//! When the [`Pool`] is dropped, it stops accepting work and waits for any
 //! currently-executing tasks to complete. Queued tasks that have not started execution are
 //! abandoned.
 //!
@@ -71,6 +90,8 @@
 //!
 //! On non-Windows non-Linux platforms (e.g. macOS), the package retains functional worker-pool
 //! behavior without physical locality guarantees. The fallback topology has one memory region.
+//!
+//! [avoiding operating system quota penalties]: https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties
 
 mod constants;
 mod group_id;

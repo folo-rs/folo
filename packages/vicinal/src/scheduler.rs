@@ -10,8 +10,8 @@ use crate::{
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
-/// Every submission samples its processor once according to the pool's
-/// [`WorkerPolicy`][crate::WorkerPolicy]: tasks use that processor by default, or its memory
+/// Each task uses its submitting processor according to the pool's
+/// [`WorkerPolicy`][crate::WorkerPolicy]: that processor by default, or its memory
 /// region for a regional policy. Regional affinity accumulates the processors that submit
 /// accepted work to this pool. All submission methods use the same policy.
 /// Tasks execute synchronously and must preserve worker affinity.
@@ -19,7 +19,7 @@ use crate::{
 /// # Cloning
 ///
 /// Schedulers are cheaply cloneable and can be shared across threads. All clones
-/// reference the same underlying pool.
+/// submit work to the same pool.
 ///
 /// # Lifetime
 ///
@@ -72,12 +72,10 @@ impl Scheduler {
 
     /// Spawns a task near the caller, according to the pool's worker policy.
     ///
-    /// The task will be added to the regular (normal-priority) queue and executed
-    /// by a worker assigned to the sampled processor or memory region.
+    /// The task has normal priority and executes on its submitting processor or memory region.
     ///
     /// Spawned tasks may be executed in any order. Urgent tasks are scheduled
-    /// preferentially but there is no hard guarantee that they will preempt all
-    /// regular tasks.
+    /// preferentially, without preempting tasks that are already executing.
     ///
     /// # Returns
     ///
@@ -94,17 +92,16 @@ impl Scheduler {
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
     {
-        self.inner.submit(|| self.spawn_internal(task, false))
+        self.inner
+            .submit(task, |task| self.spawn_internal(task, false))
     }
 
     /// Spawns an urgent task near the caller, according to the worker policy.
     ///
-    /// Urgent tasks are executed before regular tasks. Use this for time-sensitive
-    /// operations that should not wait behind a queue of regular work.
+    /// Urgent tasks are preferred over regular tasks. Use this for time-sensitive work.
     ///
     /// Spawned tasks may be executed in any order. Urgent tasks are scheduled
-    /// preferentially but there is no hard guarantee that they will preempt all
-    /// regular tasks.
+    /// preferentially, without preempting tasks that are already executing.
     ///
     /// # Returns
     ///
@@ -121,14 +118,14 @@ impl Scheduler {
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
     {
-        self.inner.submit(|| self.spawn_internal(task, true))
+        self.inner
+            .submit(task, |task| self.spawn_internal(task, true))
     }
 
     /// Spawns a fire-and-forget task according to the pool's worker policy.
     ///
     /// Unlike [`spawn`](Self::spawn), this method does not return a [`JoinHandle`].
     /// The task's result is discarded, and panics are logged rather than propagated.
-    /// This reduces overhead by avoiding result channel allocation.
     ///
     /// Use this when:
     /// - The task's return value is not needed
@@ -139,20 +136,19 @@ impl Scheduler {
     ///
     /// This call panics on [worker failure](Self#worker-failures).
     ///
-    /// If the task panics, the panic will be caught and logged via `tracing::error!`
-    /// but will not be propagated to the caller.
+    /// Task panics are logged but are not propagated to the caller.
     pub fn spawn_and_forget<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
     {
         self.inner
-            .submit(|| self.spawn_internal_and_forget(task, false));
+            .submit(task, |task| self.spawn_internal_and_forget(task, false));
     }
 
     /// Spawns an urgent fire-and-forget task according to the worker policy.
     ///
     /// This is the fire-and-forget equivalent of [`spawn_urgent`](Self::spawn_urgent).
-    /// The task is added to the high-priority queue but does not return a [`JoinHandle`].
+    /// The task has urgent priority but does not return a [`JoinHandle`].
     ///
     /// Use this for time-sensitive operations where the result is not needed.
     ///
@@ -160,18 +156,17 @@ impl Scheduler {
     ///
     /// This call panics on [worker failure](Self#worker-failures).
     ///
-    /// If the task panics, the panic will be caught and logged via `tracing::error!`
-    /// but will not be propagated to the caller.
+    /// Task panics are logged but are not propagated to the caller.
     pub fn spawn_urgent_and_forget<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
     {
         self.inner
-            .submit(|| self.spawn_internal_and_forget(task, true));
+            .submit(task, |task| self.spawn_internal_and_forget(task, true));
     }
 
     /// Internal implementation of spawn.
-    fn spawn_internal<R, F>(&self, task: F, urgent: bool) -> JoinHandle<R>
+    fn spawn_internal<R, F>(&self, task: &mut Option<F>, urgent: bool) -> JoinHandle<R>
     where
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
@@ -186,17 +181,22 @@ impl Scheduler {
         let (sender, receiver) = state.result_channel_pool.rent();
 
         // Wrap the task to capture panics and send the result.
-        let wrapped = wrap_task(task, sender, spawn_time);
-
-        let dyn_task = allocate_task(state, wrapped);
-
-        self.inner.enqueue(destination, state, dyn_task, urgent);
+        let wrapped = wrap_task(
+            task.take().expect("submission consumes its task once"),
+            sender,
+            spawn_time,
+        );
+        // Wrapping transfers capture ownership; retain that wrapper outside allocation's unwind.
+        self.inner.submit(wrapped, |wrapped| {
+            let dyn_task = allocate_task(state, wrapped);
+            self.inner.enqueue(destination, state, dyn_task, urgent);
+        });
 
         JoinHandle::new(receiver)
     }
 
     /// Internal implementation of fire-and-forget spawn.
-    fn spawn_internal_and_forget<F>(&self, task: F, urgent: bool)
+    fn spawn_internal_and_forget<F>(&self, task: &mut Option<F>, urgent: bool)
     where
         F: FnOnce() + Send + 'static,
     {
@@ -207,16 +207,19 @@ impl Scheduler {
         let state = self.inner.registry.get_or_init(destination.group);
 
         // Wrap the task to capture panics and log them.
-        let wrapped = wrap_task_and_forget(task, spawn_time);
-
-        let dyn_task = allocate_task(state, wrapped);
-
-        self.inner.enqueue(destination, state, dyn_task, urgent);
+        let wrapped = wrap_task_and_forget(
+            task.take().expect("submission consumes its task once"),
+            spawn_time,
+        );
+        self.inner.submit(wrapped, |wrapped| {
+            let dyn_task = allocate_task(state, wrapped);
+            self.inner.enqueue(destination, state, dyn_task, urgent);
+        });
     }
 }
 
 /// Allocates and initializes a task without invoking task code under the pool lock.
-fn allocate_task<T: VicinalTask>(state: &WorkerGroup, task: T) -> ErasedTaskHandle {
+fn allocate_task<T: VicinalTask>(state: &WorkerGroup, task: &mut Option<T>) -> ErasedTaskHandle {
     let slot = {
         let pool = state.task_pool.lock().expect(NEVER_POISONED);
         pool.try_alloc_uninit_box()
@@ -227,13 +230,19 @@ fn allocate_task<T: VicinalTask>(state: &WorkerGroup, task: T) -> ErasedTaskHand
         Err(error) => panic!("task pool allocation failed: {error}"),
     };
 
-    init_task(slot, task)
+    init_task(
+        slot,
+        task.take().expect("allocation consumes its task once"),
+    )
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use events_once::EventPool;
     use futures::executor::block_on;
@@ -243,6 +252,8 @@ mod tests {
     use static_assertions::assert_impl_all;
     use testing::assert_panics;
 
+    use crate::metrics::CLOCK;
+    use crate::pool_inner::{OnDrop, PanickingPayload};
     use crate::{Pool, Scheduler};
 
     assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
@@ -255,6 +266,84 @@ mod tests {
             )))
             .workers_per_processor(nz!(1))
             .build()
+    }
+
+    /// Rejected capture cleanup must remain contained even through a retained poisoned scheduler.
+    fn assert_poisoned_capture_released(submit: impl FnOnce(&Scheduler, OnDrop)) {
+        let pool = fake_pool();
+        let scheduler = pool.scheduler();
+        pool.inner.poisoned.store(true, Ordering::Release);
+        drop(pool);
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let capture = OnDrop(Some(Box::new({
+            let dropped = Arc::clone(&dropped);
+            move || {
+                dropped.fetch_add(1, Ordering::Relaxed);
+                panic::panic_any(PanickingPayload);
+            }
+        })));
+        assert_panics(|| submit(&scheduler, capture));
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn poisoned_spawn_contains_capture_destruction() {
+        assert_poisoned_capture_released(|scheduler, capture| {
+            _ = scheduler.spawn(move || drop(capture));
+        });
+    }
+
+    #[test]
+    fn poisoned_urgent_spawn_contains_capture_destruction() {
+        assert_poisoned_capture_released(|scheduler, capture| {
+            _ = scheduler.spawn_urgent(move || drop(capture));
+        });
+    }
+
+    #[test]
+    fn poisoned_forget_contains_capture_destruction() {
+        assert_poisoned_capture_released(|scheduler, capture| {
+            scheduler.spawn_and_forget(move || drop(capture));
+        });
+    }
+
+    #[test]
+    fn poisoned_urgent_forget_contains_capture_destruction() {
+        assert_poisoned_capture_released(|scheduler, capture| {
+            scheduler.spawn_urgent_and_forget(move || drop(capture));
+        });
+    }
+
+    /// An existing clock borrow forces failure before topology/channel preparation consumes the task.
+    #[test]
+    fn preparation_failure_contains_unwrapped_capture() {
+        let pool = fake_pool();
+        let scheduler = pool.scheduler();
+        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+        CLOCK.with_borrow_mut(|_| {
+            assert_panics(|| scheduler.spawn(move || drop(capture)));
+        });
+        assert!(pool.inner.poisoned.load(Ordering::Acquire));
+        assert!(pool.inner.shutdown.load(Ordering::Acquire));
+        assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+    }
+
+    /// A poisoned allocation lock forces failure after wrapping but before task storage exists.
+    #[test]
+    fn allocation_failure_contains_wrapped_capture() {
+        let pool = fake_pool();
+        let scheduler = pool.scheduler();
+        let target = pool.inner.policy.destination(&pool.inner.hardware);
+        let state = pool.inner.registry.get_or_init(target.group);
+        assert_panics(|| {
+            let _guard = state.task_pool.lock().unwrap();
+            panic!("injected allocator lock failure");
+        });
+        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+        assert_panics(|| scheduler.spawn_and_forget(move || drop(capture)));
+        assert!(pool.inner.poisoned.load(Ordering::Acquire));
+        assert!(pool.inner.shutdown.load(Ordering::Acquire));
+        assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
     }
 
     #[test]

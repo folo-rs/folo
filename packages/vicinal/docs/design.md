@@ -9,15 +9,18 @@ whether locality means the same logical processor or the same memory region.
 per processor or per memory region, without a policy trait or generic pool and scheduler
 types. Additional constructors can extend configuration without exposing its representation.
 
-The default is two workers per processor. `workers_per_processor(count)` is a convenience
-alias for selecting the corresponding policy. Both setters replace the same policy, so the
-last setter wins. A built pool's policy is immutable.
+The default is processor-local scheduling. Applications configure explicit counts through
+`WorkerPolicy`. The legacy `workers_per_processor(count)` convenience alias remains callable
+but is hidden from public documentation. Both setters replace the same policy, so the last
+setter wins. A built pool's policy is immutable.
 
 ```rust
 use new_zealand::nz;
 use vicinal::{Pool, WorkerPolicy};
 
-let processor_pool = Pool::builder().workers_per_processor(nz!(2_u32)).build();
+let processor_pool = Pool::builder()
+    .worker_policy(WorkerPolicy::fixed_per_processor(nz!(2_u32)))
+    .build();
 let regional_pool = Pool::builder()
     .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
     .build();
@@ -74,10 +77,10 @@ panics through tracing.
 
 ## Shutdown
 
-Dropping the pool signals its workers and waits for tasks that are already executing.
+Dropping the pool stops accepting work and waits for tasks that are already executing.
 Queued tasks may be abandoned. Callers that require completion await the corresponding
 join handles before dropping the pool. Abandonment releases captured resources and
-disconnects result handles even when schedulers retain the pool's storage.
+completes abandoned join handles with a panic even when schedulers remain alive.
 Submissions through retained schedulers after clean shutdown are immediately abandoned without
 execution. Submission returns normally; awaiting an abandoned handle panics.
 
@@ -85,7 +88,7 @@ execution. Submission returns normally; awaiting an abandoned handle panics.
 
 Any infrastructure failure logs the problem, stops the entire pool and permanently
 poisons it against further submissions. Queued tasks are abandoned and their joined
-handles disconnect and panic when awaited. Already executing synchronous tasks may finish;
+handles panic when awaited. Already executing synchronous tasks may finish;
 the pool does not forcibly terminate threads. Every later submission panics synchronously,
 even after the pool is dropped. Task panics retain their separate behavior and do not
 poison the pool.

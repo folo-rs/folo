@@ -60,16 +60,25 @@ impl PoolInner {
         }
     }
 
-    /// Covers topology, task storage and admission failures without catching task execution.
+    /// Holds caller-owned state outside fallible preparation and poisoned rejection.
     // Missing failure cleanup can strand accepted work.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn submit<R>(&self, action: impl FnOnce() -> R) -> R {
-        assert!(!self.poisoned.load(Ordering::Acquire));
-        match panic::catch_unwind(panic::AssertUnwindSafe(action)) {
+    pub(crate) fn submit<T, R>(&self, task: T, action: impl FnOnce(&mut Option<T>) -> R) -> R {
+        let mut task = Some(task);
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            assert!(!self.poisoned.load(Ordering::Acquire));
+            action(&mut task)
+        }));
+        match result {
             Ok(result) => result,
             Err(payload) => {
-                // Startup may already have stopped the pool after releasing its registration lock.
-                if self.shutdown.load(Ordering::Acquire) && self.poisoned.load(Ordering::Acquire) {
+                let already_stopped =
+                    self.shutdown.load(Ordering::Acquire) && self.poisoned.load(Ordering::Acquire);
+                // Destructors can re-enter submission, so reject work before releasing captures.
+                self.poisoned.store(true, Ordering::Release);
+                self.shutdown.store(true, Ordering::Release);
+                discard_task_after_failure(task);
+                if already_stopped {
                     panic::resume_unwind(payload);
                 }
                 self.poison(payload);

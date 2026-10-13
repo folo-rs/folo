@@ -54,6 +54,7 @@ impl WorkerPolicy {
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
+    /// // Illustrative concurrency; choose the count for your blocking workload.
     /// let pool = Pool::builder()
     ///     .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
     ///     .build();
@@ -89,14 +90,6 @@ impl WorkerPolicy {
 
     pub(crate) fn is_regional(&self) -> bool {
         matches!(self.kind, PolicyKind::MemoryRegion)
-    }
-
-    /// Sizes the sparse index space, not the number of populated groups.
-    pub(crate) fn capacity(&self, hardware: &SystemHardware) -> usize {
-        match self.kind {
-            PolicyKind::Processor => hardware.max_processor_count(),
-            PolicyKind::MemoryRegion => hardware.max_memory_region_count(),
-        }
     }
 
     pub(crate) fn count(&self) -> NonZero<u32> {

@@ -137,6 +137,7 @@ pub(crate) struct PanickingPayload;
 
 impl Drop for PanickingPayload {
     fn drop(&mut self) {
-        panic::panic_any(Self);
+        // Only unwind containment is under test, not panic-hook output or backtrace collection.
+        panic::resume_unwind(Box::new(Self));
     }
 }

@@ -17,8 +17,8 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 
 /// A worker pool that executes synchronous tasks near their submitting thread.
 ///
-/// By default, tasks execute on the processor sampled during submission, with two workers
-/// per processor. [`WorkerPolicy`] can instead share a fixed worker count across each
+/// By default, tasks execute on the processor sampled during submission.
+/// [`WorkerPolicy`] can instead share a fixed worker count across each
 /// submitting memory region. No workers start until the first submission to that destination.
 /// Regional workers use the cumulative set of processors that submitted accepted work
 /// to their pool and region, refreshing affinity at task boundaries without adding workers.
@@ -26,7 +26,7 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Lifetime
 ///
-/// Dropping the pool signals shutdown, abandons queued tasks and waits for executing tasks
+/// Dropping the pool stops accepting work, abandons queued tasks and waits for executing tasks
 /// and worker threads to finish. Abandoned tasks release their resources even if schedulers
 /// remain alive. Awaiting an abandoned task's [`JoinHandle`][crate::JoinHandle] panics.
 /// After clean shutdown, retained schedulers immediately abandon submissions as well.
@@ -52,7 +52,9 @@ pub struct Pool {
 }
 
 impl Pool {
-    /// Creates a pool with two lazily started workers per submitting processor.
+    /// Creates a pool with default settings and lazily started processor-local workers.
+    ///
+    /// Use [`Self::builder`] and [`WorkerPolicy`] to configure worker counts explicitly.
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -106,11 +108,14 @@ impl PoolBuilder {
 
     /// Sets the name of the pool, used as a prefix in worker thread names.
     ///
-    /// Processor-policy names use `{name}-{processor_id}-{worker_index}`.
-    /// Memory-region-policy names use `{name}-region-{memory_region_id}-{worker_index}`.
+    /// Processor-policy names use `{name}-p{processor_id}-{worker_index}`.
+    /// Memory-region-policy names use `{name}-r{memory_region_id}-{worker_index}`.
     /// Worker indices start at zero within each destination.
     ///
-    /// The default name is `vicinal-{N}`, where `N` is an auto-incrementing counter.
+    /// The default pool name is `vicinal-{N}`, where `N` is an auto-incrementing pool
+    /// counter that distinguishes different pools.
+    ///
+    /// The default naming scheme is not part of the API contract and may change at any time.
     #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -121,6 +126,7 @@ impl PoolBuilder {
     ///
     /// Equivalent to `worker_policy(WorkerPolicy::fixed_per_processor(count))`.
     /// This replaces any previously selected policy; the last policy setter wins.
+    #[doc(hidden)]
     #[must_use]
     #[inline]
     pub fn workers_per_processor(self, count: NonZero<u32>) -> Self {
@@ -129,8 +135,7 @@ impl PoolBuilder {
 
     /// Sets the pool's worker count and locality policy.
     ///
-    /// Replaces any previous policy, including one set by [`Self::workers_per_processor`].
-    /// The default is two workers per processor.
+    /// Replaces any previously selected policy; the last setter wins.
     #[must_use]
     pub fn worker_policy(mut self, policy: WorkerPolicy) -> Self {
         self.policy = policy;

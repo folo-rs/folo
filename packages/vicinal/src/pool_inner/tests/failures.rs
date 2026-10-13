@@ -29,11 +29,50 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
         // This is the common boundary for topology, result-channel and task-slot failures.
         assert_panics(|| {
             pool.inner
-                .submit(|| panic!("injected infrastructure failure"))
+                .submit((), |_| panic!("injected infrastructure failure"))
         });
         assert!(pool.inner.poisoned.load(Ordering::Acquire));
         assert!(pool.inner.shutdown.load(Ordering::Acquire));
         assert_panics(|| scheduler.spawn(|| {}));
+    });
+}
+
+/// Drop the receiver while its task is blocked so the worker must discard the eventual panic.
+#[test]
+fn disconnected_joined_panic_does_not_poison_pool() {
+    with_watchdog(|| {
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .build();
+        pin(&pool.inner.hardware, 0);
+        let scheduler = pool.scheduler();
+        let (release, wait) = mpsc::channel();
+        let abandoned = scheduler.spawn(move || {
+            wait.recv().unwrap();
+            panic::panic_any(PanickingPayload);
+        });
+        drop(abandoned);
+        release.send(()).unwrap();
+        block_on(scheduler.spawn(|| {}));
+        assert!(!pool.inner.poisoned.load(Ordering::Acquire));
+    });
+}
+
+/// Finish delivery first to cover payload destruction on the receiver instead of the worker.
+#[test]
+fn unobserved_joined_panic_can_be_dropped_after_completion() {
+    with_watchdog(|| {
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .build();
+        pin(&pool.inner.hardware, 0);
+        let scheduler = pool.scheduler();
+        let completed = scheduler.spawn(|| panic::panic_any(PanickingPayload));
+        block_on(scheduler.spawn(|| {}));
+        drop(completed);
+        assert!(!pool.inner.poisoned.load(Ordering::Acquire));
     });
 }
 

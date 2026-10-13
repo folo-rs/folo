@@ -10,12 +10,6 @@ pub(crate) enum GroupId {
 }
 
 impl GroupId {
-    pub(crate) fn index(self) -> usize {
-        match self {
-            Self::Processor(id) | Self::MemoryRegion(id) => id as usize,
-        }
-    }
-
     pub(crate) fn contains(self, processor: &Processor) -> bool {
         match self {
             Self::Processor(id) => processor.id() == id,
@@ -27,9 +21,8 @@ impl GroupId {
 impl fmt::Display for GroupId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            // Preserve the default policy's established thread names.
-            Self::Processor(id) => write!(f, "{id}"),
-            Self::MemoryRegion(id) => write!(f, "region-{id}"),
+            Self::Processor(id) => write!(f, "p{id}"),
+            Self::MemoryRegion(id) => write!(f, "r{id}"),
         }
     }
 }

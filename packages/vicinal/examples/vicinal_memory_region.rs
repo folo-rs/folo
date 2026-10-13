@@ -10,6 +10,7 @@ fn main() {
     // Select the orchestrator's stable CPU set once. Worker placement follows this set;
     // fractional quotas and unrelated process work may still cause throttling.
     let submitters = hardware.processors();
+    // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
         .build();

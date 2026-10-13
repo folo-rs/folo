@@ -2,15 +2,22 @@
 
 User-visible behavior is defined in the package [design](design.md).
 
+The default configuration uses two workers per processor, an internal tuning choice rather
+than a numeric API promise. Thread names use `p` or `r` before the destination ID to identify
+the policy compactly: `{pool_name}-p{processor_id}-{worker_index}` or
+`{pool_name}-r{memory_region_id}-{worker_index}`. Default pool names include an incrementing
+pool counter. The naming scheme is diagnostic information, not a stable API contract.
+
 The pool maintains an indexed registry of worker groups created on demand. A typed
 destination distinguishes logical processors from memory regions. Each submission samples
 one processor and derives its regional destination from the same cached topology entry.
 This coherent target is reused for startup, allocation, queueing and diagnostics.
 
 Each group owns its queues, wake and shutdown signals, task storage, result channels and
-startup outcome. Workers consume only their group's queues. The registry uses the selected
-policy's hardware index-space bound, not a count of populated regions; sparse IDs and
-regions without eligible processors do not imply worker creation. Initialized lookups
+startup outcome. Workers consume only their group's queues.
+Processor groups use direct indexed lookup. Regional groups use compact slots for the
+populated regions, with binary search over sorted IDs; storage does not scale with the
+highest region ID. Regions without eligible processors have no slot. Initialized lookups
 require neither a global map lock nor topology filtering.
 
 ## Task storage
@@ -63,9 +70,12 @@ signaling every group and draining queued tasks outside locks. All worker handle
 registered: the reporting worker must not attempt to join itself. Pool destruction joins
 every handle and propagates worker failures after cleanup.
 
-The submission boundary covers topology sampling, result channels, task allocation and
-admission. Infrastructure panics unwind only after local guards have been released, then
-stop the pool and propagate. Worker entry has the equivalent boundary around infrastructure
+The submission boundary retains caller-owned task state outside topology, result-channel
+and allocation operations. It also catches poisoned rejection before destroying captures.
+Wrapping transfers ownership into another protected preparation boundary; allocation consumes
+the wrapper only after slot reservation succeeds. Infrastructure failures stop admission
+before separately destroying retained captures, so reentrant destructors cannot submit work.
+Worker entry has the equivalent boundary around infrastructure
 execution. Task wrappers separately catch user-task panics, keeping them out of the
 infrastructure boundary. Cleanup failures also poison the pool while cleanup continues.
 Workers check the pool-wide stop flag before task execution, rather than waiting for the
@@ -88,4 +98,7 @@ takes precedence over shutdown, permanently rejecting every submission with a pa
 
 Result channels use a separate typed pool because their layout and lifecycle do not
 require heterogeneous task storage. Disconnecting abandoned senders completes pending
-join handles even while scheduler clones retain the registry.
+join handles even while scheduler clones retain the registry. Task panic payloads have an
+owning wrapper with protected disposal. Dropping either result-channel endpoint therefore
+cannot turn an unobserved task panic's destructor into an infrastructure failure; awaiting
+the handle extracts and resumes the original payload.

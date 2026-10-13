@@ -2,11 +2,12 @@
 
 Worker pool with processor-local or memory-region-local task scheduling.
 
-A memory region is the processor/memory locality grouping reported by
-[`many_cpus`](https://docs.rs/many_cpus/): its processors are associated with local physical memory.
+A memory region groups processors with their local physical memory, as reported by
+[`many_cpus`](https://docs.rs/many_cpus/). Access to local memory can be faster than access
+across regions. Many systems have only one region.
 
-Tasks execute synchronously on the processor sampled during submission by default, with
-two workers per processor. A regional policy shares a fixed worker count across all
+Tasks execute synchronously on the processor sampled during submission by default.
+A regional policy shares a fixed worker count across all
 submitting processors in each memory region. Workers start on first use of a destination
 and persist until shutdown.
 
@@ -39,6 +40,7 @@ async fn processor_local() {
 
 async fn memory_region_local() {
     // Workers share each region's cumulative set of submitting processors.
+    // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
         .build();
@@ -52,8 +54,9 @@ processor. New submitting processors expand that region's permitted set without 
 workers; never-submitting processors remain excluded. Membership is per pool and cumulative.
 Workers refresh affinity at task boundaries, without preempting running tasks. They may
 move within their permitted set even during one task, but never steal work from other regions.
-`workers_per_processor(count)` is an alias for the corresponding `WorkerPolicy`; the last
-policy setter wins. Counts may exceed processor counts for blocking work.
+Configure concurrency with `WorkerPolicy`; counts may exceed processor counts for blocking work.
+Each pool counts workers independently, while scheduler clones share their pool's workers.
+Regions describe processor locality, not the task's allocations or data.
 
 ## Tradeoffs
 
@@ -62,14 +65,16 @@ policy setter wins. Counts may exceed processor counts for blocking work.
 - Regional workers stay within the submitting processors. A stable, quota-appropriate
   submitter set keeps worker placement within that set; changing submitters can grow the
   cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
-  quotas and other process work can still cause throttling.
+  quotas and other process work can still cause throttling: operating-system delays after
+  exceeding the process's processor-time allowance. See
+  [avoiding operating system quota penalties](https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties).
 - Task code must preserve worker affinity. Affinity does not bind memory allocations,
   move data or guarantee cache hits. Topology and restriction refresh are not supported.
 
 ## Shutdown
 
 Dropping the pool releases queued tasks and waits for executing tasks and workers.
-Abandoned join handles disconnect and panic when awaited, even if scheduler clones remain.
+Awaiting an abandoned task's join handle panics, even if scheduler clones remain.
 Await required work before dropping the pool.
 
 Infrastructure failures, including worker startup and affinity refresh, log the failure

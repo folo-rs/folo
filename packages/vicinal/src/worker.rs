@@ -50,6 +50,8 @@ impl<'a> WorkerCore<'a> {
     }
 
     /// Refreshes thread-local state and confirms admission outside the queue lock after dequeueing.
+    // Mutating worker-exit decisions can strand independently scheduled lifecycle tests.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn run_one_iteration_with(
         &self,
         before_task: impl FnOnce() -> bool,
@@ -83,14 +85,19 @@ impl<'a> WorkerCore<'a> {
     }
 }
 
-/// Keeps affinity failure and capture destruction in separate unwind boundaries.
+/// Keeps preparation/execution infrastructure and capture destruction in separate unwind boundaries.
+// Returning the wrong execution outcome can strand lifecycle tests after all workers exit.
+#[cfg_attr(test, mutants::skip)]
 fn execute_task(mut task: ErasedTaskHandle, before_task: impl FnOnce() -> bool) -> bool {
-    match panic::catch_unwind(AssertUnwindSafe(before_task)) {
-        Ok(true) => {
+    match panic::catch_unwind(AssertUnwindSafe(|| {
+        if before_task() {
             task.as_pin_mut().call();
             true
+        } else {
+            false
         }
-        Ok(false) => false,
+    })) {
+        Ok(executed) => executed,
         Err(payload) => {
             discard_task_after_failure(task);
             panic::resume_unwind(payload);
@@ -105,10 +112,12 @@ mod tests {
     use std::sync::atomic::AtomicU32;
 
     use plurality::MultiPool;
+    use testing::assert_panics;
 
     use super::*;
+    use crate::metrics::CLOCK;
     use crate::pool_inner::{OnDrop, PanickingPayload};
-    use crate::{VicinalTask, init_task};
+    use crate::{VicinalTask, init_task, wrap_task_and_forget};
 
     fn alloc_task(pool: &MultiPool, task: impl VicinalTask) -> ErasedTaskHandle {
         init_task(pool.alloc_uninit_box(), task)
@@ -214,6 +223,20 @@ mod tests {
             assert!(queue.lock().unwrap().is_empty());
             assert!(pool.is_empty());
         }
+    }
+
+    /// A metric failure before invoking user code must leave captures available for safe disposal.
+    #[test]
+    fn task_preparation_failure_contains_panicking_capture() {
+        let pool = MultiPool::new();
+        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+        let wrapped = wrap_task_and_forget(
+            move || drop(capture),
+            CLOCK.with_borrow_mut(fast_time::Clock::now),
+        );
+        let task = alloc_task(&pool, wrapped);
+        CLOCK.with_borrow_mut(|_| assert_panics(|| execute_task(task, || true)));
+        assert!(pool.is_empty());
     }
 
     #[test]

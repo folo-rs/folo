@@ -127,16 +127,14 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let pool = Pool::builder().hardware(hardware).build();
         let inner = Arc::clone(&pool.inner);
-        // Supply the cleanup failure through a joined worker rather than another nested task
-        // unwind. This covers the same suppressed-payload boundary with less Miri backtrace work.
-        inner
-            .worker_handles
-            .lock()
-            .unwrap()
-            .push(thread::spawn(|| panic::panic_any(PanickingPayload)));
+        // Inject unwinds directly: this exercises cleanup rather than panic-hook output,
+        // keeping Miri's backtrace work focused on the failing payload destructor.
+        inner.worker_handles.lock().unwrap().push(thread::spawn(|| {
+            panic::resume_unwind(Box::new(PanickingPayload));
+        }));
         let payload = panic::catch_unwind(AssertUnwindSafe(move || {
             let _pool = pool;
-            panic::panic_any(OuterFailure);
+            panic::resume_unwind(Box::new(OuterFailure));
         }))
         .unwrap_err();
         assert!(payload.is::<OuterFailure>());
