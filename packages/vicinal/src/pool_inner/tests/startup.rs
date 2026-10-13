@@ -82,9 +82,9 @@ fn concurrent_first_submissions_start_exact_configured_count() {
                 release.send(()).unwrap();
             }
             for submitter in submitters {
-                block_on(submitter.join().unwrap());
+                block_on(submitter.join().unwrap()).unwrap();
             }
-            block_on(scheduler.spawn(|| {}));
+            block_on(scheduler.spawn(|| {})).unwrap();
             assert_eq!(
                 pool.inner.worker_handles.lock().unwrap().len(),
                 WORKERS as usize
@@ -328,8 +328,11 @@ fn startup_failure_stops_every_group() {
                         panic!("injected startup failure")
                     });
             });
-            block_on(running);
-            assert_panics(|| block_on(abandoned));
+            let error = block_on(abandoned).unwrap_err();
+            assert!(error.is_cancel());
+            // Disposing of the retained body releases the already-running task.
+            drop(error);
+            block_on(running).unwrap();
             for state in pool.inner.registry.initialized() {
                 assert!(state.shutdown_flag.load(Ordering::Acquire));
             }

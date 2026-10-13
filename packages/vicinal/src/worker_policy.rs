@@ -58,8 +58,9 @@ impl WorkerPolicy {
     /// let pool = Pool::builder()
     ///     .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
     ///     .build();
-    /// assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
-    /// # });
+    /// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # }).unwrap();
     /// ```
     #[must_use]
     pub fn fixed_per_memory_region(count: NonZero<u32>) -> Self {

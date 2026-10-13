@@ -56,7 +56,7 @@ fn tasks_execute_on_spawning_processor() {
             // Wait for all tasks to complete.
             for handle in task_handles {
                 // We use block_on from futures crate for simplicity in this example.
-                block_on(handle);
+                block_on(handle).unwrap();
             }
         }
     });
@@ -116,7 +116,8 @@ fn regional_tasks_use_only_submitting_processors() {
                                 affinity.iter().map(Processor::id).collect::<BTreeSet<_>>(),
                                 expected
                             );
-                        }));
+                        }))
+                        .unwrap();
                     }
                 })
                 .join()

@@ -26,10 +26,11 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Lifetime
 ///
-/// Dropping the pool stops accepting work, abandons queued tasks and waits for executing tasks
-/// and worker threads to finish. Abandoned tasks release their resources even if schedulers
-/// remain alive. Awaiting an abandoned task's [`JoinHandle`][crate::JoinHandle] panics.
-/// After clean shutdown, retained schedulers immediately abandon submissions as well.
+/// Dropping the pool stops accepting work, cancels queued tasks and waits for executing tasks
+/// and worker threads to finish. Cancelled joined tasks return a
+/// [`TaskError`][crate::TaskError] that retains the original body for recovery;
+/// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
+/// submissions after clean shutdown as well.
 /// An infrastructure failure stops and permanently poisons the entire pool; all further
 /// submissions then panic synchronously, even after the pool is dropped.
 ///
@@ -43,8 +44,9 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// # block_on(async {
 /// let pool = Pool::new();
-/// assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
-/// # });
+/// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # }).unwrap();
 /// ```
 #[derive(Debug)]
 pub struct Pool {

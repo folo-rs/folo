@@ -72,24 +72,33 @@ Regular and urgent work use separate priority classes. Workers prefer urgent wor
 tasks within a class may execute in any order and urgent work does not preempt a task that
 is already running.
 
-Tasks with join handles return their output asynchronously. A task panic is captured and
-resumed when the handle is awaited. Fire-and-forget tasks discard their output and report
-panics through tracing.
+Tasks with join handles return `Result<R, TaskError<R>>` asynchronously. Successful execution
+returns `Ok(value)`. `is_cancel()` identifies cancellation before the body was called;
+`is_panic()` identifies a panic during execution. Task panics do not automatically unwind
+the awaiting caller. Fire-and-forget tasks discard their output and report panics through tracing.
+
+`into_body()` recovers a cancelled task as `Box<dyn FnOnce() -> R + Send>`, preserving its
+captures so callers can execute it directly or submit it elsewhere. `into_panic()` recovers
+the original panic payload for inspection or resumption. Both return `Result<_, Self>`,
+preserving the error when its outcome does not match the requested extraction.
+Dropping a join handle does not cancel execution.
 
 ## Shutdown
 
 Dropping the pool stops accepting work and waits for tasks that are already executing.
-Queued tasks may be abandoned. Callers that require completion await the corresponding
-join handles before dropping the pool. Abandonment releases captured resources and
-completes abandoned join handles with a panic even when schedulers remain alive.
-Submissions through retained schedulers after clean shutdown are immediately abandoned without
-execution. Submission returns normally; awaiting an abandoned handle panics.
+Queued tasks may be cancelled. Callers that require completion await the corresponding
+join handles before dropping the pool. Cancellation completes joined handles even when
+schedulers remain alive. Joined task captures remain available until their handle, error or
+recovered body is dropped, or the recovered body executes. Fire-and-forget cancellation releases
+captures during shutdown.
+Submissions through retained schedulers after clean shutdown are immediately cancelled without
+execution. Submission returns normally; a joined submission yields a recoverable cancellation.
 
 ## Infrastructure failures
 
 Any infrastructure failure logs the problem, stops the entire pool and permanently
-poisons it against further submissions. Queued tasks are abandoned and their joined
-handles panic when awaited. Already executing synchronous tasks may finish;
+poisons it against further submissions. Queued tasks are cancelled and their joined
+handles yield recoverable cancellation errors. Already executing synchronous tasks may finish;
 the pool does not forcibly terminate threads. Every later submission panics synchronously,
 even after the pool is dropped. Task panics retain their separate behavior and do not
 poison the pool.

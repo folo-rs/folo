@@ -24,8 +24,9 @@ use crate::{
 /// # Lifetime
 ///
 /// Scheduler clones do not keep worker threads running after their [`Pool`][crate::Pool]
-/// is dropped. Submissions after clean shutdown are abandoned without execution and release
-/// their captures before returning. Awaiting a returned [`JoinHandle`] panics.
+/// is dropped. Submissions after clean shutdown are cancelled without execution. Joined tasks
+/// retain their captures for recovery through [`TaskError::into_body()`][crate::TaskError::into_body];
+/// fire-and-forget tasks release their captures before returning.
 ///
 /// # Worker failures
 ///
@@ -55,9 +56,10 @@ use crate::{
 /// let scheduler2 = scheduler.clone();
 /// let handle2 = scheduler.spawn(move || scheduler2.spawn(|| "nested"));
 ///
-/// assert_eq!(handle1.await, "hello");
-/// assert_eq!(handle2.await.await, "nested");
-/// # });
+/// assert_eq!(handle1.await?, "hello");
+/// assert_eq!(handle2.await?.await?, "nested");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # }).unwrap();
 /// ```
 #[derive(Clone, Debug)]
 pub struct Scheduler {
@@ -79,14 +81,12 @@ impl Scheduler {
     ///
     /// # Returns
     ///
-    /// A [`JoinHandle`] that can be awaited to get the task's return value.
+    /// A [`JoinHandle`] yielding the task's return value or a [`TaskError`][crate::TaskError].
+    /// Task panics are returned as errors, as is cancellation before execution.
     ///
     /// # Panics
     ///
     /// This call panics on [worker failure](Self#worker-failures).
-    ///
-    /// If the task panics, the panic will be captured and re-thrown when the
-    /// [`JoinHandle`] is awaited.
     pub fn spawn<R, F>(&self, task: F) -> JoinHandle<R>
     where
         R: Send + 'static,
@@ -105,14 +105,12 @@ impl Scheduler {
     ///
     /// # Returns
     ///
-    /// A [`JoinHandle`] that can be awaited to get the task's return value.
+    /// A [`JoinHandle`] yielding the task's return value or a [`TaskError`][crate::TaskError].
+    /// Task panics are returned as errors, as is cancellation before execution.
     ///
     /// # Panics
     ///
     /// This call panics on [worker failure](Self#worker-failures).
-    ///
-    /// If the task panics, the panic will be captured and re-thrown when the
-    /// [`JoinHandle`] is awaited.
     pub fn spawn_urgent<R, F>(&self, task: F) -> JoinHandle<R>
     where
         R: Send + 'static,
@@ -186,13 +184,19 @@ impl Scheduler {
             sender,
             spawn_time,
         );
-        // Wrapping transfers capture ownership; retain that wrapper outside allocation's unwind.
-        self.inner.submit(wrapped, |wrapped| {
+        // Retain both endpoints outside preparation's unwind: cancellation can move captures
+        // into the receiver, whose destruction must also happen behind the cleanup boundary.
+        self.inner.submit((Some(wrapped), receiver), |submission| {
+            let (wrapped, _) = submission
+                .as_mut()
+                .expect("submission remains owned until admitted");
             let dyn_task = allocate_task(state, wrapped);
             self.inner.enqueue(destination, state, dyn_task, urgent);
-        });
-
-        JoinHandle::new(receiver)
+            let (_, receiver) = submission
+                .take()
+                .expect("admission consumes its receiver once");
+            JoinHandle::new(receiver)
+        })
     }
 
     /// Internal implementation of fire-and-forget spawn.
@@ -332,19 +336,27 @@ mod tests {
     /// A poisoned allocation lock forces failure after wrapping but before task storage exists.
     #[test]
     fn allocation_failure_contains_wrapped_capture() {
-        let pool = fake_pool();
-        let scheduler = pool.scheduler();
-        let target = pool.inner.policy.destination(&pool.inner.hardware);
-        let state = pool.inner.registry.get_or_init(target.group);
-        assert_panics(|| {
-            let _guard = state.task_pool.lock().unwrap();
-            panic!("injected allocator lock failure");
-        });
-        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
-        assert_panics(|| scheduler.spawn_and_forget(move || drop(capture)));
-        assert!(pool.inner.poisoned.load(Ordering::Acquire));
-        assert!(pool.inner.shutdown.load(Ordering::Acquire));
-        assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+        for joined in [false, true] {
+            let pool = fake_pool();
+            let scheduler = pool.scheduler();
+            let target = pool.inner.policy.destination(&pool.inner.hardware);
+            let state = pool.inner.registry.get_or_init(target.group);
+            assert_panics(|| {
+                let _guard = state.task_pool.lock().unwrap();
+                panic!("injected allocator lock failure");
+            });
+            let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+            assert_panics(|| {
+                if joined {
+                    _ = scheduler.spawn(move || drop(capture));
+                } else {
+                    scheduler.spawn_and_forget(move || drop(capture));
+                }
+            });
+            assert!(pool.inner.poisoned.load(Ordering::Acquire));
+            assert!(pool.inner.shutdown.load(Ordering::Acquire));
+            assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+        }
     }
 
     #[test]
@@ -353,7 +365,7 @@ mod tests {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| 42);
-        let result = block_on(handle);
+        let result = block_on(handle).unwrap();
 
         assert_eq!(result, 42);
     }
@@ -364,7 +376,7 @@ mod tests {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn_urgent(|| "urgent result");
-        let result = block_on(handle);
+        let result = block_on(handle).unwrap();
 
         assert_eq!(result, "urgent result");
     }
@@ -378,8 +390,8 @@ mod tests {
         let handle1 = scheduler.spawn(|| 1);
         let handle2 = scheduler2.spawn(|| 2);
 
-        assert_eq!(block_on(handle1), 1);
-        assert_eq!(block_on(handle2), 2);
+        assert_eq!(block_on(handle1).unwrap(), 1);
+        assert_eq!(block_on(handle2).unwrap(), 2);
     }
 
     #[test]
@@ -391,7 +403,7 @@ mod tests {
             panic!("test panic");
         });
 
-        assert_panics(|| block_on(handle));
+        assert!(block_on(handle).unwrap_err().is_panic());
     }
 
     #[test]
@@ -406,7 +418,7 @@ mod tests {
             42
         });
 
-        let result = block_on(handle);
+        let result = block_on(handle).unwrap();
         assert_eq!(result, 42);
     }
 

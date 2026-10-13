@@ -59,7 +59,8 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
                 block_on(scheduler.spawn({
                     let hardware = hardware.clone();
                     move || affinity(&hardware)
-                })),
+                }))
+                .unwrap(),
                 expected
             );
         }
@@ -101,7 +102,7 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
                 let hardware = hardware.clone();
                 move || affinity(&hardware)
             });
-            assert_eq!(block_on(handle), BTreeSet::from([processor.id()]));
+            assert_eq!(block_on(handle).unwrap(), BTreeSet::from([processor.id()]));
         });
         for handle in handles {
             handle.join().unwrap();
@@ -132,8 +133,8 @@ fn every_submission_variant_grows_the_region_mask() {
                 move || sent.send(affinity(&hardware)).unwrap()
             };
             match processor {
-                0 => block_on(scheduler.spawn(task)),
-                1 => block_on(scheduler.spawn_urgent(task)),
+                0 => block_on(scheduler.spawn(task)).unwrap(),
+                1 => block_on(scheduler.spawn_urgent(task)).unwrap(),
                 2 => scheduler.spawn_and_forget(task),
                 3 => scheduler.spawn_urgent_and_forget(task),
                 _ => unreachable!(),
@@ -158,7 +159,7 @@ fn membership_is_isolated_by_pool_and_region() {
             .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
-        block_on(scheduler.spawn(|| {}));
+        block_on(scheduler.spawn(|| {})).unwrap();
         pin(&hardware, 3);
         let independent = Pool::builder()
             .hardware(hardware.clone())
@@ -168,12 +169,13 @@ fn membership_is_isolated_by_pool_and_region() {
             block_on(independent.scheduler().spawn({
                 let hardware = hardware.clone();
                 move || affinity(&hardware)
-            })),
+            }))
+            .unwrap(),
             BTreeSet::from([3])
         );
         pin(&hardware, 8);
         assert_eq!(
-            block_on(scheduler.spawn(move || affinity(&hardware))),
+            block_on(scheduler.spawn(move || affinity(&hardware))).unwrap(),
             BTreeSet::from([8])
         );
         let worker_count = pool.inner.worker_handles.lock().unwrap().len();
@@ -224,9 +226,9 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
         assert_eq!(worker_count, 1);
         release.send(()).unwrap();
         // No preemption or mid-task repinning: the prior mask remains a valid subset.
-        assert_eq!(block_on(running), BTreeSet::from([0]));
+        assert_eq!(block_on(running).unwrap(), BTreeSet::from([0]));
         for task in pending {
-            assert_eq!(block_on(task), BTreeSet::from([0, 1, 2]));
+            assert_eq!(block_on(task).unwrap(), BTreeSet::from([0, 1, 2]));
         }
     });
 }
@@ -255,9 +257,9 @@ fn idle_workers_refresh_even_without_a_task_for_each_worker() {
                         }
                     });
             });
-        block_on(pool.scheduler().spawn(|| {}));
+        block_on(pool.scheduler().spawn(|| {})).unwrap();
         pin(&hardware, 1);
-        block_on(pool.scheduler().spawn(|| {}));
+        block_on(pool.scheduler().spawn(|| {})).unwrap();
         let first = updates.recv().unwrap();
         let second = updates.recv().unwrap();
         assert_ne!(first, second);

@@ -21,7 +21,7 @@ fn spawn_and_await_value() {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| 42);
-        let result = block_on(handle);
+        let result = block_on(handle).unwrap();
 
         assert_eq!(result, 42);
     });
@@ -34,19 +34,18 @@ fn spawn_and_await_unit() {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| {});
-        block_on(handle);
+        block_on(handle).unwrap();
     });
 }
 
 #[test]
-#[should_panic]
 fn spawn_and_await_panic() {
     with_watchdog(|| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| panic!("intentional panic"));
-        block_on(handle);
+        assert!(block_on(handle).unwrap_err().is_panic());
     });
 }
 
@@ -60,8 +59,8 @@ fn clone_scheduler_spawn_from_both() {
         let handle1 = scheduler1.spawn(|| 1);
         let handle2 = scheduler2.spawn(|| 2);
 
-        assert_eq!(block_on(handle1), 1);
-        assert_eq!(block_on(handle2), 2);
+        assert_eq!(block_on(handle1).unwrap(), 1);
+        assert_eq!(block_on(handle2).unwrap(), 2);
     });
 }
 
@@ -74,8 +73,8 @@ fn nested_spawn_via_captured_scheduler() {
         let scheduler_clone = scheduler.clone();
         let outer_handle = scheduler.spawn(move || scheduler_clone.spawn(|| 99));
 
-        let inner_handle = block_on(outer_handle);
-        let result = block_on(inner_handle);
+        let inner_handle = block_on(outer_handle).unwrap();
+        let result = block_on(inner_handle).unwrap();
 
         assert_eq!(result, 99);
     });
@@ -96,7 +95,7 @@ fn drop_pool_after_awaiting_task() {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| 42);
-        assert_eq!(block_on(handle), 42);
+        assert_eq!(block_on(handle).unwrap(), 42);
 
         drop(pool);
     });
@@ -115,7 +114,7 @@ fn spawn_many_tasks_await_all() {
             .map(|i| scheduler.spawn(move || i * 2))
             .enumerate()
         {
-            assert_eq!(block_on(handle), i * 2);
+            assert_eq!(block_on(handle).unwrap(), i * 2);
         }
     });
 }
@@ -128,7 +127,7 @@ fn scheduler_sent_to_another_thread() {
 
         let handle = thread::spawn(move || {
             let task_handle = scheduler.spawn(|| 123);
-            block_on(task_handle)
+            block_on(task_handle).unwrap()
         });
 
         let result = handle.join().unwrap();
@@ -171,7 +170,7 @@ fn concurrent_spawns_from_multiple_threads() {
                     .collect();
 
                 for (i, handle) in handles.into_iter().enumerate() {
-                    assert_eq!(block_on(handle), i);
+                    assert_eq!(block_on(handle).unwrap(), i);
                 }
             })
         })
@@ -267,7 +266,7 @@ fn spawn_and_await_with_fake_hardware() {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| 42);
-        assert_eq!(block_on(handle), 42);
+        assert_eq!(block_on(handle).unwrap(), 42);
     });
 }
 
@@ -286,7 +285,7 @@ fn spawn_many_tasks_with_single_processor_hardware() {
             .map(|i| scheduler.spawn(move || i))
             .enumerate()
         {
-            assert_eq!(block_on(handle), i);
+            assert_eq!(block_on(handle).unwrap(), i);
         }
     });
 }
@@ -346,7 +345,7 @@ fn concurrent_spawns_with_fake_hardware() {
                     .collect();
 
                 for (i, handle) in handles.into_iter().enumerate() {
-                    assert_eq!(block_on(handle), i);
+                    assert_eq!(block_on(handle).unwrap(), i);
                 }
             })
         })
@@ -365,7 +364,6 @@ fn concurrent_spawns_with_fake_hardware() {
 }
 
 #[test]
-#[should_panic]
 fn spawn_and_await_panic_with_fake_hardware() {
     with_watchdog(|| {
         let hardware =
@@ -374,7 +372,7 @@ fn spawn_and_await_panic_with_fake_hardware() {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| panic!("intentional panic"));
-        block_on(handle);
+        assert!(block_on(handle).unwrap_err().is_panic());
     });
 }
 
@@ -387,7 +385,7 @@ fn spawn_urgent_with_fake_hardware() {
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn_urgent(|| "urgent result");
-        assert_eq!(block_on(handle), "urgent result");
+        assert_eq!(block_on(handle).unwrap(), "urgent result");
     });
 }
 
@@ -402,8 +400,8 @@ fn nested_spawn_with_fake_hardware() {
         let scheduler_clone = scheduler.clone();
         let outer_handle = scheduler.spawn(move || scheduler_clone.spawn(|| 99));
 
-        let inner_handle = block_on(outer_handle);
-        assert_eq!(block_on(inner_handle), 99);
+        let inner_handle = block_on(outer_handle).unwrap();
+        assert_eq!(block_on(inner_handle).unwrap(), 99);
     });
 }
 

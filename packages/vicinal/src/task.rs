@@ -11,6 +11,7 @@ use fast_time::Instant;
 use pin_project::pin_project;
 use plurality::{Box as PoolBox, coerce};
 
+use crate::TaskError;
 use crate::metrics::{CLOCK, EXECUTION_TIME_MS, SCHEDULING_DELAY_MS};
 
 /// Unit of work handed to a worker thread.
@@ -51,9 +52,8 @@ pub(crate) fn init_task<T: VicinalTask>(
     PoolBox::unsize(handle, coerce!(dyn VicinalTask))
 }
 
-/// Outcome of running a task to completion: either its return value or the payload of the
-/// panic that unwound out of it.
-pub(crate) type TaskResult<R> = Result<R, TaskPanic>;
+/// A joined task's success, cancellation or panic.
+pub(crate) type TaskResult<R> = Result<R, TaskError<R>>;
 
 /// Keeps discarded task panics isolated from infrastructure, on either result-channel endpoint.
 #[derive(Debug)]
@@ -165,6 +165,44 @@ where
     }
 }
 
+/// Preserves the original body until execution or cancellation transfers it to the caller.
+struct JoinedTask<F, R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    pending: Option<(F, PooledSender<TaskResult<R>>)>,
+}
+
+impl<F, R> JoinedTask<F, R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    // Omitting execution strands tests waiting for task-provided synchronization signals.
+    #[cfg_attr(test, mutants::skip)]
+    fn run(mut self) {
+        let (task, sender) = self.pending.take().expect("a joined task is executed once");
+        let result = panic::catch_unwind(AssertUnwindSafe(task)).map_err(TaskError::panicked);
+        sender.send(result);
+    }
+}
+
+impl<F, R> Drop for JoinedTask<F, R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    fn drop(&mut self) {
+        if let Some((task, sender)) = self.pending.take() {
+            // Only cancellation boxes the body; successful dispatch retains pooled storage.
+            // Queue draining and rejected admission release tasks outside pool locks.
+            sender.send(Err(TaskError::cancelled(task)));
+        }
+    }
+}
+
+/// Adds completion and cancellation delivery without boxing the submitted body.
 pub(crate) fn wrap_task<R, F>(
     task: F,
     sender: PooledSender<TaskResult<R>>,
@@ -174,13 +212,10 @@ where
     R: Send + 'static,
     F: FnOnce() -> R + Send + 'static,
 {
-    TaskWrapper::new(
-        move || {
-            let result = panic::catch_unwind(AssertUnwindSafe(task)).map_err(TaskPanic::new);
-            sender.send(result);
-        },
-        spawn_time,
-    )
+    let joined = JoinedTask {
+        pending: Some((task, sender)),
+    };
+    TaskWrapper::new(move || joined.run(), spawn_time)
 }
 
 /// Wraps a task for "fire-and-forget" execution without a result channel.
@@ -208,10 +243,12 @@ where
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use events_once::EventLake;
+    use futures::FutureExt;
     use futures::executor::block_on;
     use plurality::MultiPool;
 
     use super::*;
+    use crate::pool_inner::OnDrop;
 
     /// Makes capacity growth observable after live tasks fill an initial chunk.
     const TEST_CHUNK_SIZE: u32 = 2;
@@ -282,6 +319,64 @@ mod tests {
     }
 
     #[test]
+    fn unexecuted_task_returns_original_body() {
+        let lake = EventLake::new();
+        let (sender, receiver) = lake.rent::<TaskResult<String>>();
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+        let capture = String::from("owned task capture");
+        drop(wrap_task(move || capture, sender, spawn_time));
+
+        let error = receiver.now_or_never().unwrap().unwrap().unwrap_err();
+        assert!(error.is_cancel());
+        assert_eq!(error.into_body().unwrap()(), "owned task capture");
+    }
+
+    #[test]
+    fn cancellation_retains_captures_until_result_is_dropped() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let capture = OnDrop(Some(Box::new({
+            let dropped = Arc::clone(&dropped);
+            move || {
+                dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        })));
+        let lake = EventLake::new();
+        let (sender, receiver) = lake.rent::<TaskResult<()>>();
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+        drop(wrap_task(move || drop(capture), sender, spawn_time));
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        let error = receiver.now_or_never().unwrap().unwrap().unwrap_err();
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(error);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn dropping_receiver_does_not_cancel_execution() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let executed = Arc::new(AtomicBool::new(false));
+        let lake = EventLake::new();
+        let (sender, receiver) = lake.rent::<TaskResult<()>>();
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+        let wrapped = wrap_task(
+            {
+                let executed = Arc::clone(&executed);
+                move || executed.store(true, Ordering::Relaxed)
+            },
+            sender,
+            spawn_time,
+        );
+        drop(receiver);
+        Box::pin(wrapped).as_mut().call();
+        assert!(executed.load(Ordering::Relaxed));
+    }
+
+    #[test]
     fn wrap_task_captures_panic() {
         let lake = EventLake::new();
         let (sender, receiver) = lake.rent::<TaskResult<()>>();
@@ -316,7 +411,7 @@ mod tests {
         Box::pin(wrapped).as_mut().call();
 
         let result = block_on(receiver).unwrap();
-        let panic_payload = result.unwrap_err().into_payload();
+        let panic_payload = result.unwrap_err().into_panic().unwrap();
 
         // The panic payload should contain our message.
         let message = panic_payload

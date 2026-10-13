@@ -14,38 +14,43 @@ and persist until shutdown.
 ## Example
 
 ```rust
+use std::error::Error;
+
 use new_zealand::nz;
 use vicinal::{Pool, WorkerPolicy};
 
 #[tokio::main]
-async fn main() {
-    processor_local().await;
-    memory_region_local().await;
+async fn main() -> Result<(), Box<dyn Error>> {
+    processor_local().await?;
+    memory_region_local().await?;
+    Ok(())
 }
 
-async fn processor_local() {
+async fn processor_local() -> Result<(), Box<dyn Error>> {
     let pool = Pool::new();
     let scheduler = pool.scheduler();
 
     let task1 = scheduler.spawn(|| 42);
     let _task2 = scheduler.spawn(|| println!("doing some stuff"));
 
-    assert_eq!(task1.await, 42);
+    assert_eq!(task1.await?, 42);
 
     let scheduler2 = scheduler.clone();
     let task3 = scheduler.spawn(move || scheduler2.spawn(|| 55));
 
-    assert_eq!(task3.await.await, 55);
+    assert_eq!(task3.await?.await?, 55);
+    Ok(())
 }
 
-async fn memory_region_local() {
+async fn memory_region_local() -> Result<(), Box<dyn Error>> {
     // Workers share each region's cumulative set of submitting processors.
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
         .build();
 
-    assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
+    assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
+    Ok(())
 }
 ```
 
@@ -71,10 +76,20 @@ Regions describe processor locality, not the task's allocations or data.
 - Task code must preserve worker affinity. Affinity does not bind memory allocations,
   move data or guarantee cache hits. Topology and restriction refresh are not supported.
 
+## Task outcomes
+
+Awaiting a join handle returns `Result<R, TaskError<R>>`. Use `is_cancel()` and `is_panic()`
+to distinguish cancellation before execution from a task panic. `into_body()` recovers a
+cancelled task as `Box<dyn FnOnce() -> R + Send>` for execution elsewhere, while `into_panic()`
+recovers the original panic payload. Both methods return the unchanged error if its outcome
+does not match the extraction. Dropping a handle does not cancel the task.
+
 ## Shutdown
 
-Dropping the pool releases queued tasks and waits for executing tasks and workers.
-Awaiting an abandoned task's join handle panics, even if scheduler clones remain.
+Dropping the pool cancels queued tasks and waits for executing tasks and workers.
+Cancelled joined tasks retain their captures for recovery until the handle, error or recovered
+body is dropped or the body executes. Fire-and-forget cancellation releases captures.
+Retained schedulers return cancelled join handles for submissions after clean shutdown.
 Await required work before dropping the pool.
 
 Infrastructure failures, including worker startup and affinity refresh, log the failure

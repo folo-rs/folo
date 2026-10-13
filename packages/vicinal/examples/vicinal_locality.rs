@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use many_cpus::SystemHardware;
-use vicinal::Pool;
+use vicinal::{Pool, TaskError};
 
-fn main() {
+fn main() -> Result<(), TaskError<()>> {
     // Exit early if running in a testing environment
     if std::env::var("IS_TESTING").is_ok() {
         println!("Running in testing mode - exiting immediately to prevent infinite loop");
-        return;
+        return Ok(());
     }
 
     println!("=== Processor Locality Demo ===");
@@ -31,7 +31,7 @@ fn main() {
             println!("Task executed on processor {processor_id}");
         });
 
-        block_on(handle);
+        block_on(handle)?;
         thread::sleep(Duration::from_millis(100));
     }
 }
