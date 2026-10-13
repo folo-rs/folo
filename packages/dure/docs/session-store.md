@@ -63,6 +63,22 @@ because the two are distinguished rather than conflated.
 The Win32 record-file mechanics live under the filesystem implementation rather
 than beside it, because they are meaningful only there.
 
+### Filesystem policy and native operations
+
+Record decoding, filename recognition, published-record selection, reservation
+selection, ascending-id ordering, ownership checks and absent-versus-error handling
+operate on values inside the process. Direct reads and listings share the record-identity check.
+Conditional deletion takes an operation supplied by the native adapter, so its
+unit tests can observe both permission to delete and deletion failures without
+opening files.
+
+The adapter reads and deletes through the same native handle. Directory
+enumeration, concurrent disappearance, exclusive creation, flushing, atomic
+replacement, cleanup and operating-system path queries stay in native integration
+tests. Those adapters have individual mutation exclusions; the in-process policy
+and path construction remain mutation-tested. This boundary does not replace
+native-store integration coverage with an in-memory filesystem simulation.
+
 ## Isolation
 
 Session isolation is a property of the per-user store root, not of anything the

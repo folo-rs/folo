@@ -1453,7 +1453,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dure"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "clap",
  "dure-test-helper",
@@ -4503,7 +4503,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vicinal"
-version = "0.1.46"
+version = "0.1.47"
 dependencies = [
  "all_the_time",
  "alloc_tracker",

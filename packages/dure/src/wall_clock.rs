@@ -8,6 +8,9 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Milliseconds since the Unix epoch.
+// Reading the host clock is an external boundary, not a deterministic unit-test input.
+// Conversion and injected-clock routing remain mutation-tested.
+#[cfg_attr(test, mutants::skip)]
 #[must_use]
 pub(crate) fn unix_now_ms() -> u64 {
     unix_ms_at(SystemTime::now())
@@ -46,15 +49,24 @@ mod tests {
     }
 
     #[test]
+    fn a_post_epoch_system_time_reaches_the_millisecond_conversion() {
+        // Cross a whole-second boundary with a fractional millisecond to distinguish
+        // seconds, milliseconds and rounding without consulting the host clock.
+        let time = UNIX_EPOCH
+            .checked_add(Duration::from_micros(1_500_999))
+            .unwrap();
+        assert_eq!(unix_ms_at(time), 1_500);
+        assert_eq!(unix_ms_at(UNIX_EPOCH), 0);
+    }
+
+    #[test]
     fn a_duration_too_large_to_express_saturates() {
         assert_eq!(since_epoch_ms(Duration::MAX), u64::MAX);
     }
 
     #[test]
     fn a_clock_set_before_the_epoch_reads_as_the_epoch() {
-        let before = UNIX_EPOCH
-            .checked_sub(Duration::from_secs(1))
-            .expect("an instant one second before the epoch is representable");
+        let before = UNIX_EPOCH.checked_sub(Duration::from_secs(1)).unwrap();
         assert_eq!(unix_ms_at(before), 0);
     }
 }

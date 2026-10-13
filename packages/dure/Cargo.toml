@@ -2,7 +2,7 @@
 name = "dure"
 description = "Detachable Windows console sessions that outlive the terminal"
 publish = true
-version = "0.2.16"
+version = "0.2.17"
 
 authors.workspace = true
 edition.workspace = true
@@ -35,9 +35,10 @@ pkg-fmt = "zip"
 release-targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 
 # The Windows integration tests are gated behind `private-test-util`, so a default-feature build
-# compiles none of them and the helper they drive looks unused. Same reason as `many_cpus`.
+# compiles none of them and their helper and temporary-directory dependencies look unused.
+# All-feature validation compiles and runs the actual consumers.
 [package.metadata.cargo-udeps.ignore]
-development = ["dure-test-helper"]
+development = ["dure-test-helper", "tempfile"]
 
 # External types intentionally exposed in the handoff surface. The check fails when a public
 # external type matches no entry, so a new exposure is a deliberate, reviewed act rather than an

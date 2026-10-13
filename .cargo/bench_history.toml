@@ -65,4 +65,6 @@ benchmarks = [
     # Cross-thread scheduling and completion, including measured OS-thread creation.
     "vicinal/spawn/",
     "vicinal/fire_and_forget/",
+    "vicinal/policy_dispatch/",
+    "vicinal/region_contention/",
 ]

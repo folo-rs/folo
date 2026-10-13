@@ -119,7 +119,7 @@ function Get-MutantsExcludeArgument {
 
         # The integration-test helper package and in-crate test support are not product code.
         '-e', 'packages/dure-test-helper/**/*.rs',
-        '-e', 'packages/dure/src/test_support.rs'
+        '-e', 'packages/dure/src/test_support/**'
     )
 
     if (-not $IsWindowsPlatform) {

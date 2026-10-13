@@ -218,6 +218,12 @@ elapsed time saturates, rather than either being an error. A user whose clock ha
 moved sees a wrong age; nothing else misbehaves, and no command fails over a
 display value.
 
+The live clock adapter is excluded from mutation testing because observing it
+requires real time. Explicitly constructed `SystemTime` values exercise conversion,
+including positive timestamps and the pre-epoch fallback, while duration tests
+cover whole milliseconds and saturation. Injected clocks exercise command routing
+without changing the production clock path.
+
 ## Detached supervisor
 
 A terminal typically confines what it launches. Windows OpenSSH places the remote
@@ -312,6 +318,13 @@ cancellation and helper-binary discovery run as integration tests. Narrow
 test-support adapters keep their PAL implementation types internal. Native fault
 cases observe peer closure after listener replacement fails and uncommitted
 startup rollback with app output but no serving pump.
+
+The nested integration-test support subtree is excluded from mutation discovery,
+not just from execution. It is non-product infrastructure whose consumers live
+outside the library unit-test harness. The default-feature unused-dependency check
+accounts specifically for the helper binary and temporary-directory dependency
+used by these feature-gated targets; all-feature validation still compiles and
+runs their consumers.
 
 Initial geometry is measured after input has traversed the completed attach, in
 a terminal whose size differs from the session default. Resize tests enable

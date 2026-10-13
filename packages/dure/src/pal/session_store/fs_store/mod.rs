@@ -1,5 +1,6 @@
 //! Filesystem session storage and its Win32 record-file mechanics.
 
+mod policy;
 mod store;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod windows;

@@ -76,6 +76,11 @@ impl Store {
     pub fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         self.0.canonicalize(path).map_err(io::Error::other)
     }
+
+    /// Reads the process directory through the production store adapter.
+    pub fn current_dir(&self) -> io::Result<PathBuf> {
+        self.0.current_dir().map_err(io::Error::other)
+    }
 }
 
 /// Prepared record with controlled identity and content for native scenarios.
