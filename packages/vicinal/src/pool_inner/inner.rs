@@ -75,8 +75,7 @@ impl PoolInner {
                 let already_stopped =
                     self.shutdown.load(Ordering::Acquire) && self.poisoned.load(Ordering::Acquire);
                 // Destructors can re-enter submission, so reject work before releasing captures.
-                self.poisoned.store(true, Ordering::Release);
-                self.shutdown.store(true, Ordering::Release);
+                self.stop_admission();
                 discard_task_after_failure(task);
                 if already_stopped {
                     panic::resume_unwind(payload);
@@ -163,8 +162,7 @@ impl PoolInner {
                     self.admit(target, state, &mut task, urgent, affinity)
                 }));
                 if result.is_err() {
-                    self.poisoned.store(true, Ordering::Release);
-                    self.shutdown.store(true, Ordering::Release);
+                    self.stop_admission();
                 }
                 drop(handles);
                 match result {
@@ -176,8 +174,7 @@ impl PoolInner {
         let (accepted, expanded) = match result {
             Ok(outcome) => outcome,
             Err(payload) => {
-                self.poisoned.store(true, Ordering::Release);
-                self.shutdown.store(true, Ordering::Release);
+                self.stop_admission();
                 if let Some(task) = task.take() {
                     discard_task_after_failure(task);
                 }
@@ -313,12 +310,19 @@ impl PoolInner {
             .expect("a topology processor must fit its index-space bound")
     }
 
+    /// Publishes failure before cleanup can invoke reentrant task destructors, without callbacks.
+    // Mutating terminal state can admit work to workers that are exiting after failure.
+    #[cfg_attr(test, mutants::skip)]
+    pub(super) fn stop_admission(&self) {
+        self.poisoned.store(true, Ordering::Release);
+        self.shutdown.store(true, Ordering::Release);
+    }
+
     /// Stops every group without joining the reporting worker or dropping captures under locks.
     // Missing terminal cleanup can strand workers and joined handles.
     #[cfg_attr(test, mutants::skip)]
     fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
-        self.poisoned.store(true, Ordering::Release);
-        self.shutdown.store(true, Ordering::Release);
+        self.stop_admission();
         error!(
             pool_id = self.pool_id,
             message = extract_panic_message(&payload),
@@ -449,15 +453,18 @@ fn worker_loop(
         if regional {
             refresh_affinity(state, &mut revision, &pin);
         }
-        match core.run_one_iteration_with(|| {
-            if inner.shutdown.load(Ordering::Acquire) {
-                return false;
-            }
-            if regional {
-                refresh_affinity(state, &mut revision, &pin);
-            }
-            !inner.shutdown.load(Ordering::Acquire)
-        }) {
+        match core.run_one_iteration_with(
+            || {
+                if inner.shutdown.load(Ordering::Acquire) {
+                    return false;
+                }
+                if regional {
+                    refresh_affinity(state, &mut revision, &pin);
+                }
+                !inner.shutdown.load(Ordering::Acquire)
+            },
+            || inner.stop_admission(),
+        ) {
             IterationResult::ExecutedUrgent | IterationResult::ExecutedRegular => {
                 trace!(
                     pool_id = inner.pool_id,

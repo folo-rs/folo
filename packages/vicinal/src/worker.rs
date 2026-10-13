@@ -46,7 +46,7 @@ impl<'a> WorkerCore<'a> {
 
     #[cfg(test)]
     pub(crate) fn run_one_iteration(&self) -> IterationResult {
-        self.run_one_iteration_with(|| true)
+        self.run_one_iteration_with(|| true, || {})
     }
 
     /// Refreshes thread-local state and confirms admission outside the queue lock after dequeueing.
@@ -55,6 +55,7 @@ impl<'a> WorkerCore<'a> {
     pub(crate) fn run_one_iteration_with(
         &self,
         before_task: impl FnOnce() -> bool,
+        stop_pool: impl FnOnce(),
     ) -> IterationResult {
         // We first check with Relaxed to minimize overhead, as this will be called often.
         if self.shutdown_flag.load(Ordering::Relaxed) {
@@ -67,7 +68,7 @@ impl<'a> WorkerCore<'a> {
 
         let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(task) = task {
-            if !execute_task(task, before_task) {
+            if !execute_task(task, before_task, stop_pool) {
                 return IterationResult::Shutdown;
             }
             return IterationResult::ExecutedUrgent;
@@ -75,7 +76,7 @@ impl<'a> WorkerCore<'a> {
 
         let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(task) = task {
-            if !execute_task(task, before_task) {
+            if !execute_task(task, before_task, stop_pool) {
                 return IterationResult::Shutdown;
             }
             return IterationResult::ExecutedRegular;
@@ -89,7 +90,11 @@ impl<'a> WorkerCore<'a> {
 /// unwind boundaries.
 // Returning the wrong execution outcome can strand lifecycle tests after all workers exit.
 #[cfg_attr(test, mutants::skip)]
-fn execute_task(mut task: ErasedTaskHandle, before_task: impl FnOnce() -> bool) -> bool {
+fn execute_task(
+    mut task: ErasedTaskHandle,
+    before_task: impl FnOnce() -> bool,
+    stop_pool: impl FnOnce(),
+) -> bool {
     match panic::catch_unwind(AssertUnwindSafe(|| {
         if before_task() {
             task.as_pin_mut().call();
@@ -100,6 +105,9 @@ fn execute_task(mut task: ErasedTaskHandle, before_task: impl FnOnce() -> bool) 
     })) {
         Ok(executed) => executed,
         Err(payload) => {
+            // Publish terminal state before a capture destructor can re-enter submission.
+            // Only state publication occurs here; worker entry owns draining and propagation.
+            stop_pool();
             discard_task_after_failure(task);
             panic::resume_unwind(payload);
         }
@@ -185,11 +193,14 @@ mod tests {
                 .push_back(alloc_task(&pool, CountingTask::new(&COUNTER)));
             let core = WorkerCore::new(&urgent, &regular, &shutdown);
             assert_eq!(
-                core.run_one_iteration_with(|| {
-                    drop(urgent.try_lock().unwrap());
-                    drop(regular.try_lock().unwrap());
-                    false
-                }),
+                core.run_one_iteration_with(
+                    || {
+                        drop(urgent.try_lock().unwrap());
+                        drop(regular.try_lock().unwrap());
+                        false
+                    },
+                    || panic!("clean shutdown must not poison the pool"),
+                ),
                 IterationResult::Shutdown
             );
             assert_eq!(COUNTER.load(Ordering::Relaxed), 0);
@@ -213,11 +224,14 @@ mod tests {
             ));
             let core = WorkerCore::new(&urgent, &regular, &shutdown);
             let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-                core.run_one_iteration_with(|| {
-                    drop(urgent.try_lock().unwrap());
-                    drop(regular.try_lock().unwrap());
-                    panic::panic_any(AffinityFailure);
-                })
+                core.run_one_iteration_with(
+                    || {
+                        drop(urgent.try_lock().unwrap());
+                        drop(regular.try_lock().unwrap());
+                        panic::panic_any(AffinityFailure);
+                    },
+                    || {},
+                )
             }))
             .unwrap_err();
             assert!(payload.is::<AffinityFailure>());
@@ -236,7 +250,7 @@ mod tests {
             CLOCK.with_borrow_mut(fast_time::Clock::now),
         );
         let task = alloc_task(&pool, wrapped);
-        CLOCK.with_borrow_mut(|_| assert_panics(|| execute_task(task, || true)));
+        CLOCK.with_borrow_mut(|_| assert_panics(|| execute_task(task, || true, || {})));
         assert!(pool.is_empty());
     }
 

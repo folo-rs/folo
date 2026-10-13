@@ -1,6 +1,7 @@
 //! Pool-wide infrastructure failure and user-task panic isolation.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::{panic, thread};
 
@@ -8,8 +9,11 @@ use futures::executor::block_on;
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use super::helpers::{CountOnDrop, NoopTask, PanickingPayload, hardware, pin, regional_hardware};
-use crate::{Pool, WorkerPolicy, init_task};
+use super::helpers::{
+    CountOnDrop, NoopTask, PanickingPayload, hardware, pin, probe, regional_hardware,
+};
+use crate::pool_inner::refresh_affinity;
+use crate::{Pool, WorkerCore, WorkerPolicy, init_task};
 
 /// Submission failures stop admission, whereas caught user-task panics leave it operational.
 #[test]
@@ -73,6 +77,74 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
         block_on(scheduler.spawn(|| {}));
         drop(completed);
         assert!(!pool.inner.poisoned.load(Ordering::Acquire));
+    });
+}
+
+/// Dequeued-task destruction must see pool-wide rejection, not admit work to a failing worker.
+#[test]
+fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
+    struct AffinityFailure;
+
+    with_watchdog(|| {
+        let hardware = hardware();
+        pin(&hardware, 0);
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .build();
+        let target = pool.inner.policy.destination(&hardware);
+        let state = pool.inner.registry.get_or_init(target.group);
+        let affinity = hardware
+            .all_processors()
+            .to_builder()
+            .filter(|processor| processor.id() == target.processor)
+            .take_all()
+            .unwrap();
+        *state.affinity.lock().unwrap() = Some(Arc::new(affinity));
+        // Publish a snapshot to exercise the refresh after dequeueing, independently of startup.
+        state.affinity_revision.store(1, Ordering::Release);
+
+        let observed_stop = Arc::new(AtomicBool::new(false));
+        let rejected = Arc::new(AtomicBool::new(false));
+        state.regular_queue.lock().unwrap().push_back(probe(state, {
+            let scheduler = pool.scheduler();
+            let inner = Arc::clone(&pool.inner);
+            let observed_stop = Arc::clone(&observed_stop);
+            let rejected = Arc::clone(&rejected);
+            move || {
+                observed_stop.store(
+                    inner.poisoned.load(Ordering::Acquire)
+                        && inner.shutdown.load(Ordering::Acquire),
+                    Ordering::Release,
+                );
+                assert_panics(|| scheduler.spawn(|| {}));
+                assert_panics(|| scheduler.spawn_urgent(|| {}));
+                assert_panics(|| scheduler.spawn_and_forget(|| {}));
+                assert_panics(|| scheduler.spawn_urgent_and_forget(|| {}));
+                rejected.store(true, Ordering::Release);
+            }
+        }));
+        let core = WorkerCore::new(
+            &state.urgent_queue,
+            &state.regular_queue,
+            &state.shutdown_flag,
+        );
+        let mut revision = 0;
+        let payload = panic::catch_unwind(AssertUnwindSafe(|| {
+            core.run_one_iteration_with(
+                || {
+                    refresh_affinity(state, &mut revision, |_| panic::panic_any(AffinityFailure));
+                    true
+                },
+                || pool.inner.stop_admission(),
+            )
+        }))
+        .unwrap_err();
+        assert!(payload.is::<AffinityFailure>());
+        assert!(observed_stop.load(Ordering::Acquire));
+        assert!(rejected.load(Ordering::Acquire));
+        assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+        assert!(state.task_pool.lock().unwrap().is_empty());
     });
 }
 

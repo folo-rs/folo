@@ -75,8 +75,9 @@ and allocation operations. It also catches poisoned rejection before destroying 
 Wrapping transfers ownership into another protected preparation boundary; allocation consumes
 the wrapper only after slot reservation succeeds. Infrastructure failures stop admission
 before separately destroying retained captures, so reentrant destructors cannot submit work.
-Worker entry has the equivalent boundary around infrastructure
-execution. Task wrappers separately catch user-task panics, keeping them out of the
+The worker's dequeued-task boundary publishes the same pool-wide failure state before releasing
+its task; worker entry then signals groups, drains queued work and propagates the original failure.
+Task wrappers separately catch user-task panics, keeping them out of the
 infrastructure boundary. Cleanup failures also poison the pool while cleanup continues.
 Workers check the pool-wide stop flag before task execution, rather than waiting for the
 group signal scan to reach their group.
