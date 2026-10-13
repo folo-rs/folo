@@ -107,6 +107,8 @@ require heterogeneous task storage. Joined wrappers retain the original body and
 together until execution consumes them. Dropping an unexecuted wrapper sends cancellation
 with the original body, completing pending handles even while schedulers retain the registry.
 Only cancellation boxes the body; normal execution uses the existing pooled task slot.
+The recovery API hides that storage behind an opaque callable type so storage choices remain
+internal to the implementation.
 Recovering the owning heterogeneous slot would require moving ownership out of the queue's
 handle rather than cancellation from the stored wrapper's destructor.
 

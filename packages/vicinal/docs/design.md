@@ -77,7 +77,7 @@ returns `Ok(value)`. `is_cancel()` identifies cancellation before the body was c
 `is_panic()` identifies a panic during execution. Task panics do not automatically unwind
 the awaiting caller. Fire-and-forget tasks discard their output and report panics through tracing.
 
-`into_body()` recovers a cancelled task as `Box<dyn FnOnce() -> R + Send>`, preserving its
+`into_body()` recovers a cancelled task as `impl FnOnce() -> R + Send + 'static`, preserving its
 captures so callers can execute it directly or submit it elsewhere. `into_panic()` recovers
 the original panic payload for inspection or resumption. Both return `Result<_, Self>`,
 preserving the error when its outcome does not match the requested extraction.

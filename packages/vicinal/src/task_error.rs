@@ -67,7 +67,10 @@ impl<R> TaskError<R> {
     /// # Ok::<(), vicinal::TaskError<i32>>(())
     /// # }).unwrap();
     /// ```
-    pub fn into_body(self) -> Result<Box<dyn FnOnce() -> R + Send>, Self> {
+    pub fn into_body(self) -> Result<impl FnOnce() -> R + Send + 'static, Self>
+    where
+        R: 'static,
+    {
         match self {
             Self {
                 failure: TaskFailure::Cancelled(body),
@@ -139,6 +142,7 @@ struct TaskPanicked;
 mod tests {
     use std::cell::Cell;
     use std::error::Error;
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -157,6 +161,16 @@ mod tests {
         let error = error.into_panic().unwrap_err();
         assert!(error.is_cancel());
         assert_eq!(error.into_body().unwrap()(), "captured value");
+    }
+
+    #[test]
+    fn recovered_body_can_run_on_another_thread() {
+        let capture = Cell::new(String::from("transferred capture"));
+        let body = TaskError::cancelled(move || capture.into_inner())
+            .into_body()
+            .unwrap();
+
+        assert_eq!(thread::spawn(body).join().unwrap(), "transferred capture");
     }
 
     #[test]
