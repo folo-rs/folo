@@ -127,6 +127,7 @@ impl PoolBuilder {
     /// Equivalent to `worker_policy(WorkerPolicy::fixed_per_processor(count))`.
     /// This replaces any previously selected policy; the last policy setter wins.
     #[doc(hidden)]
+    #[deprecated(note = "use worker_policy(WorkerPolicy::fixed_per_processor(count)) instead")]
     #[must_use]
     #[inline]
     pub fn workers_per_processor(self, count: NonZero<u32>) -> Self {
@@ -182,6 +183,10 @@ mod tests {
     assert_impl_all!(PoolBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "verifies compatibility and precedence of the legacy setter"
+    )]
     fn default_and_policy_setter_order() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let default = Pool::builder().hardware(hardware.clone()).build();

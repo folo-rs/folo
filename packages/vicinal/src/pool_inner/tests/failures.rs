@@ -17,7 +17,7 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .workers_per_processor(nz!(1))
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         assert_panics(|| block_on(scheduler.spawn(|| panic!("task panic"))));

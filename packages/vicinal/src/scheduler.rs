@@ -254,7 +254,7 @@ mod tests {
 
     use crate::metrics::CLOCK;
     use crate::pool_inner::{OnDrop, PanickingPayload};
-    use crate::{Pool, Scheduler};
+    use crate::{Pool, Scheduler, WorkerPolicy};
 
     assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
 
@@ -264,7 +264,7 @@ mod tests {
                 nz!(1),
                 nz!(1),
             )))
-            .workers_per_processor(nz!(1))
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
             .build()
     }
 

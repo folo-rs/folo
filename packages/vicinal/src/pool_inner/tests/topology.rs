@@ -93,7 +93,7 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
         assert!(hardware.processors().len() < processors.len());
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .workers_per_processor(nz!(1))
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         let handles = processors.spawn_threads(move |processor| {

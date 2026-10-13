@@ -99,7 +99,7 @@ fn shutdown_accounts_for_in_progress_startup() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .workers_per_processor(nz!(1))
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
             .build();
         let inner = Arc::clone(&pool.inner);
         let (entered, arrivals) = mpsc::channel();
@@ -151,7 +151,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .workers_per_processor(nz!(2))
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(2)))
             .build();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
@@ -194,7 +194,7 @@ fn affinity_failure_is_reported_before_admission() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .workers_per_processor(nz!(1))
+            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
             .build();
         let inner = &pool.inner;
         let destination = SubmissionTarget {

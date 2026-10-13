@@ -11,8 +11,9 @@ types. Additional constructors can extend configuration without exposing its rep
 
 The default is processor-local scheduling. Applications configure explicit counts through
 `WorkerPolicy`. The legacy `workers_per_processor(count)` convenience alias remains callable
-but is hidden from public documentation. Both setters replace the same policy, so the last
-setter wins. A built pool's policy is immutable.
+but is deprecated and hidden from public documentation. Its deprecation directs callers to
+`worker_policy(WorkerPolicy::fixed_per_processor(count))`. Both setters replace the same policy,
+so the last setter wins. A built pool's policy is immutable.
 
 ```rust
 use new_zealand::nz;
