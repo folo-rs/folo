@@ -444,7 +444,9 @@ call several scenario helpers. Do not invoke `init_tracing!()` in the same binar
 captured formatting and silent formatting are separate global subscriber configurations.
 Start capture before constructing fixtures or starting workers. The capture helper
 uses the same enabled formatting path as ordinary tests, but retains the resulting
-output for `snapshot()`.
+output for `snapshot()`. Formatting completes in an event-local buffer before reaching
+the subscriber's reusable buffer, so a panicking formatter cannot leave partial text
+for a later event. Successful cleanup logs emitted during an existing unwind are retained.
 
 Wait for background work through explicit completion signals and join workers before
 reading the final snapshot. Task-result delivery may precede the final log event.
@@ -474,9 +476,11 @@ Do not exclude logging or exercised formatters from coverage merely because thei
 wording is not contractual.
 
 The startup convention and capture writer follow the MIT-licensed
-[Oxidizer tracing helpers](https://github.com/microsoft/oxidizer/tree/13d95b808b1ec7890ee70aeacd8d962805896ecf/crates/testing_aids/src/tracing_logs).
+[Oxidizer tracing helpers][oxidizer].
 Unlike an interest-only subscriber, both helper configurations keep formatting active
 throughout the test process, even when no output is captured.
+
+[oxidizer]: https://github.com/microsoft/oxidizer/tree/13d95b8/crates/testing_aids/src/tracing_logs
 
 ### Coverage exclusions
 

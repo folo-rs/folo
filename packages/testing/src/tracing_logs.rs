@@ -3,12 +3,15 @@
 // See ../LICENSE-oxidizer and docs/testing.md, "Tracing log coverage", at the workspace root.
 
 use std::io::{self, Write};
-use std::mem;
 use std::sync::{Arc, Mutex, Once};
+use std::{fmt, mem};
 
 use tracing::level_filters::{LevelFilter, STATIC_MAX_LEVEL};
 use tracing::subscriber::set_global_default;
-use tracing_subscriber::fmt::MakeWriter;
+use tracing::{Event, Subscriber};
+use tracing_subscriber::fmt::format::{Format, Writer};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, MakeWriter};
+use tracing_subscriber::registry::LookupSpan;
 
 /// Captures fully formatted tracing output from every thread in a test process.
 ///
@@ -83,11 +86,37 @@ where
     // evaluates expressions but never calls their Debug/Display implementations.
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(LevelFilter::TRACE)
-        .without_time()
         .with_ansi(false)
+        .event_format(CompleteEvent)
         .with_writer(writer)
         .finish();
     set_global_default(subscriber).unwrap();
+}
+
+/// Prevents failed formatting from leaving partial text in the subscriber's reusable buffer.
+struct CompleteEvent;
+
+impl<S, N> FormatEvent<S, N> for CompleteEvent
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        // The subscriber clears its buffer only after format_event returns. Stage locally
+        // so an unwind discards partial text instead of prepending it to the next event.
+        // No panicking-state filter is needed: successful cleanup logs remain valid.
+        let mut formatted = String::new();
+        Format::default()
+            .without_time()
+            .with_ansi(false)
+            .format_event(ctx, Writer::new(&mut formatted), event)?;
+        writer.write_str(&formatted)
+    }
 }
 
 /// Keeps each event's output together even when threads emit concurrently.
@@ -146,6 +175,7 @@ mod tests {
     use super::*;
     use crate::assert_panics_with;
 
+    /// Private unit-test data must reach both eager evaluation and lazy formatting from startup.
     #[test]
     fn startup_formats_private_unit_test_fields() {
         let expressions = Cell::new(0);
@@ -169,6 +199,7 @@ mod tests {
         assert_eq!(formats.get(), 5);
     }
 
+    /// Explicit initialization must preserve the constructor's permanent formatting behavior.
     #[test]
     fn initialization_is_idempotent_without_disabling_formatting() {
         initialize_tracing();
@@ -178,6 +209,7 @@ mod tests {
         assert_eq!(formats.get(), 1);
     }
 
+    /// Discarding output must not hide failures in the formatters ordinary unit tests exercise.
     #[test]
     fn discarded_output_still_propagates_formatting_panics() {
         assert_panics_with(

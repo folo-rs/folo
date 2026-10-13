@@ -13,6 +13,10 @@ testing::set_allocator!();
 
 assert_impl_all!(TracingCapture: Send, Sync, UnwindSafe, RefUnwindSafe);
 
+/// Keeps capture regressions together because the subscriber owns the process for its lifetime.
+///
+/// Formatting must run outside the capture lock so a formatter can inspect captured output.
+/// See docs/testing.md, "Tracing log coverage", for the isolated-capture boundary.
 #[test]
 fn captures_every_level_and_formats_fields_across_threads() {
     let capture = TracingCapture::start();
@@ -27,11 +31,8 @@ fn captures_every_level_and_formats_fields_across_threads() {
 
         let entries = capture.snapshot();
         for level in ["trace", "debug", "info", "warn", "error"] {
-            assert!(
-                entries
-                    .iter()
-                    .any(|entry| entry.contains(&format!("{level} canary")))
-            );
+            let canary = format!("{level} canary");
+            assert!(entries.iter().any(|entry| entry.contains(&canary)));
         }
 
         let formats = Cell::new(0);
@@ -57,16 +58,13 @@ fn captures_every_level_and_formats_fields_across_threads() {
 
         // Competing writers and multiline fields must still produce whole entries.
         let start = Arc::new(Barrier::new(2));
-        let workers: Vec<_> = ["first", "second"]
-            .into_iter()
-            .map(|marker| {
-                let start = Arc::clone(&start);
-                thread::spawn(move || {
-                    start.wait();
-                    trace!(worker = marker, "worker start\nworker end");
-                })
+        let workers = ["first", "second"].map(|marker| {
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                start.wait();
+                trace!(worker = marker, "worker start\nworker end");
             })
-            .collect();
+        });
         for worker in workers {
             worker.join().unwrap();
         }

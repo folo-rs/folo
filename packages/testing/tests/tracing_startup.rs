@@ -11,6 +11,7 @@ testing::set_allocator!();
 testing::init_tracing!();
 testing::init_tracing!();
 
+/// Executable initialization must enable real formatting before any test performs its own setup.
 #[test]
 fn logging_is_enabled_before_test_setup() {
     assert!(tracing::enabled!(tracing::Level::TRACE));
@@ -24,6 +25,7 @@ fn logging_is_enabled_before_test_setup() {
     assert_eq!(formats.load(Ordering::Relaxed), 5);
 }
 
+/// Worker threads must inherit permanent logging without capture scopes or per-thread setup.
 #[test]
 fn background_threads_format_without_local_subscribers() {
     // This test must also pass when selected alone by nextest or libtest.

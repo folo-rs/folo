@@ -5,6 +5,7 @@ use tracing::subscriber::{NoSubscriber, set_global_default};
 
 testing::set_allocator!();
 
+/// Neither helper may silently accept a foreign subscriber that could suppress coverage.
 #[test]
 fn rejects_an_existing_global_subscriber() {
     set_global_default(NoSubscriber::default()).unwrap();

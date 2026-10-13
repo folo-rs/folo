@@ -7,7 +7,7 @@ use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
 use vicinal::{Pool, WorkerPolicy};
 
-/// Restricts every submission to one fake processor without using real OS affinity.
+/// Provides deterministic simulated destinations for locality scenarios without real OS affinity.
 pub(crate) fn pool(policy: WorkerPolicy, name: &str) -> Pool {
     let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     Pool::builder()

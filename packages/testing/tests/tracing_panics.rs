@@ -7,6 +7,7 @@ use tracing::trace;
 
 testing::set_allocator!();
 
+/// Formatting failures must propagate without publishing partial events or poisoning later capture.
 #[test]
 fn logging_panics_propagate_without_poisoning_capture() {
     let capture = TracingCapture::start();
@@ -16,7 +17,7 @@ fn logging_panics_propagate_without_poisoning_capture() {
         |message| assert!(message.contains("field canary")),
     );
     assert_panics_with(
-        || trace!(value = ?PanickingFormat),
+        || trace!(incomplete = "failed-event-canary", value = ?PanickingFormat),
         |message| assert!(message.contains("debug canary")),
     );
     assert_panics_with(
@@ -30,12 +31,11 @@ fn logging_panics_propagate_without_poisoning_capture() {
 
     assert!(capture.snapshot().is_empty());
     trace!("capture survives formatting panics");
-    assert!(
-        capture
-            .snapshot()
-            .iter()
-            .any(|entry| entry.contains("capture survives"))
-    );
+    let entries = capture.snapshot();
+    assert_eq!(entries.len(), 1);
+    let entry = entries.first().unwrap();
+    assert!(entry.contains("capture survives"));
+    assert!(!entry.contains("failed-event-canary"));
 }
 
 /// A failure in eager field evaluation, distinct from deferred formatting.

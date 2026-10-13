@@ -13,7 +13,8 @@ use crate::fixtures::{PanickingPayload, pool};
 
 /// Exercises both destination formatters, priorities and task-panic payload representations.
 pub(crate) fn exercise(capture: &TracingCapture) {
-    // One worker gives each started task exclusive execution until its logging completes.
+    // The worker configuration prevents a later task's start signal from overtaking
+    // an earlier task's remaining diagnostics.
     // Empty and multiline names also exercise diagnostic field escaping.
     let borrowed: Box<dyn Any + Send> = Box::new("borrowed panic canary");
     for (policy, name, group, payloads, markers) in [
@@ -62,6 +63,7 @@ pub(crate) fn exercise(capture: &TracingCapture) {
 
         let snapshot = capture.snapshot();
         let entries = snapshot.get(first_entry..).unwrap();
+        let group_field = format!("group={group}");
         for message in [
             "worker thread started",
             "worker thread exiting",
@@ -69,15 +71,18 @@ pub(crate) fn exercise(capture: &TracingCapture) {
         ] {
             assert!(entries.iter().any(|entry| {
                 entry.contains(message)
-                    && entry.contains(&format!("group={group}"))
+                    && entry.contains(&group_field)
                     && entry.contains("worker_index=")
                     && entry.contains("pool_id=")
             }));
         }
         for urgent in [false, true] {
-            assert!(entries.iter().any(|entry| {
-                entry.contains("spawned task") && entry.contains(&format!("urgent={urgent}"))
-            }));
+            let urgent_field = format!("urgent={urgent}");
+            assert!(
+                entries.iter().any(|entry| {
+                    entry.contains("spawned task") && entry.contains(&urgent_field)
+                })
+            );
         }
         assert!(entries.iter().any(|entry| entry.contains("abandoned task")));
         for marker in markers {
