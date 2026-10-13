@@ -217,6 +217,11 @@ contain binary shells and their private helpers, not shared library implementati
 Keep new binary targets in these conventional locations; a custom binary source
 layout needs corresponding source-selection handling.
 
+The nested `dure` integration-test support subtree is also excluded from source
+discovery. It is non-product infrastructure whose integration consumers do not
+run in the library-only mutation harness. Discovery regression tests compare
+complete inventories to retain the selected product mutations.
+
 The same helper excludes `packages/infinity_pool/**` from source discovery under
 the maintenance policy in [Testing](testing.md#mutation-testing-target-selection).
 This applies to both local and scheduled mutation runs on every platform, including

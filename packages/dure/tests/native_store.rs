@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Barrier};
-use std::{fs, iter, thread};
+use std::{env, fs, iter, thread};
 
 use dure::test_support::store::{
     Identity as ProcessIdentity, InspectedRecord as RecordFile, Record as SessionRecord,
@@ -385,6 +385,12 @@ fn canonicalize_resolves_an_existing_path_and_rejects_a_missing_one() {
     assert!(resolved.is_absolute());
     assert_eq!(resolved, fs::canonicalize(dir.path()).unwrap());
     store.canonicalize(&dir.path().join("absent")).unwrap_err();
+}
+
+#[test]
+fn current_directory_comes_from_the_process_not_the_store_root() {
+    let (_dir, store) = store();
+    assert_eq!(store.current_dir().unwrap(), env::current_dir().unwrap());
 }
 
 #[test]

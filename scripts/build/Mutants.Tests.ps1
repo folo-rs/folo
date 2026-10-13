@@ -47,7 +47,7 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain 'packages/dure/src/pal/raw_handle.rs'
         $values | Should -Contain 'packages/dure/src/outbox.rs'
         $values | Should -Contain 'packages/dure-test-helper/**/*.rs'
-        $values | Should -Contain 'packages/dure/src/test_support.rs'
+        $values | Should -Contain 'packages/dure/src/test_support/**'
     }
 
     It 'excludes the whole Windows-only dure package off Windows' {

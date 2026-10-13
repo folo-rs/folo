@@ -46,6 +46,29 @@ BeforeAll {
 # cargo-mutants is not installed on ARM64 by the workspace tool setup. Mutation validation
 # targets x64; the same source-selection policy is architecture-independent.
 Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') {
+    It 'excludes nested dure integration support while preserving product mutations' {
+        # Discovery parses sources independently of the host OS. Use the Windows selection
+        # on every host so the non-Windows whole-package exclusion cannot hide a regression.
+        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $true -IsLinuxPlatform $false)
+        $withoutSupportExclusion = @()
+        for ($index = 0; $index -lt $exclusions.Count; $index += 2) {
+            if ($exclusions[$index + 1] -ne 'packages/dure/src/test_support/**') {
+                $withoutSupportExclusion += $exclusions[$index], $exclusions[$index + 1]
+            }
+        }
+        $packageArguments = @('-p', 'dure')
+        $before = @(Get-DiscoveredMutant -Exclusions $withoutSupportExclusion -PackageArguments $packageArguments)
+        $after = @(Get-DiscoveredMutant -Exclusions $exclusions -PackageArguments $packageArguments)
+        $supportPattern = '^packages/dure/src/test_support/'
+        $supportMutants = @($before | Where-Object { $_.file -match $supportPattern })
+        $productMutants = @($before | Where-Object { $_.file -notmatch $supportPattern })
+
+        $supportMutants.Count | Should -BeGreaterThan 0
+        $productMutants.Count | Should -BeGreaterThan 0
+        @($after | Where-Object { $_.file -match $supportPattern }).Count | Should -Be 0
+        @($after.name | Sort-Object) | Should -Be @($productMutants.name | Sort-Object)
+    }
+
     It 'excludes infinity_pool without losing mutations in active packages' {
         $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
         $withoutPoolExclusion = @()
