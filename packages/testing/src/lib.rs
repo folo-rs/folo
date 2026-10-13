@@ -11,6 +11,7 @@ mod cwd_guard;
 mod drop_waker;
 mod float;
 mod reentrant_waker;
+mod tracing_logs;
 mod wake_action_waker;
 mod watchdog;
 
@@ -21,6 +22,7 @@ pub use cwd_guard::CwdGuard;
 pub use drop_waker::{DropOnWakerRelease, drop_waker};
 pub use float::f64_diff_abs;
 pub use reentrant_waker::ReentrantWakerData;
+pub use tracing_logs::*;
 pub use wake_action_waker::wake_action_waker;
 pub use watchdog::{
     WatchdogPhaseReporter, with_watchdog, with_watchdog_phases, with_watchdog_timeout,

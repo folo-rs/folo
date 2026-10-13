@@ -157,6 +157,7 @@ tokio = { version = "1.49.0", default-features = false }
 toml = { version = "1.1.2", default-features = false }
 toml_edit = { version = "0.25.12", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false }
 trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.1.46", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }

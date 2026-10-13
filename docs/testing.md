@@ -384,6 +384,63 @@ Package dependencies of UI tests must be excluded from `udeps` scanner logic via
 
 ## Test coverage
 
+### Tracing log coverage
+
+Every production `tracing` statement must have integration coverage with logging
+enabled, including trace-level diagnostics, error paths and relevant input boundaries.
+Reaching the surrounding operation without an interested subscriber is insufficient:
+disabled events skip their field expressions. An interested subscriber that discards
+fields is also insufficient because it need not invoke `Debug`, `Display` or message
+formatting. Span creation and later field recording have the same requirement.
+
+Use `testing::TracingCapture::start()` in a dedicated `tests/tracing_coverage.rs`
+binary containing a single `#[test]`. That test may call several scenario helpers.
+Initialize capture before constructing fixtures or starting workers. The helper
+installs a process-global subscriber, enables every level independently of `RUST_LOG`,
+formats fields synchronously and captures output from every thread without timestamps
+or terminal colors. It rejects an existing subscriber and compile-time level filters
+that disable logging.
+
+Do not install competing subscribers, including thread-local defaults, in that
+binary. Tests for a different filtering configuration or no-subscriber behavior
+belong in separate integration binaries. Serial test execution is not isolation:
+subscriber configuration and callsite-interest caches persist within the process.
+Nextest's per-test isolation is useful but must not be required for correctness;
+the same test layout must work under ordinary `cargo test`. Keeping one test in each
+logging binary avoids constructors, initialization ordering and shared capture scopes.
+
+Wait for background work through explicit completion signals and join workers before
+reading the final `snapshot()`. Task-result delivery may precede the final log event.
+Do not poll output or sleep, and propagate worker failures rather than allowing a
+logging panic to disappear in a detached thread. Keep expected application panics
+separate from logging assertions; a broad `#[should_panic]` can accept the wrong panic.
+
+Prefer real public-API scenarios. If required states cannot be reached that way,
+expose the necessary implementation surface through the
+[`_impl` package pattern](impl-crate-split.md), not through the public facade or a
+duplicate compilation of production source. Keep logging expressions unchanged in
+test builds.
+
+Inspect the existing LLVM coverage report for the statements and their field
+expressions when adding or changing logging. Cover all applicable sites; the general
+coverage percentage is not permission to leave diagnostic paths untested. Use the
+existing platform and feature validation to cover conditional logging. No separate
+source inventory or logging-specific coverage gate is required.
+
+Assertions should establish that the intended events were emitted and relevant fields
+were formatted, without freezing entire diagnostic messages. This requirement does
+not make log wording a public API contract, nor does one execution establish safety
+for every input. Retain focused tests for nontrivial calculations and boundary values.
+Do not exclude logging or exercised formatters from coverage merely because their
+wording is not contractual.
+
+The helper's capture writer is adapted from the MIT-licensed
+[Oxidizer tracing helpers](https://github.com/microsoft/oxidizer/tree/13d95b808b1ec7890ee70aeacd8d962805896ecf/crates/testing_aids/src/tracing_logs).
+Unlike a silent interest-keeper layer, its formatting layer remains active throughout
+the test process.
+
+### Coverage exclusions
+
 In some circumstances, we may need to mark parts of code as intentionally not
 covered by tests. For example:
 
@@ -393,7 +450,7 @@ covered by tests. For example:
   are automatically excluded, though — no need to worry about those.
 * Defensive branches that can never be reached due to defense in depth layering.
 * When code has no API contract to test (e.g. `fmt::Debug` implementations which
-  may contractually write anything).
+  may contractually write anything), except formatters exercised by production logging.
 * Facade pass-through methods whose only purpose is to redirect calls to either a
   real or mock implementation. Const facade constructors remain instrumented and
   are called at runtime as described below.
