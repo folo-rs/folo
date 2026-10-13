@@ -19,12 +19,14 @@ BeforeAll {
         )
 
         $start = [Diagnostics.ProcessStartInfo]::new()
-        $start.FileName = (Get-Command cargo -CommandType Application | Select-Object -First 1).Source
+        $start.FileName = (Get-Command cargo -CommandType Application |
+            Select-Object -First 1).Source
         $start.WorkingDirectory = $repositoryRoot
         $start.UseShellExecute = $false
         $start.RedirectStandardOutput = $true
         $start.RedirectStandardError = $true
-        foreach ($argument in (@('mutants', '--list', '--json') + $PackageArguments + $Exclusions)) {
+        foreach ($argument in (@('mutants', '--list', '--json') +
+                $PackageArguments + $Exclusions)) {
             $start.ArgumentList.Add($argument)
         }
         $process = [Diagnostics.Process]::new()
@@ -45,7 +47,9 @@ BeforeAll {
 
 # cargo-mutants is not installed on ARM64 by the workspace tool setup. Mutation validation
 # targets x64; the same source-selection policy is architecture-independent.
-Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') {
+Describe 'Library-only mutation discovery' -Skip:(
+    [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64'
+) {
     It 'excludes nested dure integration support while preserving product mutations' {
         # Discovery parses sources independently of the host OS. Use the Windows selection
         # on every host so the non-Windows whole-package exclusion cannot hide a regression.
@@ -57,7 +61,8 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
             }
         }
         $packageArguments = @('-p', 'dure')
-        $before = @(Get-DiscoveredMutant -Exclusions $withoutSupportExclusion -PackageArguments $packageArguments)
+        $before = @(Get-DiscoveredMutant -Exclusions $withoutSupportExclusion `
+                -PackageArguments $packageArguments)
         $after = @(Get-DiscoveredMutant -Exclusions $exclusions -PackageArguments $packageArguments)
         $supportPattern = '^packages/dure/src/test_support/'
         $supportMutants = @($before | Where-Object { $_.file -match $supportPattern })
@@ -70,7 +75,8 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
     }
 
     It 'excludes infinity_pool without losing mutations in active packages' {
-        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
+        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows `
+                -IsLinuxPlatform $IsLinux)
         $withoutPoolExclusion = @()
         for ($index = 0; $index -lt $exclusions.Count; $index += 2) {
             if ($exclusions[$index + 1] -ne 'packages/infinity_pool/**') {
@@ -89,12 +95,14 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         @($after.name | Sort-Object) | Should -Be @($otherMutants.name | Sort-Object)
 
         # Explicit package selection must not bypass the shared maintenance exclusion.
-        @(Get-DiscoveredMutant -Exclusions $exclusions -PackageArguments @('-p', 'infinity_pool')).Count |
+        @(Get-DiscoveredMutant -Exclusions $exclusions `
+                -PackageArguments @('-p', 'infinity_pool')).Count |
             Should -Be 0
     }
 
     It 'removes binary source mutations and preserves every selected library mutation' {
-        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
+        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows `
+                -IsLinuxPlatform $IsLinux)
         # Compare against the same platform/package policy without the binary-source exclusions.
         $withoutBinaryExclusions = @()
         for ($index = 0; $index -lt $exclusions.Count; $index += 2) {
@@ -119,10 +127,13 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         if ($IsWindows) { $packages += 'dure' }
         foreach ($packageName in $packages) {
             # Every executable keeps its own non-binary adapter behavior mutation-selected.
-            @($binaryMutants | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
+            @($binaryMutants | Where-Object { $_.package -eq $packageName }).Count |
+                Should -BeGreaterThan 0
             @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
         }
-        foreach ($packageName in @('crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication')) {
+        foreach ($packageName in @(
+                'crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication'
+            )) {
             @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
         }
     }
@@ -130,7 +141,8 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
     It 'excludes a src/bin entry point without excluding its library' {
         # The figure generator supplies a real src/bin layout. Isolate the binary-path
         # exclusions from its unrelated whole-package skip to exercise that layout, too.
-        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
+        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows `
+                -IsLinuxPlatform $IsLinux)
         $binaryExclusions = @()
         for ($index = 0; $index -lt $exclusions.Count; $index += 2) {
             if ($exclusions[$index + 1] -in @('**/src/main.rs', '**/src/bin/**')) {
@@ -139,7 +151,8 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         }
         $packageArguments = @('-p', 'cargo-bench-history-figures')
         $before = @(Get-DiscoveredMutant -Exclusions @() -PackageArguments $packageArguments)
-        $after = @(Get-DiscoveredMutant -Exclusions $binaryExclusions -PackageArguments $packageArguments)
+        $after = @(Get-DiscoveredMutant -Exclusions $binaryExclusions `
+                -PackageArguments $packageArguments)
         @($before | Where-Object { $_.file -match '/src/bin/' }).Count | Should -BeGreaterThan 0
         $expected = @($before | Where-Object { $_.file -notmatch '/src/bin/' })
         $expected.Count | Should -BeGreaterThan 0
