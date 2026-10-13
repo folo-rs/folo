@@ -21,13 +21,12 @@ fn concurrent_first_submissions_start_exact_configured_count() {
     // More workers than processors proves that intentional oversubscription is retained.
     const WORKERS: u32 = 2;
     with_watchdog(|| {
-        for regional in [false, true] {
+        for (policy, destination) in [
+            (WorkerPolicy::fixed_per_processor(nz!(WORKERS)), "p0"),
+            (WorkerPolicy::fixed_per_memory_region(nz!(WORKERS)), "r0"),
+            (WorkerPolicy::fixed_per_system(nz!(WORKERS)), "s"),
+        ] {
             let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-            let policy = if regional {
-                WorkerPolicy::fixed_per_memory_region(nz!(WORKERS))
-            } else {
-                WorkerPolicy::fixed_per_processor(nz!(WORKERS))
-            };
             let pool = Pool::builder()
                 .name("workers")
                 .hardware(hardware.clone())
@@ -67,7 +66,6 @@ fn concurrent_first_submissions_start_exact_configured_count() {
                 assert_eq!(mask, BTreeSet::from([0]));
                 assert!(names.insert(name));
             }
-            let destination = if regional { "r0" } else { "p0" };
             assert_eq!(
                 names,
                 (0..WORKERS)

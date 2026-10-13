@@ -12,8 +12,9 @@ use crate::{
 ///
 /// Each task uses its submitting processor according to the pool's
 /// [`WorkerPolicy`][crate::WorkerPolicy]: that processor by default, or its memory
-/// region for a regional policy. Regional affinity accumulates the processors that submit
-/// accepted work to this pool. All submission methods use the same policy.
+/// region for a regional policy, or all submitting processors for a system policy.
+/// Shared worker affinity accumulates the processors that submit accepted work to this pool
+/// and destination. All submission methods use the same policy.
 /// Tasks execute synchronously and must preserve worker affinity.
 ///
 /// # Cloning
@@ -72,7 +73,7 @@ impl Scheduler {
 
     /// Spawns a task near the caller, according to the pool's worker policy.
     ///
-    /// The task has normal priority and executes on its submitting processor or memory region.
+    /// The task has normal priority and executes within the policy's permitted processor set.
     ///
     /// Spawned tasks may be executed in any order. Urgent tasks are scheduled
     /// preferentially, without preempting tasks that are already executing.

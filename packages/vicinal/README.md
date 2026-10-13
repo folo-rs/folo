@@ -1,15 +1,15 @@
 # vicinal
 
-Worker pool with processor-local or memory-region-local task scheduling.
+Worker pool with configurable processor affinity.
 
 A memory region groups processors with their local physical memory, as reported by
 [`many_cpus`](https://docs.rs/many_cpus/). Access to local memory can be faster than access
 across regions. Many systems have only one region.
 
 Tasks execute synchronously on the processor sampled during submission by default.
-A regional policy shares a fixed worker count across all
-submitting processors in each memory region. Workers start on first use of a destination
-and persist until shutdown.
+A regional policy shares a fixed worker count across submitting processors in each memory
+region. A system policy shares a fixed count across all submitting processors, regardless
+of region. Workers start on first use of a destination and persist until shutdown.
 
 ## Example
 
@@ -21,6 +21,7 @@ use vicinal::{Pool, WorkerPolicy};
 async fn main() {
     processor_local().await;
     memory_region_local().await;
+    system_wide().await;
 }
 
 async fn processor_local() {
@@ -47,13 +48,25 @@ async fn memory_region_local() {
 
     assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
 }
+
+/// Demonstrates a worker count independent of the submitting processors' memory regions.
+async fn system_wide() {
+    // Illustrative concurrency shared across every submitting processor in this pool.
+    let pool = Pool::builder()
+        .worker_policy(WorkerPolicy::fixed_per_system(nz!(2_u32)))
+        .build();
+
+    assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
+}
 ```
 
-The regional count is per region, not per processor. Workers start on the first submitting
-processor. New submitting processors expand that region's permitted set without adding
+The regional count is per region, not per processor. The system count is per pool, not per
+region. Shared workers start on the first submitting processor.
+New submitting processors expand the destination's permitted set without adding
 workers; never-submitting processors remain excluded. Membership is per pool and cumulative.
 Workers refresh affinity at task boundaries, without preempting running tasks. They may
-move within their permitted set even during one task, but never steal work from other regions.
+move within their permitted set even during one task. Regional workers never steal work from
+other regions; system workers share all regions' work.
 Configure concurrency with `WorkerPolicy`; counts may exceed processor counts for blocking work.
 Each pool counts workers independently, while scheduler clones share their pool's workers.
 Regions describe processor locality, not the task's allocations or data.
@@ -62,7 +75,7 @@ Regions describe processor locality, not the task's allocations or data.
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
   short-lived so that the pool is often idle.
-- Regional workers stay within the submitting processors. A stable, quota-appropriate
+- Shared workers stay within the submitting processors. A stable, quota-appropriate
   submitter set keeps worker placement within that set; changing submitters can grow the
   cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
   quotas and other process work can still cause throttling: operating-system delays after

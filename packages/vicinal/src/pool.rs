@@ -15,13 +15,14 @@ const DEFAULT_WORKERS_PER_PROCESSOR: NonZero<u32> = nz!(2_u32);
 
 static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 
-/// A worker pool that executes synchronous tasks near their submitting thread.
+/// A synchronous worker pool with configurable processor affinity.
 ///
 /// By default, tasks execute on the processor sampled during submission.
 /// [`WorkerPolicy`] can instead share a fixed worker count across each
-/// submitting memory region. No workers start until the first submission to that destination.
-/// Regional workers use the cumulative set of processors that submitted accepted work
-/// to their pool and region, refreshing affinity at task boundaries without adding workers.
+/// submitting memory region or across the system. No workers start until the first submission
+/// to that destination. Shared workers use the cumulative set of processors that submitted
+/// accepted work to their pool and destination, refreshing affinity at task boundaries
+/// without adding workers.
 /// A pool's policy does not change after construction.
 ///
 /// # Lifetime
@@ -110,6 +111,7 @@ impl PoolBuilder {
     ///
     /// Processor-policy names use `{name}-p{processor_id}-{worker_index}`.
     /// Memory-region-policy names use `{name}-r{memory_region_id}-{worker_index}`.
+    /// System-policy names use `{name}-s-{worker_index}`.
     /// Worker indices start at zero within each destination.
     ///
     /// The default pool name is `vicinal-{N}`, where `N` is an auto-incrementing pool
@@ -197,14 +199,20 @@ mod tests {
             .build();
         let processor = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::fixed_per_system(nz!(1)))
             .workers_per_processor(nz!(3))
+            .build();
+        let system = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::fixed_per_system(nz!(3)))
             .build();
 
         for (pool, destination, count) in [
             (&default, GroupId::Processor(0), nz!(2)),
             (&region, GroupId::MemoryRegion(0), nz!(1)),
             (&processor, GroupId::Processor(0), nz!(3)),
+            (&system, GroupId::System, nz!(3)),
         ] {
             assert_eq!(pool.inner.policy.destination(&hardware).group, destination);
             assert_eq!(pool.inner.policy.count(), count);

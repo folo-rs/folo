@@ -196,6 +196,7 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
     for policy in [
         WorkerPolicy::fixed_per_processor(nz!(1)),
         WorkerPolicy::fixed_per_memory_region(nz!(1)),
+        WorkerPolicy::fixed_per_system(nz!(1)),
     ] {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let destination = policy.destination(&hardware);
@@ -217,6 +218,38 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
         assert_panics(|| scheduler.spawn_and_forget(|| {}));
         assert_panics(|| scheduler.spawn_urgent_and_forget(|| {}));
     }
+}
+
+/// Clean shutdown cannot add system members, retain new work or restart the shared group.
+#[test]
+fn system_post_shutdown_submissions_do_not_expand_or_restart() {
+    with_watchdog(|| {
+        let hardware = hardware();
+        pin(&hardware, 0);
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(WorkerPolicy::fixed_per_system(nz!(1)))
+            .build();
+        let scheduler = pool.scheduler();
+        block_on(scheduler.spawn(|| {}));
+        let inner = Arc::clone(&pool.inner);
+        drop(pool);
+        pin(&hardware, 3);
+        assert_retained_scheduler(&scheduler);
+        let state = inner.registry.get_or_init(GroupId::System);
+        assert_eq!(state.affinity_revision.load(Ordering::Acquire), 1);
+        assert!(state.regular_queue.lock().unwrap().is_empty());
+        assert!(state.urgent_queue.lock().unwrap().is_empty());
+        assert!(inner.worker_handles.lock().unwrap().is_empty());
+        assert_eq!(
+            inner
+                .submitted_processors
+                .iter()
+                .map(|(id, submitted)| (*id, submitted.load(Ordering::Acquire)))
+                .collect::<Vec<_>>(),
+            [(0, true), (1, false), (3, false)]
+        );
+    });
 }
 
 /// Rejected submitters cannot expand an existing mask or initialize another region.

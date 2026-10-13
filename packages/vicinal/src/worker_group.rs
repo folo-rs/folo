@@ -32,7 +32,7 @@ pub(crate) struct WorkerGroup {
     /// Published only after every worker acknowledges affinity, or startup fails permanently.
     pub(crate) startup: OnceLock<Result<(), ()>>,
 
-    /// The admitted regional mask. Workers clone it only when its revision changes.
+    /// The admitted shared-worker mask. Workers clone it only when its revision changes.
     pub(crate) affinity: Mutex<Option<Arc<ProcessorSet>>>,
     pub(crate) affinity_revision: AtomicUsize,
 

@@ -7,6 +7,7 @@ use many_cpus::{MemoryRegionId, Processor, ProcessorId};
 pub(crate) enum GroupId {
     Processor(ProcessorId),
     MemoryRegion(MemoryRegionId),
+    System,
 }
 
 impl GroupId {
@@ -14,6 +15,7 @@ impl GroupId {
         match self {
             Self::Processor(id) => processor.id() == id,
             Self::MemoryRegion(id) => processor.memory_region_id() == id,
+            Self::System => true,
         }
     }
 }
@@ -23,6 +25,7 @@ impl fmt::Display for GroupId {
         match self {
             Self::Processor(id) => write!(f, "p{id}"),
             Self::MemoryRegion(id) => write!(f, "r{id}"),
+            Self::System => f.write_str("s"),
         }
     }
 }

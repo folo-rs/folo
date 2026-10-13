@@ -5,11 +5,13 @@ User-visible behavior is defined in the package [design](design.md).
 The default configuration uses two workers per processor, an internal tuning choice rather
 than a numeric API promise. Thread names use `p` or `r` before the destination ID to identify
 the policy compactly: `{pool_name}-p{processor_id}-{worker_index}` or
-`{pool_name}-r{memory_region_id}-{worker_index}`. Default pool names include an incrementing
+`{pool_name}-r{memory_region_id}-{worker_index}`. System workers use
+`{pool_name}-s-{worker_index}` because they have no processor or region identity.
+Default pool names include an incrementing
 pool counter. The naming scheme is diagnostic information, not a stable API contract.
 
 The pool maintains an indexed registry of worker groups created on demand. A typed
-destination distinguishes logical processors from memory regions. Each submission samples
+destination distinguishes logical processors, memory regions and the system. Each submission samples
 one processor and derives its regional destination from the same cached topology entry.
 This coherent target is reused for startup, allocation, queueing and diagnostics.
 
@@ -17,7 +19,8 @@ Each group owns its queues, wake and shutdown signals, task storage, result chan
 startup outcome. Workers consume only their group's queues.
 Processor groups use direct indexed lookup. Regional groups use compact slots for the
 populated regions, with binary search over sorted IDs; storage does not scale with the
-highest region ID. Regions without eligible processors have no slot. Initialized lookups
+highest region ID. Regions without eligible processors have no slot. System pools have a
+single lazy group, independent of processor and region counts. Initialized lookups
 require neither a global map lock nor topology filtering.
 
 ## Task storage
@@ -40,7 +43,7 @@ therefore runs without any group-state lock held.
 Each enqueue wakes an additional sleeping worker: notification coalescing must not leave
 idle workers asleep while an already notified worker enters a blocking task.
 
-Cold startup, regional membership expansion and handle registration share a pool-level lock
+Cold startup, shared worker membership expansion and handle registration share a pool-level lock
 with the shutdown transition. This lock is absent from established submitters' submissions.
 Task allocation precedes the cold transaction, so another processor cannot overtake the
 initial submission between worker startup and admission. Startup publishes its outcome only
@@ -51,13 +54,14 @@ pools cannot accept work or silently retry.
 
 Workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
 hard operating-system restrictions independently of processor-time quotas. Processor groups
-keep that affinity. Regional groups publish an immutable shared affinity snapshot and
+keep that affinity. Regional and system groups publish an immutable shared affinity snapshot and
 revision when admitting work from a new CPU. A pool-wide sorted table pairs populated CPU IDs
-with atomic membership flags because each CPU belongs to one fixed region. Binary search
+with atomic membership flags because each CPU belongs to one fixed group within a pool. Binary search
 keeps established submissions allocation-free and lock-free for membership lookup, while table
 storage scales with eligible processors rather than the highest ID. Processor-local pools
 do not allocate this table. Expansion selects only already admitted CPUs plus the current
-submitter from the exact destination region.
+submitter from the destination. The system destination admits eligible processors regardless
+of their memory region, reusing the same membership and refresh protocol as regional groups.
 
 Queue insertion, membership and snapshot publication happen under the selected queue's
 admission lock. Workers refresh after dequeueing but before invoking task code, so they

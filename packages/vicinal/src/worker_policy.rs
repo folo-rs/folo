@@ -8,7 +8,7 @@ use crate::{GroupId, SubmissionTarget};
 ///
 /// Set a policy with [`PoolBuilder::worker_policy`][crate::PoolBuilder::worker_policy].
 /// A pool's policy is fixed when it is built. Workers start lazily on the first submission
-/// to a processor or memory region and persist until shutdown. Counts are not limited by
+/// to a processor, memory region or the pool and persist until shutdown. Counts are not limited by
 /// the number of processors, allowing oversubscription for blocking work.
 ///
 /// Locality requires task code to preserve worker affinity. It does not bind allocations,
@@ -69,6 +69,44 @@ impl WorkerPolicy {
         }
     }
 
+    /// Uses a fixed worker count shared across all of this pool's submitters.
+    ///
+    /// Workers may run only on processors that have submitted accepted work to this pool,
+    /// regardless of memory region. The first submission starts the configured workers on
+    /// its processor; new submitting processors expand the permitted set without adding workers.
+    /// Separate pools have independent worker counts and permitted processor sets.
+    ///
+    /// Workers refresh affinity at task boundaries. A running task may finish with the
+    /// previous narrower set and may migrate within that set, including across memory regions.
+    /// Membership is cumulative: processors are never removed.
+    ///
+    /// Submitters using a stable, quota-appropriate processor set keep worker placement
+    /// within that set. Changing submitter processors can grow the accumulated set.
+    /// This does not guarantee avoidance of throttling from fractional quotas or other work.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use new_zealand::nz;
+    /// use vicinal::{Pool, WorkerPolicy};
+    /// # use futures::executor::block_on;
+    ///
+    /// # block_on(async {
+    /// // Illustrative concurrency; choose the count for your blocking workload.
+    /// let pool = Pool::builder()
+    ///     .worker_policy(WorkerPolicy::fixed_per_system(nz!(2_u32)))
+    ///     .build();
+    /// assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
+    /// # });
+    /// ```
+    #[must_use]
+    pub fn fixed_per_system(count: NonZero<u32>) -> Self {
+        Self {
+            kind: PolicyKind::System,
+            count,
+        }
+    }
+
     /// Samples only the identity used by this policy, avoiding inconsistent topology samples.
     pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
         match self.kind {
@@ -85,11 +123,21 @@ impl WorkerPolicy {
                     processor: processor.id(),
                 })
             }
+            PolicyKind::System => SubmissionTarget {
+                group: GroupId::System,
+                processor: hardware.current_processor_id(),
+            },
         }
     }
 
-    pub(crate) fn is_regional(&self) -> bool {
-        matches!(self.kind, PolicyKind::MemoryRegion)
+    pub(crate) fn kind(&self) -> PolicyKind {
+        self.kind
+    }
+
+    /// Shared worker groups expand affinity as new processors submit accepted work.
+    #[cfg_attr(test, mutants::skip)] // Disabling refresh can strand revision-sensitive workers.
+    pub(crate) fn shares_processors(&self) -> bool {
+        matches!(self.kind, PolicyKind::MemoryRegion | PolicyKind::System)
     }
 
     pub(crate) fn count(&self) -> NonZero<u32> {
@@ -97,11 +145,12 @@ impl WorkerPolicy {
     }
 }
 
-/// Keeps policy variants private so extensions need not change caller matches.
-#[derive(Clone, Debug)]
-enum PolicyKind {
+/// Keeps policy variants out of the public API so extensions need not change caller matches.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PolicyKind {
     Processor,
     MemoryRegion,
+    System,
 }
 
 #[cfg(test)]
