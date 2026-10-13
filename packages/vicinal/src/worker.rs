@@ -85,7 +85,8 @@ impl<'a> WorkerCore<'a> {
     }
 }
 
-/// Keeps preparation/execution infrastructure and capture destruction in separate unwind boundaries.
+/// Keeps preparation/execution infrastructure and capture destruction in separate
+/// unwind boundaries.
 // Returning the wrong execution outcome can strand lifecycle tests after all workers exit.
 #[cfg_attr(test, mutants::skip)]
 fn execute_task(mut task: ErasedTaskHandle, before_task: impl FnOnce() -> bool) -> bool {

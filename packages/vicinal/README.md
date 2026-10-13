@@ -67,7 +67,7 @@ Regions describe processor locality, not the task's allocations or data.
   cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
   quotas and other process work can still cause throttling: operating-system delays after
   exceeding the process's processor-time allowance. See
-  [avoiding operating system quota penalties](https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties).
+  [avoiding operating system quota penalties].
 - Task code must preserve worker affinity. Affinity does not bind memory allocations,
   move data or guarantee cache hits. Topology and restriction refresh are not supported.
 
@@ -99,3 +99,6 @@ More details in the [package documentation](https://docs.rs/vicinal/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 high-performance hardware-aware programming in Rust.
+
+[avoiding operating system quota penalties]:
+  https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties

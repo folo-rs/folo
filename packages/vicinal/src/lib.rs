@@ -91,7 +91,8 @@
 //! On non-Windows non-Linux platforms (e.g. macOS), the package retains functional worker-pool
 //! behavior without physical locality guarantees. The fallback topology has one memory region.
 //!
-//! [avoiding operating system quota penalties]: https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties
+//! [avoiding operating system quota penalties]:
+//!   https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties
 
 mod constants;
 mod group_id;

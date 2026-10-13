@@ -314,7 +314,8 @@ mod tests {
         });
     }
 
-    /// An existing clock borrow forces failure before topology/channel preparation consumes the task.
+    /// An existing clock borrow forces failure before topology/channel preparation
+    /// consumes the task.
     #[test]
     fn preparation_failure_contains_unwrapped_capture() {
         let pool = fake_pool();
