@@ -7,13 +7,82 @@ use std::thread;
 
 use futures::FutureExt;
 use futures::executor::block_on;
-use many_cpus::Processor;
+use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
+use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use testing::with_watchdog;
 
 use super::helpers::{NoopTask, affinity, hardware, pin, probe, regional_hardware};
 use crate::pool_inner::refresh_affinity;
 use crate::{GroupId, Pool, SubmissionTarget, WorkerPolicy, init_task};
+
+/// Sparse IDs need one membership entry per eligible CPU, without registering absent submitters.
+#[test]
+fn sparse_processor_membership_is_compact_and_expands_by_identity() {
+    with_watchdog(|| {
+        // Small gaps expose ID-as-index mistakes without allocating a large fake topology.
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(19).memory_region(2))
+                .processor(ProcessorBuilder::new().id(3).memory_region(5))
+                .processor(ProcessorBuilder::new().id(7).memory_region(2))
+                .processor(ProcessorBuilder::new().id(11).memory_region(2)),
+        );
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .build();
+        let membership = || {
+            pool.inner
+                .submitted_processors
+                .iter()
+                .map(|(id, submitted)| (*id, submitted.load(Ordering::Acquire)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            membership(),
+            [(3, false), (7, false), (11, false), (19, false)]
+        );
+        assert_eq!(pool.inner.registry.initialized().count(), 0);
+        let initial_worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(initial_worker_count, 0);
+        let scheduler = pool.scheduler();
+        // Repeating a known submitter must leave the mask and revision unchanged.
+        for (processor, expected) in [
+            (19, BTreeSet::from([19])),
+            (7, BTreeSet::from([7, 19])),
+            (7, BTreeSet::from([7, 19])),
+            (3, BTreeSet::from([3])),
+        ] {
+            pin(&hardware, processor);
+            assert_eq!(
+                block_on(scheduler.spawn({
+                    let hardware = hardware.clone();
+                    move || affinity(&hardware)
+                })),
+                expected
+            );
+        }
+        assert_eq!(
+            membership(),
+            [(3, true), (7, true), (11, false), (19, true)]
+        );
+        let region = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
+        assert_eq!(region.affinity_revision.load(Ordering::Acquire), 2);
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 2);
+    });
+}
+
+/// Processor-local pools do not need the regional submission-membership table.
+#[test]
+fn processor_policy_does_not_allocate_regional_membership() {
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+        .build();
+    assert!(pool.inner.submitted_processors.is_empty());
+}
 
 /// Checks singleton worker affinity against quota-independent eligible topology.
 #[test]
@@ -37,10 +106,8 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
         for handle in handles {
             handle.join().unwrap();
         }
-        assert_eq!(
-            pool.inner.worker_handles.lock().unwrap().len(),
-            processors.len()
-        );
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, processors.len());
     });
 }
 
@@ -72,7 +139,8 @@ fn every_submission_variant_grows_the_region_mask() {
                 _ => unreachable!(),
             }
             assert_eq!(received.recv().unwrap(), expected);
-            assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 1);
+            let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+            assert_eq!(worker_count, 1);
         }
         let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
         assert_eq!(state.get_tasks_spawned(), 4);
@@ -108,7 +176,8 @@ fn membership_is_isolated_by_pool_and_region() {
             block_on(scheduler.spawn(move || affinity(&hardware))),
             BTreeSet::from([8])
         );
-        assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 2);
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 2);
     });
 }
 
@@ -151,7 +220,8 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
         let pending = submitters.map(|submitter| submitter.join().unwrap());
         let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 3);
-        assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 1);
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 1);
         release.send(()).unwrap();
         // No preemption or mid-task repinning: the prior mask remains a valid subset.
         assert_eq!(block_on(running), BTreeSet::from([0]));
@@ -191,7 +261,8 @@ fn idle_workers_refresh_even_without_a_task_for_each_worker() {
         let first = updates.recv().unwrap();
         let second = updates.recv().unwrap();
         assert_ne!(first, second);
-        assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 2);
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 2);
     });
 }
 

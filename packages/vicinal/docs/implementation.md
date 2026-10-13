@@ -52,9 +52,12 @@ pools cannot accept work or silently retry.
 Workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
 hard operating-system restrictions independently of processor-time quotas. Processor groups
 keep that affinity. Regional groups publish an immutable shared affinity snapshot and
-revision when admitting work from a new CPU. A pool-wide indexed atomic membership table
-is sufficient because each CPU belongs to one fixed region. Expansion selects only already
-admitted CPUs plus the current submitter from the exact destination region.
+revision when admitting work from a new CPU. A pool-wide sorted table pairs populated CPU IDs
+with atomic membership flags because each CPU belongs to one fixed region. Binary search
+keeps established submissions allocation-free and lock-free for membership lookup, while table
+storage scales with eligible processors rather than the highest ID. Processor-local pools
+do not allocate this table. Expansion selects only already admitted CPUs plus the current
+submitter from the exact destination region.
 
 Queue insertion, membership and snapshot publication happen under the selected queue's
 admission lock. Workers refresh after dequeueing but before invoking task code, so they

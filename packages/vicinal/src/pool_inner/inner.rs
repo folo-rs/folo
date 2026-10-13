@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle as ThreadJoinHandle, Result as ThreadResult};
-use std::{fmt, io, iter, mem, panic};
+use std::{fmt, io, mem, panic};
 
 use event_listener::{IntoNotification, Listener, listener};
 use many_cpus::{ProcessorId, ProcessorSet, SystemHardware};
@@ -29,8 +29,8 @@ pub(crate) struct PoolInner {
     pub(crate) shutdown: AtomicBool,
     /// Infrastructure failure is permanent and distinct from clean shutdown abandonment.
     pub(crate) poisoned: AtomicBool,
-    /// CPUs belong to one fixed region, so one pool-wide index records regional membership.
-    submitted_processors: Box<[AtomicBool]>,
+    /// Sorted populated CPU IDs keep pool-wide regional membership independent of ID gaps.
+    pub(crate) submitted_processors: Box<[(ProcessorId, AtomicBool)]>,
 }
 
 impl PoolInner {
@@ -40,13 +40,17 @@ impl PoolInner {
         hardware: SystemHardware,
         policy: WorkerPolicy,
     ) -> Self {
-        let submitted_processors = iter::repeat_with(|| AtomicBool::new(false))
-            .take(if policy.is_regional() {
-                hardware.max_processor_count()
-            } else {
-                0
-            })
-            .collect();
+        let submitted_processors = if policy.is_regional() {
+            let mut processors = hardware
+                .all_processors()
+                .iter()
+                .map(|processor| (processor.id(), AtomicBool::new(false)))
+                .collect::<Vec<_>>();
+            processors.sort_unstable_by_key(|(id, _)| *id);
+            processors.into_boxed_slice()
+        } else {
+            Box::default()
+        };
         Self {
             pool_id,
             pool_name,
@@ -303,11 +307,17 @@ impl PoolInner {
         (true, expanded)
     }
 
-    /// Resolves CPU membership in the topology's sparse index space.
+    /// Resolves a populated CPU without allocating or locking on established submissions.
     fn membership(&self, processor: ProcessorId) -> &AtomicBool {
-        self.submitted_processors
-            .get(processor as usize)
-            .expect("a topology processor must fit its index-space bound")
+        let index = self
+            .submitted_processors
+            .binary_search_by_key(&processor, |(id, _)| *id)
+            .expect("a submitting processor must belong to the eligible topology");
+        &self
+            .submitted_processors
+            .get(index)
+            .expect("binary search returns an existing membership slot")
+            .1
     }
 
     /// Publishes failure before cleanup can invoke reentrant task destructors, without callbacks.
