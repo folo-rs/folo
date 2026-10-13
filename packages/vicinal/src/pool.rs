@@ -147,7 +147,7 @@ impl PoolBuilder {
         self
     }
 
-    /// Sets a function that initializes each worker's thread-local state.
+    /// Sets a function to run when each worker thread starts.
     ///
     /// The function runs once on each worker, after its initial affinity is set and before
     /// it executes any tasks. Workers start lazily; building the pool does not call the function.

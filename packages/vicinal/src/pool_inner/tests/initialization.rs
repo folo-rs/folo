@@ -17,73 +17,83 @@ thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Every destination initializes all workers, including idle workers, without rerunning on tasks.
+/// Processor-local workers initialize once, including idle siblings.
 #[test]
-fn initialization_is_lazy_and_once_per_worker() {
+fn processor_initialization_is_lazy_and_once_per_worker() {
+    assert_lazy_initialization(false);
+}
+
+/// Regional membership expansion reuses initialized workers rather than starting new ones.
+#[test]
+fn regional_initialization_is_lazy_and_once_per_worker() {
+    assert_lazy_initialization(true);
+}
+
+/// Shares the callback contract assertions while keeping each policy within the Miri budget.
+fn assert_lazy_initialization(regional: bool) {
     // Multiple workers expose missing initialization of otherwise idle siblings.
     const WORKERS: u32 = 2;
-    with_watchdog(|| {
-        for regional in [false, true] {
-            let hardware = hardware();
-            let policy = if regional {
-                WorkerPolicy::fixed_per_memory_region(nz!(WORKERS))
-            } else {
-                WorkerPolicy::fixed_per_processor(nz!(WORKERS))
-            };
-            let (initialized, observations) = mpsc::channel();
-            let pool = Pool::builder()
-                .hardware(hardware.clone())
-                .worker_policy(policy)
-                .thread_init(|| panic!("replaced initializer"))
-                .thread_init({
-                    let hardware = hardware.clone();
-                    move || {
-                        assert!(!INITIALIZED.replace(true));
-                        initialized
-                            .send((thread::current().id(), affinity(&hardware)))
-                            .unwrap();
-                    }
-                })
-                .build();
-            let scheduler = pool.scheduler();
-            assert_eq!(
-                observations.try_recv().unwrap_err(),
-                mpsc::TryRecvError::Empty
-            );
+    with_watchdog(move || {
+        let hardware = hardware();
+        let policy = if regional {
+            WorkerPolicy::fixed_per_memory_region(nz!(WORKERS))
+        } else {
+            WorkerPolicy::fixed_per_processor(nz!(WORKERS))
+        };
+        let (initialized, observations) = mpsc::channel();
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(policy)
+            .thread_init(|| panic!("replaced initializer"))
+            .thread_init({
+                let hardware = hardware.clone();
+                move || {
+                    assert!(!INITIALIZED.replace(true));
+                    initialized
+                        .send((thread::current().id(), affinity(&hardware)))
+                        .unwrap();
+                }
+            })
+            .build();
+        let scheduler = pool.scheduler();
+        assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+        assert_eq!(
+            observations.try_recv().unwrap_err(),
+            mpsc::TryRecvError::Empty
+        );
 
-            // The shared region grows before work reaches a separate region.
-            for processor in [0, 1, 3] {
-                pin(&hardware, processor);
-                assert!(block_on(scheduler.spawn(|| INITIALIZED.get())));
-                assert!(block_on(scheduler.spawn_urgent(|| INITIALIZED.get())));
-                let (result, received) = mpsc::channel();
-                scheduler.spawn_and_forget({
-                    let result = result.clone();
-                    move || result.send(INITIALIZED.get()).unwrap()
-                });
-                scheduler.spawn_urgent_and_forget(move || {
-                    result.send(INITIALIZED.get()).unwrap();
-                });
-                assert!(received.recv().unwrap());
-                assert!(received.recv().unwrap());
-            }
-            assert!(!INITIALIZED.get());
-            // Joining also accounts for workers that never received a task.
-            drop(pool);
-            let mut threads = HashSet::new();
-            let mut masks = Vec::new();
-            for (id, mask) in observations.try_iter() {
-                assert!(threads.insert(id));
-                masks.push(mask);
-            }
-            let initial_processors = if regional { vec![0, 3] } else { vec![0, 1, 3] };
-            let expected: Vec<_> = initial_processors
-                .into_iter()
-                .flat_map(|processor| iter::repeat_n(BTreeSet::from([processor]), WORKERS as usize))
-                .collect();
-            masks.sort();
-            assert_eq!(masks, expected);
+        // The shared region grows before work reaches a separate region.
+        for processor in [0, 1, 3] {
+            pin(&hardware, processor);
+            assert!(block_on(scheduler.spawn(|| INITIALIZED.get())));
+            assert!(block_on(scheduler.spawn_urgent(|| INITIALIZED.get())));
+            let (result, received) = mpsc::channel();
+            scheduler.spawn_and_forget({
+                let result = result.clone();
+                move || result.send(INITIALIZED.get()).unwrap()
+            });
+            scheduler.spawn_urgent_and_forget(move || {
+                result.send(INITIALIZED.get()).unwrap();
+            });
+            assert!(received.recv().unwrap());
+            assert!(received.recv().unwrap());
         }
+        assert!(!INITIALIZED.get());
+        // Joining also accounts for workers that never received a task.
+        drop(pool);
+        let mut threads = HashSet::new();
+        let mut masks = Vec::new();
+        for (id, mask) in observations.try_iter() {
+            assert!(threads.insert(id));
+            masks.push(mask);
+        }
+        let initial_processors = if regional { vec![0, 3] } else { vec![0, 1, 3] };
+        let expected: Vec<_> = initial_processors
+            .into_iter()
+            .flat_map(|processor| iter::repeat_n(BTreeSet::from([processor]), WORKERS as usize))
+            .collect();
+        masks.sort();
+        assert_eq!(masks, expected);
     });
 }
 
@@ -106,6 +116,8 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
                 }
             })
             .build();
+        // Reject count mutations before starting callbacks with a fixed participant count.
+        assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let task = pool.scheduler().spawn({
             let executed = Arc::clone(&executed);
             move || {
@@ -166,6 +178,8 @@ fn initialization_panic_stops_the_pool() {
                 }
             })
             .build();
+        // The controller releases exactly one initializer.
+        assert_eq!(pool.inner.policy.count(), nz!(1));
         let scheduler = pool.scheduler();
         let executed = Arc::new(AtomicBool::new(false));
         let task = scheduler.spawn({

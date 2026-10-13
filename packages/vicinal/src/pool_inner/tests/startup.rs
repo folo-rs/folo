@@ -33,6 +33,8 @@ fn concurrent_first_submissions_start_exact_configured_count() {
                 .hardware(hardware.clone())
                 .worker_policy(policy)
                 .build();
+            // Validate capacity before waiting for a task on every worker.
+            assert_eq!(pool.inner.policy.count().get(), WORKERS);
             let scheduler = pool.scheduler();
             let start = Arc::new(Barrier::new(WORKERS as usize));
             let (entered, arrivals) = mpsc::channel();

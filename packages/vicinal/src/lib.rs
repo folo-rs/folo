@@ -49,13 +49,6 @@
 //! explicitly, rather than calculated from this set or from a processor-time quota.
 //! This controls where tasks run, not where their memory is allocated.
 //!
-//! # Worker initialization
-//!
-//! [`PoolBuilder::thread_init`] configures thread-local state once on each worker, after
-//! initial affinity setup and before executing tasks. Initialization starts lazily with the
-//! workers and may run concurrently on different threads. Submission does not wait for it.
-//! Initialization panics follow the pool's infrastructure-failure behavior.
-//!
 //! # Tradeoffs
 //!
 //! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
