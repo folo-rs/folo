@@ -1,6 +1,7 @@
 #![expect(missing_docs, reason = "benchmarks")]
 
 use std::hint::black_box;
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Instant;
 
@@ -9,11 +10,11 @@ use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{Criterion, criterion_group, criterion_main};
 use events_once::EventPool;
 use futures::executor::block_on;
-use many_cpus::SystemHardware;
+use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use testing::DefaultAllocator;
 use threadpool::ThreadPool;
-use vicinal::Pool;
+use vicinal::{Pool, WorkerPolicy};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
@@ -483,8 +484,137 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
+    policy_dispatch(c, &allocs, &times);
+    region_contention(c, &one_processor);
+
     // `allocs` and `times` print their summaries and write JSON to the Cargo
     // target directory when they are dropped at the end of this function.
+}
+
+/// Compares locality routing with one submission and a short queued batch.
+fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession) {
+    let mut group = c.benchmark_group("vicinal/policy_dispatch");
+    // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
+    // tasks. This benchmark count does not track future changes to the pool's default.
+    for (policy_name, policy) in [
+        ("processor", WorkerPolicy::fixed_per_processor(nz!(2_u32))),
+        ("region", WorkerPolicy::fixed_per_memory_region(nz!(2_u32))),
+    ] {
+        // The low case isolates dispatch; the high case exercises shared queue/slot reuse.
+        for batch_size in [1, TASK_BATCH_SIZE] {
+            let name = format!("{policy_name}/{batch_size}");
+            let allocation = allocs.operation(format!("vicinal/policy_dispatch/{name}"));
+            let time = times.operation(format!("vicinal/policy_dispatch/{name}"));
+            group.bench_function(name, |b| {
+                let pool = Pool::builder().worker_policy(policy.clone()).build();
+                let scheduler = pool.scheduler();
+                block_on(scheduler.spawn(|| {}));
+                let mut handles = Vec::with_capacity(batch_size);
+                b.iter_custom(|iterations| {
+                    let _allocations = allocation.measure_process().iterations(iterations);
+                    let _time = time.measure_process().iterations(iterations);
+                    let start = Instant::now();
+                    for _ in 0..iterations {
+                        for _ in 0..batch_size {
+                            handles.push(scheduler.spawn(|| black_box(simulate_work())));
+                        }
+                        #[expect(clippy::iter_with_drain, reason = "reuse the batch vector")]
+                        for handle in handles.drain(..) {
+                            black_box(block_on(handle));
+                        }
+                    }
+                    start.elapsed()
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+/// Measures competing submitters sharing a region; thread creation and affinity are untimed.
+///
+/// The workspace has no `bench_on_threadpool` helper. A scoped-thread harness runs both
+/// caller-count cases with identical synchronization and measures only dispatch/completion.
+fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
+    let region_id = caller.iter().next().unwrap().memory_region_id();
+    let region = SystemHardware::current()
+        .all_processors()
+        .to_builder()
+        .filter(|p| p.memory_region_id() == region_id)
+        .take_all()
+        .unwrap();
+    let mut group = c.benchmark_group("vicinal/region_contention");
+    // A single submitter is the control; competing submitters expose regional queue contention.
+    for callers in [1_usize, 2] {
+        group.bench_function(format!("callers/{callers}"), |b| {
+            // Use the same fixed destination capacity as policy_dispatch so contention is
+            // measured without changing the amount of worker parallelism.
+            let pool = Pool::builder()
+                .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+                .build();
+            let scheduler = pool.scheduler();
+            // Only producers submit, including during setup, so the controller cannot expand
+            // worker affinity beyond this case's intended caller processors.
+            b.iter_custom(|iterations| {
+                thread::scope(|scope| {
+                    // The controller participates in both rendezvous barriers.
+                    let participants = callers.checked_add(1).unwrap();
+                    let start = Arc::new(Barrier::new(participants));
+                    let finish = Arc::new(Barrier::new(participants));
+                    for index in 0..callers {
+                        // Small/one-CPU regions still exercise competing callers on the same CPU.
+                        let processor = region
+                            .iter()
+                            .nth(index)
+                            .unwrap_or_else(|| region.processors().first())
+                            .id();
+                        let affinity = region
+                            .to_builder()
+                            .filter(|p| p.id() == processor)
+                            .take_all()
+                            .unwrap();
+                        scope.spawn({
+                            let scheduler = scheduler.clone();
+                            let start = Arc::clone(&start);
+                            let finish = Arc::clone(&finish);
+                            move || {
+                                affinity.pin_current_thread_to();
+                                // Membership expansion and initial slot/channel allocation are
+                                // setup, not steady-state dispatch contention.
+                                block_on(scheduler.spawn(|| {}));
+                                let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
+                                // First rendezvous reports readiness; the second releases work.
+                                start.wait();
+                                start.wait();
+                                for _ in 0..iterations {
+                                    for _ in 0..TASK_BATCH_SIZE {
+                                        handles
+                                            .push(scheduler.spawn(|| black_box(simulate_work())));
+                                    }
+                                    #[expect(
+                                        clippy::iter_with_drain,
+                                        reason = "reuse the batch vector"
+                                    )]
+                                    for handle in handles.drain(..) {
+                                        black_box(block_on(handle));
+                                    }
+                                }
+                                finish.wait();
+                            }
+                        });
+                    }
+                    // All producers have prepared affinity/storage before the measured release.
+                    // The symmetric barriers include the same controller handoff in both cases.
+                    start.wait();
+                    let started = Instant::now();
+                    start.wait();
+                    finish.wait();
+                    started.elapsed()
+                })
+            });
+        });
+    }
+    group.finish();
 }
 
 criterion_group!(benches, entrypoint);

@@ -1,6 +1,7 @@
 //! Task representation and the wrappers that adapt user-provided closures to it.
 
 use std::any::Any;
+use std::mem;
 use std::mem::MaybeUninit;
 use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
@@ -22,7 +23,7 @@ pub(crate) trait VicinalTask: Send + 'static {
     fn call(self: Pin<&mut Self>);
 }
 
-/// Owning handle to a type-erased task, as stored in a processor's task queue.
+/// Owning handle to a type-erased task, as stored in a worker group's task queue.
 ///
 /// The handle owns its pool slot, so queueing, dequeuing and executing a task need no further
 /// contact with the pool or the lock that guards allocation.
@@ -52,19 +53,66 @@ pub(crate) fn init_task<T: VicinalTask>(
 
 /// Outcome of running a task to completion: either its return value or the payload of the
 /// panic that unwound out of it.
-pub(crate) type TaskResult<R> = Result<R, Box<dyn Any + Send>>;
+pub(crate) type TaskResult<R> = Result<R, TaskPanic>;
+
+/// Keeps discarded task panics isolated from infrastructure, on either result-channel endpoint.
+#[derive(Debug)]
+pub(crate) struct TaskPanic {
+    payload: Option<Box<dyn Any + Send>>,
+}
+
+impl TaskPanic {
+    pub(crate) fn new(payload: Box<dyn Any + Send>) -> Self {
+        Self {
+            payload: Some(payload),
+        }
+    }
+
+    pub(crate) fn into_payload(mut self) -> Box<dyn Any + Send> {
+        self.payload.take().expect("a task panic is consumed once")
+    }
+}
+
+impl Drop for TaskPanic {
+    fn drop(&mut self) {
+        if let Some(payload) = self.payload.take() {
+            discard_panic(payload);
+        }
+    }
+}
 
 /// Extracts a human-readable message from a panic payload.
 ///
 /// Handles both `&str` and `String` panic payloads, which are the most common
 /// panic types produced by the `panic!` macro.
-fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
+pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
     } else {
         "unknown panic payload".to_string()
+    }
+}
+
+/// Disposes of a suppressed failure without allowing its destructor to interrupt pool cleanup.
+pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
+    if let Err(replacement) = panic::catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+        // A replacement can itself have a panicking destructor. Retain it rather than
+        // recursively disposing of arbitrary user payloads; see docs/implementation.md.
+        mem::forget(replacement);
+        tracing::error!("panic payload destruction failed; replacement payload retained");
+    }
+}
+
+/// Releases task captures outside an active unwind while preserving an earlier failure.
+pub(crate) fn discard_task_after_failure<T>(task: T) {
+    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
+        tracing::error!(
+            message = extract_panic_message(&payload),
+            "task cleanup failed while handling an infrastructure failure"
+        );
+        discard_panic(payload);
     }
 }
 
@@ -96,7 +144,9 @@ where
     fn call(self: Pin<&mut Self>) {
         let this = self.project();
 
-        let Some(task) = this.task.take() else { return };
+        if this.task.is_none() {
+            return;
+        }
 
         // Record scheduling delay: time from spawn to execution start.
         let scheduling_delay = CLOCK.with_borrow_mut(|clock| this.spawn_time.elapsed(clock));
@@ -104,6 +154,11 @@ where
 
         // Execute the task and record execution time.
         let start = CLOCK.with_borrow_mut(fast_time::Clock::now);
+        // Leave captures in their owning handle until fallible metric preparation completes.
+        let task = this
+            .task
+            .take()
+            .expect("an unexecuted task remains available");
         task();
         let elapsed = CLOCK.with_borrow_mut(|clock| start.elapsed(clock));
         EXECUTION_TIME_MS.with(|e| e.observe_millis(elapsed));
@@ -121,7 +176,7 @@ where
 {
     TaskWrapper::new(
         move || {
-            let result = panic::catch_unwind(AssertUnwindSafe(task));
+            let result = panic::catch_unwind(AssertUnwindSafe(task)).map_err(TaskPanic::new);
             sender.send(result);
         },
         spawn_time,
@@ -142,6 +197,7 @@ where
             if let Err(payload) = result {
                 let message = extract_panic_message(&payload);
                 tracing::error!(message, "fire-and-forget task panicked");
+                discard_panic(payload);
             }
         },
         spawn_time,
@@ -260,7 +316,7 @@ mod tests {
         Box::pin(wrapped).as_mut().call();
 
         let result = block_on(receiver).unwrap();
-        let panic_payload = result.unwrap_err();
+        let panic_payload = result.unwrap_err().into_payload();
 
         // The panic payload should contain our message.
         let message = panic_payload

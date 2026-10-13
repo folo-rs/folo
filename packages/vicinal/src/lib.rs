@@ -1,10 +1,14 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Worker pool that schedules tasks on the same processor that spawned them.
+//! Worker pool with processor-local or memory-region-local task scheduling.
 //!
-//! This crate provides a worker pool where each task is executed on the same processor that
-//! spawned it, ensuring optimal cache locality and minimizing cross-processor data movement.
+//! A memory region groups processors with their local physical memory, as reported by
+//! [`many_cpus`]. Access to memory local to a processor can be faster than access across regions.
+//!
+//! Tasks execute synchronously on the processor sampled during submission by default.
+//! [`WorkerPolicy`] can instead share workers across the caller's memory region.
+//! Both policies start their fixed worker count lazily on first use of each destination.
 //!
 //! # Quick start
 //!
@@ -28,22 +32,49 @@
 //! # });
 //! ```
 //!
+//! # Memory regions and worker counts
+//!
+//! Systems with non-uniform memory access (NUMA) have processors connected to different physical
+//! memory modules. A memory region represents one such locality group; many systems have only one.
+//! Regions are identified by [`many_cpus::MemoryRegionId`], not by a task's allocations or data.
+//!
+//! With a regional [`WorkerPolicy`], submissions from processors in the same region share one
+//! configured worker count. The first submission activates those workers; further submissions
+//! from that region do not add workers. Each pool accounts for its regions independently,
+//! and scheduler clones share their pool's workers.
+//!
+//! Worker placement is tracked separately from concurrency. Workers use only processors that have
+//! submitted accepted work to that pool and region. This set starts with the first submitter and
+//! grows when another processor in the region submits work. Worker concurrency is configured
+//! explicitly, rather than calculated from this set or from a processor-time quota.
+//! This controls where tasks run, not where their memory is allocated.
+//!
 //! # Tradeoffs
 //!
 //! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
 //!   short-lived so that the pool is often idle.
-//! - Workers may use any processor permitted by hard operating-system restrictions.
-//!   Processor-time quotas do not limit worker placement or adjust the configured worker count.
-//!   The pool does not guarantee avoidance of quota throttling.
+//! - Regional workers use only processors that submitted accepted work to their pool and region.
+//!   A stable, quota-appropriate submitter set keeps worker placement within that set; membership
+//!   grows if new processors submit work and never shrinks. Quotas do not adjust worker counts.
+//!   Fractional quotas and other process work can still cause throttling: operating-system
+//!   delays after the process exceeds its processor-time allowance. See
+//!   [avoiding operating system quota penalties] for guidance on choosing the submitter set.
+//! - Regional affinity expands at task boundaries, without preempting running tasks.
+//!   Workers may migrate within their permitted set, even during one task.
+//!   Task code must preserve worker affinity. Affinity does not bind allocations, move data
+//!   or guarantee cache hits. Topology and restriction refresh are not supported.
 //!
 //! # Shutdown behavior
 //!
-//! When the [`Pool`] is dropped, it signals all worker threads to shut down and waits for any
+//! When the [`Pool`] is dropped, it stops accepting work and waits for any
 //! currently-executing tasks to complete. Queued tasks that have not started execution are
 //! abandoned.
 //!
 //! If you need to ensure all spawned tasks complete before shutdown, await their [`JoinHandle`]s
 //! before dropping the pool.
+//! Infrastructure failures log the failure and stop the entire pool, abandoning queued work.
+//! The pool then remains poisoned and all further submissions panic synchronously.
+//! Already executing tasks may finish; task panics do not poison the pool.
 //!
 //! # Panics
 //!
@@ -57,28 +88,36 @@
 //! * Windows Server 2022 x64
 //! * Ubuntu 24.04 x64
 //!
-//! On non-Windows non-Linux platforms (e.g. mac OS), the package will not uphold the processor
-//! locality guarantees, but will otherwise function correctly as a worker pool.
+//! On non-Windows non-Linux platforms (e.g. macOS), the package retains functional worker-pool
+//! behavior without physical locality guarantees. The fallback topology has one memory region.
+//!
+//! [avoiding operating system quota penalties]:
+//!   https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties
 
 mod constants;
+mod group_id;
+mod group_registry;
 mod join_handle;
 mod metrics;
 mod pool;
-mod processor_registry;
-mod processor_state;
+mod pool_inner;
 mod scheduler;
 mod task;
 mod worker;
+mod worker_group;
+mod worker_policy;
 
 pub(crate) use constants::NEVER_POISONED;
+pub(crate) use group_id::*;
+pub(crate) use group_registry::*;
 pub use join_handle::*;
-pub(crate) use pool::PoolInner;
 pub use pool::*;
-pub(crate) use processor_registry::ProcessorRegistry;
-pub(crate) use processor_state::ProcessorState;
+pub(crate) use pool_inner::PoolInner;
 pub use scheduler::*;
 pub(crate) use task::*;
 pub(crate) use worker::*;
+pub(crate) use worker_group::*;
+pub use worker_policy::*;
 
 #[cfg(test)]
 ::testing::set_allocator!();

@@ -3,11 +3,14 @@
     reason = "This is a test file, documentation is not required."
 )]
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use many_cpus::SystemHardware;
-use vicinal::Pool;
+use futures::executor::block_on;
+use many_cpus::{Processor, SystemHardware};
+use new_zealand::nz;
+use vicinal::{Pool, WorkerPolicy};
 
 #[test]
 fn tasks_execute_on_spawning_processor() {
@@ -53,7 +56,7 @@ fn tasks_execute_on_spawning_processor() {
             // Wait for all tasks to complete.
             for handle in task_handles {
                 // We use block_on from futures crate for simplicity in this example.
-                futures::executor::block_on(handle);
+                block_on(handle);
             }
         }
     });
@@ -70,6 +73,56 @@ fn tasks_execute_on_spawning_processor() {
         correct, total,
         "All tasks should execute on the processor they were spawned from"
     );
+}
+
+#[test]
+fn regional_tasks_use_only_submitting_processors() {
+    testing::with_watchdog(|| {
+        let hardware = SystemHardware::current();
+        let processors = hardware.all_processors();
+        let pool = Pool::builder()
+            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+            .build();
+        let scheduler = pool.scheduler();
+        // Sequential CPU registration makes each expected cumulative mask deterministic.
+        let mut submitted = BTreeSet::new();
+        for processor in &processors {
+            let caller = processors
+                .to_builder()
+                .filter(|p| p.id() == processor.id())
+                .take_all()
+                .unwrap();
+            submitted.insert(processor.id());
+            let expected_region = processor.memory_region_id();
+            let expected: BTreeSet<_> = processors
+                .iter()
+                .filter(|p| p.memory_region_id() == expected_region && submitted.contains(&p.id()))
+                .map(Processor::id)
+                .collect();
+            caller
+                .spawn_thread({
+                    let scheduler = scheduler.clone();
+                    move |_| {
+                        block_on(scheduler.spawn(move || {
+                            let hardware = SystemHardware::current();
+                            assert_eq!(hardware.current_memory_region_id(), expected_region);
+                            let affinity = hardware
+                                .all_processors()
+                                .to_builder()
+                                .where_available_for_current_thread()
+                                .take_all()
+                                .unwrap();
+                            assert_eq!(
+                                affinity.iter().map(Processor::id).collect::<BTreeSet<_>>(),
+                                expected
+                            );
+                        }));
+                    }
+                })
+                .join()
+                .unwrap();
+        }
+    });
 }
 
 ::testing::set_allocator!();

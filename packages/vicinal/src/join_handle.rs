@@ -18,7 +18,7 @@ use crate::TaskResult;
 ///
 /// Awaiting the join handle panics if:
 /// - The task panicked (the panic is re-thrown).
-/// - The pool was shut down before the task could execute (the channel is disconnected).
+/// - The task was abandoned during pool shutdown or after an infrastructure failure.
 #[derive(Debug)]
 pub struct JoinHandle<R>
 where
@@ -52,7 +52,7 @@ where
             Poll::Ready(result) => match result {
                 Ok(Ok(value)) => Poll::Ready(value),
                 Ok(Err(panic_payload)) => {
-                    panic::resume_unwind(panic_payload);
+                    panic::resume_unwind(panic_payload.into_payload());
                 }
                 Err(_disconnected) => {
                     // Channel disconnected - pool was shut down.
@@ -72,6 +72,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
+    use crate::TaskPanic;
 
     static_assertions::assert_impl_all!(
         JoinHandle<String>: UnwindSafe, RefUnwindSafe
@@ -112,7 +113,7 @@ mod tests {
             panic!("test panic");
         }));
 
-        sender.send(Err(panic_result.unwrap_err()));
+        sender.send(Err(TaskPanic::new(panic_result.unwrap_err())));
 
         block_on(handle);
     }
