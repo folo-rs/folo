@@ -109,10 +109,16 @@ the handle extracts and resumes the original payload.
 
 ## Logging coverage
 
-The dedicated `tracing_coverage` integration binary owns a global formatting subscriber
-for its single test. Scenarios use the public pool and scheduler APIs with simulated
-hardware, including both locality policies, priorities, task panic payloads, retained
-schedulers and shutdown during an outer unwind.
+Ordinary unit and integration test executables initialize permanent silent formatting
+with `testing::init_tracing!()`. Existing private failure adapters can therefore exercise
+logging expressions and formatters without adding public test APIs. Tests share the
+enabled subscriber configuration without capturing or mixing their output.
+
+The dedicated `tracing_coverage` integration binary instead owns a capturing subscriber
+for its single test, allowing assertions about events emitted across worker threads.
+Its scenarios use the public pool and scheduler APIs with simulated hardware, including
+both locality policies, priorities, task panic payloads, retained schedulers and shutdown
+during an outer unwind.
 
 Failure-path logging needs no private failure adapter: dropping a disconnected task result
 can fail on its worker, poisoned rejection can encounter a panicking capture, and queued

@@ -11,6 +11,7 @@ mod cwd_guard;
 mod drop_waker;
 mod float;
 mod reentrant_waker;
+mod tracing_init;
 mod tracing_logs;
 mod wake_action_waker;
 mod watchdog;
@@ -28,6 +29,11 @@ pub use watchdog::{
     WatchdogPhaseReporter, with_watchdog, with_watchdog_phases, with_watchdog_timeout,
 };
 
+#[doc(hidden)]
+pub mod __private {
+    pub use ctor::declarative::ctor;
+}
+
 #[cfg(windows)]
 mod windows;
 
@@ -36,3 +42,6 @@ pub use windows::*;
 
 #[cfg(test)]
 crate::set_allocator!();
+
+#[cfg(test)]
+crate::init_tracing!();

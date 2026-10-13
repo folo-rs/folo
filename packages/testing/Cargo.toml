@@ -23,6 +23,7 @@ doc = false
 default = []
 
 [dependencies]
+ctor = { workspace = true }
 mimalloc = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt"] }

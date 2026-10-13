@@ -250,9 +250,10 @@ scale tests rather than raising the runner deadline.
 **Open this when**: writing or modifying a test (unit, integration, doctest);
 hitting a hang, slow Miri test, Miri failure, or uncaught mutation; asserting that
 a panic or error occurs; marking code as not-relevant-for-coverage; discovering a
-flaky test; adding or changing tracing statements or testing their fields. Tracing
-coverage requires dedicated single-test integration binaries with
-`testing::TracingCapture`, including real formatting and manual coverage inspection.
+flaky test; adding or changing tracing statements or testing their fields. Ordinary
+tracing coverage uses `testing::init_tracing!()` at test-executable startup, including
+real formatting and manual coverage inspection. Cross-thread output assertions use
+`testing::TracingCapture` in dedicated single-test integration binaries.
 
 ### [docs/benchmarks.md](docs/benchmarks.md)
 

@@ -386,40 +386,79 @@ Package dependencies of UI tests must be excluded from `udeps` scanner logic via
 
 ### Tracing log coverage
 
-Every production `tracing` statement must have integration coverage with logging
-enabled, including trace-level diagnostics, error paths and relevant input boundaries.
+Every production `tracing` statement must have test coverage with logging enabled,
+including trace-level diagnostics, error paths and relevant input boundaries.
 Reaching the surrounding operation without an interested subscriber is insufficient:
 disabled events skip their field expressions. An interested subscriber that discards
 fields is also insufficient because it need not invoke `Debug`, `Display` or message
 formatting. Span creation and later field recording have the same requirement.
 
-Use `testing::TracingCapture::start()` in a dedicated `tests/tracing_coverage.rs`
-binary containing a single `#[test]`. That test may call several scenario helpers.
-Initialize capture before constructing fixtures or starting workers. The helper
-installs a process-global subscriber, enables every level independently of `RUST_LOG`,
-formats fields synchronously and captures output from every thread without timestamps
-or terminal colors. It rejects an existing subscriber and compile-time level filters
-that disable logging.
+#### Ordinary unit and integration tests
 
-Do not install competing subscribers, including thread-local defaults, in that
-binary. Tests for a different filtering configuration or no-subscriber behavior
-belong in separate integration binaries. Serial test execution is not isolation:
-subscriber configuration and callsite-interest caches persist within the process.
-Nextest's per-test isolation is useful but must not be required for correctness;
-the same test layout must work under ordinary `cargo test`. Keeping one test in each
-logging binary avoids constructors, initialization ordering and shared capture scopes.
+Invoke `testing::init_tracing!()` at the root of each test executable that exercises
+logging. Library unit-test roots gate the invocation on `test`:
+
+```rust
+#[cfg(test)]
+testing::init_tracing!();
+```
+
+Integration test binaries invoke it without that gate. They link the library's
+non-test build, so its unit-test initializer does not initialize them.
+
+The macro installs a permanent process-global formatting subscriber before tests
+run. It accepts every level independently of `RUST_LOG`, formats fields synchronously
+and discards the resulting output without retaining a shared log buffer. It omits
+timestamps and terminal colors. Initialization is idempotent, but rejects another
+subscriber or compile-time level filters that disable logging. Logging remains
+enabled under mutation testing and Miri.
+
+Tests can run concurrently because they share an immutable logging configuration,
+not mutable capture scopes. Unit tests can reach private APIs and mocks normally:
+logging coverage does not require moving them into integration binaries or widening
+visibility. Keep real external interactions in integration tests under the usual
+[test boundary](#unit-tests-stay-inside-the-process), and keep production logging
+expressions unchanged in test builds.
+
+Do not install competing global or thread-local subscribers in these binaries.
+Tests for another filtering configuration or no-subscriber behavior must own separate
+integration executables without the ordinary initializer. Subscriber configuration
+and callsite-interest caches persist within a process; serial execution does not
+reset them. This layout works under both ordinary Cargo and nextest without relying
+on nextest's per-test process isolation.
+
+The macro uses `ctor` through the `testing` helper; callers need no direct `ctor`
+dependency. The constructor initializes only process-local tracing state, with no
+application callbacks, output or worker creation. It must not depend on constructor
+ordering or execute logging itself. Rust does not generally guarantee standard-library
+services before `main`, so keep this boundary narrow and verify initialization with
+the workspace's native toolchains and pinned Miri. An explicitly owned custom harness
+can instead call `testing::initialize_tracing()` before executing tests; a setup test
+or a helper reached only by some tests is not a substitute for executable initialization.
+
+#### Assertions about logged output
+
+Use `testing::TracingCapture::start()` in a dedicated integration executable containing
+a single `#[test]` when output assertions need events from every thread. That test may
+call several scenario helpers. Do not invoke `init_tracing!()` in the same binary:
+captured formatting and silent formatting are separate global subscriber configurations.
+Start capture before constructing fixtures or starting workers. The capture helper
+uses the same enabled formatting path as ordinary tests, but retains the resulting
+output for `snapshot()`.
 
 Wait for background work through explicit completion signals and join workers before
-reading the final `snapshot()`. Task-result delivery may precede the final log event.
+reading the final snapshot. Task-result delivery may precede the final log event.
 Do not poll output or sleep, and propagate worker failures rather than allowing a
 logging panic to disappear in a detached thread. Keep expected application panics
 separate from logging assertions; a broad `#[should_panic]` can accept the wrong panic.
+These failure-handling rules also apply to ordinary tests.
 
-Prefer real public-API scenarios. If required states cannot be reached that way,
-expose the necessary implementation surface through the
-[`_impl` package pattern](impl-crate-split.md), not through the public facade or a
-duplicate compilation of production source. Keep logging expressions unchanged in
-test builds.
+Prefer public-API scenarios for output assertions. When an external test genuinely
+requires implementation access, use the [`_impl` package pattern](impl-crate-split.md)
+instead of exposing test-only public facade APIs or compiling production source twice.
+Ordinary logging coverage through private unit tests needs no such split.
+
+#### Coverage inspection
 
 Inspect the existing LLVM coverage report for the statements and their field
 expressions when adding or changing logging. Cover all applicable sites; the general
@@ -427,17 +466,17 @@ coverage percentage is not permission to leave diagnostic paths untested. Use th
 existing platform and feature validation to cover conditional logging. No separate
 source inventory or logging-specific coverage gate is required.
 
-Assertions should establish that the intended events were emitted and relevant fields
-were formatted, without freezing entire diagnostic messages. This requirement does
+Output assertions should establish that the intended events were emitted and relevant
+fields were formatted, without freezing entire diagnostic messages. This requirement does
 not make log wording a public API contract, nor does one execution establish safety
 for every input. Retain focused tests for nontrivial calculations and boundary values.
 Do not exclude logging or exercised formatters from coverage merely because their
 wording is not contractual.
 
-The helper's capture writer is adapted from the MIT-licensed
+The startup convention and capture writer follow the MIT-licensed
 [Oxidizer tracing helpers](https://github.com/microsoft/oxidizer/tree/13d95b808b1ec7890ee70aeacd8d962805896ecf/crates/testing_aids/src/tracing_logs).
-Unlike a silent interest-keeper layer, its formatting layer remains active throughout
-the test process.
+Unlike an interest-only subscriber, both helper configurations keep formatting active
+throughout the test process, even when no output is captured.
 
 ### Coverage exclusions
 

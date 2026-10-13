@@ -305,8 +305,9 @@ such targets in `--tests`. Doctests retain their separate `test-docs` pass.
 The library-only selectors in many-seed Miri and exact library replays are deliberate
 scope restrictions, not general test or coverage selection.
 
-Logging-coverage integration binaries participate in the same measurement; there is
-no additional runner or gate. For a logging change, use
+Logging coverage comes from ordinary unit and integration tests with startup
+initialization, plus isolated output-assertion tests. They participate in the same
+measurement; there is no additional runner or gate. For a logging change, use
 `just package=<name> coverage-measure` and `just package=<name> coverage-report`,
 then inspect the logging statements and field expressions under the
 [tracing testing requirement](testing.md#tracing-log-coverage). A passing overall
