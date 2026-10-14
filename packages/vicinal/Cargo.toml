@@ -1,8 +1,8 @@
 [package]
 name = "vicinal"
-description = "Worker pool with processor-local or memory-region-local task scheduling"
+description = "Worker pool with configurable processor affinity"
 publish = true
-version = "0.2.0"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true

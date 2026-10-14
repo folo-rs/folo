@@ -11,7 +11,7 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{affinity, hardware, pin};
-use crate::{Pool, Scheduler, WorkerPolicy};
+use crate::{PolicyKind, Pool, Scheduler, WorkerPolicy};
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
@@ -20,25 +20,31 @@ thread_local! {
 /// Processor-local workers initialize once, including idle siblings.
 #[test]
 fn processor_initialization_is_lazy_and_once_per_worker() {
-    assert_lazy_initialization(false);
+    assert_lazy_initialization(PolicyKind::Processor);
 }
 
 /// Regional membership expansion reuses initialized workers rather than starting new ones.
 #[test]
 fn regional_initialization_is_lazy_and_once_per_worker() {
-    assert_lazy_initialization(true);
+    assert_lazy_initialization(PolicyKind::MemoryRegion);
+}
+
+/// System membership expansion across regions retains each worker's initialized state.
+#[test]
+fn system_initialization_is_lazy_and_once_per_worker() {
+    assert_lazy_initialization(PolicyKind::System);
 }
 
 /// Shares the callback contract assertions while keeping each policy within the Miri budget.
-fn assert_lazy_initialization(regional: bool) {
+fn assert_lazy_initialization(kind: PolicyKind) {
     // Multiple workers expose missing initialization of otherwise idle siblings.
     const WORKERS: u32 = 2;
     with_watchdog(move || {
         let hardware = hardware();
-        let policy = if regional {
-            WorkerPolicy::per_memory_region(nz!(WORKERS))
-        } else {
-            WorkerPolicy::per_processor(nz!(WORKERS))
+        let policy = match kind {
+            PolicyKind::Processor => WorkerPolicy::per_processor(nz!(WORKERS)),
+            PolicyKind::MemoryRegion => WorkerPolicy::per_memory_region(nz!(WORKERS)),
+            PolicyKind::System => WorkerPolicy::per_system(nz!(WORKERS)),
         };
         let (initialized, observations) = mpsc::channel();
         let pool = Pool::builder()
@@ -87,7 +93,11 @@ fn assert_lazy_initialization(regional: bool) {
             assert!(threads.insert(id));
             masks.push(mask);
         }
-        let initial_processors = if regional { vec![0, 3] } else { vec![0, 1, 3] };
+        let initial_processors = match kind {
+            PolicyKind::Processor => vec![0, 1, 3],
+            PolicyKind::MemoryRegion => vec![0, 3],
+            PolicyKind::System => vec![0],
+        };
         let expected: Vec<_> = initial_processors
             .into_iter()
             .flat_map(|processor| iter::repeat_n(BTreeSet::from([processor]), WORKERS as usize))

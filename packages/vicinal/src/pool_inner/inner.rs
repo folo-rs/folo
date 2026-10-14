@@ -30,7 +30,7 @@ pub(crate) struct PoolInner {
     pub(crate) shutdown: AtomicBool,
     /// Infrastructure failure is permanent and distinct from clean shutdown abandonment.
     pub(crate) poisoned: AtomicBool,
-    /// Sorted populated CPU IDs keep pool-wide regional membership independent of ID gaps.
+    /// Sorted populated CPU IDs keep pool-wide submission membership independent of ID gaps.
     pub(crate) submitted_processors: Box<[(ProcessorId, AtomicBool)]>,
 }
 
@@ -42,7 +42,7 @@ impl PoolInner {
         policy: WorkerPolicy,
         thread_init: Option<ThreadInit>,
     ) -> Self {
-        let submitted_processors = if policy.is_regional() {
+        let submitted_processors = if policy.shares_processors() {
             let mut processors = hardware
                 .all_processors()
                 .iter()
@@ -124,8 +124,8 @@ impl PoolInner {
         // Keep task ownership outside all guards so rejection never drops captures under a lock.
         let mut task = Some(task);
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            let regional = matches!(target.group, GroupId::MemoryRegion(_));
-            let known = !regional || self.membership(target.processor).load(Ordering::Acquire);
+            let shared = self.policy.shares_processors();
+            let known = !shared || self.membership(target.processor).load(Ordering::Acquire);
             if known && state.startup.get().is_some() {
                 self.admit(target, state, &mut task, urgent, None)
             } else {
@@ -149,7 +149,7 @@ impl PoolInner {
                         }
                     }
                     let expanded =
-                        regional && !self.membership(target.processor).load(Ordering::Acquire);
+                        shared && !self.membership(target.processor).load(Ordering::Acquire);
                     let affinity = expanded.then(|| {
                         Arc::new(
                             self.hardware
@@ -163,7 +163,7 @@ impl PoolInner {
                                                 .load(Ordering::Acquire))
                                 })
                                 .take_all()
-                                .expect("the sampled submitting processor belongs to its region"),
+                                .expect("the sampled submitting processor belongs to its group"),
                         )
                     });
                     self.admit(target, state, &mut task, urgent, affinity)
@@ -464,12 +464,12 @@ pub(crate) fn worker_loop(
         &state.shutdown_flag,
     );
     let mut revision = 0;
-    let regional = matches!(destination, GroupId::MemoryRegion(_));
+    let shared = inner.policy.shares_processors();
     loop {
         if inner.shutdown.load(Ordering::Acquire) {
             break;
         }
-        if regional {
+        if shared {
             refresh_affinity(state, &mut revision, &pin);
         }
         match core.run_one_iteration_with(
@@ -477,7 +477,7 @@ pub(crate) fn worker_loop(
                 if inner.shutdown.load(Ordering::Acquire) {
                     return false;
                 }
-                if regional {
+                if shared {
                     refresh_affinity(state, &mut revision, &pin);
                 }
                 !inner.shutdown.load(Ordering::Acquire)
@@ -504,6 +504,10 @@ pub(crate) fn worker_loop(
                     || state.affinity_revision.load(Ordering::Acquire) != revision
                 {
                     continue;
+                }
+                #[cfg(test)]
+                if let Some(before_wait) = state.before_wait.get() {
+                    before_wait(worker_index, revision);
                 }
                 listener.wait();
             }
