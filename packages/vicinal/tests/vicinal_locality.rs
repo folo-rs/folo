@@ -79,12 +79,20 @@ fn tasks_execute_on_spawning_processor() {
 
 #[test]
 fn regional_tasks_use_only_submitting_processors() {
-    testing::with_watchdog(|| {
+    assert_submitting_processor_affinity(WorkerPolicy::per_memory_region(nz!(2_u32)), true);
+}
+
+#[test]
+fn system_tasks_use_only_submitting_processors() {
+    assert_submitting_processor_affinity(WorkerPolicy::per_system(nz!(2_u32)), false);
+}
+
+/// Verifies actual OS affinity, including cross-region masks on multi-region machines.
+fn assert_submitting_processor_affinity(policy: WorkerPolicy, regional: bool) {
+    testing::with_watchdog(move || {
         let hardware = SystemHardware::current();
         let processors = hardware.all_processors();
-        let pool = Pool::builder()
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
-            .build();
+        let pool = Pool::builder().worker_policy(policy).build();
         let scheduler = pool.scheduler();
         // Sequential CPU registration makes each expected cumulative mask deterministic.
         let mut submitted = BTreeSet::new();
@@ -98,7 +106,10 @@ fn regional_tasks_use_only_submitting_processors() {
             let expected_region = processor.memory_region_id();
             let expected: BTreeSet<_> = processors
                 .iter()
-                .filter(|p| p.memory_region_id() == expected_region && submitted.contains(&p.id()))
+                .filter(|p| {
+                    (!regional || p.memory_region_id() == expected_region)
+                        && submitted.contains(&p.id())
+                })
                 .map(Processor::id)
                 .collect();
             caller
@@ -107,7 +118,9 @@ fn regional_tasks_use_only_submitting_processors() {
                     move |_| {
                         block_on(scheduler.spawn(move || {
                             let hardware = SystemHardware::current();
-                            assert_eq!(hardware.current_memory_region_id(), expected_region);
+                            if regional {
+                                assert_eq!(hardware.current_memory_region_id(), expected_region);
+                            }
                             let affinity = hardware
                                 .all_processors()
                                 .to_builder()

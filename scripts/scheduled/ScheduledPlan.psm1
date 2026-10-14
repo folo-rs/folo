@@ -40,7 +40,8 @@ function Get-ScheduledCheck {
             @{ package = 'events_once'; shards = 1 },
             @{ package = 'events'; shards = 1 },
             @{ package = 'awaiter_set'; shards = 1 },
-            @{ package = 'nm_impl'; shards = 1 })) {
+            @{ package = 'nm_impl'; shards = 1 },
+            @{ package = 'vicinal'; shards = 1 })) {
         foreach ($index in 1..$family.shards) {
             $shard = "$index/$($family.shards)"
             $checks += @{

@@ -44,9 +44,9 @@ how work and data are spread between processors, when applied to different algor
 allows you to judge when it matters and by how much.
 
 [`vicinal`][vicinal] schedules synchronous tasks on the submitting processor by default, or
-shares a fixed worker count within each submitting memory region. This preserves the chosen
-locality for work detached from primary application threads, such as blocking code not
-suitable for an async application thread.
+shares a fixed worker count within each submitting memory region or across all submitting
+processors. This preserves the chosen locality for work detached from primary application
+threads, such as blocking code not suitable for an async application thread.
 
 ![](doc/region_cached.png)
 

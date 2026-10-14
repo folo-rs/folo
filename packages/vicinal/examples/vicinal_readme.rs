@@ -8,6 +8,7 @@ use vicinal::{Pool, TaskError, WorkerPolicy};
 async fn main() -> Result<(), AppError> {
     processor_local().await?;
     memory_region_local().await?;
+    system_wide().await?;
     Ok(())
 }
 
@@ -33,6 +34,23 @@ async fn memory_region_local() -> Result<(), AppError> {
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+        .build();
+
+    assert_eq!(
+        pool.scheduler()
+            .spawn(|| 42)
+            .await
+            .map_err(TaskError::into_diagnostic)?,
+        42
+    );
+    Ok(())
+}
+
+/// Demonstrates a worker count independent of the submitting processors' memory regions.
+async fn system_wide() -> Result<(), AppError> {
+    // Illustrative concurrency shared across every submitting processor in this pool.
+    let pool = Pool::builder()
+        .worker_policy(WorkerPolicy::per_system(nz!(2_u32)))
         .build();
 
     assert_eq!(

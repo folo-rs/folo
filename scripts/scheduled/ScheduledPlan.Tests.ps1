@@ -10,7 +10,7 @@ BeforeAll { Import-Module (Join-Path $PSScriptRoot 'ScheduledPlan.psm1') -Force 
 Describe 'Fresh deep check catalog' {
     It 'preserves every platform, mutation shard and many-seed family' {
         $checks = @(Get-ScheduledCheck)
-        $checks.Count | Should -Be 14
+        $checks.Count | Should -Be 15
         @($checks.id | Sort-Object -Unique).Count | Should -Be $checks.Count
         @($checks.recipe | Sort-Object -Unique) | Should -Be @('careful', 'miri', 'miri-harder', 'mutants')
         @($checks | Where-Object recipe -EQ 'miri').platform | Should -Be @(
@@ -20,7 +20,7 @@ Describe 'Fresh deep check catalog' {
                 Should -Be @('1/2', '2/2')
             @($checks | Where-Object { $_.recipe -eq 'careful' -and $_.platform -eq $platform }).Count | Should -Be 1
         }
-        foreach ($package in @('events_once', 'events', 'awaiter_set', 'nm_impl')) {
+        foreach ($package in @('events_once', 'events', 'awaiter_set', 'nm_impl', 'vicinal')) {
             $selected = @($checks | Where-Object { $_.recipe -eq 'miri-harder' -and $_.packages -contains $package })
             $selected.Count | Should -Be 1
             $selected.shard | Should -Be '1/1'
