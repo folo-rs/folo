@@ -113,16 +113,9 @@ impl PoolBuilder {
         }
     }
 
-    /// Sets the name of the pool, used as a prefix in worker thread names.
+    /// Sets an identifier included in worker thread names.
     ///
-    /// Processor-policy names use `{name}-p{processor_id}-{worker_index}`.
-    /// Memory-region-policy names use `{name}-r{memory_region_id}-{worker_index}`.
-    /// Worker indices start at zero within each destination.
-    ///
-    /// The default pool name is `vicinal-{N}`, where `N` is an auto-incrementing pool
-    /// counter that distinguishes different pools.
-    ///
-    /// The default naming scheme is not part of the API contract and may change at any time.
+    /// The naming format and the identifier's position within it are unspecified.
     #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());

@@ -55,16 +55,22 @@ coverage-report-ci:
 
     Export-CoverageReport -Toolchain "{{ env_var('RUST_NIGHTLY') }}" -OutputPath "lcov.info" | Out-Null
 
+# Formatting is workspace-wide, but each rustfmt process receives only one package's targets
+# to stay within Windows command-line limits. Run from the root to share the same configuration.
+# Ref: docs/build-and-tooling.md#workspace-formatting.
 [group('quality')]
-[no-cd]
 format:
-    cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose --all -- --config-path ./unstable-rustfmt.toml
+    cargo each --workspace --keep-going -- cargo +{{ env_var('RUST_NIGHTLY') }} fmt \
+        --verbose -p "{name}" -- --config-path unstable-rustfmt.toml
     cargo sort --workspace
     cargo sort-derives
 
+# Keep the same package batches and configuration as format; collect every formatter failure.
+# Ref: docs/build-and-tooling.md#workspace-formatting.
 [group('quality')]
 format-check:
-    cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose --all --check -- --config-path ./unstable-rustfmt.toml
+    cargo each --workspace --keep-going -- cargo +{{ env_var('RUST_NIGHTLY') }} fmt \
+        --verbose -p "{name}" --check -- --config-path unstable-rustfmt.toml
     cargo sort --workspace --check
     cargo sort-derives --check
 

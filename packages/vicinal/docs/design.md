@@ -44,6 +44,11 @@ starts no workers. Workers persist until shutdown, and a regional count is not m
 by the number of submitting processors. Counts must be nonzero but may exceed the
 processor count, supporting blocking workloads.
 
+## Worker thread names
+
+`PoolBuilder::name` supplies an identifier included in worker thread names.
+The naming format and the identifier's position within it are unspecified.
+
 ## Worker initialization
 
 `PoolBuilder::thread_init` lets the pool owner configure thread-local state on each worker.
