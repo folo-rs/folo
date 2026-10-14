@@ -102,6 +102,7 @@ type BeforeWait = Box<dyn Fn(u32, usize) + Send + Sync + RefUnwindSafe + UnwindS
 mod tests {
     use std::pin::Pin;
     use std::sync::{Arc, Barrier};
+    use std::{iter, thread};
 
     use super::*;
     use crate::{VicinalTask, init_task};
@@ -166,12 +167,12 @@ mod tests {
     #[test]
     fn task_slots_can_be_released_while_allocating() {
         let state = Arc::new(WorkerGroup::new());
-        let tasks = std::iter::repeat_with(|| alloc_noop_task(&state))
+        let tasks = iter::repeat_with(|| alloc_noop_task(&state))
             .take(CONCURRENT_TASK_COUNT)
             .collect::<Vec<_>>();
         let barrier = Arc::new(Barrier::new(2));
 
-        std::thread::scope(|scope| {
+        thread::scope(|scope| {
             scope.spawn({
                 let barrier = Arc::clone(&barrier);
                 move || {

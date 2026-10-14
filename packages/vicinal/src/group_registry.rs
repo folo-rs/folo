@@ -33,6 +33,7 @@ impl GroupRegistry {
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect::<Box<[_]>>();
+
                 Self::MemoryRegion {
                     groups: iter::repeat_with(OnceLock::new).take(ids.len()).collect(),
                     ids,
@@ -45,13 +46,17 @@ impl GroupRegistry {
     pub(crate) fn get_or_init(&self, destination: GroupId) -> &WorkerGroup {
         let group = match (self, destination) {
             (Self::Processor(groups), GroupId::Processor(id)) => groups.get(id as usize),
-            (Self::MemoryRegion { ids, groups }, GroupId::MemoryRegion(id)) => groups.get(
-                ids.binary_search(&id)
-                    .expect("a submitting region must contain an eligible processor"),
-            ),
+            (Self::MemoryRegion { ids, groups }, GroupId::MemoryRegion(id)) => {
+                let index = ids
+                    .binary_search(&id)
+                    .expect("a submitting region must contain an eligible processor");
+
+                groups.get(index)
+            }
             (Self::System(group), GroupId::System) => Some(group.as_ref()),
             _ => panic!("the destination must match the pool's policy"),
         };
+
         group
             .expect("the policy samples IDs within its hardware index space")
             .get_or_init(WorkerGroup::new)
@@ -62,6 +67,7 @@ impl GroupRegistry {
             Self::Processor(groups) | Self::MemoryRegion { groups, .. } => groups.as_ref(),
             Self::System(group) => slice::from_ref(group.as_ref()),
         };
+
         groups.iter().filter_map(OnceLock::get)
     }
 }
@@ -91,9 +97,11 @@ mod tests {
         let GroupRegistry::MemoryRegion { groups, .. } = &registry else {
             panic!("regional policy must use regional indexing");
         };
+
         assert_eq!(groups.len(), 2);
         assert_eq!(registry.initialized().count(), 0);
         assert_panics(|| registry.get_or_init(GroupId::MemoryRegion(4)));
+
         let first = registry.get_or_init(GroupId::MemoryRegion(2));
         assert!(ptr::eq(
             first,
@@ -113,11 +121,13 @@ mod tests {
         let policy = WorkerPolicy::per_system(nz!(1));
         let registry = GroupRegistry::new(&hardware, &policy);
         assert_eq!(registry.initialized().count(), 0);
+
         let first = registry.get_or_init(GroupId::System);
         assert!(ptr::eq(first, registry.get_or_init(GroupId::System)));
         assert_eq!(registry.initialized().count(), 1);
         assert_panics(|| registry.get_or_init(GroupId::Processor(0)));
         assert_panics(|| registry.get_or_init(GroupId::MemoryRegion(0)));
+
         let independent = GroupRegistry::new(&hardware, &policy);
         assert!(!ptr::eq(first, independent.get_or_init(GroupId::System)));
     }

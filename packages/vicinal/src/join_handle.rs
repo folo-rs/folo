@@ -46,16 +46,10 @@ where
     type Output = Result<R, TaskError<R>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let receiver = &mut self.receiver;
-        let pinned_receiver = Pin::new(receiver);
-
-        match pinned_receiver.poll(cx) {
-            Poll::Pending => Poll::Pending,
+        Pin::new(&mut self.receiver).poll(cx).map(|result| {
             // Every unexecuted wrapper sends cancellation before releasing its sender.
-            Poll::Ready(result) => Poll::Ready(
-                result.expect("joined tasks deliver completion or cancellation before dropping"),
-            ),
-        }
+            result.expect("joined tasks deliver completion or cancellation before dropping")
+        })
     }
 }
 
