@@ -14,7 +14,7 @@ use tracing::{debug, error};
 use crate::pool_inner::worker_loop;
 use crate::{
     ErasedTaskHandle, GroupId, GroupRegistry, NEVER_POISONED, SubmissionTarget, ThreadInit,
-    WorkerPolicy, discard_panic, extract_panic_message,
+    WorkerGroup, WorkerPolicy, discard_panic, extract_panic_message,
 };
 
 /// Groups pool lifecycle diagnostics under their owner, including admission and execution.
@@ -36,8 +36,8 @@ pub(crate) struct PoolInner {
     /// Infrastructure failure is permanent and distinct from clean shutdown abandonment.
     pub(crate) poisoned: AtomicBool,
 
-    /// Sorted populated CPU IDs keep pool-wide submission membership independent of ID gaps.
-    pub(crate) submitted_processors: Box<[(ProcessorId, AtomicBool)]>,
+    /// Initial selections and accepted submitters share membership, independent of ID gaps.
+    pub(crate) member_processors: Box<[(ProcessorId, AtomicBool)]>,
 }
 
 impl PoolInner {
@@ -48,7 +48,7 @@ impl PoolInner {
         policy: WorkerPolicy,
         thread_init: Option<ThreadInit>,
     ) -> Self {
-        let submitted_processors = if policy.shares_processors() {
+        let member_processors = if policy.shares_processors() {
             let mut processors = hardware
                 .all_processors()
                 .iter()
@@ -71,8 +71,20 @@ impl PoolInner {
             worker_handles: Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
             poisoned: AtomicBool::new(false),
-            submitted_processors,
+            member_processors,
         }
+    }
+
+    /// Publishes the affinity-startup outcome while the caller serializes worker registration.
+    #[cfg_attr(test, mutants::skip)] // Missing startup publication can start duplicate workers.
+    pub(crate) fn start_group<R>(state: &WorkerGroup, start: impl FnOnce() -> R) -> R {
+        let result = panic::catch_unwind(AssertUnwindSafe(start));
+        state
+            .startup
+            .set(if result.is_ok() { Ok(()) } else { Err(()) })
+            .expect("startup is published once under the worker handle lock");
+
+        result.unwrap_or_else(|payload| panic::resume_unwind(payload))
     }
 
     /// Pins every new worker to the first submitter before admitting any work.
@@ -82,7 +94,7 @@ impl PoolInner {
         self: &Arc<Self>,
         target: SubmissionTarget,
         handles: &mut Vec<ThreadJoinHandle<()>>,
-        mut spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
+        spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
     ) {
         let destination = target.group;
@@ -97,12 +109,39 @@ impl PoolInner {
             .unwrap_or_else(|| panic!("no eligible processors for worker group {destination:?}"));
         let affinity = Arc::new(affinity);
 
+        // Lazy admission waits only for affinity; completion receivers are needed by eager builds.
+        _ = self.start_workers_on(destination, &affinity, handles, spawn, pin);
+    }
+
+    /// Shares worker entry and affinity readiness between lazy and eager group startup.
+    ///
+    /// Each returned receiver acknowledges initializer completion after its affinity message
+    /// has been consumed here. Disconnection leaves the worker's panic in its registered handle.
+    #[cfg_attr(test, mutants::skip)] // Broken acknowledgments or registration can strand workers.
+    pub(crate) fn start_workers_on(
+        self: &Arc<Self>,
+        destination: GroupId,
+        affinity: &Arc<ProcessorSet>,
+        handles: &mut Vec<ThreadJoinHandle<()>>,
+        mut spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
+        pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
+    ) -> Vec<mpsc::Receiver<ThreadResult<()>>> {
+        // Startup owns registration, so this revision describes the supplied initial mask.
+        // Acquiring pairs with eager snapshot publication before threads are spawned.
+        let revision = self
+            .registry
+            .get_or_init(destination)
+            .affinity_revision
+            .load(Ordering::Acquire);
+        let mut initialized = Vec::new();
+
         for worker_index in 0..self.policy.count().get() {
-            // One readiness message per worker; no task is admitted before all acknowledge.
+            // The buffer permits initialization to finish without waiting for the constructor.
+            // Affinity and initialization share the channel, in that order.
             let (ready, receiver) = mpsc::sync_channel(1);
             let entry: WorkerEntry = Box::new({
                 let inner = Arc::clone(self);
-                let affinity = Arc::clone(&affinity);
+                let affinity = Arc::clone(affinity);
                 let pin = pin.clone();
                 move || {
                     let result = panic::catch_unwind(AssertUnwindSafe(|| pin(&affinity)));
@@ -111,7 +150,7 @@ impl PoolInner {
                         return;
                     }
 
-                    inner.run_worker(destination, worker_index, &pin);
+                    inner.run_worker(destination, worker_index, revision, ready, &pin);
                 }
             });
             let builder = thread::Builder::new()
@@ -126,13 +165,23 @@ impl PoolInner {
                 Ok(Err(payload)) => panic::resume_unwind(payload),
                 Err(error) => panic!("worker in {destination:?} exited before readiness: {error}"),
             }
+            initialized.push(receiver);
         }
+
+        initialized
     }
 
     /// Contains initialization and the task loop within the worker's infrastructure boundary.
     // Omitting initialization or failure propagation can strand accepted work.
     #[cfg_attr(test, mutants::skip)]
-    fn run_worker(&self, destination: GroupId, worker_index: u32, pin: impl Fn(&ProcessorSet)) {
+    fn run_worker(
+        &self,
+        destination: GroupId,
+        worker_index: u32,
+        revision: usize,
+        ready: mpsc::SyncSender<ThreadResult<()>>,
+        pin: impl Fn(&ProcessorSet),
+    ) {
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             debug!(
                 pool_name = self.pool_name.as_str(),
@@ -148,7 +197,9 @@ impl PoolInner {
                 (thread_init.0)();
             }
 
-            worker_loop(self, destination, worker_index, &pin);
+            _ = ready.send(Ok(()));
+            drop(ready);
+            worker_loop(self, destination, worker_index, revision, &pin);
 
             debug!(
                 pool_name = self.pool_name.as_str(),
@@ -252,7 +303,7 @@ impl fmt::Debug for PoolInner {
 }
 
 /// The standard thread adapter and failure-injection tests share this entry-point boundary.
-type WorkerEntry = Box<dyn FnOnce() + Send>;
+pub(crate) type WorkerEntry = Box<dyn FnOnce() + Send>;
 
 /// Drains the live queue without running user destructors under a lock.
 // Skipping cleanup leaves abandoned receivers pending.

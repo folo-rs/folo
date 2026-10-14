@@ -7,9 +7,10 @@ use crate::{GroupId, SubmissionTarget};
 /// Configures worker counts and the locality of submitted tasks.
 ///
 /// Set a policy with [`PoolBuilder::worker_policy`][crate::PoolBuilder::worker_policy].
-/// A pool's policy is fixed when it is built. Workers start lazily on the first submission
-/// to a processor, memory region or the pool and persist until shutdown. Counts are not limited by
-/// the number of processors, allowing oversubscription for blocking work.
+/// A pool's policy is fixed when it is built. Workers start on the first submission
+/// to a destination, or during construction with [`PoolBuilder::eager`][crate::PoolBuilder::eager],
+/// and persist until shutdown. Counts are not limited by the number of processors, allowing
+/// oversubscription for blocking work.
 ///
 /// Locality requires task code to preserve worker affinity. It does not bind allocations,
 /// move data or guarantee cache hits. Policies do not enforce processor-time quotas.
@@ -20,7 +21,7 @@ pub struct WorkerPolicy {
 }
 
 impl WorkerPolicy {
-    /// Uses a fixed number of workers pinned to each submitting processor.
+    /// Uses a fixed number of workers pinned to each active processor.
     ///
     /// Each task is routed to the logical processor sampled during its submission.
     #[must_use]
@@ -34,16 +35,17 @@ impl WorkerPolicy {
     /// Uses a fixed worker count per memory region.
     ///
     /// Each task is routed to its submitting processor's [`many_cpus::MemoryRegionId`].
-    /// Workers may run only on processors in that region that have submitted accepted work
-    /// to this pool. The first submission starts the configured workers on its processor;
-    /// new submitting processors expand the permitted set without adding workers.
+    /// Workers may run only on processors in that region selected by
+    /// [`PoolBuilder::eager`][crate::PoolBuilder::eager] or that have submitted accepted work.
+    /// Without eager selection, the first submission starts the workers on its processor.
+    /// New submitting processors expand the permitted set without adding workers.
     ///
     /// Workers refresh affinity at task boundaries. A running task may finish with the
     /// previous narrower set and may migrate within that set. Membership is cumulative:
     /// processors are never removed, and there is no cross-region work stealing.
     ///
-    /// Submitting tasks from a stable, quota-appropriate processor set keeps workers
-    /// within that set. Using new processors to submit tasks grows the accumulated set.
+    /// Using the same stable, quota-appropriate processor set for eager selection and submissions
+    /// keeps workers within that set. Using new processors grows the accumulated set.
     /// This does not guarantee avoidance of throttling from fractional quotas or other work.
     ///
     /// # Example
@@ -73,17 +75,18 @@ impl WorkerPolicy {
 
     /// Uses a fixed worker count.
     ///
-    /// Workers may run only on processors that have submitted accepted work to this pool,
-    /// regardless of memory region. The first submission starts the configured workers on
-    /// its processor; new submitting processors expand the permitted set without adding workers.
+    /// Workers may run only on processors selected by
+    /// [`PoolBuilder::eager`][crate::PoolBuilder::eager] or that have submitted accepted work,
+    /// regardless of memory region. Without eager selection, the first submission starts the
+    /// workers on its processor; new submitting processors expand affinity without adding workers.
     /// Separate pools have independent worker counts and permitted processor sets.
     ///
     /// Workers refresh affinity at task boundaries. A running task may finish with the
     /// previous narrower set and may migrate within that set, including across memory regions.
     /// Membership is cumulative: processors are never removed.
     ///
-    /// Submitting tasks from a stable, quota-appropriate processor set keeps workers
-    /// within that set. Using new processors to submit tasks grows the accumulated set.
+    /// Using the same stable, quota-appropriate processor set for eager selection and submissions
+    /// keeps workers within that set. Using new processors grows the accumulated set.
     /// This does not guarantee avoidance of throttling from fractional quotas or other work.
     ///
     /// # Example

@@ -13,13 +13,15 @@ the calling thread's current logical processor; this is the task's submitting pr
 Tasks execute synchronously on that processor by default.
 A regional policy shares a fixed worker count across submitting processors in each memory
 region. A system policy shares a fixed count across all submitting processors, regardless
-of region. Workers start on first use of a destination and persist until shutdown.
+of region. Workers start on first use of a destination by default and persist until shutdown.
+Opt into eager initialization to prepare selected destinations during pool construction.
 
 ## Example
 
 The example uses `ohno::AppError`; enable the `app-err` feature on `ohno`.
 
 ```rust
+use many_cpus::SystemHardware;
 use new_zealand::nz;
 use ohno::AppError;
 use vicinal::{Pool, TaskError, WorkerPolicy};
@@ -50,10 +52,12 @@ async fn processor_local() -> Result<(), AppError> {
 }
 
 async fn memory_region_local() -> Result<(), AppError> {
-    // Workers share each region's cumulative set of submitting processors.
+    // Use this same selection for the application's submitting threads.
+    let processors = SystemHardware::current().processors();
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+        .eager(processors)
         .build();
 
     assert_eq!(
@@ -85,9 +89,11 @@ async fn system_wide() -> Result<(), AppError> {
 ```
 
 The regional count is per region, not per processor. The system count is per pool, not per
-region. Shared workers start on the first submitting processor.
+region. Shared workers start with the eagerly selected processors in their destination,
+or on the first submitting processor.
 New submitting processors expand the destination's permitted set without adding
-workers; never-submitting processors remain excluded. Membership is per pool and cumulative.
+workers; processors neither selected nor submitting remain excluded.
+Membership is per pool and cumulative.
 Workers refresh affinity at task boundaries, without preempting running tasks. They may
 move within their permitted set even during one task. Regional workers never steal work from
 other regions; system workers share all regions' work.
@@ -95,13 +101,31 @@ Configure concurrency with `WorkerPolicy`; counts may exceed processor counts fo
 Each pool counts workers independently, while scheduler clones share their pool's workers.
 Regions describe processor locality, not the task's allocations or data.
 
+## Eager initialization
+
+`PoolBuilder::eager(processors)` takes ownership of a nonempty `ProcessorSet` from the pool's
+hardware instance. The setter starts no workers. `build()` starts the configured workers for
+every selected processor, represented region or the system, according to the worker policy.
+It waits for initial affinity and every configured `thread_init` callback to complete.
+Initialization effects are visible when construction returns, and the calling thread's affinity
+remains unchanged. Startup failure stops and joins created workers before construction panics.
+
+Callbacks run once per worker, may overlap, and must preserve affinity. They must not wait for
+same-pool work, shut down their pool or depend on eager construction returning. In particular,
+an eager initializer cannot depend on the caller publishing the pool's scheduler after `build()`.
+
+The selection is initial membership, not a permanent limit. Later submissions from other eligible
+processors still create missing destinations or expand shared affinity. Choose a processor set
+once and reuse it for the application and pool rather than independently choosing quota-sized
+subsets. Eager construction prepares workers, not task-specific allocations or application caches.
+
 ## Tradeoffs
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
   short-lived so that the pool is often idle.
-- Shared workers stay within the submitting processors. Submitting tasks from a stable,
-  quota-appropriate processor set keeps worker placement within that set. Using new processors
-  grows the cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
+- Shared workers stay within eagerly selected processors and accepted submitters. Using one stable,
+  quota-appropriate processor set for selection and submissions keeps workers within it.
+  Using new processors grows the cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
   quotas and other process work can still cause throttling: operating-system delays after
   exceeding the process's processor-time allowance. See
   [avoiding operating system quota penalties].

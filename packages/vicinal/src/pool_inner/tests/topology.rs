@@ -35,7 +35,7 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
 
         let membership = || {
             pool.inner
-                .submitted_processors
+                .member_processors
                 .iter()
                 .map(|(id, submitted)| (*id, submitted.load(Ordering::Acquire)))
                 .collect::<Vec<_>>()
@@ -86,7 +86,7 @@ fn processor_policy_does_not_allocate_submission_membership() {
         .hardware(hardware())
         .worker_policy(WorkerPolicy::per_processor(nz!(1)))
         .build();
-    assert!(pool.inner.submitted_processors.is_empty());
+    assert!(pool.inner.member_processors.is_empty());
 }
 
 /// All submission APIs share a fixed count across regions without admitting unused processors.
@@ -139,7 +139,7 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
         assert_eq!(state.get_tasks_spawned(), 4);
         assert_eq!(
             pool.inner
-                .submitted_processors
+                .member_processors
                 .iter()
                 .map(|(id, submitted)| (*id, submitted.load(Ordering::Acquire)))
                 .collect::<Vec<_>>(),

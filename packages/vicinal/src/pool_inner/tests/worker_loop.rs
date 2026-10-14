@@ -35,7 +35,7 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
         }));
 
         let pins = Cell::new(0);
-        worker_loop(&pool.inner, destination, 0, |_| {
+        worker_loop(&pool.inner, destination, 0, 0, |_| {
             pins.set(pins.get() + 1);
             let queued = state.regular_queue.lock().unwrap().len();
             assert_eq!(queued, 1);
@@ -73,7 +73,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
         }));
 
         let pins = Cell::new(0);
-        worker_loop(&pool.inner, destination, 0, |set| {
+        worker_loop(&pool.inner, destination, 0, 0, |set| {
             pins.set(pins.get() + 1);
             match pins.get() {
                 1 => {
@@ -131,7 +131,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
 
         let pins = Cell::new(0);
         let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-            worker_loop(&pool.inner, destination, 0, |set| {
+            worker_loop(&pool.inner, destination, 0, 0, |set| {
                 pins.set(pins.get() + 1);
                 match pins.get() {
                     1 => {

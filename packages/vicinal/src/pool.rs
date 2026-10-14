@@ -7,7 +7,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use many_cpus::SystemHardware;
+use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 
 use crate::{PoolInner, Scheduler, WorkerPolicy};
@@ -22,10 +22,10 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// By default, tasks execute on the processor sampled during submission.
 /// [`WorkerPolicy`] can instead share a fixed worker count across each
-/// submitting memory region or across the system. No workers start until the first submission
-/// to that destination. Shared workers use the cumulative set of processors that submitted
-/// accepted work to their pool and destination, refreshing affinity at task boundaries
-/// without adding workers.
+/// submitting memory region or across the system. Workers start on first submission unless
+/// [`PoolBuilder::eager`] initializes their destinations during construction.
+/// Shared workers use the initial selection plus processors that submitted accepted work
+/// to their pool and destination, refreshing affinity at task boundaries without adding workers.
 /// A pool's policy does not change after construction.
 ///
 /// # Lifetime
@@ -102,6 +102,7 @@ pub struct PoolBuilder {
     policy: WorkerPolicy,
     hardware: Option<SystemHardware>,
     thread_init: Option<ThreadInit>,
+    eager: Option<ProcessorSet>,
 }
 
 impl PoolBuilder {
@@ -111,6 +112,7 @@ impl PoolBuilder {
             policy: WorkerPolicy::per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
             hardware: None,
             thread_init: None,
+            eager: None,
         }
     }
 
@@ -132,14 +134,48 @@ impl PoolBuilder {
         self
     }
 
+    /// Initializes workers for the selected processors during construction.
+    ///
+    /// [`Self::build`] waits for every selected worker to apply its initial affinity and finish
+    /// [`Self::thread_init`]. The effects of initialization are visible when construction returns.
+    /// The setter itself starts no workers and takes ownership of the nonempty processor set.
+    /// Repeated calls replace the selection; construction uses the final builder settings.
+    ///
+    /// With a per-processor policy, each selected processor gets its configured worker count.
+    /// With a regional policy, each represented region gets its count, with affinity limited to
+    /// selected processors in that region. A system policy starts its count once, with affinity
+    /// covering the entire selection. The constructing thread's affinity remains unchanged.
+    ///
+    /// This is an initial selection, not a permanent restriction. Later submissions from other
+    /// eligible processors start missing destinations lazily or expand shared-worker affinity.
+    /// The selection must belong to the pool's [`SystemHardware`] instance.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::SystemHardware;
+    /// use vicinal::Pool;
+    ///
+    /// let processors = SystemHardware::current().processors();
+    /// let pool = Pool::builder().eager(processors).build();
+    /// ```
+    #[must_use]
+    pub fn eager(mut self, processors: ProcessorSet) -> Self {
+        self.eager = Some(processors);
+        self
+    }
+
     /// Sets a function to run when each worker thread starts.
     ///
     /// The function runs once on each worker, after its initial affinity is set and before
-    /// it executes any tasks. Workers start lazily; building the pool does not call the function.
-    /// Calls on different workers may overlap. Submission does not wait for initialization.
+    /// it executes any tasks. Workers start lazily by default; [`Self::eager`] initializes selected
+    /// workers during construction. Calls on different workers may overlap, without a guaranteed
+    /// order. Submission does not wait for initialization; eager construction does.
     ///
     /// The function must preserve worker affinity. It may submit work to the same pool,
     /// but must not wait for that work to complete or shut down the pool.
+    /// During eager construction, it must not depend on the constructing thread returning from
+    /// [`Self::build`], including to publish the pool's scheduler.
     /// A panic is treated as a [worker failure][Scheduler#worker-failures].
     ///
     /// By default, no initialization function is configured. Repeated calls replace the function.
@@ -187,8 +223,18 @@ impl PoolBuilder {
         self
     }
 
-    /// Builds the pool without starting worker threads.
+    /// Builds the pool with the configured worker policy and initialization.
+    ///
+    /// By default, construction starts no workers. With [`Self::eager`], it waits for the selected
+    /// workers' affinity setup and initialization. Other destinations remain lazy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an eager selection does not belong to the configured hardware, or eager worker
+    /// creation, affinity setup or initialization fails. Started workers are joined before the
+    /// panic propagates.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Omitting eager startup can strand initializer coordination.
     pub fn build(self) -> Pool {
         let hardware = self
             .hardware
@@ -196,7 +242,9 @@ impl PoolBuilder {
         let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
         let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
 
-        Pool {
+        // Establish the shutdown owner before spawning: workers retain their own inner references.
+        // Ref: docs/implementation.md, "Eager construction".
+        let pool = Pool {
             inner: Arc::new(PoolInner::new(
                 pool_id,
                 pool_name,
@@ -204,7 +252,11 @@ impl PoolBuilder {
                 self.policy,
                 self.thread_init,
             )),
+        };
+        if let Some(processors) = self.eager {
+            pool.inner.start_eager(processors);
         }
+        pool
     }
 }
 
@@ -216,6 +268,7 @@ impl fmt::Debug for PoolBuilder {
             .field("policy", &self.policy)
             .field("hardware", &self.hardware)
             .field("has_thread_init", &self.thread_init.is_some())
+            .field("eager", &self.eager)
             .finish()
     }
 }

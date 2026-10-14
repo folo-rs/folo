@@ -23,7 +23,7 @@ Default pool names include an incrementing pool counter. Only the inclusion of a
 chosen name is contractual; its position and the rest of the naming scheme are
 implementation details.
 
-The pool maintains an indexed registry of worker groups created on demand. A typed
+The pool maintains an indexed registry of worker groups created eagerly or on demand. A typed
 destination distinguishes logical processors, memory regions and the system. Each submission
 samples one processor and derives its regional destination from the same cached topology entry.
 This coherent target is reused for startup, allocation, queueing and diagnostics.
@@ -33,7 +33,7 @@ startup outcome. Workers consume only their group's queues.
 Processor groups use direct indexed lookup. Regional groups use compact slots for the
 populated regions, with binary search over sorted IDs; storage does not scale with the
 highest region ID. Regions without eligible processors have no slot. System pools have a
-single lazy group, independent of processor and region counts. Initialized lookups
+single group, independent of processor and region counts. Initialized lookups
 require neither a global map lock nor topology filtering.
 
 ## Task storage
@@ -106,17 +106,41 @@ the callback. Different workers may initialize concurrently, and queued tasks re
 untouched by each worker until its own initialization returns. Shutdown joins initializing
 workers as well as workers executing tasks.
 
+### Eager construction
+
+The builder owns its optional processor selection and resolves final configuration only at build
+time. It creates the shutdown-owning pool before starting threads, so an unwind always stops
+and joins registered workers even though workers retain shared references to the inner state.
+
+Eager preparation validates every processor against the hardware's eligible set using full
+processor equality, including hardware-instance identity. It partitions the selection into
+singletons, distinct regions or one system mask according to the policy. Group masks and shared
+membership are seeded before spawning; no synthetic task is allocated, counted or executed.
+
+Lazy and eager startup share worker entry, handle registration and affinity acknowledgment.
+The same buffered channel subsequently acknowledges successful callback completion. Lazy callers
+discard the completion receivers; eager construction starts all selected groups, releases the
+registration lock and then waits for completion. Worker callbacks can overlap across groups.
+Receipt publishes initialization effects to the constructing thread. A callback panic disconnects
+its completion sender and remains owned by the registered thread handle; construction retrieves
+the original failure by stopping and joining workers, using the ordinary protected cleanup path.
+
+Workers enter the loop with their already-applied initial affinity revision. The first real
+submission from a selected processor therefore needs neither startup nor membership expansion.
+Unselected processors retain the ordinary lazy-startup and cumulative-expansion behavior.
+
 ### Affinity and failure coordination
 
-Workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
-hard operating-system restrictions independently of processor-time quotas. Processor groups
+Lazy workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
+hard operating-system restrictions independently of processor-time quotas. Eager workers start
+with the selected destination mask. Processor groups
 keep that affinity. Regional and system groups publish an immutable shared affinity snapshot and
 revision when admitting work from a new CPU. A pool-wide sorted table pairs populated CPU IDs
 with atomic membership flags because each CPU belongs to one fixed group within a pool.
 Binary search keeps established submissions allocation-free and lock-free for membership
 lookup, while table storage scales with eligible processors rather than the highest ID.
-Processor-local pools do not allocate this table. Expansion selects only already admitted
-CPUs plus the current submitting processor from the destination. The system destination
+Processor-local pools do not allocate this table. Expansion selects initial members and already
+admitted CPUs plus the current submitting processor from the destination. The system destination
 admits eligible processors regardless of their memory region, reusing the same membership
 and refresh protocol as regional groups.
 
