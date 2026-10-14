@@ -121,6 +121,57 @@ commit do not create independent history; minimum evidence is not a promised fin
 
 ### Backfill completion
 
+#### Backfill execution discovery
+
+Before selecting downloaded completion artifacts, read the authenticated execution history:
+
+```text
+cargo-bench-history-github --repository OWNER/REPO --instance PROJECT backfill-jobs --run-id RUN --expected-platforms CSV --output-file NEW.json
+```
+
+The repository may come from `GITHUB_REPOSITORY`; the action supplies the canonical prepared
+project namespace through `--instance`. This command requires GitHub authentication and Actions
+read permission. It creates a new JSON file and refuses to overwrite an existing destination.
+It does not read completion files, write to the step summary or publish anything.
+
+Backfill matrix jobs use `cbh-backfill:<instance>:<platform>` as their whole job name or
+final ` / `-separated reusable-workflow name component. Other namespaces and unrelated jobs
+are ignored. Unexpected platforms, duplicate job IDs, duplicate platform/attempt identities,
+run mismatches and unfinished or unknown selected conclusions fail discovery.
+
+The command reuses the companion's complete all-attempts lookup and successful-execution
+reuse normalization. Its latest-per-platform selection includes skipped and unsuccessful
+jobs: a newer skip must not resurrect older successful counts. Verified reused successes
+retain their original executed attempt and job ID. Platforms with no matching job are absent,
+not zero-count successful entries.
+
+```json
+{
+  "version": 1,
+  "repository": "example/project",
+  "instance": "project",
+  "run_id": 42,
+  "platforms": [
+    {
+      "platform": "ubuntu-latest",
+      "execution": "success",
+      "conclusion": "success",
+      "run_attempt": 1,
+      "job_id": 123
+    }
+  ]
+}
+```
+
+`execution` shares the card's vocabulary. `failure`, `timed_out`, `action_required` and
+`neutral` conclusions all prohibit successful collection and project to `failure`; the raw
+`conclusion` retains their diagnostic distinction. `cancelled` and `skipped` stay distinct.
+The action binds its immutable artifact envelope to the returned repository, instance, run,
+platform and original executed attempt before passing any completion path to the renderer.
+Do not select jobs independently or replace absent entries with an earlier success.
+
+#### Rendering final counts
+
 ```json
 {
   "execution": "success",

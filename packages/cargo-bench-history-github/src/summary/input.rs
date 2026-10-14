@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::result::Execution;
+
 /// Job facts supplied by orchestration, separate from analyzer-owned evidence.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -11,27 +13,6 @@ pub(crate) struct SummaryInput {
     pub(crate) run_url: String,
     pub(crate) artifact_url: Option<String>,
     pub(crate) result: ResultInput,
-}
-
-/// Execution status never substitutes for an analysis outcome.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Execution {
-    Success,
-    Failure,
-    Cancelled,
-    Skipped,
-}
-
-impl Execution {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Success => "Completed",
-            Self::Failure => "Failed",
-            Self::Cancelled => "Cancelled",
-            Self::Skipped => "Skipped",
-        }
-    }
 }
 
 /// The state of GitHub publication, not collection or storage.

@@ -62,6 +62,12 @@ invalidates older success. Skipped jobs can have synthetic timing fields; those 
 not establish successful collection. The receipt format and the semantic job/receipt
 reconciliation rules are unchanged.
 
+Backfill execution discovery uses the same normalized job history and shared platform/attempt
+index as single-commit collection. It exports the latest terminal job and original executed
+attempt so the action can bind immutable completion envelopes without implementing timestamp
+or retry policy. Skips remain authoritative; missing jobs stay absent. Final count/range
+validation remains in the separate offline card renderer.
+
 ## Root action boundary
 
 The `action` entry point separates strict string-object parsing and command planning from

@@ -127,6 +127,9 @@ Empty output names no speculative engine or invocation cause.
 Backfill completion cards show the frozen range and per-platform accounting. Failure,
 cancellation and missing legs remain visible alongside completed work; unknown counts remain
 unknown. Collection-only passes have no benchmark verdict or automatic analysis/publication.
+Authenticated job discovery establishes which platform attempt owns a completion artifact.
+Newer skipped or unsuccessful executions supersede older success; only verified reused work
+retains its original execution identity. Missing jobs cannot supply successful counts.
 The separately versioned action owns always-run summary delivery and the minimal execution-only
 fallback needed before the companion can run. The [card contract](workflow-summary.md) defines
 the boundary.

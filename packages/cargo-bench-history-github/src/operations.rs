@@ -78,6 +78,7 @@ pub(crate) async fn dispatch(
     clock: &Clock,
 ) -> Result<(), AppError> {
     match command {
+        Command::BackfillJobs(args) => workflow::backfill_jobs(github, context, args).await,
         Command::PrepareAnalysis(args) => workflow::prepare_analysis(github, context, args).await,
         Command::Action(_)
         | Command::WorkflowSummary(_)

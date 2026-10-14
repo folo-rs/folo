@@ -28,8 +28,78 @@ use cbh_model::{
 #[cfg(feature = "private-test-util")]
 use clap::Parser as _;
 #[cfg(feature = "private-test-util")]
+use jiff::Timestamp;
+#[cfg(feature = "private-test-util")]
 use ohno::AppError;
 use serde_json::{Value, json};
+#[cfg(feature = "private-test-util")]
+use tick::Clock;
+
+#[tokio::test]
+#[cfg(feature = "private-test-util")]
+#[cfg_attr(
+    miri,
+    ignore = "Native file-backed command dispatch with in-memory GitHub."
+)]
+async fn backfill_job_dispatch_writes_once_and_rejects_unfinished_evidence() {
+    let fixture = Fixture::new();
+    let output = fixture.path("jobs.json");
+    let arguments = [
+        "companion",
+        "--repository",
+        "folo-rs/folo",
+        "--instance",
+        "folo",
+        "backfill-jobs",
+        "--run-id",
+        "42",
+        "--expected-platforms",
+        "linux,windows",
+        "--output-file",
+        output.to_str().unwrap(),
+    ];
+    let jobs = json!([
+        {"id":1,"run_id":42,"run_attempt":1,"name":"cbh-backfill:folo:linux",
+         "status":"completed","conclusion":"success"},
+        {"id":2,"run_id":42,"run_attempt":2,"name":"cbh-backfill:folo:linux",
+         "status":"completed","conclusion":"skipped"}
+    ]);
+    for occupied in [false, true] {
+        let result = __private::run_commands(
+            vec![Cli::try_parse_from(arguments).unwrap()],
+            Clock::new_frozen_at(Timestamp::UNIX_EPOCH),
+            NonZero::new(7).unwrap(),
+            &head(),
+            &jobs.to_string(),
+        )
+        .await;
+        assert_eq!(result.is_err(), occupied);
+    }
+    let result: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+    assert_eq!(result["repository"], "folo-rs/folo");
+    assert_eq!(
+        result["platforms"],
+        json!([
+            {"platform":"linux","execution":"skipped","conclusion":"skipped","run_attempt":2,"job_id":2}
+        ])
+    );
+
+    let pending = fixture.path("pending.json");
+    let mut arguments = arguments;
+    *arguments.last_mut().unwrap() = pending.to_str().unwrap();
+    let mut jobs = jobs;
+    jobs[1]["status"] = json!("in_progress");
+    __private::run_commands(
+        vec![Cli::try_parse_from(arguments).unwrap()],
+        Clock::new_frozen_at(Timestamp::UNIX_EPOCH),
+        NonZero::new(7).unwrap(),
+        &head(),
+        &jobs.to_string(),
+    )
+    .await
+    .unwrap_err();
+    assert!(!pending.exists());
+}
 
 #[test]
 #[cfg_attr(miri, ignore = "Native filesystem and command-line output contract.")]

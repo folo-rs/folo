@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::action::{ActionArgs, PrepareWorkflowArgs};
 use crate::model::{CommitSha, Instance, Repository};
 use crate::summary::SummaryArgs;
-use crate::workflow::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
+use crate::workflow::{BackfillJobsArgs, CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 
 /// GitHub lifecycle and workflow evidence helpers for `cargo-bench-history`.
 #[derive(Debug, Parser)]
@@ -65,6 +65,8 @@ pub(crate) enum Command {
     CollectionReceipt(CollectionArgs),
     /// Reconcile collection attempts and prepare successful machine-key inputs.
     PrepareAnalysis(PrepareArgs),
+    /// Export authoritative backfill platform jobs after retry/reuse normalization.
+    BackfillJobs(BackfillJobsArgs),
     /// Project validated analysis evidence into workflow outputs.
     InspectReport(InspectArgs),
     /// Publish findings, including qualified partial findings.

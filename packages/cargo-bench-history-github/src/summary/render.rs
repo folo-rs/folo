@@ -8,10 +8,11 @@ use reqwest::Url;
 
 use crate::message::result_headline;
 use crate::model::CommitSha;
-use crate::result::{AnalysisReport, Coverage, Evidence, Outcome, PlatformCoverage, platform_list};
+use crate::result::{
+    AnalysisReport, Coverage, Evidence, Execution, Outcome, PlatformCoverage, platform_list,
+};
 use crate::summary::input::{
-    BackfillPlatform, Execution, Publication, ReportDetails, ResultInput, SummaryInput,
-    UnavailableReason,
+    BackfillPlatform, Publication, ReportDetails, ResultInput, SummaryInput, UnavailableReason,
 };
 
 /// Projects explicit job facts and validated evidence without scraping logs or report prose.
