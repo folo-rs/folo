@@ -48,6 +48,12 @@ pub const CALLGRIND_SINGLE_UNPARAMETRIZED: &str =
 pub const CALLGRIND_PARAMETRIZED: &str =
     include_str!("../tests/fixtures/callgrind/parametrized.summary.json");
 
+/// Real Gungraun summary covering the current profile and metric-pair format.
+///
+/// Do not hand-edit; regenerate from a real run.
+pub const CALLGRIND_SCHEMA7: &str =
+    include_str!("../tests/fixtures/callgrind/schema7.summary.json");
+
 /// Real Criterion `benchmark.json` for the `std_instant` case.
 ///
 /// Do not hand-edit; regenerate from a real run.

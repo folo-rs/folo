@@ -33,6 +33,7 @@
     expect(
         clippy::exit,
         clippy::missing_docs_in_private_items,
+        unit_bindings,
         unused_qualifications,
         reason = "These lints originate in Gungraun macro expansion and cannot be addressed in \
           this benchmark."
