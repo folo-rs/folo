@@ -25,6 +25,9 @@ and full-analysis qualifications independently of their top-finding selection.
 Quantity formatting reads `MetricKind::as_unit`. One scale per finding governs its comparison
 values, signed deltas and plotted observations; JSON serialization bypasses display conversion.
 Topology binning and branch comparison columns remain independent of unit scaling.
+History captions distinguish the last measurement from an analyzed-context endpoint reached
+through trailing gaps. Multiline diagnostics preserve their paragraph and bullet layout;
+single-line identity escaping does not flatten those messages.
 
 The analysis boundary supplies resolved inspection context separately from findings. The
 renderer quotes complete argument values for each supported shell, fences embedded content

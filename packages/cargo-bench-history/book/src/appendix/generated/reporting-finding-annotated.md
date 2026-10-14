@@ -10,7 +10,7 @@ wall time (ns, linear scale; lower is better)
  116 ┤         │                    
  106 ┤ ╭╮ ╭─╮╭─╯                    
   97 ┼─╯╰─╯ ╰╯                     
-History: commit0 -> commit19, oldest to newest; first-parent commit positions.
+History: commit0 -> analyzed context (10 unmeasured commits after last measurement commit19), oldest to newest; first-parent commit positions.
 Empty columns = no measurements, not zero; wide histories average columns.
 Finding marker: somewhere near commit10.
 ```

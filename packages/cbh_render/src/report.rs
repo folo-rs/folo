@@ -23,7 +23,9 @@ use rasciigraph::{Config, plot};
 use serde::Serialize;
 use serde_json::to_string_pretty;
 
-use crate::markup::{code_block, code_span, html_text, markdown_text, plain_text};
+use crate::markup::{
+    code_block, code_span, html_text, markdown_lines, markdown_text, plain_lines, plain_text,
+};
 use crate::quantity::QuantityScale;
 use crate::{AnalysisOutcome, Coverage, CoverageState, Inspection};
 
@@ -609,9 +611,9 @@ fn overview(input: &ReportInput<'_>, markdown: bool) -> Vec<String> {
     }
     if let Some(warning) = input.warning {
         lines.push(if markdown {
-            markdown_text(warning)
+            markdown_lines(warning)
         } else {
-            plain_text(warning)
+            plain_lines(warning)
         });
     }
     lines
@@ -743,7 +745,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     if input.findings.is_empty() {
         if let Some(hint) = input.hint {
             lines.push(String::new());
-            lines.push(plain_text(hint));
+            lines.push(plain_lines(hint));
         }
         if !render_empty_branch_sets {
             return finish(&lines);
@@ -1248,10 +1250,25 @@ fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
                 .last()
                 .and_then(|point| point.commit.as_deref())
                 .map_or_else(|| "newest".to_owned(), short_commit);
+            let trailing = finding.series.last().map_or(0, |point| {
+                finding
+                    .chart_base_ref
+                    .map_or(0, |end| end.saturating_sub(point.topo_index))
+            });
+            let endpoint = if trailing > 0 {
+                let noun = if trailing == 1 { "commit" } else { "commits" };
+                format!(
+                    "analyzed context ({trailing} unmeasured {noun} after last measurement {})",
+                    plain_text(&last)
+                )
+            } else {
+                plain_text(&last)
+            };
             format!(
-                "History: {first} -> {last}, oldest to newest; first-parent commit positions.\n\
+                "History: {} -> {endpoint}, oldest to newest; first-parent commit positions.\n\
                 Empty columns = no measurements, not zero; wide histories average columns.\n\
                 Finding marker: {}.",
+                plain_text(&first),
                 plain_text(&attribution_text(finding))
             )
         }
@@ -1349,7 +1366,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         lines.push(String::new());
         if let Some(hint) = input.hint {
             lines.push(String::new());
-            lines.push(markdown_text(hint));
+            lines.push(markdown_lines(hint));
         }
         if !render_empty_branch_sets {
             push_markdown_coverage(&mut lines, &coverage);
@@ -1478,7 +1495,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         && let Some(hint) = input.hint
     {
         lines.push(String::new());
-        lines.push(compact(hint));
+        lines.push(markdown_lines(&display_prefix(hint)));
     }
     // These qualifications describe the entire report, not just the retained top findings.
     let lags = input
@@ -4954,6 +4971,66 @@ mod tests {
         let summary = render_markdown_summary(&flat_input(&findings), DEFAULT_SUMMARY_LIMIT);
         assert!(summary.contains(r"| regression | \_case\_\*\`&lt;&amp;&gt; /"));
         assert!(summary.contains("<summary>regression: _case_*`&lt;&amp;&gt; evidence</summary>"));
+    }
+
+    #[test]
+    fn reports_preserve_multiline_selection_diagnostics() {
+        let input = ReportInput {
+            hint: Some("Excluded runs:\n  - wrong <machine>\n\nInspect the selected history."),
+            warning: Some("Warning:\nDirty observations are ephemeral."),
+            ..flat_input(&[])
+        };
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(
+            text.contains("Excluded runs:\n  - wrong <machine>\n\nInspect the selected history.")
+        );
+        assert!(text.contains("Warning:\nDirty observations are ephemeral."));
+        assert!(!text.contains("\\n"));
+        for markdown in [
+            render(&input, ReportFormat::Markdown, false),
+            render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
+        ] {
+            assert!(markdown.contains(
+                "Excluded runs:\n  - wrong &lt;machine&gt;\n\nInspect the selected history."
+            ));
+            assert!(markdown.contains("Warning:\nDirty observations are ephemeral."));
+        }
+    }
+
+    #[test]
+    fn history_chart_distinguishes_last_measurement_from_trailing_context() {
+        let mut finding = regression();
+        finding.series = vec![
+            SeriesValue {
+                commit: Some("c0".to_owned()),
+                value: 100.0,
+                dirty: false,
+                topo_index: 0,
+            },
+            SeriesValue {
+                commit: Some("c1".to_owned()),
+                value: 130.0,
+                dirty: false,
+                topo_index: 1,
+            },
+        ];
+        for (end, endpoint) in [
+            (1, "History: c0 -> c1,"),
+            (
+                2,
+                "History: c0 -> analyzed context (1 unmeasured commit after last measurement c1),",
+            ),
+            (
+                4,
+                "History: c0 -> analyzed context (3 unmeasured commits after last measurement c1),",
+            ),
+        ] {
+            finding.chart_base_ref = Some(end);
+            let rendered = scoped_chart(&finding, ChartScope::FullHistory).unwrap();
+            let plotted = chart_series(&[(0, 100.0), (1, 130.0)], Some(end)).unwrap();
+            assert!(rendered.contains(&plotted));
+            assert!(rendered.contains(endpoint), "{rendered}");
+        }
     }
 
     #[test]

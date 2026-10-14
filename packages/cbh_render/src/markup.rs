@@ -29,6 +29,20 @@ pub(crate) fn html_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Preserves diagnostic paragraphs and bullets while escaping each Markdown line.
+pub(crate) fn markdown_lines(value: &str) -> String {
+    value
+        .lines()
+        .map(markdown_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Preserves terminal diagnostic layout without admitting other control characters.
+pub(crate) fn plain_lines(value: &str) -> String {
+    value.lines().map(plain_text).collect::<Vec<_>>().join("\n")
+}
+
 /// Uses a code span for identities, with a delimiter longer than any embedded run.
 pub(crate) fn code_span(value: &str) -> String {
     let value = plain_text(value);
@@ -81,5 +95,18 @@ mod tests {
         let identity = "_case_*`<&>\n";
         assert_eq!(markdown_text(identity), "\\_case\\_\\*\\`&lt;&amp;&gt; ");
         assert_eq!(html_text(identity), "_case_*`&lt;&amp;&gt;\\n");
+    }
+
+    #[test]
+    fn diagnostics_keep_line_breaks_but_escape_embedded_controls() {
+        let diagnostic = "Selection:\n  - <machine>\n\nInspect:\tquery";
+        assert_eq!(
+            plain_lines(diagnostic),
+            "Selection:\n  - <machine>\n\nInspect:\\tquery"
+        );
+        assert_eq!(
+            markdown_lines(diagnostic),
+            "Selection:\n  - &lt;machine&gt;\n\nInspect:\\tquery"
+        );
     }
 }
