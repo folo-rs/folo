@@ -119,7 +119,8 @@
 //! analysis ran, never what it found. Downstream automation reads the
 //! machine-readable signal from the `json` report — `mode`, the named `outcome`,
 //! the backward-compatible boolean `notable` (any finding survived), each finding's
-//! `direction`, and the full per-finding `series` for charting. `--outcome <path>`
+//! `direction`, and the complete coverage census. `examine` supplies raw observations.
+//! `--outcome <path>`
 //! writes just the stable outcome wire name for lightweight automation. See
 //! [Analyze modes](#analyze-modes) below.
 //!
@@ -130,6 +131,21 @@
 //! unchanged. Reports disclose ignored series outside the in-scope coverage denominator;
 //! an entirely ignored selection has outcome `nothing_in_scope`, not `clean`.
 //! Removing a prefix restores eligibility of the stored history.
+//!
+//! Human reports lead with findings and judged coverage. Incomplete coverage remains
+//! explicit even when findings exist. Quantities include readable units; history
+//! values identify before and after representatives, while branch values identify the
+//! measured context and its excess beyond the nearest observed current-base range edge.
+//! JSON retains stable metric identifiers, original numeric units and full precision.
+//!
+//! `--markdown-summary <path>` writes a bounded findings table with expandable evidence.
+//! It discloses omitted findings or details and keeps full-analysis qualifications visible.
+//! Use full Markdown or JSON for the complete result, not the condensed summary.
+//!
+//! Finding evidence includes shell-labelled `examine` commands with the selected query
+//! context. These inspect stored observations; exact collection snapshots can contain
+//! different current measurements. Stored data, configuration and dirty working-tree
+//! state may change after the report.
 //!
 //! ## `list`
 //!
