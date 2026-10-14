@@ -167,35 +167,32 @@ impl Scheduler {
             .submit(task, |task| self.spawn_internal_and_forget(task, true));
     }
 
-    /// Internal implementation of spawn.
+    /// Prepares a joined task while retaining its captures across each fallible ownership transfer.
     fn spawn_internal<R, F>(&self, task: &mut Option<F>, urgent: bool) -> JoinHandle<R>
     where
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
     {
-        // Capture spawn time for metrics.
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
-
         let destination = self.inner.policy.destination(&self.inner.hardware);
         let state = self.inner.registry.get_or_init(destination.group);
-
-        // Rent a oneshot channel for the result.
         let (sender, receiver) = state.result_channel_pool.rent();
 
-        // Wrap the task to capture panics and send the result.
         let wrapped = wrap_task(
             task.take().expect("submission consumes its task once"),
             sender,
             spawn_time,
         );
+
         // Retain both endpoints outside preparation's unwind: cancellation can move captures
         // into the receiver, whose destruction must also happen behind the cleanup boundary.
         self.inner.submit((Some(wrapped), receiver), |submission| {
             let (wrapped, _) = submission
                 .as_mut()
                 .expect("submission remains owned until admitted");
-            let dyn_task = allocate_task(state, wrapped);
-            self.inner.enqueue(destination, state, dyn_task, urgent);
+            let task = allocate_task(state, wrapped);
+            self.inner.enqueue(destination, state, task, urgent);
+
             let (_, receiver) = submission
                 .take()
                 .expect("admission consumes its receiver once");
@@ -203,25 +200,23 @@ impl Scheduler {
         })
     }
 
-    /// Internal implementation of fire-and-forget spawn.
+    /// Prepares a task without a result channel, retaining captures across allocation failure.
     fn spawn_internal_and_forget<F>(&self, task: &mut Option<F>, urgent: bool)
     where
         F: FnOnce() + Send + 'static,
     {
-        // Capture spawn time for metrics.
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
-
         let destination = self.inner.policy.destination(&self.inner.hardware);
         let state = self.inner.registry.get_or_init(destination.group);
 
-        // Wrap the task to capture panics and log them.
         let wrapped = wrap_task_and_forget(
             task.take().expect("submission consumes its task once"),
             spawn_time,
         );
+
         self.inner.submit(wrapped, |wrapped| {
-            let dyn_task = allocate_task(state, wrapped);
-            self.inner.enqueue(destination, state, dyn_task, urgent);
+            let task = allocate_task(state, wrapped);
+            self.inner.enqueue(destination, state, task, urgent);
         });
     }
 }
@@ -282,6 +277,7 @@ mod tests {
         let scheduler = pool.scheduler();
         pool.inner.poisoned.store(true, Ordering::Release);
         drop(pool);
+
         let dropped = Arc::new(AtomicUsize::new(0));
         let capture = OnDrop(Some(Box::new({
             let dropped = Arc::clone(&dropped);
@@ -290,7 +286,9 @@ mod tests {
                 panic::panic_any(PanickingPayload);
             }
         })));
+
         assert_panics(|| submit(&scheduler, capture));
+
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 
@@ -329,9 +327,11 @@ mod tests {
         let pool = fake_pool();
         let scheduler = pool.scheduler();
         let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+
         CLOCK.with_borrow_mut(|_| {
             assert_panics(|| scheduler.spawn(move || drop(capture)));
         });
+
         assert!(pool.inner.poisoned.load(Ordering::Acquire));
         assert!(pool.inner.shutdown.load(Ordering::Acquire));
         assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
@@ -345,10 +345,12 @@ mod tests {
             let scheduler = pool.scheduler();
             let target = pool.inner.policy.destination(&pool.inner.hardware);
             let state = pool.inner.registry.get_or_init(target.group);
+
             assert_panics(|| {
                 let _guard = state.task_pool.lock().unwrap();
                 panic!("injected allocator lock failure");
             });
+
             let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
             assert_panics(|| {
                 if joined {
@@ -357,6 +359,7 @@ mod tests {
                     scheduler.spawn_and_forget(move || drop(capture));
                 }
             });
+
             assert!(pool.inner.poisoned.load(Ordering::Acquire));
             assert!(pool.inner.shutdown.load(Ordering::Acquire));
             assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
