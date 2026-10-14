@@ -130,3 +130,6 @@ pub use worker_policy::*;
 
 #[cfg(test)]
 ::testing::set_allocator!();
+
+#[cfg(test)]
+::testing::init_tracing!();

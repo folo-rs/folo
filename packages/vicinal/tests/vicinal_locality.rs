@@ -12,6 +12,8 @@ use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use vicinal::{Pool, WorkerPolicy};
 
+testing::init_tracing!();
+
 #[test]
 fn tasks_execute_on_spawning_processor() {
     let pool = Pool::new();
@@ -81,7 +83,7 @@ fn regional_tasks_use_only_submitting_processors() {
         let hardware = SystemHardware::current();
         let processors = hardware.all_processors();
         let pool = Pool::builder()
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
             .build();
         let scheduler = pool.scheduler();
         // Sequential CPU registration makes each expected cumulative mask deterministic.

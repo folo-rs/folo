@@ -23,7 +23,10 @@ doc = false
 default = []
 
 [dependencies]
+ctor = { workspace = true }
 mimalloc = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 [target.'cfg(windows)'.dependencies]
 deranged = { workspace = true, features = ["macros"] }

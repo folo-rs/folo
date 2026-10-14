@@ -30,7 +30,7 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
         );
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let membership = || {
             pool.inner
@@ -80,7 +80,7 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
 fn processor_policy_does_not_allocate_regional_membership() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+        .worker_policy(WorkerPolicy::per_processor(nz!(1)))
         .build();
     assert!(pool.inner.submitted_processors.is_empty());
 }
@@ -94,7 +94,7 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
         assert!(hardware.processors().len() < processors.len());
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         let handles = processors.spawn_threads(move |processor| {
@@ -119,7 +119,7 @@ fn every_submission_variant_grows_the_region_mask() {
         let hardware = regional_hardware();
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         let mut expected = BTreeSet::new();
@@ -156,14 +156,14 @@ fn membership_is_isolated_by_pool_and_region() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         block_on(scheduler.spawn(|| {})).unwrap();
         pin(&hardware, 3);
         let independent = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         assert_eq!(
             block_on(independent.scheduler().spawn({
@@ -191,7 +191,7 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         let (entered, arrivals) = mpsc::channel();
@@ -241,7 +241,7 @@ fn idle_workers_refresh_even_without_a_task_for_each_worker() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(2)))
             .build();
         let target = pool.inner.policy.destination(&hardware);
         let state = pool.inner.registry.get_or_init(target.group);
@@ -274,7 +274,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     let hardware = regional_hardware();
     let pool = Pool::builder()
         .hardware(hardware)
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let target = SubmissionTarget {
         group: GroupId::MemoryRegion(2),

@@ -103,7 +103,7 @@ impl PoolBuilder {
     fn new() -> Self {
         Self {
             name: None,
-            policy: WorkerPolicy::fixed_per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
+            policy: WorkerPolicy::per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
             hardware: None,
         }
     }
@@ -178,13 +178,13 @@ mod tests {
         let default = Pool::builder().hardware(hardware.clone()).build();
         let region = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(3)))
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(3)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let processor = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(3)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(3)))
             .build();
 
         for (pool, destination, count) in [

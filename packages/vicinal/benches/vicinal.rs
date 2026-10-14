@@ -497,8 +497,8 @@ fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession
     // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
     // tasks. This benchmark count does not track future changes to the pool's default.
     for (policy_name, policy) in [
-        ("processor", WorkerPolicy::fixed_per_processor(nz!(2_u32))),
-        ("region", WorkerPolicy::fixed_per_memory_region(nz!(2_u32))),
+        ("processor", WorkerPolicy::per_processor(nz!(2_u32))),
+        ("region", WorkerPolicy::per_memory_region(nz!(2_u32))),
     ] {
         // The low case isolates dispatch; the high case exercises shared queue/slot reuse.
         for batch_size in [1, TASK_BATCH_SIZE] {
@@ -550,7 +550,7 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
             // Use the same fixed destination capacity as policy_dispatch so contention is
             // measured without changing the amount of worker parallelism.
             let pool = Pool::builder()
-                .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+                .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
                 .build();
             let scheduler = pool.scheduler();
             // Only producers submit, including during setup, so the controller cannot expand

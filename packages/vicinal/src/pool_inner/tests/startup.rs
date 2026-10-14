@@ -24,9 +24,9 @@ fn concurrent_first_submissions_start_exact_configured_count() {
         for regional in [false, true] {
             let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
             let policy = if regional {
-                WorkerPolicy::fixed_per_memory_region(nz!(WORKERS))
+                WorkerPolicy::per_memory_region(nz!(WORKERS))
             } else {
-                WorkerPolicy::fixed_per_processor(nz!(WORKERS))
+                WorkerPolicy::per_processor(nz!(WORKERS))
             };
             let pool = Pool::builder()
                 .name("workers")
@@ -99,7 +99,7 @@ fn shutdown_accounts_for_in_progress_startup() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build();
         let inner = Arc::clone(&pool.inner);
         let (entered, arrivals) = mpsc::channel();
@@ -151,7 +151,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(2)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(2)))
             .build();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
@@ -194,7 +194,7 @@ fn affinity_failure_is_reported_before_admission() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
@@ -261,7 +261,7 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
 fn empty_region_never_starts_unpinned_workers() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     // The sparse index space contains this ID, but no eligible processor belongs to it.
     assert_panics(|| {
@@ -281,8 +281,8 @@ fn empty_region_never_starts_unpinned_workers() {
 fn startup_failure_stops_every_group() {
     with_watchdog(|| {
         for policy in [
-            WorkerPolicy::fixed_per_processor(nz!(1)),
-            WorkerPolicy::fixed_per_memory_region(nz!(1)),
+            WorkerPolicy::per_processor(nz!(1)),
+            WorkerPolicy::per_memory_region(nz!(1)),
         ] {
             let hardware = hardware();
             let other_region = hardware

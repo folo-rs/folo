@@ -24,7 +24,7 @@ impl WorkerPolicy {
     ///
     /// Each task is routed to the logical processor sampled during its submission.
     #[must_use]
-    pub fn fixed_per_processor(count: NonZero<u32>) -> Self {
+    pub fn per_processor(count: NonZero<u32>) -> Self {
         Self {
             kind: PolicyKind::Processor,
             count,
@@ -56,14 +56,14 @@ impl WorkerPolicy {
     /// # block_on(async {
     /// // Illustrative concurrency; choose the count for your blocking workload.
     /// let pool = Pool::builder()
-    ///     .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+    ///     .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
     ///     .build();
     /// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// # }).unwrap();
     /// ```
     #[must_use]
-    pub fn fixed_per_memory_region(count: NonZero<u32>) -> Self {
+    pub fn per_memory_region(count: NonZero<u32>) -> Self {
         Self {
             kind: PolicyKind::MemoryRegion,
             count,

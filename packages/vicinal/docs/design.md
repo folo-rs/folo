@@ -18,10 +18,10 @@ use new_zealand::nz;
 use vicinal::{Pool, WorkerPolicy};
 
 let processor_pool = Pool::builder()
-    .worker_policy(WorkerPolicy::fixed_per_processor(nz!(2_u32)))
+    .worker_policy(WorkerPolicy::per_processor(nz!(2_u32)))
     .build();
 let regional_pool = Pool::builder()
-    .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+    .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
     .build();
 ```
 

@@ -128,7 +128,7 @@ fn completion_waker_can_drop_handles_and_submit() {
 fn shutdown_before_lazy_state_creation_starts_no_workers() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
@@ -256,7 +256,7 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         // Keep the submitter on one region throughout the shutdown scenario.
         let processors = pool.inner.hardware.all_processors();
@@ -302,8 +302,8 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
 #[test]
 fn poisoned_pool_rejects_submissions_even_after_drop() {
     for policy in [
-        WorkerPolicy::fixed_per_processor(nz!(1)),
-        WorkerPolicy::fixed_per_memory_region(nz!(1)),
+        WorkerPolicy::per_processor(nz!(1)),
+        WorkerPolicy::per_memory_region(nz!(1)),
     ] {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let destination = policy.destination(&hardware);
@@ -334,7 +334,7 @@ fn post_shutdown_submissions_do_not_expand_or_activate() {
     pin(&hardware, 0);
     let pool = Pool::builder()
         .hardware(hardware.clone())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let scheduler = pool.scheduler();
     block_on(scheduler.spawn(|| {})).unwrap();

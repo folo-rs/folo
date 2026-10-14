@@ -14,6 +14,8 @@ use new_zealand::nz;
 use testing::with_watchdog;
 use vicinal::Pool;
 
+testing::init_tracing!();
+
 #[test]
 fn spawn_and_await_value() {
     with_watchdog(|| {

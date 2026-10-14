@@ -268,7 +268,7 @@ mod tests {
                 nz!(1),
                 nz!(1),
             )))
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build()
     }
 

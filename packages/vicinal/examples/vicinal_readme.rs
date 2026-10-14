@@ -32,7 +32,7 @@ async fn memory_region_local() -> Result<(), Box<dyn Error>> {
     // Workers share each region's cumulative set of submitting processors.
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
         .build();
 
     assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);

@@ -56,6 +56,7 @@ crp_native = { version = "=0.8.2", path = "packages/crp_native", default-feature
 crp_publication = { version = "=0.8.2", path = "packages/crp_publication", default-features = false }
 crp_versioning = { version = "=0.8.2", path = "packages/crp_versioning", default-features = false }
 crp_workspace = { version = "=0.8.2", path = "packages/crp_workspace", default-features = false }
+ctor = { version = "1.0.8", default-features = false }
 ctrlc = { version = "3.5.0", default-features = false }
 deranged = { version = "0.5.2", default-features = false }
 derive_more = { version = "2.0.0", default-features = false }
@@ -157,6 +158,7 @@ tokio = { version = "1.49.0", default-features = false }
 toml = { version = "1.1.2", default-features = false }
 toml_edit = { version = "0.25.12", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false }
 trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.2.0", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
