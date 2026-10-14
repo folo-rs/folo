@@ -633,7 +633,7 @@ impl Plot {
         let mut description = format!(
             "{}. Values in {} against first-parent commit position, spanning {} commits. \
              Filled circles are observations; hollow circles highlight focus; triangles mark \
-             regressions; plus signs mark added data; crossed points are excluded. \
+             regressions; X marks identify added data; crossed-out circles are excluded. \
              Gaps are missing observations, not zero values.",
             self.caption, units, self.span,
         );
