@@ -43,6 +43,35 @@ For Codecov verification-key import failures, follow the
 Skipping uploader executable verification does not relax coverage targets or authorize
 treating a failed upload as passed.
 
+### Queue attempts and release freshness
+
+PR checks and merge-queue checks validate different commits. The queue validates
+a candidate combining the PR with its current target. Its failures may not appear
+in the PR head's check rollup. A passing PR `required-checks` result does not
+supersede a failed queue attempt.
+
+Before declaring a PR ready, submitting it to the queue or retrying after removal:
+
+* Inspect live queue membership, recent queue events and the applicable
+  **Merge queue validation** runs triggered by `merge_group`. Associate runs with
+  the PR and their tested head/base; queue candidates have their own commit IDs,
+  so filtering only by the PR head can miss them.
+* Read failed jobs and their diagnostics. Establish that each relevant failure
+  is fixed and verified, is an identified transient failure suitable for retry,
+  or no longer applies to the candidate. A newer commit alone is not evidence
+  of a fix. Do not repeatedly enqueue an unchanged candidate with an unexplained
+  failure or attribute queue removal to optional checks without evidence.
+* Refresh actual release history and the intended merge target, and compare them
+  with the version plan's inputs. Another merged PR can consume a proposed
+  package version without creating a Git conflict. If either input changed,
+  follow [release-plan recovery](release-versioning.md#release-branch-movement-during-planning)
+  and revalidate the complete release plan before submission. `MERGEABLE` and
+  green checks against an older base do not establish version readiness.
+
+Report readiness for queue submission, confirmed queue membership and completed
+merge as distinct states. Successful enqueueing establishes only queue membership;
+the queue candidate still needs its required validation.
+
 ## Addressing pull request review comments
 
 When addressing PR review comments, reply to each comment thread with the

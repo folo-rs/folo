@@ -339,6 +339,8 @@ fn system_idle_workers_refresh_even_without_a_task_for_each_worker() {
 
 /// Expands affinity while each worker holds a fresh registered wait at the initial revision.
 fn assert_idle_workers_refresh(policy: WorkerPolicy, next_processor: u32) {
+    // Sibling workers expose whether expansion wakes workers without queued tasks.
+    const WORKERS: u32 = 2;
     with_watchdog(move || {
         let hardware = regional_hardware();
         pin(&hardware, 0);
@@ -346,6 +348,8 @@ fn assert_idle_workers_refresh(policy: WorkerPolicy, next_processor: u32) {
             .hardware(hardware.clone())
             .worker_policy(policy)
             .build();
+        // Validate capacity before waiting for an acknowledgment from every worker.
+        assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let target = pool.inner.policy.destination(&hardware);
         let state = pool.inner.registry.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
@@ -399,7 +403,7 @@ fn assert_idle_workers_refresh(policy: WorkerPolicy, next_processor: u32) {
         assert!([first_id, second_id].contains(&first));
         assert!([first_id, second_id].contains(&second));
         let worker_count = pool.inner.worker_handles.lock().unwrap().len();
-        assert_eq!(worker_count, 2);
+        assert_eq!(worker_count, WORKERS as usize);
     });
 }
 

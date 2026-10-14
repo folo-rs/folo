@@ -30,9 +30,9 @@ use crate::{
 ///
 /// # Worker failures
 ///
-/// Infrastructure failures, including thread creation and affinity setup or refresh,
-/// are logged and stop the entire pool. Queued tasks are abandoned and executing tasks
-/// may finish. The pool becomes permanently poisoned: every subsequent submission panics
+/// Infrastructure failures, including thread creation, initialization and affinity setup or
+/// refresh, are logged and stop the entire pool. Queued tasks are abandoned and executing
+/// tasks may finish. The pool becomes permanently poisoned: every subsequent submission panics
 /// synchronously, including through retained schedulers after the pool is dropped.
 ///
 /// A failure detected during submission panics on that call. A worker-side failure may

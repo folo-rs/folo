@@ -53,6 +53,23 @@ or pinning failure marks the pool poisoned, stops every group and propagates
 the panic outside the lock. All created handles remain accounted for until joined; failed
 pools cannot accept work or silently retry.
 
+### Worker initialization
+
+The pool's shared configuration owns an optional boxed initialization callback. Workers
+borrow it once before entering the task loop; task execution has no callback lookup or
+additional allocation. The builder and schedulers do not expose the callback for invocation.
+Its captures need not be unwind-safe because invocation happens only within the worker's
+infrastructure-failure boundary, which stops and poisons the pool on panic.
+
+Workers acknowledge successful initial affinity setup before invoking the callback.
+The submitter does not wait for callback completion while holding the startup lock, so
+initializers may submit work to the pool. No worker holds a pool-state lock while invoking
+the callback. Different workers may initialize concurrently, and queued tasks remain
+untouched by each worker until its own initialization returns. Shutdown joins initializing
+workers as well as workers executing tasks.
+
+### Affinity and failure coordination
+
 Workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
 hard operating-system restrictions independently of processor-time quotas. Processor groups
 keep that affinity. Regional and system groups publish an immutable shared affinity snapshot and

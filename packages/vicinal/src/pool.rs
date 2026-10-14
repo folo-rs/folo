@@ -1,6 +1,9 @@
 //! Pool configuration and ownership.
 
+use std::any::type_name;
+use std::fmt;
 use std::num::NonZero;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -91,11 +94,11 @@ impl Drop for Pool {
 }
 
 /// Builder for configuring a [`Pool`].
-#[derive(Debug)]
 pub struct PoolBuilder {
     name: Option<String>,
     policy: WorkerPolicy,
     hardware: Option<SystemHardware>,
+    thread_init: Option<ThreadInit>,
 }
 
 impl PoolBuilder {
@@ -104,6 +107,7 @@ impl PoolBuilder {
             name: None,
             policy: WorkerPolicy::fixed_per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
             hardware: None,
+            thread_init: None,
         }
     }
 
@@ -137,6 +141,49 @@ impl PoolBuilder {
         self
     }
 
+    /// Sets a function to run when each worker thread starts.
+    ///
+    /// The function runs once on each worker, after its initial affinity is set and before
+    /// it executes any tasks. Workers start lazily; building the pool does not call the function.
+    /// Calls on different workers may overlap. Submission does not wait for initialization.
+    ///
+    /// The function must preserve worker affinity. It may submit work to the same pool,
+    /// but must not wait for that work to complete or shut down the pool.
+    /// A panic is treated as a [worker failure][Scheduler#worker-failures].
+    ///
+    /// By default, no initialization function is configured. Repeated calls replace the function.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::Cell;
+    ///
+    /// use vicinal::Pool;
+    /// # use futures::executor::block_on;
+    ///
+    /// thread_local! {
+    ///     static WORKER_LABEL: Cell<&'static str> = const { Cell::new("uninitialized") };
+    /// }
+    ///
+    /// # block_on(async {
+    /// let pool = Pool::builder()
+    ///     .thread_init(|| WORKER_LABEL.set("background"))
+    ///     .build();
+    ///
+    /// assert_eq!(
+    ///     pool.scheduler().spawn(|| WORKER_LABEL.get()).await,
+    ///     "background"
+    /// );
+    /// # });
+    /// ```
+    #[must_use]
+    // Omitting the callback can strand tasks and tests that synchronize with initialization.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn thread_init(mut self, thread_init: impl Fn() + Send + Sync + 'static) -> Self {
+        self.thread_init = Some(AssertUnwindSafe(Box::new(thread_init)));
+        self
+    }
+
     /// Sets the hardware instance used for topology and locality.
     ///
     /// Defaults to [`SystemHardware::current()`]. A custom instance can provide simulated
@@ -157,10 +204,34 @@ impl PoolBuilder {
         let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
 
         Pool {
-            inner: Arc::new(PoolInner::new(pool_id, pool_name, hardware, self.policy)),
+            inner: Arc::new(PoolInner::new(
+                pool_id,
+                pool_name,
+                hardware,
+                self.policy,
+                self.thread_init,
+            )),
         }
     }
 }
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl fmt::Debug for PoolBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("name", &self.name)
+            .field("policy", &self.policy)
+            .field("hardware", &self.hardware)
+            .field("has_thread_init", &self.thread_init.is_some())
+            .finish()
+    }
+}
+
+/// Shared configuration invoked only on workers, behind their pool-poisoning unwind boundary.
+///
+/// The callback is never exposed through a builder or scheduler's unwind boundary, so its
+/// captures need not be unwind-safe. See docs/implementation.md, "Worker initialization".
+pub(crate) type ThreadInit = AssertUnwindSafe<Box<dyn Fn() + Send + Sync>>;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

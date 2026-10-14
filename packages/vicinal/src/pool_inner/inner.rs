@@ -13,7 +13,7 @@ use tracing::{debug, error, trace};
 
 use crate::{
     ErasedTaskHandle, GroupId, GroupRegistry, IterationResult, NEVER_POISONED, SubmissionTarget,
-    WorkerCore, WorkerGroup, WorkerPolicy, discard_panic, discard_task_after_failure,
+    ThreadInit, WorkerCore, WorkerGroup, WorkerPolicy, discard_panic, discard_task_after_failure,
     extract_panic_message,
 };
 
@@ -24,6 +24,7 @@ pub(crate) struct PoolInner {
     pub(crate) hardware: SystemHardware,
     pub(crate) registry: GroupRegistry,
     pub(crate) policy: WorkerPolicy,
+    thread_init: Option<ThreadInit>,
     /// Serializes cold startup and handle registration with the shutdown transition.
     pub(crate) worker_handles: Mutex<Vec<ThreadJoinHandle<()>>>,
     pub(crate) shutdown: AtomicBool,
@@ -39,6 +40,7 @@ impl PoolInner {
         pool_name: String,
         hardware: SystemHardware,
         policy: WorkerPolicy,
+        thread_init: Option<ThreadInit>,
     ) -> Self {
         let submitted_processors = if policy.shares_processors() {
             let mut processors = hardware
@@ -57,6 +59,7 @@ impl PoolInner {
             registry: GroupRegistry::new(&hardware, &policy),
             hardware,
             policy,
+            thread_init,
             worker_handles: Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
             poisoned: AtomicBool::new(false),
@@ -241,6 +244,12 @@ impl PoolInner {
                             worker_index,
                             "worker thread started"
                         );
+                        // Acknowledge affinity before invoking user code so initialization can
+                        // submit work without waiting on its own startup transaction.
+                        // Ref: docs/implementation.md, "Worker initialization".
+                        if let Some(thread_init) = &inner.thread_init {
+                            (thread_init.0)();
+                        }
                         worker_loop(&inner, destination, worker_index, &pin);
                         debug!(
                             pool_name = inner.pool_name.as_str(),
