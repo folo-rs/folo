@@ -17,50 +17,70 @@ of region. Workers start on first use of a destination and persist until shutdow
 
 ## Example
 
+The example uses `ohno::AppError`; enable the `app-err` feature on `ohno`.
+
 ```rust
 use new_zealand::nz;
-use vicinal::{Pool, WorkerPolicy};
+use ohno::AppError;
+use vicinal::{Pool, TaskError, WorkerPolicy};
 
 #[tokio::main]
-async fn main() {
-    processor_local().await;
-    memory_region_local().await;
-    system_wide().await;
+async fn main() -> Result<(), AppError> {
+    processor_local().await?;
+    memory_region_local().await?;
+    system_wide().await?;
+    Ok(())
 }
 
-async fn processor_local() {
+async fn processor_local() -> Result<(), AppError> {
     let pool = Pool::new();
     let scheduler = pool.scheduler();
 
     let task1 = scheduler.spawn(|| 42);
     let _task2 = scheduler.spawn(|| println!("doing some stuff"));
 
-    assert_eq!(task1.await, 42);
+    assert_eq!(task1.await.map_err(TaskError::into_diagnostic)?, 42);
 
     let scheduler2 = scheduler.clone();
     let task3 = scheduler.spawn(move || scheduler2.spawn(|| 55));
 
-    assert_eq!(task3.await.await, 55);
+    let task3 = task3.await.map_err(TaskError::into_diagnostic)?;
+    assert_eq!(task3.await.map_err(TaskError::into_diagnostic)?, 55);
+    Ok(())
 }
 
-async fn memory_region_local() {
+async fn memory_region_local() -> Result<(), AppError> {
     // Workers share each region's cumulative set of submitting processors.
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
         .build();
 
-    assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
+    assert_eq!(
+        pool.scheduler()
+            .spawn(|| 42)
+            .await
+            .map_err(TaskError::into_diagnostic)?,
+        42
+    );
+    Ok(())
 }
 
 /// Demonstrates a worker count independent of the submitting processors' memory regions.
-async fn system_wide() {
+async fn system_wide() -> Result<(), AppError> {
     // Illustrative concurrency shared across every submitting processor in this pool.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::per_system(nz!(2_u32)))
         .build();
 
-    assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
+    assert_eq!(
+        pool.scheduler()
+            .spawn(|| 42)
+            .await
+            .map_err(TaskError::into_diagnostic)?,
+        42
+    );
+    Ok(())
 }
 ```
 
@@ -88,14 +108,35 @@ Regions describe processor locality, not the task's allocations or data.
 - Task code must preserve worker affinity. Affinity does not bind memory allocations,
   move data or guarantee cache hits. Topology and restriction refresh are not supported.
 
+## Task outcomes
+
+Awaiting a join handle returns `Result<R, TaskError<R>>`:
+
+- **Success:** `Ok(value)` contains the task's return value.
+- **Cancellation:** `is_cancel()` identifies cancellation before execution.
+  `into_body()` recovers the task as `impl FnOnce() -> R + Send + 'static` for execution elsewhere.
+- **Panic:** `is_panic()` identifies a task panic.
+  `into_panic()` recovers the original panic payload.
+
+Calling a recovery method for the other outcome returns the unchanged error.
+
+When recovery is unnecessary, `into_diagnostic()` drops the body or panic payload and returns
+a `Send + Sync` error retaining the message, source chain, backtrace and enrichment. This supports
+application-level error reporting without turning the task error into a string.
+
+Dropping a handle does not cancel the task.
+
 ## Shutdown
 
-Dropping the pool releases queued tasks and waits for executing tasks and workers.
-Awaiting an abandoned task's join handle panics, even if scheduler clones remain.
+Dropping the pool cancels queued tasks and waits for executing tasks and workers.
+Cancelled joined tasks retain their captures for recovery until the handle, error or recovered
+body is dropped or the body executes. Fire-and-forget cancellation releases captures.
+Retained schedulers return cancelled join handles for submissions after clean shutdown.
 Await required work before dropping the pool.
 
 Infrastructure failures, including worker startup and affinity refresh, log the failure
-and stop the entire pool. Queued tasks are abandoned; executing tasks may finish.
+and stop the entire pool. Queued joined tasks are cancelled recoverably; queued fire-and-forget
+tasks release their captures. Executing tasks may finish.
 The pool remains poisoned and every later submission panics synchronously, including
 after the pool is dropped. Task panics do not poison the pool.
 

@@ -30,10 +30,11 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Lifetime
 ///
-/// Dropping the pool stops accepting work, abandons queued tasks and waits for executing tasks
-/// and worker threads to finish. Abandoned tasks release their resources even if schedulers
-/// remain alive. Awaiting an abandoned task's [`JoinHandle`][crate::JoinHandle] panics.
-/// After clean shutdown, retained schedulers immediately abandon submissions as well.
+/// Dropping the pool stops accepting work, cancels queued tasks and waits for executing tasks
+/// and worker threads to finish. Cancelled joined tasks return a
+/// [`TaskError`][crate::TaskError] that retains the original body for recovery;
+/// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
+/// submissions after clean shutdown as well.
 /// An infrastructure failure stops and permanently poisons the entire pool; all further
 /// submissions then panic synchronously, even after the pool is dropped.
 ///
@@ -42,13 +43,15 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// # Example
 ///
 /// ```
+/// # use std::error::Error;
 /// use vicinal::Pool;
 /// # use futures::executor::block_on;
 ///
 /// # block_on(async {
 /// let pool = Pool::new();
-/// assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
-/// # });
+/// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
+/// # Ok::<(), Box<dyn Error>>(())
+/// # }).unwrap();
 /// ```
 #[derive(Debug)]
 pub struct Pool {
@@ -105,7 +108,7 @@ impl PoolBuilder {
     fn new() -> Self {
         Self {
             name: None,
-            policy: WorkerPolicy::fixed_per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
+            policy: WorkerPolicy::per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
             hardware: None,
             thread_init: None,
         }
@@ -118,18 +121,6 @@ impl PoolBuilder {
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
-    }
-
-    /// Sets the number of worker threads per processor.
-    ///
-    /// Equivalent to `worker_policy(WorkerPolicy::fixed_per_processor(count))`.
-    /// This replaces any previously selected policy; the last policy setter wins.
-    #[doc(hidden)]
-    #[deprecated(note = "use worker_policy(WorkerPolicy::fixed_per_processor(count)) instead")]
-    #[must_use]
-    #[inline]
-    pub fn workers_per_processor(self, count: NonZero<u32>) -> Self {
-        self.worker_policy(WorkerPolicy::fixed_per_processor(count))
     }
 
     /// Sets the pool's worker count and locality policy.
@@ -158,6 +149,7 @@ impl PoolBuilder {
     /// ```
     /// use std::cell::Cell;
     ///
+    /// # use std::error::Error;
     /// use vicinal::Pool;
     /// # use futures::executor::block_on;
     ///
@@ -171,10 +163,11 @@ impl PoolBuilder {
     ///     .build();
     ///
     /// assert_eq!(
-    ///     pool.scheduler().spawn(|| WORKER_LABEL.get()).await,
+    ///     pool.scheduler().spawn(|| WORKER_LABEL.get()).await?,
     ///     "background"
     /// );
-    /// # });
+    /// # Ok::<(), Box<dyn Error>>(())
+    /// # }).unwrap();
     /// ```
     #[must_use]
     // Omitting the callback can strand tasks and tests that synchronize with initialization.
@@ -248,26 +241,22 @@ mod tests {
     assert_impl_all!(PoolBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
-    #[expect(
-        deprecated,
-        reason = "verifies compatibility and precedence of the legacy setter"
-    )]
     fn default_and_policy_setter_order() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let default = Pool::builder().hardware(hardware.clone()).build();
         let region = Pool::builder()
             .hardware(hardware.clone())
-            .workers_per_processor(nz!(3))
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(3)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let processor = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(WorkerPolicy::per_system(nz!(1)))
-            .workers_per_processor(nz!(3))
+            .worker_policy(WorkerPolicy::per_processor(nz!(3)))
             .build();
         let system = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .worker_policy(WorkerPolicy::per_system(nz!(3)))
             .build();
 

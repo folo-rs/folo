@@ -159,7 +159,7 @@ fn regional_pool() -> (Pool, GroupId) {
     pin(&hardware, 0);
     let pool = Pool::builder()
         .hardware(hardware.clone())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let target = pool.inner.policy.destination(&hardware);
     let state = pool.inner.registry.get_or_init(target.group);

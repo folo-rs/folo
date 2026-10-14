@@ -9,7 +9,7 @@ use many_cpus::ProcessorSet;
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use super::helpers::{NoopTask, OnDrop, hardware};
+use super::helpers::{NoopTask, OnDrop, hardware, pin};
 use crate::{Pool, WorkerPolicy, init_task};
 
 /// Initializer failure cannot lose a sibling's handle while startup still owns registration.
@@ -19,8 +19,8 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
     const WORKERS: u32 = 2;
     with_watchdog(|| {
         for policy in [
-            WorkerPolicy::fixed_per_processor(nz!(WORKERS)),
-            WorkerPolicy::fixed_per_memory_region(nz!(WORKERS)),
+            WorkerPolicy::per_processor(nz!(WORKERS)),
+            WorkerPolicy::per_memory_region(nz!(WORKERS)),
         ] {
             let initialized = Arc::new(AtomicUsize::new(0));
             let (failed, failure) = mpsc::channel();
@@ -77,19 +77,22 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
     });
 }
 
-/// Abandoning queued captures releases initialization before shutdown joins its worker.
+/// Fire-and-forget capture cleanup releases initialization while joined work is cancelled.
 #[test]
-fn shutdown_waits_for_initialization_and_abandons_queued_work() {
+fn shutdown_waits_for_initialization_and_cancels_queued_work() {
     with_watchdog(|| {
         for policy in [
-            WorkerPolicy::fixed_per_processor(nz!(1)),
-            WorkerPolicy::fixed_per_memory_region(nz!(1)),
+            WorkerPolicy::per_processor(nz!(1)),
+            WorkerPolicy::per_memory_region(nz!(1)),
         ] {
+            // Pin to the first fake processor so both tasks share one initializer.
+            let hardware = hardware();
+            pin(&hardware, 0);
             let finished = Arc::new(AtomicBool::new(false));
             let (entered, arrival) = mpsc::channel();
             let (release, wait) = mpsc::channel();
             let pool = Pool::builder()
-                .hardware(hardware())
+                .hardware(hardware)
                 .worker_policy(policy)
                 .thread_init({
                     let finished = Arc::clone(&finished);
@@ -101,12 +104,13 @@ fn shutdown_waits_for_initialization_and_abandons_queued_work() {
                     }
                 })
                 .build();
-            // The abandoned capture releases exactly one initializer.
+            // The fire-and-forget capture releases exactly one initializer.
             assert_eq!(pool.inner.policy.count(), nz!(1));
             let inner = Arc::clone(&pool.inner);
             let capture = OnDrop(Some(Box::new(move || release.send(()).unwrap())));
-            let task = pool.scheduler().spawn(move || {
-                drop(capture);
+            let scheduler = pool.scheduler();
+            scheduler.spawn_and_forget(move || drop(capture));
+            let task = scheduler.spawn(|| {
                 panic!("queued work must not execute before initialization finishes");
             });
             arrival.recv().unwrap();
@@ -114,7 +118,7 @@ fn shutdown_waits_for_initialization_and_abandons_queued_work() {
             assert!(finished.load(Ordering::Acquire));
             assert!(inner.worker_handles.lock().unwrap().is_empty());
             assert!(!inner.poisoned.load(Ordering::Acquire));
-            assert_panics(|| block_on(task));
+            assert!(block_on(task).unwrap_err().is_cancel());
         }
     });
 }

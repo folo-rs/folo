@@ -1,24 +1,26 @@
 //! Join handle for awaiting task completion.
 
 use std::future::Future;
-use std::panic;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use events_once::PooledReceiver;
 
-use crate::TaskResult;
+use crate::{TaskError, TaskResult};
 
 /// A handle to a spawned task that can be awaited to retrieve its result.
 ///
-/// Awaiting the join handle returns the task's return value. If the task panicked,
-/// awaiting the join handle will re-throw the panic.
+/// Awaiting returns `Ok(value)` when the task completes, or a [`TaskError`] for cancellation
+/// or a task panic. Cancellation occurs before the task body is called, including work queued
+/// during shutdown or an infrastructure failure and submissions after clean shutdown.
 ///
-/// # Panics
+/// Dropping the handle does not cancel its task. A cancelled task's captures remain alive
+/// until its handle, error or recovered body is consumed or dropped.
 ///
-/// Awaiting the join handle panics if:
-/// - The task panicked (the panic is re-thrown).
-/// - The task was abandoned during pool shutdown or after an infrastructure failure.
+/// # Reentrancy
+///
+/// A completion wake callback may drop this handle or other handles and submit more work.
+/// Submissions remain subject to the pool's shutdown and infrastructure-failure rules.
 #[derive(Debug)]
 pub struct JoinHandle<R>
 where
@@ -41,7 +43,7 @@ impl<R> Future for JoinHandle<R>
 where
     R: Send + 'static,
 {
-    type Output = R;
+    type Output = Result<R, TaskError<R>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let receiver = &mut self.receiver;
@@ -49,16 +51,10 @@ where
 
         match pinned_receiver.poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(result) => match result {
-                Ok(Ok(value)) => Poll::Ready(value),
-                Ok(Err(panic_payload)) => {
-                    panic::resume_unwind(panic_payload.into_payload());
-                }
-                Err(_disconnected) => {
-                    // Channel disconnected - pool was shut down.
-                    panic!("task was abandoned because the pool was shut down");
-                }
-            },
+            // Every unexecuted wrapper sends cancellation before releasing its sender.
+            Poll::Ready(result) => Poll::Ready(
+                result.expect("joined tasks deliver completion or cancellation before dropping"),
+            ),
         }
     }
 }
@@ -66,13 +62,12 @@ where
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use events_once::EventLake;
     use futures::executor::block_on;
 
     use super::*;
-    use crate::TaskPanic;
 
     static_assertions::assert_impl_all!(
         JoinHandle<String>: UnwindSafe, RefUnwindSafe
@@ -86,7 +81,7 @@ mod tests {
 
         sender.send(Ok(42));
 
-        let result = block_on(handle);
+        let result = block_on(handle).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -98,37 +93,35 @@ mod tests {
 
         sender.send(Ok(()));
 
-        block_on(handle);
+        block_on(handle).unwrap();
     }
 
     #[test]
-    #[should_panic]
-    fn await_rethrows_panic() {
+    fn await_returns_panic() {
         let lake = EventLake::new();
         let (sender, receiver) = lake.rent::<TaskResult<()>>();
         let handle = JoinHandle::new(receiver);
 
-        // Capture a real panic to get a proper payload.
-        let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
-            panic!("test panic");
-        }));
-
-        sender.send(Err(TaskPanic::new(panic_result.unwrap_err())));
-
-        block_on(handle);
+        sender.send(Err(TaskError::panicked(Box::new("test panic"))));
+        let error = block_on(handle).unwrap_err();
+        assert!(error.is_panic());
+        assert_eq!(
+            *error.into_panic().unwrap().downcast::<&str>().unwrap(),
+            "test panic"
+        );
     }
 
     #[test]
     #[should_panic]
-    fn await_panics_on_disconnect() {
+    fn missing_outcome_is_an_invariant_failure() {
         let lake = EventLake::new();
         let (sender, receiver) = lake.rent::<TaskResult<()>>();
         let handle = JoinHandle::new(receiver);
 
-        // Drop sender without sending, simulating pool shutdown.
+        // A disconnected channel without an outcome is not a valid cancellation.
         drop(sender);
 
-        block_on(handle);
+        _ = block_on(handle);
     }
 
     #[test]

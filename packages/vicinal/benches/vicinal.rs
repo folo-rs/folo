@@ -83,7 +83,7 @@ fn entrypoint(c: &mut Criterion) {
 
             for _ in 0..iterations {
                 let handle = scheduler.spawn(|| black_box(simulate_work()));
-                black_box(block_on(handle));
+                black_box(block_on(handle).unwrap());
             }
 
             start.elapsed()
@@ -114,7 +114,7 @@ fn entrypoint(c: &mut Criterion) {
                     reason = "we reuse the vector in the next iteration"
                 )]
                 for handle in handles.drain(..) {
-                    black_box(block_on(handle));
+                    black_box(block_on(handle).unwrap());
                 }
             }
 
@@ -140,7 +140,7 @@ fn entrypoint(c: &mut Criterion) {
 
             for _ in 0..iterations {
                 let handle = scheduler.spawn_urgent(|| black_box(simulate_work()));
-                black_box(block_on(handle));
+                black_box(block_on(handle).unwrap());
             }
 
             start.elapsed()
@@ -175,7 +175,7 @@ fn entrypoint(c: &mut Criterion) {
                     reason = "we reuse the vector in the next iteration"
                 )]
                 for handle in handles.drain(..) {
-                    black_box(block_on(handle));
+                    black_box(block_on(handle).unwrap());
                 }
             }
 
@@ -497,8 +497,8 @@ fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession
     // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
     // tasks. This benchmark count does not track future changes to the pool's default.
     for (policy_name, policy) in [
-        ("processor", WorkerPolicy::fixed_per_processor(nz!(2_u32))),
-        ("region", WorkerPolicy::fixed_per_memory_region(nz!(2_u32))),
+        ("processor", WorkerPolicy::per_processor(nz!(2_u32))),
+        ("region", WorkerPolicy::per_memory_region(nz!(2_u32))),
     ] {
         // The low case isolates dispatch; the high case exercises shared queue/slot reuse.
         for batch_size in [1, TASK_BATCH_SIZE] {
@@ -508,7 +508,7 @@ fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession
             group.bench_function(name, |b| {
                 let pool = Pool::builder().worker_policy(policy.clone()).build();
                 let scheduler = pool.scheduler();
-                block_on(scheduler.spawn(|| {}));
+                block_on(scheduler.spawn(|| {})).unwrap();
                 let mut handles = Vec::with_capacity(batch_size);
                 b.iter_custom(|iterations| {
                     let _allocations = allocation.measure_process().iterations(iterations);
@@ -520,7 +520,7 @@ fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession
                         }
                         #[expect(clippy::iter_with_drain, reason = "reuse the batch vector")]
                         for handle in handles.drain(..) {
-                            black_box(block_on(handle));
+                            black_box(block_on(handle).unwrap());
                         }
                     }
                     start.elapsed()
@@ -550,7 +550,7 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
             // Use the same fixed destination capacity as policy_dispatch so contention is
             // measured without changing the amount of worker parallelism.
             let pool = Pool::builder()
-                .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+                .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
                 .build();
             let scheduler = pool.scheduler();
             // Only producers submit, including during setup, so the controller cannot expand
@@ -581,7 +581,7 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                                 affinity.pin_current_thread_to();
                                 // Membership expansion and initial slot/channel allocation are
                                 // setup, not steady-state dispatch contention.
-                                block_on(scheduler.spawn(|| {}));
+                                block_on(scheduler.spawn(|| {})).unwrap();
                                 let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
                                 // First rendezvous reports readiness; the second releases work.
                                 start.wait();
@@ -596,7 +596,7 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                                         reason = "reuse the batch vector"
                                     )]
                                     for handle in handles.drain(..) {
-                                        black_box(block_on(handle));
+                                        black_box(block_on(handle).unwrap());
                                     }
                                 }
                                 finish.wait();

@@ -58,7 +58,7 @@ fn tasks_execute_on_spawning_processor() {
             // Wait for all tasks to complete.
             for handle in task_handles {
                 // We use block_on from futures crate for simplicity in this example.
-                block_on(handle);
+                block_on(handle).unwrap();
             }
         }
     });
@@ -79,7 +79,7 @@ fn tasks_execute_on_spawning_processor() {
 
 #[test]
 fn regional_tasks_use_only_submitting_processors() {
-    assert_submitting_processor_affinity(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)), true);
+    assert_submitting_processor_affinity(WorkerPolicy::per_memory_region(nz!(2_u32)), true);
 }
 
 #[test]
@@ -131,7 +131,8 @@ fn assert_submitting_processor_affinity(policy: WorkerPolicy, regional: bool) {
                                 affinity.iter().map(Processor::id).collect::<BTreeSet<_>>(),
                                 expected
                             );
-                        }));
+                        }))
+                        .unwrap();
                     }
                 })
                 .join()

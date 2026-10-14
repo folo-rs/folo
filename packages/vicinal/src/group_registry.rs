@@ -86,7 +86,7 @@ mod tests {
                 .processor(ProcessorBuilder::new().id(3).memory_region(2))
                 .processor(ProcessorBuilder::new().id(4).memory_region(5)),
         );
-        let policy = WorkerPolicy::fixed_per_memory_region(nz!(1_u32));
+        let policy = WorkerPolicy::per_memory_region(nz!(1_u32));
         let registry = GroupRegistry::new(&hardware, &policy);
         let GroupRegistry::MemoryRegion { groups, .. } = &registry else {
             panic!("regional policy must use regional indexing");

@@ -22,8 +22,8 @@ fn concurrent_first_submissions_start_exact_configured_count() {
     const WORKERS: u32 = 2;
     with_watchdog(|| {
         for (policy, destination) in [
-            (WorkerPolicy::fixed_per_processor(nz!(WORKERS)), "p0"),
-            (WorkerPolicy::fixed_per_memory_region(nz!(WORKERS)), "r0"),
+            (WorkerPolicy::per_processor(nz!(WORKERS)), "p0"),
+            (WorkerPolicy::per_memory_region(nz!(WORKERS)), "r0"),
             (WorkerPolicy::per_system(nz!(WORKERS)), "s"),
         ] {
             let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
@@ -82,9 +82,9 @@ fn concurrent_first_submissions_start_exact_configured_count() {
                 release.send(()).unwrap();
             }
             for submitter in submitters {
-                block_on(submitter.join().unwrap());
+                block_on(submitter.join().unwrap()).unwrap();
             }
-            block_on(scheduler.spawn(|| {}));
+            block_on(scheduler.spawn(|| {})).unwrap();
             assert_eq!(
                 pool.inner.worker_handles.lock().unwrap().len(),
                 WORKERS as usize
@@ -99,7 +99,7 @@ fn shutdown_accounts_for_in_progress_startup() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build();
         let inner = Arc::clone(&pool.inner);
         let (entered, arrivals) = mpsc::channel();
@@ -151,7 +151,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(2)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(2)))
             .build();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
@@ -195,7 +195,7 @@ fn affinity_failure_is_reported_before_admission() {
         let initialized = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .thread_init({
                 let initialized = Arc::clone(&initialized);
                 move || initialized.store(true, Ordering::Relaxed)
@@ -267,7 +267,7 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
 fn empty_region_never_starts_unpinned_workers() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     // The sparse index space contains this ID, but no eligible processor belongs to it.
     assert_panics(|| {
@@ -287,8 +287,8 @@ fn empty_region_never_starts_unpinned_workers() {
 fn startup_failure_stops_every_group() {
     with_watchdog(|| {
         for policy in [
-            WorkerPolicy::fixed_per_processor(nz!(1)),
-            WorkerPolicy::fixed_per_memory_region(nz!(1)),
+            WorkerPolicy::per_processor(nz!(1)),
+            WorkerPolicy::per_memory_region(nz!(1)),
         ] {
             let hardware = hardware();
             let other_region = hardware
@@ -334,8 +334,11 @@ fn startup_failure_stops_every_group() {
                         panic!("injected startup failure")
                     });
             });
-            block_on(running);
-            assert_panics(|| block_on(abandoned));
+            let error = block_on(abandoned).unwrap_err();
+            assert!(error.is_cancel());
+            // Disposing of the retained body releases the already-running task.
+            drop(error);
+            block_on(running).unwrap();
             for state in pool.inner.registry.initialized() {
                 assert!(state.shutdown_flag.load(Ordering::Acquire));
             }

@@ -17,6 +17,7 @@
 //! # Quick start
 //!
 //! ```rust
+//! # use std::error::Error;
 //! use vicinal::Pool;
 //! # use futures::executor::block_on;
 //!
@@ -27,13 +28,14 @@
 //! let task1 = scheduler.spawn(|| 42);
 //! let _task2 = scheduler.spawn(|| println!("doing some stuff"));
 //!
-//! assert_eq!(task1.await, 42);
+//! assert_eq!(task1.await?, 42);
 //!
 //! let scheduler2 = scheduler.clone();
 //! let task3 = scheduler.spawn(move || scheduler2.spawn(|| 55));
 //!
-//! assert_eq!(task3.await.await, 55);
-//! # });
+//! assert_eq!(task3.await?.await?, 55);
+//! # Ok::<(), Box<dyn Error>>(())
+//! # }).unwrap();
 //! ```
 //!
 //! # Memory regions and worker counts
@@ -76,17 +78,32 @@
 //!
 //! When the [`Pool`] is dropped, it stops accepting work and waits for any
 //! currently-executing tasks to complete. Queued tasks that have not started execution are
-//! abandoned.
+//! cancelled. Joined tasks return errors that retain their bodies and captures for recovery
+//! through [`TaskError::into_body()`]. Fire-and-forget tasks release their captures.
 //!
 //! If you need to ensure all spawned tasks complete before shutdown, await their [`JoinHandle`]s
 //! before dropping the pool.
-//! Infrastructure failures log the failure and stop the entire pool, abandoning queued work.
+//! Infrastructure failures log the failure and stop the entire pool. Queued joined work is
+//! cancelled recoverably; queued fire-and-forget tasks release their captures.
 //! The pool then remains poisoned and all further submissions panic synchronously.
 //! Already executing tasks may finish; task panics do not poison the pool.
 //!
-//! # Panics
+//! # Task outcomes
 //!
-//! If a task panics, the panic is captured and re-thrown when the [`JoinHandle`] is awaited.
+//! Awaiting a [`JoinHandle`] returns `Result<R, TaskError<R>>`:
+//!
+//! - **Success:** `Ok(value)` contains the task's return value.
+//! - **Cancellation:** [`TaskError::is_cancel()`] identifies cancellation before execution.
+//!   [`TaskError::into_body()`] recovers the original task body for execution elsewhere.
+//! - **Panic:** [`TaskError::is_panic()`] identifies a task panic.
+//!   [`TaskError::into_panic()`] recovers the original panic payload.
+//!
+//! Calling a recovery method for the other outcome returns the unchanged error.
+//!
+//! For reporting without recovery, [`TaskError::into_diagnostic()`] discards recovery data and
+//! retains a thread-safe error, including its source chain and backtrace.
+//!
+//! Fire-and-forget tasks log task panics instead.
 //!
 //! # Platform support
 //!
@@ -111,6 +128,7 @@ mod pool;
 mod pool_inner;
 mod scheduler;
 mod task;
+mod task_error;
 mod worker;
 mod worker_group;
 mod worker_policy;
@@ -123,6 +141,7 @@ pub use pool::*;
 pub(crate) use pool_inner::PoolInner;
 pub use scheduler::*;
 pub(crate) use task::*;
+pub use task_error::*;
 pub(crate) use worker::*;
 pub(crate) use worker_group::*;
 pub use worker_policy::*;

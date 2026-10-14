@@ -19,14 +19,14 @@ pub(crate) fn exercise(capture: &TracingCapture) {
     let borrowed: Box<dyn Any + Send> = Box::new("borrowed panic canary");
     for (policy, name, group, payloads, markers) in [
         (
-            WorkerPolicy::fixed_per_processor(nz!(1)),
+            WorkerPolicy::per_processor(nz!(1)),
             "",
             "Processor",
             [borrowed, Box::new(String::from("owned panic canary"))],
             &["borrowed panic canary", "owned panic canary"][..],
         ),
         (
-            WorkerPolicy::fixed_per_memory_region(nz!(1)),
+            WorkerPolicy::per_memory_region(nz!(1)),
             "logging\ncanary",
             "MemoryRegion",
             [Box::new(()), Box::new(PanickingPayload)],
@@ -36,8 +36,11 @@ pub(crate) fn exercise(capture: &TracingCapture) {
         let first_entry = capture.snapshot().len();
         let pool = pool(policy, name);
         let scheduler = pool.scheduler();
-        assert_eq!(block_on(scheduler.spawn(|| "regular")), "regular");
-        assert_eq!(block_on(scheduler.spawn_urgent(|| "urgent")), "urgent");
+        assert_eq!(block_on(scheduler.spawn(|| "regular")).unwrap(), "regular");
+        assert_eq!(
+            block_on(scheduler.spawn_urgent(|| "urgent")).unwrap(),
+            "urgent"
+        );
 
         let expected_panics = payloads.len();
         for (urgent, payload) in [false, true].into_iter().zip(payloads) {
@@ -57,8 +60,7 @@ pub(crate) fn exercise(capture: &TracingCapture) {
 
         // Result delivery and the start signals precede the worker's final log statements.
         drop(pool);
-        // The abandonment event is synchronous; awaiting the disconnected handle would
-        // only repeat the separate scheduler panic-contract tests.
+        // Submission after shutdown emits the abandonment event synchronously.
         drop(scheduler.spawn(|| {}));
 
         let snapshot = capture.snapshot();

@@ -17,9 +17,14 @@ all-features = true
 # Baseline of external types intentionally exposed in the public API. Cross-crate
 # first-party types are listed individually by their canonical defining crate
 # (many_cpus re-exports `SystemHardware` from its `many_cpus_impl` partition).
+# Task errors expose ohno's diagnostic traits through their Error implementation.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["many_cpus_impl::system_hardware::SystemHardware"]
+allowed_external_types = [
+    "many_cpus_impl::system_hardware::SystemHardware",
+    "ohno::enrichable::Enrichable",
+    "ohno::error_ext::ErrorExt",
+]
 
 [features]
 default = []
@@ -31,6 +36,7 @@ fast_time = { workspace = true }
 many_cpus = { workspace = true }
 new_zealand = { workspace = true }
 nm = { workspace = true }
+ohno = { workspace = true }
 pin-project = { workspace = true }
 plurality = { workspace = true }
 tracing = { workspace = true }
@@ -42,6 +48,7 @@ criterion = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 many_cpus = { path = "../many_cpus", features = ["test-util"] }
 mutants = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 threadpool = { workspace = true }
