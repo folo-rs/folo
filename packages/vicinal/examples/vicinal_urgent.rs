@@ -7,10 +7,11 @@
 use std::thread;
 use std::time::Duration;
 
+use ohno::AppError;
 use vicinal::{Pool, TaskError};
 
 #[tokio::main]
-async fn main() -> Result<(), TaskError<()>> {
+async fn main() -> Result<(), AppError> {
     let pool = Pool::new();
     let scheduler = pool.scheduler();
 
@@ -36,7 +37,7 @@ async fn main() -> Result<(), TaskError<()>> {
 
     println!("Waiting for tasks to complete...");
     for result in futures::future::join_all(handles).await {
-        result?;
+        result.map_err(TaskError::into_diagnostic)?;
     }
     Ok(())
 }

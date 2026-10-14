@@ -242,6 +242,10 @@ where
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::hint::black_box;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+
     use events_once::EventLake;
     use futures::FutureExt;
     use futures::executor::block_on;
@@ -264,7 +268,7 @@ mod tests {
 
     impl VicinalTask for SmallTask {
         fn call(self: Pin<&mut Self>) {
-            _ = std::hint::black_box(self.0);
+            _ = black_box(self.0);
         }
     }
 
@@ -273,7 +277,7 @@ mod tests {
 
     impl VicinalTask for LargeTask {
         fn call(self: Pin<&mut Self>) {
-            _ = std::hint::black_box(self.0);
+            _ = black_box(self.0);
         }
     }
 
@@ -333,9 +337,6 @@ mod tests {
 
     #[test]
     fn cancellation_retains_captures_until_result_is_dropped() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
         let dropped = Arc::new(AtomicUsize::new(0));
         let capture = OnDrop(Some(Box::new({
             let dropped = Arc::clone(&dropped);
@@ -356,9 +357,6 @@ mod tests {
 
     #[test]
     fn dropping_receiver_does_not_cancel_execution() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
         let executed = Arc::new(AtomicBool::new(false));
         let lake = EventLake::new();
         let (sender, receiver) = lake.rent::<TaskResult<()>>();
@@ -423,8 +421,6 @@ mod tests {
 
     #[test]
     fn call_only_executes_once() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
         static COUNTER: AtomicU32 = AtomicU32::new(0);
 
         let lake = EventLake::new();
@@ -448,8 +444,6 @@ mod tests {
 
     #[test]
     fn wrap_task_and_forget_executes() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
         static COUNTER: AtomicU32 = AtomicU32::new(0);
 
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);

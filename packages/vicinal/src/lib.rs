@@ -13,6 +13,7 @@
 //! # Quick start
 //!
 //! ```rust
+//! # use std::error::Error;
 //! use vicinal::Pool;
 //! # use futures::executor::block_on;
 //!
@@ -29,7 +30,7 @@
 //! let task3 = scheduler.spawn(move || scheduler2.spawn(|| 55));
 //!
 //! assert_eq!(task3.await?.await?, 55);
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # Ok::<(), Box<dyn Error>>(())
 //! # }).unwrap();
 //! ```
 //!
@@ -69,12 +70,13 @@
 //!
 //! When the [`Pool`] is dropped, it stops accepting work and waits for any
 //! currently-executing tasks to complete. Queued tasks that have not started execution are
-//! cancelled. Their join handles return errors that retain the task bodies and captures
-//! for recovery through [`TaskError::into_body()`].
+//! cancelled. Joined tasks return errors that retain their bodies and captures for recovery
+//! through [`TaskError::into_body()`]. Fire-and-forget tasks release their captures.
 //!
 //! If you need to ensure all spawned tasks complete before shutdown, await their [`JoinHandle`]s
 //! before dropping the pool.
-//! Infrastructure failures log the failure and stop the entire pool, abandoning queued work.
+//! Infrastructure failures log the failure and stop the entire pool. Queued joined work is
+//! cancelled recoverably; queued fire-and-forget tasks release their captures.
 //! The pool then remains poisoned and all further submissions panic synchronously.
 //! Already executing tasks may finish; task panics do not poison the pool.
 //!
@@ -85,6 +87,8 @@
 //! cancellation before execution from a task panic. [`TaskError::into_body()`] recovers a
 //! cancelled task for execution elsewhere; [`TaskError::into_panic()`] recovers the original
 //! panic payload. Both extraction methods return the unchanged error for the other outcome.
+//! When recovery is unnecessary, [`TaskError::into_diagnostic()`] discards recovery data while
+//! retaining a thread-safe error for reporting, including its source chain and backtrace.
 //! Fire-and-forget tasks log task panics instead.
 //!
 //! # Platform support

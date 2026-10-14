@@ -39,13 +39,14 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// # Example
 ///
 /// ```
+/// # use std::error::Error;
 /// use vicinal::Pool;
 /// # use futures::executor::block_on;
 ///
 /// # block_on(async {
 /// let pool = Pool::new();
 /// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok::<(), Box<dyn Error>>(())
 /// # }).unwrap();
 /// ```
 #[derive(Debug)]

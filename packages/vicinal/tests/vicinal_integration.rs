@@ -159,7 +159,7 @@ fn concurrent_spawns_from_multiple_threads() {
                 start.wait();
                 #[expect(
                     clippy::needless_collect,
-                    reason = "submit the whole batch before awaiting any task to exercise queue contention"
+                    reason = "submit the whole batch before awaiting to exercise queue contention"
                 )]
                 let handles: Vec<_> = (0..TASKS_PER_PRODUCER)
                     .map(|i| {
@@ -334,7 +334,7 @@ fn concurrent_spawns_with_fake_hardware() {
                 start.wait();
                 #[expect(
                     clippy::needless_collect,
-                    reason = "submit the whole batch before awaiting any task to exercise queue contention"
+                    reason = "submit the whole batch before awaiting to exercise queue contention"
                 )]
                 let handles: Vec<_> = (0..TASKS_PER_PRODUCER)
                     .map(|i| {

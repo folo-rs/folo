@@ -81,6 +81,11 @@ the original panic payload for inspection or resumption. Both return `Result<_, 
 preserving the error when its outcome does not match the requested extraction.
 Dropping a join handle does not cancel execution.
 
+For error reporting without recovery, `into_diagnostic()` consumes the task error and releases
+the original body or panic payload. It returns an opaque `Error + Send + Sync + 'static` that
+retains the message, source chain, backtrace and enrichment. Recovery state itself remains
+`Send`-only; converting to a diagnostic does not require synchronization or message flattening.
+
 ## Shutdown
 
 Dropping the pool stops accepting work and waits for tasks that are already executing.

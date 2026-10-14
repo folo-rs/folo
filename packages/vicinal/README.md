@@ -13,43 +13,51 @@ and persist until shutdown.
 
 ## Example
 
-```rust
-use std::error::Error;
+The example uses `ohno::AppError`; enable the `app-err` feature on `ohno`.
 
+```rust
 use new_zealand::nz;
-use vicinal::{Pool, WorkerPolicy};
+use ohno::AppError;
+use vicinal::{Pool, TaskError, WorkerPolicy};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), AppError> {
     processor_local().await?;
     memory_region_local().await?;
     Ok(())
 }
 
-async fn processor_local() -> Result<(), Box<dyn Error>> {
+async fn processor_local() -> Result<(), AppError> {
     let pool = Pool::new();
     let scheduler = pool.scheduler();
 
     let task1 = scheduler.spawn(|| 42);
     let _task2 = scheduler.spawn(|| println!("doing some stuff"));
 
-    assert_eq!(task1.await?, 42);
+    assert_eq!(task1.await.map_err(TaskError::into_diagnostic)?, 42);
 
     let scheduler2 = scheduler.clone();
     let task3 = scheduler.spawn(move || scheduler2.spawn(|| 55));
 
-    assert_eq!(task3.await?.await?, 55);
+    let task3 = task3.await.map_err(TaskError::into_diagnostic)?;
+    assert_eq!(task3.await.map_err(TaskError::into_diagnostic)?, 55);
     Ok(())
 }
 
-async fn memory_region_local() -> Result<(), Box<dyn Error>> {
+async fn memory_region_local() -> Result<(), AppError> {
     // Workers share each region's cumulative set of submitting processors.
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
         .build();
 
-    assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
+    assert_eq!(
+        pool.scheduler()
+            .spawn(|| 42)
+            .await
+            .map_err(TaskError::into_diagnostic)?,
+        42
+    );
     Ok(())
 }
 ```
@@ -80,9 +88,13 @@ Regions describe processor locality, not the task's allocations or data.
 
 Awaiting a join handle returns `Result<R, TaskError<R>>`. Use `is_cancel()` and `is_panic()`
 to distinguish cancellation before execution from a task panic. `into_body()` recovers a
-cancelled task as `impl FnOnce() -> R + Send + 'static` for execution elsewhere, while `into_panic()`
-recovers the original panic payload. Both methods return the unchanged error if its outcome
-does not match the extraction. Dropping a handle does not cancel the task.
+cancelled task as `impl FnOnce() -> R + Send + 'static` for execution elsewhere, while
+`into_panic()` recovers the original panic payload. Both methods return the unchanged error if
+its outcome does not match the extraction. Dropping a handle does not cancel the task.
+
+When recovery is unnecessary, `into_diagnostic()` drops the body or panic payload and returns
+a `Send + Sync` error retaining the message, source chain, backtrace and enrichment. This supports
+application-level error reporting without turning the task error into a string.
 
 ## Shutdown
 
@@ -93,7 +105,8 @@ Retained schedulers return cancelled join handles for submissions after clean sh
 Await required work before dropping the pool.
 
 Infrastructure failures, including worker startup and affinity refresh, log the failure
-and stop the entire pool. Queued tasks are abandoned; executing tasks may finish.
+and stop the entire pool. Queued joined tasks are cancelled recoverably; queued fire-and-forget
+tasks release their captures. Executing tasks may finish.
 The pool remains poisoned and every later submission panics synchronously, including
 after the pool is dropped. Task panics do not poison the pool.
 

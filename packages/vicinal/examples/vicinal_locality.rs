@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use many_cpus::SystemHardware;
+use ohno::AppError;
 use vicinal::{Pool, TaskError};
 
-fn main() -> Result<(), TaskError<()>> {
+fn main() -> Result<(), AppError> {
     // Exit early if running in a testing environment
     if std::env::var("IS_TESTING").is_ok() {
         println!("Running in testing mode - exiting immediately to prevent infinite loop");
@@ -31,7 +32,7 @@ fn main() -> Result<(), TaskError<()>> {
             println!("Task executed on processor {processor_id}");
         });
 
-        block_on(handle)?;
+        block_on(handle).map_err(TaskError::into_diagnostic)?;
         thread::sleep(Duration::from_millis(100));
     }
 }

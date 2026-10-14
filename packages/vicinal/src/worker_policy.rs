@@ -49,6 +49,7 @@ impl WorkerPolicy {
     /// # Example
     ///
     /// ```
+    /// # use std::error::Error;
     /// use new_zealand::nz;
     /// use vicinal::{Pool, WorkerPolicy};
     /// # use futures::executor::block_on;
@@ -59,7 +60,7 @@ impl WorkerPolicy {
     ///     .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
     ///     .build();
     /// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), Box<dyn Error>>(())
     /// # }).unwrap();
     /// ```
     #[must_use]

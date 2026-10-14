@@ -1,6 +1,7 @@
 //! Recoverable outcomes for joined tasks that did not return a value.
 
 use std::any::{Any, type_name};
+use std::error::Error;
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
@@ -16,6 +17,8 @@ use crate::TaskPanic;
 ///
 /// A cancelled task retains its captures until the error or recovered body is dropped or the
 /// body is executed. Dropping a panic error discards the payload without resuming the panic.
+/// When recovery is unnecessary, [`into_diagnostic()`][Self::into_diagnostic] discards recovery
+/// data and retains a thread-safe error for reporting.
 #[derive(ohno::Error)]
 #[no_constructors]
 pub struct TaskError<R> {
@@ -52,6 +55,7 @@ impl<R> TaskError<R> {
     /// ```
     /// use vicinal::Pool;
     /// # use futures::executor::block_on;
+    /// # use vicinal::TaskError;
     ///
     /// # block_on(async {
     /// let pool = Pool::new();
@@ -64,7 +68,7 @@ impl<R> TaskError<R> {
     ///     Err(error) => error.into_body()?(),
     /// };
     /// assert_eq!(value, 42);
-    /// # Ok::<(), vicinal::TaskError<i32>>(())
+    /// # Ok::<(), TaskError<i32>>(())
     /// # }).unwrap();
     /// ```
     pub fn into_body(self) -> Result<impl FnOnce() -> R + Send + 'static, Self>
@@ -94,6 +98,38 @@ impl<R> TaskError<R> {
         }
     }
 
+    /// Discards recovery data and retains the error's diagnostics.
+    ///
+    /// Drops the cancelled task body or captured panic payload. The returned error retains
+    /// the diagnostic message, source chain, backtrace and enrichment.
+    ///
+    /// Use this when recovery is unnecessary and error reporting requires `Send + Sync`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::error::Error;
+    /// use vicinal::{Pool, TaskError};
+    /// # use futures::executor::block_on;
+    ///
+    /// # block_on(async {
+    /// let pool = Pool::new();
+    /// let value = pool
+    ///     .scheduler()
+    ///     .spawn(|| 42)
+    ///     .await
+    ///     .map_err(TaskError::into_diagnostic)?;
+    /// assert_eq!(value, 42);
+    /// # Ok::<(), Box<dyn Error + Send + Sync>>(())
+    /// # }).unwrap();
+    /// ```
+    #[must_use]
+    pub fn into_diagnostic(self) -> impl Error + Send + Sync + 'static {
+        let Self { failure, core } = self;
+        drop(failure);
+        TaskDiagnostic { core }
+    }
+
     pub(crate) fn cancelled(body: impl FnOnce() -> R + Send + 'static) -> Self {
         Self {
             failure: TaskFailure::Cancelled(Box::new(body)),
@@ -117,6 +153,8 @@ enum TaskFailure<R> {
     Panicked(TaskPanic),
 }
 
+// Identify the outcome without inspecting recovery values or requiring R: Debug.
+// Recovery state remains opaque; see docs/implementation.md.
 impl<R> fmt::Debug for TaskFailure<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self {
@@ -126,6 +164,18 @@ impl<R> fmt::Debug for TaskFailure<R> {
         f.debug_tuple(type_name::<Self>()).field(&kind).finish()
     }
 }
+
+/// Carries the original diagnostics after recovery state is discarded.
+#[derive(ohno::Error)]
+#[no_constructors]
+struct TaskDiagnostic {
+    #[error]
+    core: OhnoCore,
+}
+
+// The core's erased source blocks inference; inspecting diagnostics cannot expose partial mutation.
+impl UnwindSafe for TaskDiagnostic {}
+impl RefUnwindSafe for TaskDiagnostic {}
 
 /// Diagnoses cancellation independently of the task's recoverable captures.
 #[ohno::error]
@@ -142,15 +192,79 @@ struct TaskPanicked;
 mod tests {
     use std::cell::Cell;
     use std::error::Error;
-    use std::thread;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{ptr, thread};
 
+    use ohno::{AppError, Enrichable, EnrichmentEntry, ErrorExt};
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-    use crate::pool_inner::PanickingPayload;
+    use crate::pool_inner::{OnDrop, PanickingPayload};
 
     assert_impl_all!(TaskError<Cell<()>>: Error, Send, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(TaskError<()>: Sync);
+    assert_impl_all!(TaskDiagnostic: Error, Send, Sync, UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn diagnostic_conversion_releases_recovery_data() {
+        for panicked in [false, true] {
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let capture = OnDrop(Some(Box::new({
+                let dropped = Arc::clone(&dropped);
+                move || {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            })));
+            let error = if panicked {
+                TaskError::panicked(Box::new(capture))
+            } else {
+                TaskError::cancelled(move || drop(capture))
+            };
+
+            let diagnostic = error.into_diagnostic();
+            assert_eq!(dropped.load(Ordering::Relaxed), 1);
+            if panicked {
+                assert!(diagnostic.source().unwrap().is::<TaskPanicked>());
+            } else {
+                assert!(diagnostic.source().unwrap().is::<TaskCancelled>());
+            }
+            drop(diagnostic);
+            assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[test]
+    fn diagnostic_conversion_preserves_the_original_core() {
+        let mut error = TaskError::cancelled(|| {});
+        error.add_enrichment(EnrichmentEntry::new("diagnostic canary", file!(), line!()));
+        let message = error.to_string();
+        let source = ptr::from_ref(error.source().unwrap());
+        let backtrace = ptr::from_ref(error.backtrace());
+
+        let diagnostic = error.into_diagnostic();
+        assert_eq!(diagnostic.to_string(), message);
+        assert!(diagnostic.to_string().contains("diagnostic canary"));
+        assert!(ptr::addr_eq(diagnostic.source().unwrap(), source));
+        let diagnostic: &dyn Error = &diagnostic;
+        let diagnostic = diagnostic.downcast_ref::<TaskDiagnostic>().unwrap();
+        assert!(ptr::eq(diagnostic.core.backtrace(), backtrace));
+    }
+
+    #[test]
+    fn diagnostic_conversion_contains_panicking_payload_disposal() {
+        let diagnostic = TaskError::<()>::panicked(Box::new(PanickingPayload)).into_diagnostic();
+        assert!(diagnostic.source().unwrap().is::<TaskPanicked>());
+    }
+
+    #[test]
+    fn diagnostic_converts_to_application_error_without_flattening() {
+        let error: AppError = TaskError::<()>::panicked(Box::new(()))
+            .into_diagnostic()
+            .into();
+        assert!(error.find_source::<TaskDiagnostic>().is_some());
+        assert!(error.find_source::<TaskPanicked>().is_some());
+    }
 
     #[test]
     fn cancelled_body_survives_wrong_extraction() {
@@ -198,5 +312,8 @@ mod tests {
         let error = TaskError::cancelled(|| Output);
         assert!(!format!("{error:?}").is_empty());
         let _: Output = error.into_body().unwrap()();
+
+        let error = TaskError::<Output>::panicked(Box::new(()));
+        assert!(!format!("{error:?}").is_empty());
     }
 }

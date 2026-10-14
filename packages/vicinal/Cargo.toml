@@ -48,6 +48,7 @@ criterion = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 many_cpus = { path = "../many_cpus", features = ["test-util"] }
 mutants = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 threadpool = { workspace = true }

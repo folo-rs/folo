@@ -25,15 +25,17 @@ use crate::{
 ///
 /// Scheduler clones do not keep worker threads running after their [`Pool`][crate::Pool]
 /// is dropped. Submissions after clean shutdown are cancelled without execution. Joined tasks
-/// retain their captures for recovery through [`TaskError::into_body()`][crate::TaskError::into_body];
-/// fire-and-forget tasks release their captures before returning.
+/// retain their captures for recovery through
+/// [`TaskError::into_body()`][crate::TaskError::into_body]. Fire-and-forget tasks release their
+/// captures before returning.
 ///
 /// # Worker failures
 ///
 /// Infrastructure failures, including thread creation and affinity setup or refresh,
-/// are logged and stop the entire pool. Queued tasks are abandoned and executing tasks
-/// may finish. The pool becomes permanently poisoned: every subsequent submission panics
-/// synchronously, including through retained schedulers after the pool is dropped.
+/// are logged and stop the entire pool. Queued joined tasks are cancelled recoverably;
+/// queued fire-and-forget tasks release their captures. Executing tasks may finish.
+/// The pool becomes permanently poisoned: every subsequent submission panics synchronously,
+/// including through retained schedulers after the pool is dropped.
 ///
 /// A failure detected during submission panics on that call. A worker-side failure may
 /// occur after the triggering submission returns and is propagated when the pool is dropped.
@@ -42,6 +44,7 @@ use crate::{
 /// # Example
 ///
 /// ```rust
+/// # use std::error::Error;
 /// use vicinal::Pool;
 /// # use futures::executor::block_on;
 ///
@@ -58,7 +61,7 @@ use crate::{
 ///
 /// assert_eq!(handle1.await?, "hello");
 /// assert_eq!(handle2.await?.await?, "nested");
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok::<(), Box<dyn Error>>(())
 /// # }).unwrap();
 /// ```
 #[derive(Clone, Debug)]

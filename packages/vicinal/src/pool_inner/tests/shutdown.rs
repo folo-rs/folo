@@ -1,8 +1,12 @@
 //! Clean shutdown, retained schedulers and resource-release boundaries.
 
+use std::cell::Cell;
+use std::future::Future;
 use std::panic::{self, AssertUnwindSafe};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
+use std::task::{Context, Wake};
 use std::thread;
 
 use futures::FutureExt;
@@ -15,13 +19,11 @@ use testing::{assert_panics, with_watchdog};
 use super::helpers::{
     OnDrop, PanickingPayload, assert_retained_scheduler, hardware, pin, probe, regional_hardware,
 };
-use crate::{GroupId, Pool, SubmissionTarget, WorkerPolicy};
+use crate::{GroupId, JoinHandle, Pool, Scheduler, SubmissionTarget, WorkerPolicy};
 
 /// A ready group without workers keeps both priority queues deterministic until shutdown.
 #[test]
 fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
-    use std::cell::Cell;
-
     let pool = Pool::builder()
         .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
             nz!(1),
@@ -64,13 +66,6 @@ fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
 /// Completion callbacks run outside pool locks for execution and cancellation alike.
 #[test]
 fn completion_waker_can_drop_handles_and_submit() {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::Mutex;
-    use std::task::{Context, Wake};
-
-    use crate::{JoinHandle, Scheduler};
-
     /// Re-enters admission while disposing of the completed result and another pending handle.
     struct OnWake {
         handles: Mutex<Vec<JoinHandle<()>>>,
