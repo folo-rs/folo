@@ -2,7 +2,7 @@
 name = "vicinal"
 description = "Worker pool with processor-local or memory-region-local task scheduling"
 publish = true
-version = "0.1.50"
+version = "0.1.49"
 
 authors.workspace = true
 edition.workspace = true
