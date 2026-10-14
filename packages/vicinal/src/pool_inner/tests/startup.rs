@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, mpsc};
 use std::{io, thread};
 
@@ -33,6 +33,8 @@ fn concurrent_first_submissions_start_exact_configured_count() {
                 .hardware(hardware.clone())
                 .worker_policy(policy)
                 .build();
+            // Validate capacity before waiting for a task on every worker.
+            assert_eq!(pool.inner.policy.count().get(), WORKERS);
             let scheduler = pool.scheduler();
             let start = Arc::new(Barrier::new(WORKERS as usize));
             let (entered, arrivals) = mpsc::channel();
@@ -192,9 +194,14 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
 #[test]
 fn affinity_failure_is_reported_before_admission() {
     with_watchdog(|| {
+        let initialized = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .thread_init({
+                let initialized = Arc::clone(&initialized);
+                move || initialized.store(true, Ordering::Relaxed)
+            })
             .build();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
@@ -216,6 +223,7 @@ fn affinity_failure_is_reported_before_admission() {
         });
         inner.join_all_workers();
         assert!(inner.worker_handles.lock().unwrap().is_empty());
+        assert!(!initialized.load(Ordering::Relaxed));
     });
 }
 
