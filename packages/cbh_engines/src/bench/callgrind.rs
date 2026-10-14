@@ -41,14 +41,13 @@ struct CallgrindJsonError;
 #[ohno::error]
 #[display(
     "unsupported Gungraun summary schema version {version:?} \
-     (expected {supported_version:?})"
+     (expected one of {supported_versions:?})"
 )]
 struct UnsupportedCallgrindVersionError {
     version: String,
     /// The display template can only interpolate this type's own fields, so the
-    /// version the parser understands travels with the error instead of being
-    /// read from `SUPPORTED_VERSION` at format time.
-    supported_version: String,
+    /// supported alternatives travel with the error rather than a preformatted string.
+    supported_versions: &'static [&'static str],
 }
 
 // The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
@@ -77,8 +76,7 @@ pub fn parse_callgrind_summary(json: &str) -> Result<BenchmarkResult, CallgrindP
 fn parse_summary(json: &str) -> Result<Summary, CallgrindParseError> {
     let summary: Summary = serde_json::from_str(json).map_err(CallgrindJsonError::from)?;
     if !SUPPORTED_VERSIONS.contains(&summary.version.as_str()) {
-        let error =
-            UnsupportedCallgrindVersionError::new(summary.version, SUPPORTED_VERSIONS.join(", "));
+        let error = UnsupportedCallgrindVersionError::new(summary.version, SUPPORTED_VERSIONS);
         return Err(error.into());
     }
     Ok(summary)
@@ -351,7 +349,8 @@ mod tests {
     const SINGLE_FIXTURE: &str = if cfg!(miri) {
         concat!(
             r#"{"version":"6","package_dir":"packages/fast_time","id":null,"#,
-            r#""module_path":"fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now","#,
+            r#""module_path":"fast_time_timestamp_performance_cg::timestamp_capture::"#,
+            r#"timestamp_capture_std_now","#,
             r#""function_name":"timestamp_capture_std_now","#,
             r#""profiles":[{"summaries":{"total":{"summary":{"Callgrind":{"#,
             r#""Ir":{"metrics":{"Left":{"Int":36}}},"#,
@@ -369,7 +368,8 @@ mod tests {
         concat!(
             r#"{"version":"6","package_dir":"packages/fast_time","id":"two_instants","#,
             r#""module_path":"fast_time_timestamp_performance_cg::timestamp_capture","#,
-            r#""function_name":"timestamp_capture_instant_saturating_duration_since","profiles":[]}"#,
+            r#""function_name":"timestamp_capture_instant_saturating_duration_since","#,
+            r#""profiles":[]}"#,
         )
     } else {
         CALLGRIND_PARAMETRIZED
@@ -460,7 +460,7 @@ mod tests {
             .find_source::<UnsupportedCallgrindVersionError>()
             .unwrap();
         assert_eq!(unsupported.version, "8");
-        assert_eq!(unsupported.supported_version, SUPPORTED_VERSIONS.join(", "));
+        assert_eq!(unsupported.supported_versions, SUPPORTED_VERSIONS);
         assert!(error.find_source::<CallgrindJsonError>().is_none());
     }
 
@@ -481,20 +481,15 @@ mod tests {
         assert!(json_error.find_source::<CallgrindJsonError>().is_some());
         assert!(json_error.find_source::<serde_json::Error>().is_some());
 
-        let version_error =
-            UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSIONS.join(", "));
+        let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSIONS);
         assert_eq!(version_error.version, "9");
-        assert_eq!(
-            version_error.supported_version,
-            SUPPORTED_VERSIONS.join(", ")
-        );
+        assert_eq!(version_error.supported_versions, SUPPORTED_VERSIONS);
         assert!(error::Error::source(&version_error).is_none());
     }
 
     #[test]
     fn callgrind_parse_error_displays_as_the_underlying_failure() {
-        let version_error =
-            UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSIONS.join(", "));
+        let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSIONS);
         let expected = version_error.to_string();
 
         let error = CallgrindParseError::from(version_error);
