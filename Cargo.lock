@@ -1326,6 +1326,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctor"
+version = "1.0.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
+
+[[package]]
 name = "ctrlc"
 version = "3.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3939,11 +3945,14 @@ checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 name = "testing"
 version = "0.0.1-never"
 dependencies = [
+ "ctor",
  "deranged",
  "mimalloc",
  "mutants",
  "new_zealand",
  "static_assertions",
+ "tracing",
+ "tracing-subscriber",
  "windows",
 ]
 
