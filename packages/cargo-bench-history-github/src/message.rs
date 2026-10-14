@@ -220,7 +220,6 @@ pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
 
 /// Adds platform qualifications and the outcome headline without replacing domain prose.
 fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
-    let outcome = evidence.report.outcome;
     if !evidence.platforms.is_complete() {
         sections.push(format!(
             "{WARNING_HEADING}\n> Partial platform coverage. Completed: {}. Missing: {}.\n\
@@ -229,7 +228,12 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
             evidence.platforms.missing().join(", ")
         ));
     }
-    let headline = match outcome {
+    sections.push(result_headline(evidence).to_owned());
+}
+
+/// Shares the readable checked result between GitHub posts and workflow cards.
+pub(crate) fn result_headline(evidence: &Evidence) -> &'static str {
+    match evidence.report.outcome {
         Outcome::Findings => "Notable benchmark changes detected.",
         Outcome::Clean if evidence.platforms.is_complete() => {
             "No notable changes detected across the completed collection."
@@ -238,8 +242,7 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
         Outcome::InsufficientBaseline => "Insufficient evidence to judge the in-scope series.",
         Outcome::NothingInScope => "No metric series was analyzed at this commit.",
         Outcome::Partial => "No notable changes detected among the series that could be judged.",
-    };
-    sections.push(headline.to_owned());
+    }
 }
 
 /// Renders the package selection consistently across pending and completed PR comments.

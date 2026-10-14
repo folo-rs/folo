@@ -22,6 +22,7 @@ mod message;
 mod model;
 mod operations;
 mod result;
+mod summary;
 mod workflow;
 
 #[cfg(any(test, feature = "private-test-util"))]

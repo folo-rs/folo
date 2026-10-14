@@ -747,6 +747,13 @@ not attempted, never already-recorded commits. An all-recorded range succeeds wi
 With `--overwrite`, every invocation applies the limit to the newest commits again; it is not
 a resumable cursor.
 
+Optional machine-readable completion output carries the frozen inclusive range and final
+per-commit accounting independently of free-form logs. It is collection evidence, not an
+analysis report or a benchmark verdict. A stopping benchmark failure retains its nonzero
+exit even when final accounting is available. Infrastructure failure and interruption do not
+claim completed accounting; previous writes can remain and normal resumption rules still apply.
+Completion evidence follows worktree cleanup and storage-invalidation flushing.
+
 A build or bench failure stops by default (or, with a flag, is recorded and skipped
 with an end-of-run summary), while infrastructure failures always abort since continuing
 cannot produce correct data. During replay, a historical commit without the selected project

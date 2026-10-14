@@ -10,6 +10,33 @@ use crate::action::port::Output;
 use crate::action::tests::fake::{FakeHost, FakePublisher, SHA, analysis};
 
 #[test]
+fn backfill_forwards_completion_destination_and_keeps_failure_visible() {
+    for failure in [false, true] {
+        let host = FakeHost::new(&json!({
+            "command":"backfill", "from":SHA, "to":SHA, "completion-output":"completion.json"
+        }));
+        if failure {
+            host.fail();
+        } else {
+            host.reply("");
+        }
+        let result = block_on(run_with(host.args(), &host, &FakePublisher::default()));
+        assert_eq!(result.is_err(), failure);
+        let processes = host.processes.borrow();
+        let path = host.root.join("completion.json");
+        assert!(
+            processes[0]
+                .args
+                .contains(&format!("--completion-output={}", path.display()).into())
+        );
+        assert_eq!(processes[0].output, Output::Inherit);
+        if failure {
+            assert!(host.outputs.borrow().is_empty());
+        }
+    }
+}
+
+#[test]
 fn snapshot_collect_captures_fresh_payload_without_a_second_hardware_probe() {
     let mut host = FakeHost::new(&json!({
         "command":"collect", "collection-snapshot":"true", "on-existing":"skip",

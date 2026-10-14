@@ -31,6 +31,54 @@ use clap::Parser as _;
 use ohno::AppError;
 use serde_json::{Value, json};
 
+#[test]
+#[cfg_attr(miri, ignore = "Native filesystem and command-line output contract.")]
+fn workflow_summary_is_offline_write_once_and_does_not_hide_missing_reports() {
+    let fixture = Fixture::new();
+    let input = json!({
+        "execution":"cancelled", "publication":"not_attempted",
+        "run_url":"https://github.com/o/r/actions/runs/42",
+        "result":{"kind":"unavailable","reason":"reports_unavailable"}
+    });
+    fs::write(fixture.path("inputs.json"), input.to_string()).unwrap();
+    let mut command = fixture.command();
+    command.args([
+        "workflow-summary",
+        "--inputs-file",
+        "inputs.json",
+        "--output-file",
+        "card.md",
+    ]);
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let card = fs::read_to_string(fixture.path("card.md")).unwrap();
+    assert!(card.contains("| Execution | Cancelled |"));
+    assert!(card.contains("no benchmark verdict"));
+    assert!(!command.output().unwrap().status.success());
+    assert_eq!(fs::read_to_string(fixture.path("card.md")).unwrap(), card);
+
+    let mut input = input;
+    input["execution"] = json!("success");
+    input["result"] = json!({
+        "kind":"analysis","report_file":"absent.json","analyzed_sha":"a".repeat(40),
+        "expected_platforms":"linux","completed_platforms":"linux"
+    });
+    fs::write(fixture.path("inputs.json"), input.to_string()).unwrap();
+    let output = fixture
+        .command()
+        .args([
+            "workflow-summary",
+            "--inputs-file",
+            "inputs.json",
+            "--output-file",
+            "missing.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!fixture.path("missing.md").exists());
+}
+
 /// Owns one isolated native fixture without depending on a real-time clock or system temp.
 struct Fixture(PathBuf);
 

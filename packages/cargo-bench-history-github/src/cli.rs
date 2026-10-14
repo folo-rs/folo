@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::action::{ActionArgs, PrepareWorkflowArgs};
 use crate::model::{CommitSha, Instance, Repository};
+use crate::summary::SummaryArgs;
 use crate::workflow::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 
 /// GitHub lifecycle and workflow evidence helpers for `cargo-bench-history`.
@@ -52,6 +53,8 @@ struct CommonArgs {
 /// State-specific entry points prevent callers from choosing unsupported verdicts.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Render an offline workflow results card from explicit execution and checked evidence.
+    WorkflowSummary(SummaryArgs),
     /// Execute a root-action invocation after binary installation.
     Action(ActionArgs),
     /// Freeze configuration, platform matrix and benchmark scope without GitHub access.

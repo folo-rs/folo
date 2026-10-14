@@ -35,6 +35,7 @@ fn every_subcommand_is_present_in_help() {
         "prepare-analysis",
         "inspect-report",
         "workflow-matrix",
+        "workflow-summary",
     ] {
         assert!(help.contains(name));
     }

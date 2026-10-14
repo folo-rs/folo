@@ -518,6 +518,8 @@ pub struct PruneOptions {
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackfillOptions {
+    /// Write collection-only completion evidence to a new file after replay and cleanup.
+    pub completion_output: Option<PathBuf>,
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
     /// Repository to run benchmarks in and read git history from; defaults to the
@@ -568,6 +570,7 @@ pub struct BackfillOptions {
 impl Default for BackfillOptions {
     fn default() -> Self {
         Self {
+            completion_output: None,
             config_path: None,
             repo: None,
             local: None,

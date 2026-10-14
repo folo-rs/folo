@@ -85,6 +85,8 @@ pub(crate) struct AnalysisReport {
     pub(crate) mode: AnalysisMode,
     pub(crate) outcome: Outcome,
     pub(crate) coverage: Coverage,
+    pub(crate) judged: usize,
+    pub(crate) in_scope: usize,
 }
 
 impl AnalysisReport {
@@ -131,6 +133,8 @@ impl AnalysisReport {
             mode: raw.mode,
             outcome: raw.outcome,
             coverage: census.coverage,
+            judged: census.judged,
+            in_scope: census.in_scope,
         })
     }
 

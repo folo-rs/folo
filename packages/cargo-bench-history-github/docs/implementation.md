@@ -11,6 +11,15 @@ Collection scope follows completed summaries in an expandable, escaped package i
 Lifecycle and missing-platform warnings stay outside expandable details, preserving their
 visibility without re-deriving the core's judged-series coverage.
 
+Workflow card composition is an offline, synchronous projection over explicit orchestration
+facts and checked evidence. It shares the report parser, readable headline and publication-state
+gate with posts; the core JSON retains its analysis contract. The filesystem adapter reads
+caller-selected artifacts and creates a new Markdown file. The action owns a single final
+step-summary append and execution-only fallback, not a duplicate verdict implementation.
+Backfill completion decoding reuses the core model's typed count/range validation. Missing
+platforms and absent completion evidence retain unknown accounting rather than acquiring
+zero values. The [workflow card contract](workflow-summary.md) owns input and failure semantics.
+
 The port exposes semantic GitHub operations—title search, issue reads, comment listing, create,
 update, compare and read the pull-request head—rather than a raw HTTP passthrough. Idempotent
 operations retry transient failures in the adapter. Creates never retry blindly: orchestration
