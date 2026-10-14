@@ -309,15 +309,13 @@ against a base state ten commits old is a comparison against a base state ten co
 
 A branch finding does not borrow history-mode change-point wording. It states the measured context
 value, the lowest and highest values observed in the selected current-base regime, and the excess
-beyond the nearest edge. "Slower than all 20 current-base observations" is a claim about those
+beyond the nearest edge. Being slower than every current-base observation is a claim about
 recorded observations, not a probability estimate.
 
-The discriminant-set section then gives the report-wide historical comparison, for example:
-
-```text
-None of 10 comparable base commits showed as much out-of-range movement as this branch
-(12 series compared).
-```
+The discriminant-set section gives the report-wide historical comparison. Expand
+**Comparison evidence by platform** in the [generated PR example](#pr-comment-style-example):
+its count describes comparable base commits with at least as much out-of-range movement,
+not a percentage probability.
 
 When too little shared history exists, the report says the comparison could not be formed and
 still prints every factual range excursion. JSON exposes the same distinction: finding-level

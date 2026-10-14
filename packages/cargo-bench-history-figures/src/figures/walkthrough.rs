@@ -104,6 +104,18 @@ mod tests {
                 report.get("notable").unwrap(),
                 outcome == AnalysisOutcome::Findings
             );
+            if outcome == AnalysisOutcome::Findings {
+                let methods = report
+                    .get("findings")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|finding| finding.get("method").unwrap().as_str().unwrap())
+                    .collect::<Vec<_>>();
+                assert!(methods.contains(&"change_point"));
+                assert!(methods.contains(&"drift"));
+            }
         }
         let report = gallery_branch().render(ReportFormat::Json);
         let report: Value = serde_json::from_str(&report).unwrap();
