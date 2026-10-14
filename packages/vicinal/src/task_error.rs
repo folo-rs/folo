@@ -206,6 +206,9 @@ mod tests {
     assert_not_impl_any!(TaskError<()>: Sync);
     assert_impl_all!(TaskDiagnostic: Error, Send, Sync, UnwindSafe, RefUnwindSafe);
 
+    /// Recovery data is released during conversion, not when the diagnostic is dropped.
+    ///
+    /// Ref: docs/implementation.md, "Task storage".
     #[test]
     fn diagnostic_conversion_releases_recovery_data() {
         for panicked in [false, true] {
@@ -234,6 +237,9 @@ mod tests {
         }
     }
 
+    /// Preserves the source and backtrace objects, not just matching diagnostic text.
+    ///
+    /// Ref: docs/implementation.md, "Task storage".
     #[test]
     fn diagnostic_conversion_preserves_the_original_core() {
         let mut error = TaskError::cancelled(|| {});
