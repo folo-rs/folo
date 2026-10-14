@@ -15,7 +15,9 @@ BeforeAll {
     $script:workspace = Join-Path $TestDrive 'copilot-worktrees\formatting workspace with spaces'
     $recipes = Join-Path $workspace 'justfiles'
     $null = New-Item -ItemType Directory -Path $recipes -Force
-    foreach ($file in @('justfile', 'constants.env', 'rust-toolchain.toml', 'unstable-rustfmt.toml')) {
+    foreach ($file in @(
+            'justfile', 'constants.env', 'rust-toolchain.toml', 'unstable-rustfmt.toml'
+        )) {
         Copy-Item -LiteralPath (Join-Path $repository $file) -Destination $workspace
     }
     Get-ChildItem -LiteralPath (Join-Path $repository 'justfiles') -Filter '*.just' |
@@ -29,11 +31,13 @@ resolver = "3"
 
     # CreateProcessW limits the command line including its terminator. Derive the fixture size
     # from its shortest target path rather than relying on a particular temporary-directory length.
-    # https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw
+    # Ref: docs/build-and-tooling.md#workspace-formatting.
     $script:windowsArgumentLimit = 32767
     $names = @('first', 'last')
     $shortestTarget = Join-Path $workspace 'last\examples\e0.rs'
-    $exampleCount = [int][Math]::Ceiling($windowsArgumentLimit / ($names.Count * $shortestTarget.Length))
+    $exampleCount = [int][Math]::Ceiling(
+        $windowsArgumentLimit / ($names.Count * $shortestTarget.Length)
+    )
     $script:sources = @{}
     $script:unformatted = "use std::fmt::Debug;`nuse std::fmt::Display;`nfn main( ){ }`n"
     foreach ($name in $names) {
@@ -79,7 +83,8 @@ required-features = ["extra"]
         )
 
         $start = [Diagnostics.ProcessStartInfo]::new()
-        $start.FileName = (Get-Command $Executable -CommandType Application | Select-Object -First 1).Source
+        $start.FileName = (Get-Command $Executable -CommandType Application |
+            Select-Object -First 1).Source
         $start.WorkingDirectory = Join-Path $workspace 'first\src'
         $start.UseShellExecute = $false
         $start.RedirectStandardOutput = $true
@@ -111,7 +116,7 @@ Describe 'Workspace formatting recipes' {
         }
     }
 
-    It 'checks without writing and formats every target in package-sized batches from a subdirectory' {
+    It 'checks without writing and formats all targets from a subdirectory' {
         $check = Invoke-FormattingFixture -Arguments @('package=first', 'format-check')
         $check.ExitCode | Should -Not -Be 0 -Because $check.Output
         foreach ($source in $sources.Keys) {

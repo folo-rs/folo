@@ -60,7 +60,8 @@ coverage-report-ci:
 # Ref: docs/build-and-tooling.md#workspace-formatting.
 [group('quality')]
 format:
-    cargo each --workspace --keep-going -- cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose -p "{name}" -- --config-path unstable-rustfmt.toml
+    cargo each --workspace --keep-going -- cargo +{{ env_var('RUST_NIGHTLY') }} fmt \
+        --verbose -p "{name}" -- --config-path unstable-rustfmt.toml
     cargo sort --workspace
     cargo sort-derives
 
@@ -68,7 +69,8 @@ format:
 # Ref: docs/build-and-tooling.md#workspace-formatting.
 [group('quality')]
 format-check:
-    cargo each --workspace --keep-going -- cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose -p "{name}" --check -- --config-path unstable-rustfmt.toml
+    cargo each --workspace --keep-going -- cargo +{{ env_var('RUST_NIGHTLY') }} fmt \
+        --verbose -p "{name}" --check -- --config-path unstable-rustfmt.toml
     cargo sort --workspace --check
     cargo sort-derives --check
 

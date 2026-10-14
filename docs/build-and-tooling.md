@@ -69,11 +69,15 @@ the workspace root, so invocation from a package directory uses the same
 The pinned `cargo-each` tool runs the pinned nightly's `cargo fmt` sequentially
 for each workspace member. Cargo discovers each package's targets; the formatter's
 argument list grows with one package rather than the whole workspace, keeping
-ordinary long Windows worktree paths within the process command-line limit.
+ordinary long Windows worktree paths within the
+[process command-line limit][windows-command-line-limit].
 Keep the inner formatter package-scoped: `--all` would expand the target list again.
 The recipes collect formatter failures across packages and return failure if any
 invocation fails. Manifest and derive sorting remain workspace-wide checks after
 Rust formatting succeeds.
+
+[windows-command-line-limit]:
+https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw
 
 ## Development tool installation
 
