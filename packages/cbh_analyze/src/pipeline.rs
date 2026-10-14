@@ -2292,6 +2292,54 @@ mod tests {
     }
 
     #[test]
+    fn condensed_report_retains_the_complete_mixed_exclusion_hint() {
+        let storage = MemoryStorage::new();
+        store(&storage, &dirty_key("c3", 3), &ir_set(3, "c3", 100.0));
+        store(
+            &storage,
+            &clean_key("outside"),
+            &ir_set(3, "outside", 100.0),
+        );
+        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        let mut opts = options();
+        opts.since = Some(ts(2).to_string());
+        opts.no_text = true;
+        opts.markdown_summary = Some(PathBuf::from("summary.md"));
+        opts.json = Some(PathBuf::from("report.json"));
+        let (reports, regressions) = analyze_reports_with_reporter(
+            &linear_git(),
+            &storage,
+            "folo",
+            &opts,
+            &RecordingReporter::quiet(),
+        );
+        assert_eq!(regressions, 0);
+        let json: Value = serde_json::from_str(reports.json.as_deref().unwrap()).unwrap();
+        assert_eq!(json["runs"], 0);
+        let hint = json["hint"].as_str().unwrap();
+        let mut lines = hint.lines();
+        assert!(lines.next().unwrap().contains("3 stored runs"));
+        let dirty = lines.next().unwrap();
+        assert!(dirty.contains("1 dirty (uncommitted-tree) snapshot"));
+        assert!(dirty.contains("--context"));
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .contains("1 run on commits outside HEAD")
+        );
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .contains("1 run older than the --since cutoff")
+        );
+        assert!(lines.next().unwrap().contains("--verbose"));
+        assert!(lines.next().is_none());
+        assert!(reports.markdown_summary.as_deref().unwrap().contains(hint));
+    }
+
+    #[test]
     #[cfg_attr(
         miri,
         ignore = "dirty-cohort detection requires loading a full base window and repeated snapshots"

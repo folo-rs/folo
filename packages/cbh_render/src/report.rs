@@ -52,6 +52,9 @@ const BRANCH_CHART_MAX_POINTS: usize = 30;
 /// many changes.
 pub const DEFAULT_SUMMARY_LIMIT: NonZero<usize> = NonZero::new(10).expect("10 is non-zero");
 
+/// Ordinary exclusion explanations and remedies fit without consuming the findings budget.
+const DIAGNOSTIC_BYTES: usize = 4096;
+
 /// The selectable output format of an analysis report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReportFormat {
@@ -1495,7 +1498,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         && let Some(hint) = input.hint
     {
         lines.push(String::new());
-        lines.push(markdown_lines(&display_prefix(hint)));
+        lines.push(summary_diagnostic(hint));
     }
     // These qualifications describe the entire report, not just the retained top findings.
     let lags = input
@@ -1695,6 +1698,33 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
 /// Caps display-only identities; full reports and inspection retain the original value.
 fn compact(value: &str) -> String {
     markdown_text(&display_prefix(value))
+}
+
+/// Keeps ordinary diagnostics intact and omits only whole escaped lines when oversized.
+fn summary_diagnostic(value: &str) -> String {
+    const OMITTED: &str =
+        "Some diagnostic lines were omitted; see the full report for the complete explanation.";
+    let escaped = markdown_lines(value);
+    if escaped.len() <= DIAGNOSTIC_BYTES {
+        return escaped;
+    }
+
+    let mut bounded = String::new();
+    for line in escaped.lines() {
+        if bounded
+            .len()
+            .saturating_add(line.len())
+            .saturating_add(1)
+            .saturating_add(OMITTED.len())
+            <= DIAGNOSTIC_BYTES
+        {
+            bounded.push_str(line);
+            bounded.push('\n');
+        }
+        // Keep looking after an oversized identity line: later lines may contain remedies.
+    }
+    bounded.push_str(OMITTED);
+    bounded
 }
 
 /// Shares the summary identity limit across Markdown cells and HTML labels.
@@ -4995,6 +5025,43 @@ mod tests {
             ));
             assert!(markdown.contains("Warning:\nDirty observations are ephemeral."));
         }
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exercises the fixed diagnostic byte limit; short multiline diagnostics run under Miri."
+    )]
+    fn summary_diagnostic_budget_preserves_complete_lines_and_later_remedies() {
+        let exact = "x".repeat(DIAGNOSTIC_BYTES);
+        assert_eq!(summary_diagnostic(&exact), exact);
+
+        // Escaping expands this line beyond the budget even though its source fits.
+        let diagnostic = format!(
+            "Selection explanation:\n{}\n\nRe-run with --context and --verbose.",
+            "<".repeat(DIAGNOSTIC_BYTES.div_ceil(2))
+        );
+        let summary = summary_diagnostic(&diagnostic);
+        assert!(summary.len() <= DIAGNOSTIC_BYTES);
+        assert!(summary.starts_with("Selection explanation:\n"));
+        assert!(summary.contains("\nRe-run with --context and --verbose.\n"));
+        assert!(summary.contains("Some diagnostic lines were omitted"));
+        assert!(!summary.contains("&lt;"));
+        assert_eq!(
+            summary_diagnostic(&format!("{exact}x")),
+            "Some diagnostic lines were omitted; see the full report for the complete explanation."
+        );
+
+        let input = ReportInput {
+            hint: Some(&diagnostic),
+            ..flat_input(&[])
+        };
+        let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(report.len() <= 48_000);
+        assert!(report.contains(&summary));
+        assert!(render(&input, ReportFormat::Text, false).contains(&diagnostic));
+        let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(json["hint"], diagnostic);
     }
 
     #[test]
