@@ -9,7 +9,7 @@
 //! ranked findings, and a per-set breakdown follows so each comparable partition
 //! reads as its own section.
 
-use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::num::NonZero;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -23,7 +23,9 @@ use rasciigraph::{Config, plot};
 use serde::Serialize;
 use serde_json::to_string_pretty;
 
-use crate::{AnalysisOutcome, Coverage};
+use crate::markup::{code_block, code_span, markdown_text, plain_text};
+use crate::quantity::QuantityScale;
+use crate::{AnalysisOutcome, Coverage, CoverageState, Inspection};
 
 /// Height, in rows, of a finding chart.
 const CHART_HEIGHT: u32 = 4;
@@ -129,6 +131,8 @@ pub enum ComparisonBaseLagReason {
 /// The inputs a report is rendered from.
 #[derive(Clone, Debug)]
 pub struct ReportInput<'a> {
+    /// Actual query context for copyable inspection; absent for synthetic reports.
+    pub inspection: Option<Inspection<'a>>,
     /// The project the history belongs to.
     pub project: &'a str,
     /// The commit the analysis was run against (the resolved `--context`, HEAD by
@@ -318,7 +322,7 @@ struct JsonFinding<'a> {
     /// In history mode this is the before-regime representative. In branch mode it is
     /// the nearest observed current-base range edge; there is no before regime.
     baseline: f64,
-    /// Latest measured value.
+    /// After representative or measured context value, according to the mode.
     ///
     /// In history mode this is the after-regime representative. In branch mode it is
     /// the context-commit observation.
@@ -489,22 +493,13 @@ fn finish(lines: &[String]) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
-/// Appends the ephemeral-data warning (if any) as a trailing, blank-line-separated
-/// block, so it reads at the very end of the report.
-fn push_warning(lines: &mut Vec<String>, warning: Option<&str>) {
-    if let Some(warning) = warning {
-        lines.push(String::new());
-        lines.push(warning.to_owned());
-    }
-}
-
 /// Formats one comparison-base lag as its exact report warning line, with the
 /// singular/plural agreement the text and Markdown reports share.
 fn comparison_base_lag_warning(lag: &ComparisonBaseLag) -> String {
     let count = lag.commits_behind.get();
     let commits = if count == 1 { "commit" } else { "commits" };
     let reason = match lag.reason {
-        ComparisonBaseLagReason::DiscriminantSetMismatch => "discriminant set mismatch",
+        ComparisonBaseLagReason::DiscriminantSetMismatch => "newer data belongs to another machine",
         ComparisonBaseLagReason::NoRecentBaseData => "no base data at more recent commits",
     };
     format!("Warning: comparison base is {count} {commits} behind base ({reason})")
@@ -512,18 +507,146 @@ fn comparison_base_lag_warning(lag: &ComparisonBaseLag) -> String {
 
 /// A one-line label for a set, naming its `engine / triple / machine` partition.
 fn set_label(set: &DiscriminantSet) -> String {
-    set.to_string()
-}
-
-/// The `analyze` discriminant-filter flags that select exactly this discriminant set, ready to
-/// paste into a follow-up query. Naming every filter explicitly pins the one set, so a
-/// reader who spots a finding can drill into that partition without having to guess
-/// which engine / triple / machine it came from.
-fn set_filter_flags(set: &DiscriminantSet) -> String {
     format!(
-        "--engine {} --target-triple {} --machine-key {}",
+        "{} / {} / machine {}",
         set.engine, set.target_triple, set.machine_key
     )
+}
+
+/// Adds a familiar platform name while retaining the exact target identity.
+fn platform_label(set: &DiscriminantSet) -> String {
+    let target = set.target_triple.as_str();
+    let platform = if target.contains("-windows-") {
+        "Windows"
+    } else if target.contains("-linux-") {
+        "Linux"
+    } else if target.ends_with("-apple-darwin") {
+        "macOS"
+    } else {
+        "Target"
+    };
+    format!(
+        "{platform} ({target}) / {} / machine {}",
+        set.engine, set.machine_key
+    )
+}
+
+/// A comparison uses one readable scale across values, deltas and chart labels.
+fn finding_scale(finding: &Finding) -> QuantityScale {
+    QuantityScale::new(
+        finding.kind,
+        [finding.baseline, finding.latest]
+            .into_iter()
+            .chain(finding.series.iter().map(|point| point.value))
+            .chain(
+                finding
+                    .branch
+                    .iter()
+                    .flat_map(|branch| [branch.reference_min, branch.reference_max]),
+            ),
+    )
+}
+
+/// Human metric names do not require knowledge of the JSON identifier spelling.
+fn metric_label(kind: MetricKind) -> String {
+    kind.as_str().replace('_', " ")
+}
+
+/// Decision and coverage stay together even when findings are present.
+fn overview(input: &ReportInput<'_>, markdown: bool) -> Vec<String> {
+    let coverage = Coverage::from_census(&input.census);
+    let mut lines = Vec::new();
+    if input.findings.is_empty() {
+        lines.push(coverage.verdict().to_owned());
+    } else {
+        let regressions = count_top(input.findings, Direction::Regression);
+        let regressions_noun = if regressions == 1 {
+            "regression"
+        } else {
+            "regressions"
+        };
+        let mut headline = format!("{regressions} {regressions_noun}");
+        if input.report_improvements {
+            let improvements = count_top(input.findings, Direction::Improvement);
+            let noun = if improvements == 1 {
+                "improvement"
+            } else {
+                "improvements"
+            };
+            write!(headline, ", {improvements} {noun}").expect("writing to a String never fails");
+        }
+        lines.push(format!("{headline} detected."));
+    }
+    let ratio = format!(
+        "Judged {} of {} in-scope series (one benchmark/metric per platform/engine/machine).",
+        coverage.judged(),
+        coverage.in_scope()
+    );
+    if coverage.state() == CoverageState::Partial
+        || coverage.state() == CoverageState::NothingJudged
+    {
+        let qualification = "Incomplete coverage. Unjudged series may contain changes.";
+        lines.push(if markdown {
+            format!("> [!WARNING]\n> {qualification}")
+        } else {
+            format!("WARNING: {qualification}")
+        });
+    }
+    if input.findings.is_empty() {
+        lines.extend(coverage.qualifications());
+    } else if coverage.in_scope() > 0 {
+        lines.push(ratio);
+    }
+    if !input.findings.is_empty() && coverage.unjudged() > 0 {
+        let reasons = coverage
+            .reasons()
+            .map(|(reason, count)| format!("{count} series {}", reason.describe()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        lines.push(format!(
+            "Not judged (including out-of-scope series): {reasons}."
+        ));
+    }
+    if let Some(warning) = input.warning {
+        lines.push(if markdown {
+            markdown_text(warning)
+        } else {
+            plain_text(warning)
+        });
+    }
+    lines
+}
+
+/// Read-only commands disclose storage/snapshot limits instead of implying exact replay.
+fn push_inspection(
+    lines: &mut Vec<String>,
+    input: &ReportInput<'_>,
+    finding: &Finding,
+    markdown: bool,
+) {
+    let Some(inspection) = input.inspection else {
+        return;
+    };
+    lines.push(String::new());
+    if inspection.exact_current {
+        lines.push("Current values came from exact collection snapshots. These commands inspect shared storage, whose context observations may differ; retain the collection snapshots as the current-value evidence.".to_owned());
+    }
+    if input.tip_dirty {
+        lines.push("Dirty observations are ephemeral; inspection also depends on the selected repository's current working-tree state.".to_owned());
+    }
+    lines.push("Run with the same configuration and accessible storage. Stored data and configuration can change after this report.".to_owned());
+    let Some(commands) = inspection.commands(finding, input.tip_commit, input.mode) else {
+        lines.push("No copyable command: a query path or identity cannot be represented safely and losslessly as shell text.".to_owned());
+        return;
+    };
+    for (label, command) in commands {
+        lines.push(format!("{label}:"));
+        lines.push(if markdown {
+            code_block("text", &command)
+        } else {
+            command
+        });
+    }
 }
 
 /// The commit label shared by the text and Markdown headers: the analyzed context
@@ -594,12 +717,6 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         runs_with_span(input.runs, input.commit_span)
     )];
     header.extend(judged_field(&coverage));
-    if !input.findings.is_empty() && coverage.ignored() > 0 {
-        header.push(format!(
-            "ignored by configuration: {} series",
-            coverage.ignored()
-        ));
-    }
     header.push(format!("regressions: {regressions}"));
     if input.report_improvements {
         header.push(format!(
@@ -611,27 +728,24 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     let mut lines = vec![
         format!(
             "Analyzed project {} ({} mode)",
-            input.project,
+            plain_text(input.project),
             input.mode.as_str()
         ),
-        format!("  commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
+        format!(
+            "  commit: {}",
+            plain_text(&tip_label(input.tip_commit, input.tip_dirty))
+        ),
         format!("  {}", header.join("  ")),
     ];
+    lines.splice(1..1, overview(input, false));
 
     let render_empty_branch_sets = should_render_empty_branch_sets(input);
     if input.findings.is_empty() {
-        lines.push(coverage.verdict().to_owned());
-        // Silence is a claim about the judged series only, so state how far it
-        // reaches. Indented under the verdict it qualifies.
-        for sentence in coverage.qualifications() {
-            lines.push(format!("  {sentence}"));
-        }
         if let Some(hint) = input.hint {
             lines.push(String::new());
-            lines.push(hint.to_owned());
+            lines.push(plain_text(hint));
         }
         if !render_empty_branch_sets {
-            push_warning(&mut lines, input.warning);
             return finish(&lines);
         }
     }
@@ -649,9 +763,8 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             continue;
         }
         lines.push(String::new());
-        lines.push(set_label(summary.set));
+        lines.push(plain_text(&set_label(summary.set)));
         lines.push(set_counts_line(summary, input.report_improvements));
-        lines.push(format!("  filter: {}", set_filter_flags(summary.set)));
         for lag in &summary.comparison_base_lags {
             lines.push(format!("  {}", comparison_base_lag_warning(lag)));
         }
@@ -672,6 +785,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             .collect();
         for finding in included {
             push_finding_block(&mut lines, finding, scope);
+            push_inspection(&mut lines, input, finding, false);
         }
         let additional: Vec<&Finding> = summary
             .findings
@@ -685,9 +799,9 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         }
         for finding in additional {
             push_finding_block(&mut lines, finding, scope);
+            push_inspection(&mut lines, input, finding, false);
         }
     }
-    push_warning(&mut lines, input.warning);
     finish(&lines)
 }
 
@@ -700,21 +814,24 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartSc
 
     // Lead with the benchmark id on its own line, like a chapter title: some ids are
     // long, so a dedicated line keeps the change headline that follows readable.
-    lines.push(describe_id(&finding.id).bold().to_string());
+    lines.push(plain_text(&describe_id(&finding.id)).bold().to_string());
 
+    let scale = finding_scale(finding);
     let headline_text = if let Some(branch) = &finding.branch {
         let relation = branch_relation(finding.kind, finding.direction);
         format!(
-            "{} {} - {relation} {} current-base observations",
-            format_value(finding.latest),
-            finding.kind.as_str(),
+            "{}: {} {} - {relation} {} current-base observations",
+            direction_label(finding.direction),
+            scale.quantity(finding.latest),
+            metric_label(finding.kind),
             branch.reference_count,
         )
     } else {
         format!(
-            "{} {}",
+            "{}: {} {}",
+            direction_label(finding.direction),
             format_percent(finding.relative_delta),
-            finding.kind.as_str()
+            metric_label(finding.kind)
         )
     };
     let headline = match finding.direction {
@@ -723,15 +840,23 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartSc
     };
     lines.push(format!("  {headline}"));
 
-    lines.push(format!("    {}", detail_text(finding)).dimmed().to_string());
+    lines.push(
+        format!("    {}", plain_text(&detail_text(finding)))
+            .dimmed()
+            .to_string(),
+    );
 
     // Name the blessing that re-baselined the series, so the reader knows the
     // history before it is intentionally excluded from detection.
     if let Some(blessing) = blessing_text(finding) {
-        lines.push(format!("    {blessing}").dimmed().to_string());
+        lines.push(
+            format!("    {}", plain_text(&blessing))
+                .dimmed()
+                .to_string(),
+        );
     }
     if let Some(context) = previous_regime_text(finding) {
-        lines.push(format!("    {context}").dimmed().to_string());
+        lines.push(format!("    {}", plain_text(&context)).dimmed().to_string());
     }
 
     if let Some(chart) = scoped_chart(finding, scope) {
@@ -804,22 +929,24 @@ fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
 /// (`from … to …`). Carries no styling and no leading indent; each format applies
 /// its own.
 fn detail_text(finding: &Finding) -> String {
+    let scale = finding_scale(finding);
     if let Some(branch) = &finding.branch {
         return format!(
-            "current base range: {}-{} · branch excess: {} / {} · {}",
-            format_value(branch.reference_min),
-            format_value(branch.reference_max),
-            format_signed_value(branch.excess),
+            "current base range: {} to {} · excess beyond nearest range edge: {} / {} · {}",
+            scale.quantity(branch.reference_min),
+            scale.quantity(branch.reference_max),
+            scale.signed(branch.excess),
             format_percent(branch.relative_excess),
             attribution_text(finding),
         );
     }
     format!(
-        "{} via {} · {} → {} · {}",
+        "{} via {} · before representative: {} → after representative: {} · change: {} · {}",
         direction_label(finding.direction),
         method_label(finding.method),
-        format_value(finding.baseline),
-        format_value(finding.latest),
+        scale.quantity(finding.baseline),
+        scale.quantity(finding.latest),
+        scale.signed(finding.delta),
         attribution_text(finding),
     )
 }
@@ -1088,12 +1215,13 @@ fn count_as_f64(count: usize) -> f64 {
 /// [`ChartScope::BranchComparison`] charts [`branch_chart_values`], so the comparison
 /// baseline and context commit stay legible rather than becoming aliased edge columns.
 fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
-    match scope {
+    let scale = finding_scale(finding);
+    let plot = match scope {
         ChartScope::FullHistory => {
             let points: Vec<(usize, f64)> = finding
                 .series
                 .iter()
-                .map(|point| (point.topo_index, point.value))
+                .map(|point| (point.topo_index, scale.value(point.value)))
                 .collect();
             chart_series(&points, finding.chart_base_ref)
         }
@@ -1101,8 +1229,47 @@ fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
         // business-critical: the context commit is the sole data point branch mode judges,
         // so it must remain visible and unaliased regardless of how much history
         // precedes it.
-        ChartScope::BranchComparison => chart(&branch_chart_values(finding)),
-    }
+        ChartScope::BranchComparison => chart(
+            &branch_chart_values(finding)
+                .into_iter()
+                .map(|value| scale.value(value))
+                .collect::<Vec<_>>(),
+        ),
+    }?;
+    let axis = match scope {
+        ChartScope::FullHistory => {
+            let first = finding
+                .series
+                .first()
+                .and_then(|point| point.commit.as_deref())
+                .map_or_else(|| "oldest".to_owned(), short_commit);
+            let last = finding
+                .series
+                .last()
+                .and_then(|point| point.commit.as_deref())
+                .map_or_else(|| "newest".to_owned(), short_commit);
+            format!(
+                "History: {first} -> {last}, oldest to newest; first-parent commit positions.\n\
+                Empty columns = no measurements, not zero; wide histories average columns.\n\
+                Finding marker: {}.",
+                plain_text(&attribution_text(finding))
+            )
+        }
+        ChartScope::BranchComparison => format!(
+            "Comparison: range edge | recent base history -> CONTEXT {} (last column).\n\
+             Context is placed after base, not a continuation of the branch's commit history.\n\
+             Empty columns = missing base measurements; intermediate branch commits are omitted.",
+            finding
+                .commit
+                .as_deref()
+                .map_or_else(|| "commit".to_owned(), short_commit)
+        ),
+    };
+    Some(format!(
+        "{} ({}, linear scale; lower is better)\n{plot}\n{axis}",
+        metric_label(finding.kind),
+        scale.unit
+    ))
 }
 
 /// Renders a compact line chart of `values` over commits at the report's chart height.
@@ -1147,22 +1314,28 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     let regressions = count_top(input.findings, Direction::Regression);
 
     let mut lines = vec![
-        format!("# Benchmark history analysis: {}", input.project),
+        format!(
+            "# Benchmark history analysis: {}",
+            markdown_text(input.project)
+        ),
         String::new(),
-        format!("- Commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
+        format!(
+            "- Commit: {}",
+            markdown_text(&tip_label(input.tip_commit, input.tip_dirty))
+        ),
         format!("- Mode: {}", input.mode.as_str()),
         format!(
             "- Runs analyzed: {}",
             runs_with_span(input.runs, input.commit_span)
         ),
     ];
+    lines.splice(
+        2..2,
+        overview(input, true)
+            .into_iter()
+            .flat_map(|line| [line, String::new()]),
+    );
     lines.extend(judged_bullet(&coverage));
-    if !input.findings.is_empty() && coverage.ignored() > 0 {
-        lines.push(format!(
-            "- Ignored by configuration: {} series",
-            coverage.ignored()
-        ));
-    }
     lines.push(format!("- Regressions: {regressions}"));
     if input.report_improvements {
         lines.push(format!(
@@ -1174,17 +1347,11 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     let render_empty_branch_sets = should_render_empty_branch_sets(input);
     if input.findings.is_empty() {
         lines.push(String::new());
-        lines.push(coverage.verdict().to_owned());
-        for sentence in coverage.qualifications() {
-            lines.push(String::new());
-            lines.push(sentence);
-        }
         if let Some(hint) = input.hint {
             lines.push(String::new());
-            lines.push(hint.to_owned());
+            lines.push(markdown_text(hint));
         }
         if !render_empty_branch_sets {
-            push_warning(&mut lines, input.warning);
             push_markdown_coverage(&mut lines, &coverage);
             return finish(&lines);
         }
@@ -1202,7 +1369,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             continue;
         }
         lines.push(String::new());
-        lines.push(format!("## {}", set_label(summary.set)));
+        lines.push(format!("## {}", markdown_text(&set_label(summary.set))));
         lines.push(String::new());
         lines.push(format!("- Runs: {}", summary.runs));
         lines.push(format!(
@@ -1215,7 +1382,6 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
                 count_direction(&summary.findings, Direction::Improvement)
             ));
         }
-        lines.push(format!("- Filter: `{}`", set_filter_flags(summary.set)));
         for lag in &summary.comparison_base_lags {
             lines.push(String::new());
             lines.push(format!("> {}", comparison_base_lag_warning(lag)));
@@ -1238,6 +1404,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             .collect();
         for finding in included {
             push_finding_markdown(&mut lines, finding, "###", scope);
+            push_inspection(&mut lines, input, finding, true);
         }
         let additional: Vec<&Finding> = summary
             .findings
@@ -1251,9 +1418,9 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         }
         for finding in additional {
             push_finding_markdown(&mut lines, finding, "####", scope);
+            push_inspection(&mut lines, input, finding, true);
         }
     }
-    push_warning(&mut lines, input.warning);
     push_markdown_coverage(&mut lines, &coverage);
     finish(&lines)
 }
@@ -1285,157 +1452,238 @@ fn push_markdown_coverage(lines: &mut Vec<String>, coverage: &Coverage) {
     }
 }
 
-/// Renders a condensed Markdown report carrying only the `limit` most significant
-/// findings, so a large analysis still fits within a downstream size limit (a GitHub
-/// issue body caps at 65,536 characters).
+/// Renders a bounded findings table with expandable evidence.
 ///
-/// The header repeats the full Markdown report's totals — computed from *every*
-/// finding, not the retained subset — then a flat, globally-ranked list of the top
-/// `limit` findings follows. The per-set breakdown the full Markdown report groups by
-/// is deliberately dropped: a summary is a single ranked list, and that grouping is the
-/// main length driver. When findings were dropped, a note states how many of the
-/// total are shown so a reader knows the report is partial and to consult the full
-/// report for the rest.
+/// Retains at most `limit` findings, in their supplied ranking. Counts, coverage and
+/// comparison qualifications describe the complete analysis. Omitted rows or evidence
+/// are disclosed; full reports retain the complete findings.
 #[must_use]
 pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -> String {
-    let coverage = Coverage::from_census(&input.census);
-    let regressions = count_top(input.findings, Direction::Regression);
-
+    // Leave room inside GitHub's body limit for the companion's scope and lifecycle notices.
+    const SUMMARY_BYTES: usize = 48_000;
+    const CONTEXT_BYTES: usize = 10_000;
     let mut lines = vec![
-        format!("# Benchmark history analysis: {}", input.project),
+        format!("## Benchmark history: {}", compact(input.project)),
         String::new(),
-        format!("- Commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
-        format!("- Mode: {}", input.mode.as_str()),
-        format!(
-            "- Runs analyzed: {}",
-            runs_with_span(input.runs, input.commit_span)
-        ),
     ];
-    if let Some(mut bullet) = judged_bullet(&coverage) {
-        // The summary omits detailed coverage beside findings; keep its pointer with the tally.
-        if coverage.judged() < coverage.in_scope() {
-            bullet.push_str(" (see full report for details)");
-        }
-        lines.push(bullet);
-    }
-    if !input.findings.is_empty() && coverage.ignored() > 0 {
-        lines.push(format!(
-            "- Ignored by configuration: {} series",
-            coverage.ignored()
-        ));
-    }
-    lines.push(format!("- Regressions: {regressions}"));
-    if input.report_improvements {
-        lines.push(format!(
-            "- Improvements: {}",
-            count_top(input.findings, Direction::Improvement)
-        ));
-    }
-
-    let render_empty_branch_sets = should_render_empty_branch_sets(input);
-    if input.findings.is_empty() {
+    lines.extend(overview(input, true));
+    lines.push(String::new());
+    lines.push(format!(
+        "Context: {} · {} mode · {} runs.",
+        compact(&tip_label(input.tip_commit, input.tip_dirty)),
+        input.mode.as_str(),
+        input.runs,
+    ));
+    if input.findings.is_empty()
+        && let Some(hint) = input.hint
+    {
         lines.push(String::new());
-        lines.push(coverage.verdict().to_owned());
-        for sentence in coverage.qualifications() {
-            lines.push(String::new());
-            lines.push(sentence);
-        }
-        if let Some(hint) = input.hint {
-            lines.push(String::new());
-            lines.push(hint.to_owned());
-        }
-        if !render_empty_branch_sets {
-            push_warning(&mut lines, input.warning);
-            return finish(&lines);
-        }
+        lines.push(compact(hint));
     }
-    if input.findings.is_empty() {
-        for summary in input.sets {
-            lines.push(String::new());
-            lines.push(format!("## {}", set_label(summary.set)));
-            lines.push(String::new());
-            for lag in &summary.comparison_base_lags {
-                lines.push(format!("> {}", comparison_base_lag_warning(lag)));
-            }
-            lines.push(String::new());
-            lines.push(format!(
-                "**Historical comparison:** {}",
-                historical_comparison_text(summary.branch_comparison, false)
-            ));
-            push_set_filter_footer(&mut lines, summary.set);
+    // These qualifications describe the entire report, not just the retained top findings.
+    let lags = input
+        .sets
+        .iter()
+        .flat_map(|set| &set.comparison_base_lags)
+        .collect::<Vec<_>>();
+    if let Some(maximum) = lags.iter().map(|lag| lag.commits_behind.get()).max() {
+        let mut reasons = Vec::new();
+        if lags
+            .iter()
+            .any(|lag| lag.reason == ComparisonBaseLagReason::DiscriminantSetMismatch)
+        {
+            reasons.push("newer data belongs to another machine");
         }
-        push_warning(&mut lines, input.warning);
-        return finish(&lines);
-    }
-
-    // The findings are already globally ranked by descending magnitude, so the leading
-    // `limit` are the top movers. When any were dropped, name the total so a reader
-    // knows to reach for the full report (the total exceeds `limit`, which is at least
-    // one, so the total is at least two and "findings" is unconditionally plural).
-    if input.findings.len() > limit.get() {
+        if lags
+            .iter()
+            .any(|lag| lag.reason == ComparisonBaseLagReason::NoRecentBaseData)
+        {
+            reasons.push("no base data at more recent commits");
+        }
         lines.push(String::new());
         lines.push(format!(
-            "> Showing the top {limit} of {} findings by magnitude.",
-            input.findings.len()
+            "> Comparison bases lag by up to {maximum} commits ({}). This includes findings omitted below.",
+            reasons.join("; ")
         ));
     }
-
-    // Both modes draw a per-finding chart, matching the full reports; the scope differs
-    // (history walks the whole series, branch charts the baseline and recent tail).
-    //
-    // Comparison-base warnings are per-set metadata, but the summary flattens the set
-    // grouping, so surface each affected set's warnings once — immediately before that
-    // set's first retained finding.
-    let scope = chart_scope(input.mode);
-    let mut contextualized_sets: HashSet<&DiscriminantSet> = HashSet::new();
-    for finding in input.findings.iter().take(limit.get()) {
-        let summary = input
+    if input.mode == AnalysisMode::Branch {
+        lines.push("Change = excess beyond the nearest observed current-base range edge, not a mean-to-context change.".to_owned());
+        let unavailable = input
             .sets
             .iter()
-            .find(|summary| *summary.set == finding.set);
-        if contextualized_sets.insert(&finding.set)
-            && let Some(summary) = summary
-        {
+            .filter(|set| set.branch_comparison.is_none())
+            .count();
+        let outside = input
+            .sets
+            .iter()
+            .flat_map(|summary| {
+                summary
+                    .findings
+                    .iter()
+                    .filter(|finding| !is_primary_finding(summary, finding))
+            })
+            .count();
+        lines.push(format!(
+            "Historical comparison unavailable for {unavailable} platform/engine/machine groups; {outside} excursions outside the shared-history comparison."
+        ));
+        let previous = input
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding
+                    .branch
+                    .as_ref()
+                    .is_some_and(|branch| branch.matches_previous_regime)
+            })
+            .count();
+        if previous > 0 {
+            lines.push(format!(
+                "{previous} findings match an earlier base regime; see their evidence."
+            ));
+        }
+        let mut context = Vec::new();
+        let mut omitted = 0_usize;
+        for summary in input.sets {
+            let mut section = vec![format!(
+                "**{}:** {}",
+                compact(&set_label(summary.set)),
+                historical_comparison_text(
+                    summary.branch_comparison,
+                    has_findings_in_historical_comparison(summary)
+                ),
+            )];
             for lag in &summary.comparison_base_lags {
-                lines.push(String::new());
-                lines.push(format!("> {}", comparison_base_lag_warning(lag)));
+                section.push(comparison_base_lag_warning(lag));
             }
-            if input.mode == AnalysisMode::Branch {
-                lines.push(String::new());
-                lines.push(format!(
-                    "> **Historical comparison for {}:** {}",
-                    set_label(summary.set),
-                    historical_comparison_text(
-                        summary.branch_comparison,
-                        has_findings_in_historical_comparison(summary),
-                    )
-                ));
+            if finish(&context)
+                .len()
+                .saturating_add(finish(&section).len())
+                <= CONTEXT_BYTES
+            {
+                context.extend(section);
+                context.push(String::new());
+            } else {
+                omitted = omitted.saturating_add(1);
             }
         }
-        if summary.is_some_and(|summary| !is_primary_finding(summary, finding)) {
-            lines.push(String::new());
-            lines.push(
-                "> **Outside the historical comparison:** This excursion did not meet the \
-                 shared-history requirements of the compared family."
-                    .to_owned(),
-            );
+        if omitted > 0 {
+            context.push(format!(
+                "Details for {omitted} further groups are in the full report."
+            ));
         }
-        push_finding_markdown(&mut lines, finding, "##", scope);
-        push_set_filter_footer(&mut lines, &finding.set);
+        lines.push(format!(
+            "\n<details>\n<summary>Comparison evidence by platform</summary>\n\n{}\n</details>\n",
+            finish(&context)
+        ));
+    } else {
+        lines.push("Before and after are representative historical levels, not the latest single observation.".to_owned());
     }
-    push_warning(&mut lines, input.warning);
+    if input.findings.is_empty() {
+        return finish(&lines);
+    }
+    lines.extend([
+        String::new(),
+        if input.mode == AnalysisMode::Branch {
+            "| Direction | Benchmark / metric | Platform / engine / machine | Current base range | Context measured | Excess beyond range edge |".to_owned()
+        } else {
+            "| Direction | Benchmark / metric | Platform / engine / machine | Before representative | After representative | Change |".to_owned()
+        },
+        "| --- | --- | --- | --- | --- | --- |".to_owned(),
+    ]);
+    let mut retained = Vec::new();
+    for finding in input.findings.iter().take(limit.get()) {
+        let scale = finding_scale(finding);
+        let (before, change) = finding.branch.as_ref().map_or_else(
+            || {
+                (
+                    scale.quantity(finding.baseline),
+                    format!(
+                        "{} ({})",
+                        scale.signed(finding.delta),
+                        format_percent(finding.relative_delta)
+                    ),
+                )
+            },
+            |branch| {
+                (
+                    format!(
+                        "{} to {}",
+                        scale.quantity(branch.reference_min),
+                        scale.quantity(branch.reference_max)
+                    ),
+                    format!(
+                        "{} ({})",
+                        scale.signed(branch.excess),
+                        format_percent(branch.relative_excess)
+                    ),
+                )
+            },
+        );
+        let row = format!(
+            "| {} | {} / {} | {} | {before} | {} | {change} |",
+            direction_label(finding.direction),
+            compact(&finding.id.qualified()),
+            metric_label(finding.kind),
+            compact(&platform_label(&finding.set)),
+            scale.quantity(finding.latest),
+        );
+        // Keep whole rows and reserve room for the explicit omission notice.
+        if finish(&lines)
+            .len()
+            .saturating_add(row.len())
+            .saturating_add(512)
+            > SUMMARY_BYTES
+        {
+            break;
+        }
+        lines.push(row);
+        retained.push(finding);
+    }
+    lines.push(format!("\nShowing {} of {} findings by magnitude. Full Markdown and JSON retain every finding and complete identities.", retained.len(), input.findings.len()));
+    for finding in retained {
+        let mut evidence = Vec::new();
+        evidence.push(format!(
+            "Platform / engine / machine: {}",
+            markdown_text(&set_label(&finding.set))
+        ));
+        if input
+            .sets
+            .iter()
+            .any(|summary| *summary.set == finding.set && !is_primary_finding(summary, finding))
+        {
+            evidence.push("**Outside the historical comparison:** This excursion did not meet the shared-history requirements of the compared family.".to_owned());
+        }
+        push_finding_markdown(&mut evidence, finding, "####", chart_scope(input.mode));
+        push_inspection(&mut evidence, input, finding, true);
+        let block = format!(
+            "\n<details>\n<summary>{}: {} evidence</summary>\n\n{}\n</details>\n",
+            direction_label(finding.direction),
+            compact(&finding.id.qualified()),
+            finish(&evidence)
+        );
+        if finish(&lines)
+            .len()
+            .saturating_add(block.len())
+            .saturating_add(512)
+            > SUMMARY_BYTES
+        {
+            lines.push("\nFurther charts and inspection commands are in the full report (summary size limit).".to_owned());
+            break;
+        }
+        lines.push(block);
+    }
     finish(&lines)
 }
 
-/// Appends the discriminant-set filter flags as a de-emphasized footer on a summary
-/// finding, after its chart. The summary drops the per-set grouping to stay within a
-/// downstream size cap, so without this a reader could not tell which partition a
-/// finding came from — or, when the same benchmark moved in several sets, tell the
-/// otherwise near-identical blocks apart. The flags trail the block rather than lead
-/// it because they are reference material for a follow-up query, not the headline.
-fn push_set_filter_footer(lines: &mut Vec<String>, set: &DiscriminantSet) {
-    lines.push(String::new());
-    lines.push(format!("_Filter:_ `{}`", set_filter_flags(set)));
+/// Caps display-only identities; full reports and inspection retain the original value.
+fn compact(value: &str) -> String {
+    // Keeps unusually long benchmark identifiers from overwhelming a GitHub table.
+    const DISPLAY_CHARACTERS: usize = 160;
+    let mut prefix: String = value.chars().take(DISPLAY_CHARACTERS).collect();
+    if prefix.len() < value.len() {
+        prefix.push_str("... [full text in full report]");
+    }
+    markdown_text(&prefix)
 }
 
 /// Appends one finding as a Markdown block mirroring the text report: the benchmark
@@ -1454,41 +1702,45 @@ fn push_finding_markdown(
 
     // The benchmark id is a heading of its own, so a long id reads as a chapter title
     // rather than crowding the change headline that follows.
-    lines.push(format!("{heading} `{}`", describe_id(&finding.id)));
+    lines.push(format!(
+        "{heading} {}",
+        code_span(&describe_id(&finding.id))
+    ));
 
+    let scale = finding_scale(finding);
     if let Some(branch) = &finding.branch {
         let relation = branch_relation(finding.kind, finding.direction);
         lines.push(format!(
-            "**{}** `{}` - {relation} {} current-base observations",
-            format_value(finding.latest),
-            finding.kind.as_str(),
+            "**{}: {}** {} - {relation} {} current-base observations",
+            direction_label(finding.direction),
+            scale.quantity(finding.latest),
+            metric_label(finding.kind),
             branch.reference_count,
         ));
     } else {
         lines.push(format!(
-            "**{}** `{}`",
+            "**{}: {}** {}",
+            direction_label(finding.direction),
             format_percent(finding.relative_delta),
-            finding.kind.as_str(),
+            metric_label(finding.kind),
         ));
     }
 
     lines.push(String::new());
-    lines.push(detail_text(finding));
+    lines.push(markdown_text(&detail_text(finding)));
 
     if let Some(blessing) = blessing_text(finding) {
         lines.push(String::new());
-        lines.push(blessing);
+        lines.push(markdown_text(&blessing));
     }
     if let Some(context) = previous_regime_text(finding) {
         lines.push(String::new());
-        lines.push(context);
+        lines.push(markdown_text(&context));
     }
 
     if let Some(chart) = scoped_chart(finding, scope) {
         lines.push(String::new());
-        lines.push("```text".to_owned());
-        lines.push(chart);
-        lines.push("```".to_owned());
+        lines.push(code_block("text", &chart));
     }
 }
 
@@ -1608,12 +1860,6 @@ pub fn format_value(value: f64) -> String {
     trim_trailing_zeros(&formatted)
 }
 
-/// Formats a measured value with an explicit sign for human-readable display.
-fn format_signed_value(value: f64) -> String {
-    let sign = if value.is_sign_negative() { "-" } else { "+" };
-    format!("{sign}{}", format_value(value.abs()))
-}
-
 /// The number of decimal places that yields four significant figures for
 /// `magnitude` (a non-negative, non-integer value), while always keeping every
 /// integer-part digit.
@@ -1665,6 +1911,7 @@ mod tests {
     use serde_json::{Value, from_str};
 
     use super::*;
+    use crate::InspectionLocation;
 
     fn discriminant_set() -> DiscriminantSet {
         DiscriminantSet {
@@ -1746,6 +1993,7 @@ mod tests {
             branch_comparison: None,
         });
         ReportInput {
+            inspection: None,
             project,
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -1768,6 +2016,7 @@ mod tests {
     /// `sets`). Regressions only, so the header carries a single tally.
     fn flat_input(findings: &[Finding]) -> ReportInput<'_> {
         ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -1803,6 +2052,8 @@ mod tests {
         Finding {
             id: BenchmarkId::new(nonempty![name.to_owned()]),
             direction: Direction::Improvement,
+            latest: 100.0 * (1.0 + relative_delta),
+            delta: 100.0 * relative_delta,
             relative_delta,
             ..regression()
         }
@@ -1828,10 +2079,10 @@ mod tests {
         let report = render_markdown_summary(&input, NonZero::new(3).unwrap());
 
         // The header tally counts every finding, not the retained subset.
-        assert!(report.contains("- Regressions: 5"), "{report}");
+        assert!(report.contains("5 regressions detected."), "{report}");
         // The truncation note names how many of the total are shown.
         assert!(
-            report.contains("> Showing the top 3 of 5 findings by magnitude."),
+            report.contains("Showing 3 of 5 findings by magnitude."),
             "{report}"
         );
         // The three largest movers are kept; the two smallest are dropped.
@@ -1866,6 +2117,7 @@ mod tests {
     #[test]
     fn markdown_summary_with_no_findings_matches_the_empty_message() {
         let input = ReportInput {
+            inspection: None,
             hint: Some("Found 2 stored runs ... dirty snapshots"),
             ..flat_input(&[])
         };
@@ -1892,35 +2144,21 @@ mod tests {
         assert!(report.contains("```text"), "{report}");
         assert!(report.contains('┤') || report.contains('┼'), "{report}");
         assert!(!report.contains('\u{1b}'), "{report}");
-        // The set-filter footer trails the fenced chart, not precedes it: it is
-        // reference material for a follow-up query, not the headline.
-        let chart_close = report.rfind("```").expect("fenced chart present");
-        let footer_at = report.find("_Filter:_").expect("filter footer present");
-        assert!(
-            footer_at > chart_close,
-            "the filter footer must follow the chart: {report}"
-        );
+        assert!(report.contains("<details>"));
+        assert!(report.contains("linear scale; lower is better"));
+        assert!(report.contains("Empty columns = no measurements"));
+        assert!(!report.contains("_Filter:_"));
     }
 
     #[test]
-    fn markdown_summary_footers_each_finding_with_its_set_filter() {
-        // The summary drops the per-set grouping, so each finding carries the discriminant-filter
-        // flags that isolate its partition as a trailing footer — enough to query that
-        // exact set without leading the block.
+    fn markdown_summary_identifies_the_partition_without_repeated_filter_flags() {
         let findings = vec![named_regression("mover_a", 0.50)];
         let input = flat_input(&findings);
 
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
-        let footer = "_Filter:_ `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1`";
-        assert!(report.contains(footer), "{report}");
-        // The footer trails the finding headline rather than leading it.
-        let headline_at = report.find("mover_a").expect("headline present");
-        let footer_at = report.find(footer).expect("footer present");
-        assert!(
-            footer_at > headline_at,
-            "footer must follow the finding: {report}"
-        );
+        assert!(report.contains("| regression | mover_a / instruction count | Linux (x86_64-unknown-linux-gnu) / callgrind / machine m1 |"));
+        assert!(!report.contains("_Filter:_"));
     }
 
     #[test]
@@ -1943,15 +2181,11 @@ mod tests {
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
         assert!(
-            report.contains(
-                "--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1"
-            ),
+            report.contains("callgrind / x86_64-unknown-linux-gnu / machine m1"),
             "{report}"
         );
         assert!(
-            report.contains(
-                "--engine criterion --target-triple x86_64-pc-windows-msvc --machine-key m1"
-            ),
+            report.contains("criterion / x86_64-pc-windows-msvc / machine m1"),
             "{report}"
         );
     }
@@ -1976,12 +2210,15 @@ mod tests {
         // finding — like the regressions tally — even though the cap of two drops
         // `imp_d` and `imp_e` from the rendered list.
         let input = ReportInput {
+            inspection: None,
             report_improvements: true,
             ..flat_input(&findings)
         };
         let with = render_markdown_summary(&input, NonZero::new(2).unwrap());
-        assert!(with.contains("- Regressions: 2"), "{with}");
-        assert!(with.contains("- Improvements: 3"), "{with}");
+        assert!(
+            with.contains("2 regressions, 3 improvements detected."),
+            "{with}"
+        );
     }
 
     #[test]
@@ -1999,6 +2236,7 @@ mod tests {
     #[test]
     fn text_report_with_no_findings_is_explicit() {
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -2050,6 +2288,7 @@ mod tests {
         let findings = [regression()];
         let mut summaries = Vec::new();
         let input = ReportInput {
+            inspection: None,
             census: census_of(
                 4,
                 &[
@@ -2081,9 +2320,7 @@ mod tests {
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(!summary.contains("## Coverage"));
-        assert!(
-            summary.contains("- In-scope series judged: 4 of 7 (see full report for details)\n")
-        );
+        assert!(summary.contains("Judged 4 of 7 in-scope series"));
         assert!(!markdown.contains("see full report for details"));
     }
 
@@ -2098,7 +2335,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_coverage_pointer_only_for_unjudged_in_scope_series() {
+    fn summary_warns_only_for_unjudged_in_scope_series() {
         for (census, needs_details) in [
             (SeriesCensus::default(), false),
             (
@@ -2118,15 +2355,12 @@ mod tests {
             (census_of(0, &[(UnjudgedReason::TooFewPoints, 1)]), true),
         ] {
             let input = ReportInput {
+                inspection: None,
                 census,
                 ..flat_input(&[])
             };
             let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-            assert_eq!(
-                summary.contains("(see full report for details)"),
-                needs_details,
-                "{summary}"
-            );
+            assert_eq!(summary.contains("> [!WARNING]"), needs_details, "{summary}");
         }
     }
 
@@ -2143,13 +2377,15 @@ mod tests {
             let set = discriminant_set();
             let mut summaries = Vec::new();
             let input = ReportInput {
+                inspection: None,
                 mode,
                 census,
                 ..single_set_input("folo", &set, &[], &mut summaries)
             };
             let markdown = render(&input, ReportFormat::Markdown, false);
             let (_, coverage) = markdown.split_once("\n## Coverage\n").unwrap();
-            let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+            let raw_json = render(&input, ReportFormat::Json, false);
+            let json: Value = from_str(&raw_json).unwrap();
             let census = &json["census"];
 
             assert!(coverage.contains(&format!(
@@ -2188,6 +2424,7 @@ mod tests {
             ],
         );
         let input = ReportInput {
+            inspection: None,
             census,
             ..flat_input(&[])
         };
@@ -2215,7 +2452,7 @@ mod tests {
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(
-            summary.contains("- In-scope series judged: 4 of 7 (see full report for details)\n"),
+            summary.contains("Judged 4 of 7 in-scope series"),
             "{summary}"
         );
         assert!(summary.contains("Not judged: 2 series"), "{summary}");
@@ -2228,6 +2465,7 @@ mod tests {
             named_regression("second", 0.3),
         ];
         let input = ReportInput {
+            inspection: None,
             census: census_of(2, &[(UnjudgedReason::Ignored, 3)]),
             ..flat_input(&findings)
         };
@@ -2239,7 +2477,7 @@ mod tests {
             assert!(
                 report
                     .to_lowercase()
-                    .contains("ignored by configuration: 3 series")
+                    .contains("3 series ignored by configuration")
             );
             assert!(!report.contains("Not judged:"));
         }
@@ -2253,6 +2491,7 @@ mod tests {
     #[test]
     fn silent_compact_reports_disclose_ignored_series_once_without_an_all_clear() {
         let input = ReportInput {
+            inspection: None,
             census: census_of(0, &[(UnjudgedReason::Ignored, 2)]),
             ..flat_input(&[])
         };
@@ -2293,6 +2532,7 @@ mod tests {
         // headline and a reader who trusts the ratio opposite things. The ghosts are
         // still disclosed, in the breakdown that lists what went unjudged.
         let input = ReportInput {
+            inspection: None,
             census: census_of(3, &[(UnjudgedReason::Ghost, 2)]),
             ..flat_input(&[])
         };
@@ -2329,6 +2569,7 @@ mod tests {
         // changes" is not evidence about the code at all. The report must say that
         // outright rather than let the reader infer an all-clear.
         let input = ReportInput {
+            inspection: None,
             census: census_of(0, &[(UnjudgedReason::TooFewPoints, 7)]),
             ..flat_input(&[])
         };
@@ -2366,6 +2607,7 @@ mod tests {
         // lead line is not read as an all-clear over a suite that was never looked at.
         // The empty-outcome hint carries the explanation, and it carries it once.
         let input = ReportInput {
+            inspection: None,
             census: SeriesCensus::default(),
             hint: Some("Found 2 stored runs ... dirty snapshots"),
             ..flat_input(&[])
@@ -2498,6 +2740,7 @@ mod tests {
     fn assert_silent_surface_coverage(render: impl Fn(&ReportInput<'_>) -> String) {
         for (name, census, expected, forbidden) in silent_surface_cases() {
             let input = ReportInput {
+                inspection: None,
                 census,
                 ..flat_input(&[])
             };
@@ -2519,6 +2762,7 @@ mod tests {
         // leaves two ghosts behind — the report must reconcile against that unit, not
         // against a benchmark tally.
         let input = ReportInput {
+            inspection: None,
             census: census_of(1, &[(UnjudgedReason::Ghost, 2)]),
             ghosts_excluded: 1,
             ..flat_input(&[])
@@ -2547,6 +2791,7 @@ mod tests {
         // reports no coverage while looking like a measurement. The verdict carries the
         // meaning instead, on text and Markdown alike.
         let input = ReportInput {
+            inspection: None,
             census: census_of(0, &[(UnjudgedReason::Ghost, 3)]),
             ghosts_excluded: 3,
             ..flat_input(&[])
@@ -2606,6 +2851,7 @@ mod tests {
 
         for (name, census, state, outcome, in_scope) in cases {
             let input = ReportInput {
+                inspection: None,
                 census,
                 ..flat_input(&[])
             };
@@ -2622,6 +2868,7 @@ mod tests {
     fn json_outcome_prioritizes_findings_over_partial_coverage() {
         let findings = [regression()];
         let input = ReportInput {
+            inspection: None,
             findings: &findings,
             census: census_of(1, &[(UnjudgedReason::TooFewPoints, 1)]),
             ..flat_input(&findings)
@@ -2639,6 +2886,7 @@ mod tests {
         // The census is an interface: automation reads it to tell a genuine all-clear
         // from a blind run, so its shape stays self-contained and its totals add up.
         let input = ReportInput {
+            inspection: None,
             census: census_of(
                 4,
                 &[
@@ -2667,6 +2915,7 @@ mod tests {
         // A fully judged analysis still carries the block, with an empty breakdown, so
         // a consumer never has to distinguish "absent" from "nothing to report".
         let judged = ReportInput {
+            inspection: None,
             census: judged_census(4),
             ..flat_input(&[])
         };
@@ -2679,6 +2928,7 @@ mod tests {
     #[test]
     fn text_report_renders_hint_when_present() {
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -2711,26 +2961,19 @@ mod tests {
         let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("regressions: 1"), "{report}");
         assert!(
-            report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
+            report.contains("callgrind / x86_64-unknown-linux-gnu / machine m1"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
-        // The set header names the discriminant-filter flags that reproduce exactly this partition,
-        // so a reader who spots a finding knows how to query it directly.
-        assert!(
-            report.contains(
-                "  filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1"
-            ),
-            "{report}"
-        );
+        assert!(!report.contains("filter:"));
         assert!(report.contains("+30.00%"), "{report}");
         assert!(!report.contains("[major]"), "{report}");
         // The benchmark id leads on its own chapter-title line; the change headline
         // that follows carries the metric, no longer the id.
         assert!(report.contains("nm/nm::observe/pull"), "{report}");
-        assert!(report.contains("+30.00% instruction_count"), "{report}");
+        assert!(report.contains("+30.00% instruction count"), "{report}");
         // The report no longer surfaces a confidence figure anywhere.
         assert!(
-            report.contains("regression via change point · 100 → 130"),
+            report.contains("before representative: 100 count → after representative: 130 count"),
             "{report}"
         );
         assert!(!report.contains("confidence"), "{report}");
@@ -2752,6 +2995,7 @@ mod tests {
             branch_comparison: None,
         }];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -2796,6 +3040,7 @@ mod tests {
             branch_comparison: Some(&comparison),
         }];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -2821,11 +3066,13 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("130 instruction_count - higher than all 20 current-base observations"),
+            text.contains(
+                "130 count instruction count - higher than all 20 current-base observations"
+            ),
             "{text}"
         );
         assert!(
-            text.contains("current base range: 99-110 · branch excess: +20"),
+            text.contains("current base range: 99 count to 110 count · excess beyond nearest range edge: +20 count"),
             "{text}"
         );
         assert!(!text.contains("change point"), "{text}");
@@ -2876,6 +3123,7 @@ mod tests {
             branch_comparison: Some(&comparison),
         }];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -2947,6 +3195,7 @@ mod tests {
             branch_comparison: None,
         }];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -2990,6 +3239,7 @@ mod tests {
             branch_comparison: None,
         }];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -3037,6 +3287,7 @@ mod tests {
             branch_comparison: Some(&comparison),
         }];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -3114,6 +3365,7 @@ mod tests {
             branch_comparison: None,
         }];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -3213,8 +3465,8 @@ mod tests {
             markdown.contains("improvement via change point"),
             "{markdown}"
         );
-        assert!(markdown.contains("**+30.00%**"), "{markdown}");
-        assert!(markdown.contains("**-5.00%**"), "{markdown}");
+        assert!(markdown.contains("**regression: +30.00%**"), "{markdown}");
+        assert!(markdown.contains("**improvement: -5.00%**"), "{markdown}");
         assert_eq!(
             method_label(FindingMethod::BranchExcursion),
             "branch excursion"
@@ -3278,32 +3530,26 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("## callgrind/x86_64-unknown-linux-gnu/m1"),
+            report.contains("## callgrind / x86_64-unknown-linux-gnu / machine m1"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
         // The per-set tally mirrors the JSON metadata and the text header.
         assert!(report.contains("- Regressions: 1"), "{report}");
-        // The set header names the discriminant-filter flags that reproduce exactly this partition.
-        assert!(
-            report.contains(
-                "- Filter: `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1`"
-            ),
-            "{report}"
-        );
+        assert!(!report.contains("- Filter:"));
         // Findings render as heading + bold-headline blocks, not a table.
         assert!(!report.contains("| Change | Direction |"), "{report}");
         // The benchmark id is its own heading, nested one level under the set heading
         // (`##`), so it reads as a chapter title; the change headline follows.
         assert!(report.contains("### `nm/nm::observe/pull`"), "{report}");
         assert!(
-            report.contains("**+30.00%** `instruction_count`"),
+            report.contains("**regression: +30.00%** instruction count"),
             "{report}"
         );
         // The old inline em-dash headline is gone.
         assert!(!report.contains("—"), "{report}");
         // The report no longer surfaces a confidence figure anywhere.
         assert!(
-            report.contains("regression via change point · 100 → 130"),
+            report.contains("before representative: 100 count → after representative: 130 count"),
             "{report}"
         );
         assert!(!report.contains("confidence"), "{report}");
@@ -3342,6 +3588,7 @@ mod tests {
     #[test]
     fn markdown_report_with_no_findings() {
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -3368,6 +3615,7 @@ mod tests {
     #[test]
     fn json_report_includes_hint_field_when_present() {
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -3392,7 +3640,7 @@ mod tests {
     }
 
     #[test]
-    fn warning_renders_after_findings_in_every_format() {
+    fn warning_renders_before_findings_in_every_human_format() {
         let set = discriminant_set();
         let findings = vec![regression()];
         let mut summaries = Vec::new();
@@ -3400,11 +3648,11 @@ mod tests {
         input.warning = Some("Warning: analysis included dirty runs (ephemeral).");
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.trim_end().ends_with("(ephemeral)."), "{text}");
+        assert!(text.find("(ephemeral).").unwrap() < text.find("nm/nm::observe/pull").unwrap());
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         let (body, _) = markdown.split_once("\n## Coverage\n").unwrap();
-        assert!(body.trim_end().ends_with("(ephemeral)."));
+        assert!(body.find("(ephemeral).").unwrap() < body.find("nm/nm::observe/pull").unwrap());
 
         let json = render(&input, ReportFormat::Json, false);
         let parsed: Value = from_str(&json).unwrap();
@@ -3417,6 +3665,7 @@ mod tests {
     #[test]
     fn warning_renders_even_when_there_are_no_findings() {
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -3434,16 +3683,20 @@ mod tests {
         };
         let text = render(&input, ReportFormat::Text, false);
         assert!(text.contains("No notable changes detected."), "{text}");
-        assert!(text.trim_end().ends_with("included."), "{text}");
+        assert!(
+            text.contains("Warning: dirty runs were included."),
+            "{text}"
+        );
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         let (body, _) = markdown.split_once("\n## Coverage\n").unwrap();
-        assert!(body.trim_end().ends_with("included."));
+        assert!(body.contains("Warning: dirty runs were included."));
     }
 
     #[test]
     fn omitted_warning_is_absent_from_json() {
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -3520,6 +3773,7 @@ mod tests {
     #[test]
     fn dirty_context_commit_is_annotated_with_uncommitted_changes() {
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: true,
@@ -3574,8 +3828,9 @@ mod tests {
 
     #[test]
     fn signed_values_keep_the_human_readable_precision() {
-        assert_eq!(format_signed_value(0.300_000_000_000_04), "+0.3");
-        assert_eq!(format_signed_value(-0.300_000_000_000_04), "-0.3");
+        let scale = QuantityScale::new(MetricKind::WallTime, [0.3]);
+        assert_eq!(scale.signed(0.300_000_000_000_04), "+0.3 ns");
+        assert_eq!(scale.signed(-0.300_000_000_000_04), "-0.3 ns");
     }
 
     #[test]
@@ -4253,6 +4508,7 @@ mod tests {
             },
         ];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -4301,6 +4557,7 @@ mod tests {
             },
         ];
         let input = ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -4350,6 +4607,7 @@ mod tests {
             branch_comparison: None,
         });
         ReportInput {
+            inspection: None,
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
@@ -4378,8 +4636,7 @@ mod tests {
             vec![lag(5, ComparisonBaseLagReason::DiscriminantSetMismatch)],
             &mut summaries,
         );
-        let expected =
-            "Warning: comparison base is 5 commits behind base (discriminant set mismatch)";
+        let expected = "Warning: comparison base is 5 commits behind base (newer data belongs to another machine)";
         for report in [
             render(&input, ReportFormat::Text, false),
             render(&input, ReportFormat::Markdown, false),
@@ -4463,8 +4720,7 @@ mod tests {
             &mut summaries,
         );
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-        let warning =
-            "Warning: comparison base is 3 commits behind base (discriminant set mismatch)";
+        let warning = "Warning: comparison base is 3 commits behind base (newer data belongs to another machine)";
         assert_eq!(summary.matches(warning).count(), 1, "{summary}");
     }
 
@@ -4565,19 +4821,184 @@ mod tests {
     }
 
     #[test]
-    fn markdown_wraps_the_metric_name_in_inline_code() {
+    fn human_metric_names_and_json_identifiers_have_distinct_roles() {
         let set = discriminant_set();
         let findings = vec![regression()];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
 
-        // The metric name is a keyword-like identifier, so Markdown renders it as inline
-        // code (backticks) rather than bare prose. The text report carries no such markup.
         let markdown = render(&input, ReportFormat::Markdown, false);
-        assert!(markdown.contains("`instruction_count`"), "{markdown}");
+        assert!(markdown.contains("instruction count"), "{markdown}");
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.contains("instruction_count"), "{text}");
-        assert!(!text.contains("`instruction_count`"), "{text}");
+        assert!(text.contains("instruction count"), "{text}");
+        let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(json["findings"][0]["kind"], "instruction_count");
+    }
+
+    #[test]
+    fn branch_comparisons_use_units_and_nearest_edge_without_changing_json() {
+        // The interpreter exercises both directions with one kind; the small quantity
+        // tests independently cover every unit class. Native runs combine all kinds.
+        let kinds: &[MetricKind] = if cfg!(miri) {
+            &[MetricKind::WallTime]
+        } else {
+            &MetricKind::ALL
+        };
+        for &kind in kinds {
+            for direction in [Direction::Regression, Direction::Improvement] {
+                let mut finding = branch_regression(true);
+                finding.kind = kind;
+                finding.direction = direction;
+                let (latest, excess, edge) = match direction {
+                    Direction::Regression => (130.125, 20.125, 110.0),
+                    Direction::Improvement => (80.125, -18.875, 99.0),
+                };
+                finding.latest = latest;
+                // Deliberately distinct representative metadata proves the branch display
+                // reads the range excursion, not a mean-to-context calculation.
+                finding.baseline = 105.0;
+                finding.delta = latest - finding.baseline;
+                finding.relative_delta = finding.delta / finding.baseline;
+                let branch = finding.branch.as_mut().unwrap();
+                branch.excess = excess;
+                branch.relative_excess = excess / edge;
+                let findings = [finding];
+                let input = ReportInput {
+                    mode: AnalysisMode::Branch,
+                    report_improvements: true,
+                    ..flat_input(&findings)
+                };
+                let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+                assert!(summary.contains(&format_percent(excess / edge)));
+                let displayed = match direction {
+                    Direction::Regression => "130.1",
+                    Direction::Improvement => "80.12",
+                };
+                assert!(summary.contains(&format!("{displayed} {}", kind.as_unit())));
+                assert!(summary.contains("Excess beyond range edge"));
+                assert!(summary.contains(direction_label(direction)));
+                let raw_json = render(&input, ReportFormat::Json, false);
+                let json: Value = from_str(&raw_json).unwrap();
+                assert_eq!(json["findings"][0]["baseline"], 105.0);
+                assert_eq!(json["findings"][0]["latest"], latest);
+                assert_eq!(json["findings"][0]["kind"], kind.as_str());
+                assert!(raw_json.contains(&format!(
+                    "\"relative_excess\": {}",
+                    serde_json::to_string(&(excess / edge)).unwrap()
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_coverage_and_omitted_platform_lags_precede_retained_findings() {
+        let findings = [
+            named_regression("retained", 0.4),
+            named_regression("omitted", 0.2),
+        ];
+        let other = darwin_set();
+        let summaries = [SetSummary {
+            set: &other,
+            runs: 20,
+            series: 1,
+            findings: vec![&findings[1]],
+            comparison_base_lags: vec![lag(7, ComparisonBaseLagReason::NoRecentBaseData)],
+            branch_comparison: None,
+        }];
+        let input = ReportInput {
+            mode: AnalysisMode::Branch,
+            census: census_of(2, &[(UnjudgedReason::TooFewBaseCommits, 3)]),
+            sets: &summaries,
+            ..flat_input(&findings)
+        };
+        let summary = render_markdown_summary(&input, NonZero::<usize>::MIN);
+        let table = summary.find("| Direction |").unwrap();
+        assert!(summary.find("Incomplete coverage").unwrap() < table);
+        assert!(summary.find("lag by up to 7 commits").unwrap() < table);
+        assert!(summary.contains("3 series with too few base-ref commits"));
+        assert!(!summary.contains("| regression | omitted"));
+        assert!(summary.contains("Showing 1 of 2 findings"));
+    }
+
+    #[test]
+    fn summary_bounds_hostile_identities_without_cutting_markup_or_json_evidence() {
+        let hostile = format!("|<details>`\n{}", "wide".repeat(20_000));
+        let findings = [named_regression(&hostile, 0.3)];
+        let input = flat_input(&findings);
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.len() <= 48_000);
+        assert_eq!(summary.matches("\n| regression |").count(), 1);
+        assert!(!summary.contains("|<details>"));
+        assert!(summary.contains("summary size limit"));
+        assert_eq!(
+            summary.matches("<details>").count(),
+            summary.matches("</details>").count()
+        );
+        let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(json["findings"][0]["segments"][0], hostile);
+    }
+
+    #[test]
+    fn inspection_carries_location_and_resolved_selection_and_discloses_snapshots() {
+        let location = InspectionLocation {
+            directory: "work tree".into(),
+            repo: "source's repo".into(),
+            config: Some("custom config.toml".into()),
+            local: Some("selected store".into()),
+        };
+        let findings = [branch_regression(true)];
+        let input = ReportInput {
+            mode: AnalysisMode::Branch,
+            inspection: Some(Inspection {
+                location: &location,
+                base: "base-pinned",
+                since: "2026-04-14T00:00:00Z",
+                no_dirty: true,
+                exact_current: true,
+            }),
+            ..flat_input(&findings)
+        };
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        let powershell = summary
+            .lines()
+            .find(|line| line.starts_with("Set-Location"))
+            .unwrap();
+        let posix = summary
+            .lines()
+            .find(|line| line.starts_with("cd --"))
+            .unwrap();
+        for expected in [
+            "PowerShell 7:",
+            "POSIX shell:",
+            "exact collection snapshots",
+            "context observations may differ",
+            "--context='base-pinned'",
+        ] {
+            assert!(summary.contains(expected), "{expected}");
+        }
+        for expected in [
+            "--context='1234567890abcdef1234'",
+            "--base='base-pinned'",
+            "--since='2026-04-14T00:00:00Z'",
+            "--no-dirty",
+            "--engine='callgrind'",
+            "--target-triple='x86_64-unknown-linux-gnu'",
+            "--machine-key='m1'",
+            "--metric='instruction_count'",
+            "--benchmark='nm/nm::observe/pull'",
+            "--local='selected store'",
+            "--config='custom config.toml'",
+            "--repo='source''s repo'",
+        ] {
+            assert!(powershell.contains(expected), "{expected}: {powershell}");
+        }
+        assert!(posix.contains("--repo='source'\\''s repo'"));
+        let json_with = render(&input, ReportFormat::Json, false);
+        let without = ReportInput {
+            inspection: None,
+            ..input
+        };
+        assert_eq!(json_with, render(&without, ReportFormat::Json, false));
     }
 }

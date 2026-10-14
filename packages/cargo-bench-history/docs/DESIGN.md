@@ -1522,9 +1522,7 @@ percent with the metric, a dimmed detail line, and a small line chart
 of the series — the whole series in history mode, only the bounded baseline-and-tail
 comparison in branch mode — the chart itself always uncolored, with headline color
 enabled only when stdout is a terminal and not disabled by environment. The text and Markdown reports
-group findings under a per-set header, which also states the **discriminant-filter flags** that
-reproduce exactly that partition, so a reader who spots a change can drill into it without
-reconstructing the query by hand. Markdown is that data with
+group findings under a platform, engine and machine header. Markdown is that data with
 Markdown formatting (the id as a heading with the per-finding block nested beneath it, not
 a table; charts as fenced code blocks without
 ANSI). JSON is the machine-readable form: a flat, globally-ranked findings list where each
@@ -1532,7 +1530,30 @@ finding is **self-describing** (it inlines its discriminant set and benchmark se
 findings are never duplicated under the per-set breakdown, which carries only identity and
 tallies. JSON keeps full precision and omits the per-commit series (a charting concern the
 human reports draw from internally, not data a consumer reconstructs); the text and
-Markdown values round to four significant figures. Automation selects its successful-analysis
+Markdown values round to four significant figures. Human quantities use readable time and binary
+byte units, consistently across each finding's values, deltas and chart. Metric identifiers,
+numeric units and full precision remain unchanged in JSON. History values are labelled before
+and after representatives, not current measurements. Branch values identify the measured context,
+the observed current-base range and the excess beyond its nearest edge; their percentage is not
+a mean-to-context change. Charts state their unit, linear scale, oldest-to-newest orientation,
+missing-data gaps and finding or context marker alongside the plot.
+
+Reports lead with findings and judged coverage together. An explicit incomplete-coverage warning
+remains visible beside findings, while the full account distinguishes unjudged in-scope series
+from configured and context-presence exclusions. Ephemeral-data warnings precede findings.
+
+Findings include copyable, read-only `examine` commands in explicitly labelled PowerShell and
+POSIX syntax when the query's filesystem context is available. They retain the actual working
+directory, repository, configuration override and local storage selection, the resolved context
+and base commits, an absolute time cutoff and the finding's exact engine, target and machine.
+Branch reports provide separate context-line and clean-base inspections because their histories
+can diverge. Inspection reads stored observations without re-baselining. Exact collection
+snapshots remain authoritative for current measurements; a stored inspection can differ and says
+so explicitly. Configuration, stored observations and dirty working-tree state may change, so
+the commands do not promise immutable replay. Synthetic reports without a query location do not
+invent one. Reports never fabricate repository URLs for commits.
+
+Automation selects its successful-analysis
 message from the top-level `outcome` and reads each finding's direction, magnitude, and
 associated commit. The `notable` flag remains a convenience for consumers that only need to
 know whether findings exist; it does not distinguish the silent outcomes.
@@ -1543,20 +1564,22 @@ Every format also states what the analysis **judged** (§8.9): an in-scope judge
 report headers, prose qualifying a silent result where there are no findings, and a complete
 coverage account in both the final Markdown **Coverage** section and JSON's structured `census`.
 That account includes all counts, the coverage state and the per-reason breakdown even when
-findings exist. Text and condensed summaries list reasons only for silent results.
+findings exist. Text and condensed summaries also disclose the reason counts beside findings.
 This evidence supports detailed coverage
 policy without replacing the successful-analysis outcome.
 
 Separate from those canonical formats, `analyze` can also render a condensed Markdown
-**summary** — a derived view for a size-limited consumer. It reuses the Markdown
-finding blocks but keeps only the top findings by magnitude and drops the per-discriminant grouping,
+**summary** — a derived view for a size-limited consumer. A scan-friendly table keeps the top
+findings by magnitude and names direction, benchmark/metric, platform/engine/machine, comparison
+values and change. Expandable evidence holds per-finding charts and inspection commands,
 so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
 total it shows and leaves the full reports to be consulted separately. Because it drops the
-grouping, each retained finding instead carries its set's discriminant-filter flags as a trailing
-footer — reference material for a follow-up query rather than a headline — so the summary
-stays investigable and blocks for the same benchmark in different sets remain distinguishable.
-When in-scope series remain unjudged, the summary's judged-series bullet points to the full
-report for coverage details rather than adding a separate notice.
+grouping, each row identifies its comparable group. Coverage, lag reasons and maximum lag,
+unavailable historical comparisons and excursions outside those comparisons describe the complete
+analysis, including findings omitted by the cap. Per-group comparison evidence is expandable.
+The summary bounds complete rows and evidence blocks, never cuts through Markdown, and discloses
+omitted identities or evidence. Full Markdown and JSON retain complete finding identities and
+the complete census. The size budget leaves room for a GitHub envelope.
 Because it exists to
 fit a downstream cap rather than to present the analysis, it is offered only by `analyze`,
 never by the enumerating commands, and the retained-count is a fixed policy of the renderer.

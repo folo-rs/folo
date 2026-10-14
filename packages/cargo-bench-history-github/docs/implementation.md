@@ -6,6 +6,11 @@ network or real-time delay. The production `RestGitHub` adapter is the only HTTP
 Repository identities are validated as literal owner/name path segments before REST URL
 construction, rejecting dot components as well as separators and escape syntax.
 
+The message wrapper embeds core summaries without rewriting their headings or findings.
+Collection scope follows completed summaries in an expandable, escaped package inventory.
+Lifecycle and missing-platform warnings stay outside expandable details, preserving their
+visibility without re-deriving the core's judged-series coverage.
+
 The port exposes semantic GitHub operations—title search, issue reads, comment listing, create,
 update, compare and read the pull-request head—rather than a raw HTTP passthrough. Idempotent
 operations retry transient failures in the adapter. Creates never retry blindly: orchestration

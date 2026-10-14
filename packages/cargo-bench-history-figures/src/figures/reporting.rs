@@ -217,6 +217,7 @@ impl Analysis {
             branch_comparison: None,
         }];
         let input = ReportInput {
+            inspection: None,
             project: PROJECT,
             tip_commit: TIP_COMMIT,
             tip_dirty: false,
@@ -376,13 +377,13 @@ fn finding_annotated() -> String {
     writeln!(
         markdown,
         "| `{detail}` | The detail: direction, the detector that produced the finding, \
-         the baseline and latest representative values, and a commit somewhere near \
+         the before and after representative values with units, and a commit somewhere near \
          the change. |"
     )
     .expect("writing to a String never fails");
     markdown.push_str(
         "| the lines below it | The chart: the series drawn against topology, one column \
-         per commit. |\n",
+         per commit, with its unit, scale, orientation and missing-data legend. |\n",
     );
     markdown
 }
@@ -397,7 +398,7 @@ fn formats() -> String {
     );
     markdown.push_str(
         "| Text | the default; `--no-text` suppresses it | Reading a report in a terminal \
-         | every finding; omits the per-reason census when findings exist |\n",
+         | every finding and coverage with unjudged reason counts |\n",
     );
     markdown.push_str(
         "| Markdown | `--markdown <path>` | Pasting into a pull request or an issue | \
@@ -412,8 +413,8 @@ fn formats() -> String {
         markdown,
         "| Condensed summary | `--markdown-summary <path>` (`analyze` only) | A \
          size-limited destination, such as a pull request comment or a rolling issue body \
-         | at most the {} findings of greatest magnitude, flattened so the \
-         per-set grouping is dropped — lossy by design |",
+         | at most the {} findings of greatest magnitude in a table with expandable \
+         evidence, plus full-analysis qualifications — lossy by design |",
         summary_limit.get(),
     )
     .expect("writing to a String never fails");
@@ -432,7 +433,7 @@ fn formats() -> String {
          the full per-reason census, including the ghost count. It is not an observation \
          archive — the per-commit series behind the charts is obtained with `examine`. \
          Full Markdown always includes the same coverage counts and reasons in its final \
-         Coverage section. Text omits the full reason breakdown when findings exist. \
+         Coverage section. Text also states the reason counts beside findings. \
          Configured exclusions remain visible beside findings on every surface. The condensed \
          summary is lossy by design, so it is the one output that must not be automated \
          against: a check reading it cannot distinguish findings that were capped away from \
@@ -778,7 +779,7 @@ mod tests {
         assert!(
             block
                 .get(1)
-                .is_some_and(|line| line.contains(finding.kind.as_str())),
+                .is_some_and(|line| line.contains(&finding.kind.as_str().replace('_', " "))),
             "the headline names the metric kind that moved: {block:?}"
         );
         assert!(
@@ -972,7 +973,7 @@ mod tests {
         let table = formats();
 
         assert!(
-            table.contains("omits the per-reason census when findings exist"),
+            table.contains("coverage with unjudged reason counts"),
             "{table}"
         );
         assert!(table.contains("the complete census always"), "{table}");

@@ -2,28 +2,39 @@
 
 ```text
 Analyzed project textproc (history mode)
+2 regressions detected.
+WARNING: Incomplete coverage. Unjudged series may contain changes.
+Judged 5 of 8 in-scope series (one benchmark/metric per platform/engine/machine).
+Not judged (including out-of-scope series): 2 series not measured at the analyzed context commit; 1 series ignored by configuration; 3 series with too few points in the analyzed window.
   commit: 9f2c4a1d3b5e708aab12cd34ef5678901234567a
-  runs: 128 (4d17b0c93ea2 → 9f2c4a1d3b5e)  in-scope series judged: 5 of 8  ignored by configuration: 1 series  regressions: 2
+  runs: 128 (4d17b0c93ea2 → 9f2c4a1d3b5e)  in-scope series judged: 5 of 8  regressions: 2
 
-criterion/x86_64-unknown-linux-gnu/a1b2c3d4
+criterion / x86_64-unknown-linux-gnu / machine a1b2c3d4
   runs: 128  regressions: 2
-  filter: --engine criterion --target-triple x86_64-unknown-linux-gnu --machine-key a1b2c3d4
 
 http_parse/case
-  +29.57% wall_time
-    regression via change point · 100.4 → 130.1 · somewhere near commit10
+  regression: +29.57% wall time
+    regression via change point · before representative: 100.4 ns → after representative: 130.1 ns · change: +29.68 ns · somewhere near commit10
+wall time (ns, linear scale; lower is better)
  135 ┤           ╭─╮╭─╮╭╮           
  126 ┤         ╭─╯ ╰╯ ╰╯╰─          
  116 ┤         │                    
  106 ┤ ╭╮ ╭─╮╭─╯                    
   97 ┼─╯╰─╯ ╰╯                     
+History: commit0 -> commit19, oldest to newest; first-parent commit positions.
+Empty columns = no measurements, not zero; wide histories average columns.
+Finding marker: somewhere near commit10.
 
 index_build/case
-  +10.40% wall_time
-    regression via drift · 98.5 → 108.7 · accumulated commit0 → commit29
+  regression: +10.40% wall time
+    regression via drift · before representative: 98.5 ns → after representative: 108.7 ns · change: +10.24 ns · accumulated commit0 → commit29
+wall time (ns, linear scale; lower is better)
  113 ┤                    ╭╮    ╭── 
  109 ┤          ╭╮╭╮╭─╮   ││ ╭╮╭╯   
  105 ┤ ╭╮     ╭─╯╰╯╰╯ ╰─╮╭╯╰─╯╰╯    
  101 ┼╮│╰─────╯         ╰╯          
-  97 ┤╰╯
+  97 ┤╰╯                           
+History: commit0 -> commit29, oldest to newest; first-parent commit positions.
+Empty columns = no measurements, not zero; wide histories average columns.
+Finding marker: accumulated commit0 → commit29.
 ```

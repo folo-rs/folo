@@ -76,6 +76,7 @@ impl ReportFixture {
             census.record(Testability::Judged);
         }
         ReportInput {
+            inspection: None,
             project: "render_benchmarks",
             tip_commit: LAST_COMMIT,
             tip_dirty: false,
@@ -235,14 +236,14 @@ pub fn assert_full_report(input: &ReportInput<'_>, format: ReportFormat) {
 pub fn assert_summary(input: &ReportInput<'_>) {
     let output = render_markdown_summary(input, DEFAULT_SUMMARY_LIMIT);
     let retained = input.findings.len().min(DEFAULT_SUMMARY_LIMIT.get());
-    assert!(output.contains(&format!("- Regressions: {}", input.findings.len())));
+    assert!(output.contains(&format!("{} regressions detected.", input.findings.len())));
     assert_eq!(output.matches("```text").count(), retained);
-    assert_eq!(output.matches("\n## ").count(), retained);
-    assert_eq!(output.matches("_Filter:_").count(), retained);
-    assert_eq!(
-        output.contains("Showing the top"),
-        input.findings.len() > retained
-    );
+    assert_eq!(output.matches("<details>").count(), retained);
+    assert_eq!(output.matches("| regression |").count(), retained);
+    assert!(output.contains(&format!(
+        "Showing {retained} of {} findings",
+        input.findings.len()
+    )));
     for (index, finding) in input.findings.iter().enumerate() {
         assert_eq!(output.contains(&finding.id.qualified()), index < retained);
     }

@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use crate::cli::{Conclusion, PendingArgs};
 use crate::marker;
 use crate::model::{Instance, IssueKind};
@@ -69,8 +71,8 @@ pub(crate) fn pr_result(
         ADVISORY.to_owned(),
     ];
     push_result_status(&mut sections, evidence);
-    sections.push(format_scope(packages));
     sections.push(summary.to_owned());
+    sections.push(format_scope(packages));
     push_links(&mut sections, artifact_url);
     join_sections(sections)
 }
@@ -242,14 +244,48 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
 
 /// Renders the package selection consistently across pending and completed PR comments.
 fn format_scope(packages: &str) -> String {
+    // Reserve GitHub body space for the core's bounded summary and lifecycle warnings.
+    const INVENTORY_BYTES: usize = 8_000;
     let packages = packages
         .split(',')
         .map(str::trim)
         .filter(|one| !one.is_empty())
-        .map(|one| format!("`{one}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("Packages benchmarked: {packages}")
+        .collect::<Vec<_>>();
+    let count = packages.len();
+    let noun = if count == 1 { "package" } else { "packages" };
+    let mut inventory = String::new();
+    let mut shown = 0_usize;
+    for package in &packages {
+        let entry = format!("<code>{}</code>", html_text(package));
+        if inventory
+            .len()
+            .saturating_add(entry.len())
+            .saturating_add(2)
+            > INVENTORY_BYTES
+        {
+            break;
+        }
+        if shown > 0 {
+            inventory.push_str(", ");
+        }
+        inventory.push_str(&entry);
+        shown = shown.saturating_add(1);
+    }
+    if shown < count {
+        write!(inventory, "\n\nInventory abbreviated: {shown} of {count} packages shown. Consult the collection inputs for the complete scope.")
+            .expect("writing to a String never fails");
+    }
+    format!(
+        "<details>\n<summary>Collection scope: {count} {noun}</summary>\n\nPackages benchmarked: {inventory}\n\n</details>"
+    )
+}
+
+/// Package identifiers remain text even in a collapsible HTML inventory.
+fn html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Adds the optional report artifact and the fixed reading guide to standard messages.
@@ -475,12 +511,42 @@ mod tests {
     #[test]
     fn scope_is_trimmed_and_rendered_consistently() {
         let body = pr_in_progress(&instance(), "foo, bar", &owner());
-        assert!(body.contains("Packages benchmarked: `foo`, `bar`"));
+        assert!(body.contains("Packages benchmarked: <code>foo</code>, <code>bar</code>"));
+        assert!(body.contains("<summary>Collection scope: 2 packages</summary>"));
         assert!(is_in_progress(&body, &instance()));
         assert!(!is_in_progress(
             &pr_nothing_in_scope(&instance(), &owner()),
             &instance()
         ));
+    }
+
+    #[test]
+    fn scope_cannot_hide_results_or_overflow_a_bounded_core_summary() {
+        let packages = (0..1000)
+            .map(|index| format!("package_{index:04}_with_a_long_name"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let summary = format!("## Measured result\n{}", "x".repeat(47_000));
+        let body = pr_result(
+            &instance(),
+            &owner(),
+            &evidence(AnalysisMode::Branch, Outcome::Findings, false),
+            PublicationState::Findings,
+            &packages,
+            &summary,
+            None,
+        );
+        assert!(body.len() < 65_536);
+        assert!(body.contains("Inventory abbreviated"));
+        let inventory = body.find("<details>").unwrap();
+        assert!(body.find("## Measured result").unwrap() < inventory);
+        assert!(body.find("Partial platform coverage").unwrap() < inventory);
+        assert_eq!(
+            body.matches("<details>").count(),
+            body.matches("</details>").count()
+        );
+        let escaped = format_scope("<details>&");
+        assert!(escaped.contains("<code>&lt;details&gt;&amp;</code>"));
     }
 
     #[test]

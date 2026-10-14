@@ -20,9 +20,14 @@
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 mod coverage;
+mod inspection;
+mod markup;
+mod quantity;
 mod report;
 
 pub use coverage::*;
+pub use inspection::*;
+pub use quantity::*;
 pub use report::*;
 
 #[cfg(any(test, feature = "private-test-util"))]
