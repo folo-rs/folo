@@ -12,6 +12,8 @@ use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use vicinal::{Pool, WorkerPolicy};
 
+testing::init_tracing!();
+
 #[test]
 fn tasks_execute_on_spawning_processor() {
     let pool = Pool::new();

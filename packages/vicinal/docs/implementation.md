@@ -118,3 +118,23 @@ join handles even while scheduler clones retain the registry. Task panic payload
 owning wrapper with protected disposal. Dropping either result-channel endpoint therefore
 cannot turn an unobserved task panic's destructor into an infrastructure failure; awaiting
 the handle extracts and resumes the original payload.
+
+## Logging coverage
+
+Ordinary unit and integration test executables initialize permanent silent formatting
+with `testing::init_tracing!()`. Existing private failure adapters can therefore exercise
+logging expressions and formatters without adding public test APIs. Tests share the
+enabled subscriber configuration without capturing or mixing their output.
+
+The dedicated `tracing_coverage` integration binary instead owns a capturing subscriber
+for its single test, allowing assertions about events emitted across worker threads.
+Its scenarios use the public pool and scheduler APIs with simulated hardware, including
+both locality policies, priorities, task panic payloads, retained schedulers and shutdown
+during an outer unwind.
+
+Failure-path logging needs no private failure adapter: dropping a disconnected task result
+can fail on its worker, poisoned rejection can encounter a panicking capture, and queued
+capture destruction can fail during shutdown. A blocked worker keeps those captures queued;
+another queued capture releases it during cleanup. Explicit signals establish execution
+and pool destruction joins workers before output inspection. These scenarios exercise the
+production failure boundaries without relying on scheduling delays or exposing internals.

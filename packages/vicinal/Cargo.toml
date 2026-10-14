@@ -2,7 +2,7 @@
 name = "vicinal"
 description = "Worker pool with configurable processor affinity"
 publish = true
-version = "0.1.47"
+version = "0.1.48"
 
 authors.workspace = true
 edition.workspace = true
