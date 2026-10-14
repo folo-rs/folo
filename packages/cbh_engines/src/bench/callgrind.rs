@@ -1,4 +1,4 @@
-//! Parsing of Gungraun's Callgrind `summary.json` (schema version 6) into the
+//! Parsing of Gungraun's Callgrind `summary.json` (schema versions 6 and 7) into the
 //! engine-neutral [`BenchmarkResult`] model.
 //!
 //! Only the fields the tool needs are modelled; serde ignores the rest. The
@@ -14,8 +14,8 @@ use nonempty::NonEmpty;
 use ohno::OhnoCore;
 use serde::Deserialize;
 
-/// The Gungraun summary schema version this parser understands.
-const SUPPORTED_VERSION: &str = "6";
+/// External schema identifiers covered by the real-output parser fixtures.
+const SUPPORTED_VERSIONS: &[&str] = &["6", "7"];
 
 /// An error encountered while parsing a Callgrind `summary.json`.
 ///
@@ -76,8 +76,9 @@ pub fn parse_callgrind_summary(json: &str) -> Result<BenchmarkResult, CallgrindP
 /// Deserializes and version-checks a summary without mapping it.
 fn parse_summary(json: &str) -> Result<Summary, CallgrindParseError> {
     let summary: Summary = serde_json::from_str(json).map_err(CallgrindJsonError::from)?;
-    if summary.version != SUPPORTED_VERSION {
-        let error = UnsupportedCallgrindVersionError::new(summary.version, SUPPORTED_VERSION);
+    if !SUPPORTED_VERSIONS.contains(&summary.version.as_str()) {
+        let error =
+            UnsupportedCallgrindVersionError::new(summary.version, SUPPORTED_VERSIONS.join(", "));
         return Err(error.into());
     }
     Ok(summary)
@@ -104,17 +105,17 @@ fn summary_to_record(summary: &Summary) -> BenchmarkResult {
 
     let mut metrics = Vec::new();
     for profile in &summary.profiles {
-        let Some(events) = &profile.summaries.total.summary.callgrind else {
+        let Some(events) = profile.callgrind_metrics() else {
             continue;
         };
         for (event_kind, entry) in events {
             let Some(kind) = classify(event_kind) else {
                 continue;
             };
-            let Some(value) = entry.metrics.new_value() else {
+            let Some(value) = entry.new_value() else {
                 continue;
             };
-            metrics.push(Metric::new(kind, value.as_f64()));
+            metrics.push(Metric::new(kind, value));
         }
     }
 
@@ -170,9 +171,46 @@ struct Summary {
     profiles: Vec<Profile>,
 }
 
+/// Recognizes the profile containers emitted by the supported producer schemas.
 #[derive(Debug, Deserialize)]
-struct Profile {
-    summaries: ProfileData,
+#[serde(untagged)]
+enum Profile {
+    V6 { summaries: ProfileData },
+    V7(CurrentProfile),
+}
+
+impl Profile {
+    /// Selects aggregate Callgrind counts without including per-part copies or other tools.
+    fn callgrind_metrics(&self) -> Option<&BTreeMap<String, MetricEntry>> {
+        match self {
+            Self::V6 { summaries } => summaries.total.summary.callgrind.as_ref(),
+            Self::V7(CurrentProfile::Callgrind { data }) => Some(&data.total.metrics),
+            Self::V7(CurrentProfile::Other) => None,
+        }
+    }
+}
+
+/// The current format identifies the tool before its tool-specific data.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "tool")]
+enum CurrentProfile {
+    Callgrind {
+        data: CurrentProfileData,
+    },
+    #[serde(other)]
+    Other,
+}
+
+/// Keeps per-part measurements outside the aggregate metric mapping.
+#[derive(Debug, Deserialize)]
+struct CurrentProfileData {
+    total: CurrentProfileTotal,
+}
+
+/// Aggregate measurements in the current producer format.
+#[derive(Debug, Deserialize)]
+struct CurrentProfileTotal {
+    metrics: BTreeMap<String, MetricEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,9 +231,28 @@ struct ToolSummaries {
     callgrind: Option<BTreeMap<String, MetricEntry>>,
 }
 
+/// Reads the current side of either supported metric-pair representation.
 #[derive(Debug, Deserialize)]
-struct MetricEntry {
-    metrics: MetricPair,
+#[serde(untagged)]
+enum MetricEntry {
+    V6 { metrics: MetricPair },
+    V7 { values: CurrentMetricPair },
+}
+
+impl MetricEntry {
+    /// Baseline-only values do not describe the run being collected.
+    fn new_value(&self) -> Option<f64> {
+        match self {
+            Self::V6 { metrics } => metrics.new_value().map(MetricValue::as_f64),
+            Self::V7 { values } => values.new,
+        }
+    }
+}
+
+/// The current format uses untagged JSON numbers and names each side of the comparison.
+#[derive(Debug, Deserialize)]
+struct CurrentMetricPair {
+    new: Option<f64>,
 }
 
 /// One metric as Gungraun serializes its `EitherOrBoth<MetricValue>`: the current
@@ -285,8 +342,37 @@ mod tests {
     );
 
     use crate::testing::{
-        CALLGRIND_PARAMETRIZED as PARAMETRIZED_FIXTURE,
-        CALLGRIND_SINGLE_UNPARAMETRIZED as SINGLE_FIXTURE,
+        CALLGRIND_PARAMETRIZED, CALLGRIND_SCHEMA7 as CURRENT_FIXTURE,
+        CALLGRIND_SINGLE_UNPARAMETRIZED,
+    };
+
+    // Native runs validate complete producer output. Miri covers the same identity and metric
+    // shapes without interpreting unrelated profiling metadata in every assertion.
+    const SINGLE_FIXTURE: &str = if cfg!(miri) {
+        concat!(
+            r#"{"version":"6","package_dir":"packages/fast_time","id":null,"#,
+            r#""module_path":"fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now","#,
+            r#""function_name":"timestamp_capture_std_now","#,
+            r#""profiles":[{"summaries":{"total":{"summary":{"Callgrind":{"#,
+            r#""Ir":{"metrics":{"Left":{"Int":36}}},"#,
+            r#""Bc":{"metrics":{"Left":{"Int":4}}},"#,
+            r#""Bi":{"metrics":{"Left":{"Int":2}}},"#,
+            r#""Bcm":{"metrics":{"Left":{"Int":1}}}"#,
+            r#"}}}}}]}"#,
+        )
+    } else {
+        CALLGRIND_SINGLE_UNPARAMETRIZED
+    };
+
+    // This fixture exercises the optional parameter identity; metric mapping has separate coverage.
+    const PARAMETRIZED_FIXTURE: &str = if cfg!(miri) {
+        concat!(
+            r#"{"version":"6","package_dir":"packages/fast_time","id":"two_instants","#,
+            r#""module_path":"fast_time_timestamp_performance_cg::timestamp_capture","#,
+            r#""function_name":"timestamp_capture_instant_saturating_duration_since","profiles":[]}"#,
+        )
+    } else {
+        CALLGRIND_PARAMETRIZED
     };
 
     fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
@@ -345,10 +431,7 @@ mod tests {
     #[test]
     fn skips_untracked_events() {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
-        // Only the three tracked events survive. The fixture still carries the
-        // cache-simulation and branch-misprediction events (`EstimatedCycles`,
-        // `L1hits`, `LLhits`, `RamHits`, `Bcm`, `Bim`), derived rates (`L1HitRate`),
-        // raw cache reads (`Dr`), and totals (`TotalRW`) — all dropped.
+        // Cache-simulation and branch-misprediction events do not enter normalized metrics.
         assert_eq!(record.metrics.len(), 3, "{:?}", record.metrics);
     }
 
@@ -371,13 +454,13 @@ mod tests {
     fn rejects_unsupported_version() {
         // Version validation needs a well-formed summary, not the producer's
         // unrelated profiling metadata.
-        let altered = r#"{"version":"7","module_path":"m","function_name":"f","profiles":[]}"#;
+        let altered = r#"{"version":"8","module_path":"m","function_name":"f","profiles":[]}"#;
         let error = parse_callgrind_summary(altered).unwrap_err();
         let unsupported = error
             .find_source::<UnsupportedCallgrindVersionError>()
             .unwrap();
-        assert_eq!(unsupported.version, "7");
-        assert_eq!(unsupported.supported_version, SUPPORTED_VERSION);
+        assert_eq!(unsupported.version, "8");
+        assert_eq!(unsupported.supported_version, SUPPORTED_VERSIONS.join(", "));
         assert!(error.find_source::<CallgrindJsonError>().is_none());
     }
 
@@ -398,15 +481,20 @@ mod tests {
         assert!(json_error.find_source::<CallgrindJsonError>().is_some());
         assert!(json_error.find_source::<serde_json::Error>().is_some());
 
-        let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSION);
+        let version_error =
+            UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSIONS.join(", "));
         assert_eq!(version_error.version, "9");
-        assert_eq!(version_error.supported_version, SUPPORTED_VERSION);
+        assert_eq!(
+            version_error.supported_version,
+            SUPPORTED_VERSIONS.join(", ")
+        );
         assert!(error::Error::source(&version_error).is_none());
     }
 
     #[test]
     fn callgrind_parse_error_displays_as_the_underlying_failure() {
-        let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSION);
+        let version_error =
+            UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSIONS.join(", "));
         let expected = version_error.to_string();
 
         let error = CallgrindParseError::from(version_error);
@@ -494,5 +582,65 @@ mod tests {
         let body = "{\"Callgrind\":{\"Ir\":{\"metrics\":{\"Left\":{\"Float\":1.5}}}}}";
         let record = parse_callgrind_summary(&summary_json(body)).unwrap();
         assert_eq!(metric(&record, MetricKind::InstructionCount).value, 1.5);
+    }
+
+    #[test]
+    fn parses_current_producer_identity_and_aggregate_metrics() {
+        let record = parse_callgrind_summary(CURRENT_FIXTURE).unwrap();
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(nonempty![
+                "awaiter_set".to_owned(),
+                "awaiter_set_cg::register_unregister::register_unregister_register_into_empty"
+                    .to_owned(),
+                "register_unregister_register_into_empty".to_owned(),
+                "empty".to_owned(),
+            ])
+        );
+        assert_eq!(record.metrics.len(), 3);
+        assert_eq!(metric(&record, MetricKind::InstructionCount).value, 54.0);
+        assert_eq!(metric(&record, MetricKind::ConditionalBranches).value, 3.0);
+        assert_eq!(metric(&record, MetricKind::IndirectBranches).value, 3.0);
+    }
+
+    #[test]
+    fn current_profiles_ignore_other_tools_and_baseline_only_values() {
+        // Distinct new, old and per-part values detect selection of the wrong measurement.
+        let json = r#"{
+            "version":"7","module_path":"m","function_name":"f",
+            "profiles":[
+                {"tool":"Dhat","data":{}},
+                {"tool":"Callgrind","data":{
+                    "parts":[{"metrics":{"Ir":{"values":{"new":99}}}}],
+                    "total":{"metrics":{
+                        "Ir":{"values":{"new":12,"old":30}},
+                        "Bc":{"values":{"old":40}},
+                        "Bi":{"values":{"new":1.5}},
+                        "Bcm":{"values":{"new":50}}
+                    }}
+                }}
+            ]
+        }"#;
+        let record = parse_callgrind_summary(json).unwrap();
+        assert_eq!(record.metrics.len(), 2);
+        assert_eq!(metric(&record, MetricKind::InstructionCount).value, 12.0);
+        assert_eq!(metric(&record, MetricKind::IndirectBranches).value, 1.5);
+    }
+
+    #[test]
+    fn rejects_malformed_current_callgrind_profiles() {
+        for data in [
+            "{}",
+            r#"{"total":{"metrics":{"Ir":{"values":{"new":"invalid"}}}}}"#,
+            r#"{"total":{"metrics":{"Ir":{}}}}"#,
+        ] {
+            let json = format!(
+                r#"{{"version":"7","module_path":"m","function_name":"f","profiles":[
+                    {{"tool":"Callgrind","data":{data}}}
+                ]}}"#
+            );
+            let error = parse_callgrind_summary(&json).unwrap_err();
+            assert!(error.find_source::<CallgrindJsonError>().is_some());
+        }
     }
 }

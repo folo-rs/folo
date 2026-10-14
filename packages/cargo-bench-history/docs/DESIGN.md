@@ -40,6 +40,8 @@ every engine is partitioned by machine key (see §3).
   test, so they cannot be compared across builds (see §8). Its machine-readable summary is the
   one output that must be opted into with an environment variable — the narrow "special need"
   that justifies `collect` existing at all.
+  Collection accepts Gungraun summary schemas 6 and 7, selecting the current run's
+  aggregate counts while preserving the same benchmark identities and stored metric kinds.
 * **`alloc_tracker`** — heap allocations (bytes and counts) and optional peak outstanding
   bytes. Available peaks are collected and analyzed by default. Not deterministic: warmup and
   buffer-resize allocations are amortized over a Criterion-chosen iteration count, so the
