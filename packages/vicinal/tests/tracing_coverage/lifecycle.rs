@@ -12,6 +12,8 @@ use vicinal::WorkerPolicy;
 use crate::fixtures::{PanickingPayload, pool};
 
 /// Exercises both destination formatters, priorities and task-panic payload representations.
+///
+/// Tracing targets must follow their owning component so internal helpers share its log filters.
 pub(crate) fn exercise(capture: &TracingCapture) {
     // The worker configuration prevents a later task's start signal from overtaking
     // an earlier task's remaining diagnostics.
@@ -73,6 +75,7 @@ pub(crate) fn exercise(capture: &TracingCapture) {
         ] {
             assert!(entries.iter().any(|entry| {
                 entry.contains(message)
+                    && entry.contains("vicinal::pool_inner::inner:")
                     && entry.contains(&group_field)
                     && entry.contains("worker_index=")
                     && entry.contains("pool_id=")
@@ -80,13 +83,16 @@ pub(crate) fn exercise(capture: &TracingCapture) {
         }
         for urgent in [false, true] {
             let urgent_field = format!("urgent={urgent}");
-            assert!(
-                entries.iter().any(|entry| {
-                    entry.contains("spawned task") && entry.contains(&urgent_field)
-                })
-            );
+            assert!(entries.iter().any(|entry| {
+                entry.contains("spawned task")
+                    && entry.contains("vicinal::pool_inner::inner:")
+                    && entry.contains(&urgent_field)
+            }));
         }
-        assert!(entries.iter().any(|entry| entry.contains("abandoned task")));
+
+        assert!(entries.iter().any(|entry| {
+            entry.contains("abandoned task") && entry.contains("vicinal::pool_inner::inner:")
+        }));
         for marker in markers {
             assert!(
                 entries
@@ -102,10 +108,7 @@ pub(crate) fn exercise(capture: &TracingCapture) {
             expected_panics
         );
     }
-    assert!(
-        capture
-            .snapshot()
-            .iter()
-            .any(|entry| entry.contains("payload destruction failed"))
-    );
+    assert!(capture.snapshot().iter().any(|entry| {
+        entry.contains("payload destruction failed") && entry.contains("vicinal::task:")
+    }));
 }

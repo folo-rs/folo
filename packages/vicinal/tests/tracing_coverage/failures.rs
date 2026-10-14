@@ -41,7 +41,9 @@ pub(crate) fn worker_failure(capture: &TracingCapture) {
             && entry.contains("pool_id=")
     }));
     assert!(entries.iter().any(|entry| {
-        entry.contains("task cleanup failed") && entry.contains("rejected capture canary")
+        entry.contains("task cleanup failed")
+            && entry.contains("vicinal::task:")
+            && entry.contains("rejected capture canary")
     }));
     assert!(entries.iter().any(|entry| {
         entry.contains("failure during worker pool cleanup")

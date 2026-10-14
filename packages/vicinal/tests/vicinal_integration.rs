@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
-use std::thread;
+use std::{iter, thread};
 
 use events_once::EventPool;
 use futures::executor::block_on;
@@ -72,8 +72,10 @@ fn nested_spawn_via_captured_scheduler() {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
-        let scheduler_clone = scheduler.clone();
-        let outer_handle = scheduler.spawn(move || scheduler_clone.spawn(|| 99));
+        let outer_handle = scheduler.spawn({
+            let scheduler = scheduler.clone();
+            move || scheduler.spawn(|| 99)
+        });
 
         let inner_handle = block_on(outer_handle).unwrap();
         let result = block_on(inner_handle).unwrap();
@@ -141,52 +143,9 @@ fn scheduler_sent_to_another_thread() {
 fn concurrent_spawns_from_multiple_threads() {
     // Keep multiple submissions from every producer under Miri, with native stress coverage.
     const TASKS_PER_PRODUCER: usize = if cfg!(miri) { 2 } else { 25 };
-    // Retain competing producers even when interpreting only a small batch from each.
-    const PRODUCER_COUNT: usize = 4;
 
     with_watchdog(|| {
-        let pool = Pool::new();
-        let scheduler = pool.scheduler();
-        let completed = Arc::new(AtomicUsize::new(0));
-        let start = Arc::new(Barrier::new(PRODUCER_COUNT));
-
-        let thread_handles: Vec<_> = std::iter::repeat_with(|| {
-            let scheduler = scheduler.clone();
-            let completed = Arc::clone(&completed);
-            let start = Arc::clone(&start);
-
-            thread::spawn(move || {
-                start.wait();
-                #[expect(
-                    clippy::needless_collect,
-                    reason = "submit the whole batch before awaiting to exercise queue contention"
-                )]
-                let handles: Vec<_> = (0..TASKS_PER_PRODUCER)
-                    .map(|i| {
-                        let completed = Arc::clone(&completed);
-                        scheduler.spawn(move || {
-                            completed.fetch_add(1, Ordering::Relaxed);
-                            i
-                        })
-                    })
-                    .collect();
-
-                for (i, handle) in handles.into_iter().enumerate() {
-                    assert_eq!(block_on(handle).unwrap(), i);
-                }
-            })
-        })
-        .take(PRODUCER_COUNT)
-        .collect();
-
-        for handle in thread_handles {
-            handle.join().unwrap();
-        }
-
-        assert_eq!(
-            completed.load(Ordering::Relaxed),
-            PRODUCER_COUNT * TASKS_PER_PRODUCER
-        );
+        assert_concurrent_spawns(&Pool::new(), TASKS_PER_PRODUCER);
     });
 }
 
@@ -199,11 +158,9 @@ fn spawn_and_forget_completes() {
 
         let (tx, rx) = event_pool.rent();
         scheduler.spawn_and_forget(move || {
-            // Signal completion via the event.
             tx.send(());
         });
 
-        // Wait for the task to complete.
         block_on(rx).unwrap();
     });
 }
@@ -217,11 +174,9 @@ fn spawn_urgent_and_forget_completes() {
 
         let (tx, rx) = event_pool.rent();
         scheduler.spawn_urgent_and_forget(move || {
-            // Signal completion via the event.
             tx.send(());
         });
 
-        // Wait for the task to complete.
         block_on(rx).unwrap();
     });
 }
@@ -314,54 +269,13 @@ fn fire_and_forget_with_fake_hardware() {
 fn concurrent_spawns_with_fake_hardware() {
     // Keep multiple submissions from every producer under Miri, with native stress coverage.
     const TASKS_PER_PRODUCER: usize = if cfg!(miri) { 2 } else { 10 };
-    // Exercise the same competing producers and hardware topology at either batch size.
-    const PRODUCER_COUNT: usize = 4;
 
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(4_usize), nz!(2_usize)));
         let pool = Pool::builder().hardware(hardware).build();
-        let scheduler = pool.scheduler();
-        let completed = Arc::new(AtomicUsize::new(0));
-        let start = Arc::new(Barrier::new(PRODUCER_COUNT));
 
-        let thread_handles: Vec<_> = std::iter::repeat_with(|| {
-            let scheduler = scheduler.clone();
-            let completed = Arc::clone(&completed);
-            let start = Arc::clone(&start);
-
-            thread::spawn(move || {
-                start.wait();
-                #[expect(
-                    clippy::needless_collect,
-                    reason = "submit the whole batch before awaiting to exercise queue contention"
-                )]
-                let handles: Vec<_> = (0..TASKS_PER_PRODUCER)
-                    .map(|i| {
-                        let completed = Arc::clone(&completed);
-                        scheduler.spawn(move || {
-                            completed.fetch_add(1, Ordering::Relaxed);
-                            i
-                        })
-                    })
-                    .collect();
-
-                for (i, handle) in handles.into_iter().enumerate() {
-                    assert_eq!(block_on(handle).unwrap(), i);
-                }
-            })
-        })
-        .take(PRODUCER_COUNT)
-        .collect();
-
-        for handle in thread_handles {
-            handle.join().unwrap();
-        }
-
-        assert_eq!(
-            completed.load(Ordering::Relaxed),
-            PRODUCER_COUNT * TASKS_PER_PRODUCER
-        );
+        assert_concurrent_spawns(&pool, TASKS_PER_PRODUCER);
     });
 }
 
@@ -399,12 +313,67 @@ fn nested_spawn_with_fake_hardware() {
         let pool = Pool::builder().hardware(hardware).build();
         let scheduler = pool.scheduler();
 
-        let scheduler_clone = scheduler.clone();
-        let outer_handle = scheduler.spawn(move || scheduler_clone.spawn(|| 99));
+        let outer_handle = scheduler.spawn({
+            let scheduler = scheduler.clone();
+            move || scheduler.spawn(|| 99)
+        });
 
         let inner_handle = block_on(outer_handle).unwrap();
         assert_eq!(block_on(inner_handle).unwrap(), 99);
     });
+}
+
+/// Exercises the same competing-producer scenario with real or simulated hardware.
+fn assert_concurrent_spawns(pool: &Pool, tasks_per_producer: usize) {
+    // Retain competing producers even when Miri interprets only a small batch from each.
+    const PRODUCER_COUNT: usize = 4;
+
+    let scheduler = pool.scheduler();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let start = Arc::new(Barrier::new(PRODUCER_COUNT));
+
+    let thread_handles: Vec<_> = iter::repeat_with(|| {
+        thread::spawn({
+            let scheduler = scheduler.clone();
+            let completed = Arc::clone(&completed);
+            let start = Arc::clone(&start);
+
+            move || {
+                start.wait();
+
+                #[expect(
+                    clippy::needless_collect,
+                    reason = "submit the whole batch before awaiting to exercise queue contention"
+                )]
+                let handles: Vec<_> = (0..tasks_per_producer)
+                    .map(|i| {
+                        scheduler.spawn({
+                            let completed = Arc::clone(&completed);
+                            move || {
+                                completed.fetch_add(1, Ordering::Relaxed);
+                                i
+                            }
+                        })
+                    })
+                    .collect();
+
+                for (i, handle) in handles.into_iter().enumerate() {
+                    assert_eq!(block_on(handle).unwrap(), i);
+                }
+            }
+        })
+    })
+    .take(PRODUCER_COUNT)
+    .collect();
+
+    for handle in thread_handles {
+        handle.join().unwrap();
+    }
+
+    assert_eq!(
+        completed.load(Ordering::Relaxed),
+        PRODUCER_COUNT.checked_mul(tasks_per_producer).unwrap()
+    );
 }
 
 ::testing::set_allocator!();

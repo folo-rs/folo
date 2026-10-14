@@ -7,19 +7,6 @@ use std::sync::atomic::{self, AtomicBool, Ordering};
 
 use crate::{ErasedTaskHandle, NEVER_POISONED, discard_task_after_failure};
 
-/// What one pass of a worker's main loop accomplished, and thus what the loop does next.
-///
-/// The two `Executed` outcomes mean work was found and the loop should immediately look for
-/// more; they are kept apart so tests can assert queue priority. `WaitingForWork` sends the
-/// worker to sleep on the wake event and `Shutdown` ends the thread.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum IterationResult {
-    ExecutedUrgent,
-    ExecutedRegular,
-    Shutdown,
-    WaitingForWork,
-}
-
 /// The body of a worker thread's main loop, isolated from thread management.
 ///
 /// It borrows only the parts of a group's state that executing work needs, which lets a
@@ -71,6 +58,7 @@ impl<'a> WorkerCore<'a> {
             if !execute_task(task, before_task, stop_pool) {
                 return IterationResult::Shutdown;
             }
+
             return IterationResult::ExecutedUrgent;
         }
 
@@ -79,11 +67,23 @@ impl<'a> WorkerCore<'a> {
             if !execute_task(task, before_task, stop_pool) {
                 return IterationResult::Shutdown;
             }
+
             return IterationResult::ExecutedRegular;
         }
 
         IterationResult::WaitingForWork
     }
+}
+
+/// Tells the worker loop whether to continue, stop or wait for a notification.
+///
+/// The execution outcomes stay distinct so tests can verify queue priority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IterationResult {
+    ExecutedUrgent,
+    ExecutedRegular,
+    Shutdown,
+    WaitingForWork,
 }
 
 /// Keeps preparation/execution infrastructure and capture destruction in separate
@@ -186,12 +186,14 @@ mod tests {
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
         let pool = MultiPool::new();
+
         for queue in [&regular, &urgent] {
             queue
                 .lock()
                 .unwrap()
                 .push_back(alloc_task(&pool, CountingTask::new(&COUNTER)));
             let core = WorkerCore::new(&urgent, &regular, &shutdown);
+
             assert_eq!(
                 core.run_one_iteration_with(
                     || {
@@ -217,12 +219,14 @@ mod tests {
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
         let pool = MultiPool::new();
+
         for queue in [&urgent, &regular] {
             queue.lock().unwrap().push_back(alloc_task(
                 &pool,
                 OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload)))),
             ));
             let core = WorkerCore::new(&urgent, &regular, &shutdown);
+
             let payload = panic::catch_unwind(AssertUnwindSafe(|| {
                 core.run_one_iteration_with(
                     || {
@@ -234,6 +238,7 @@ mod tests {
                 )
             }))
             .unwrap_err();
+
             assert!(payload.is::<AffinityFailure>());
             assert!(queue.lock().unwrap().is_empty());
             assert!(pool.is_empty());
@@ -250,7 +255,9 @@ mod tests {
             CLOCK.with_borrow_mut(fast_time::Clock::now),
         );
         let task = alloc_task(&pool, wrapped);
+
         CLOCK.with_borrow_mut(|_| assert_panics(|| execute_task(task, || true, || {})));
+
         assert!(pool.is_empty());
     }
 

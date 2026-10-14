@@ -33,6 +33,7 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
                 dropped.store(true, Ordering::Release);
             }
         }));
+
         let pins = Cell::new(0);
         worker_loop(&pool.inner, destination, 0, |_| {
             pins.set(pins.get() + 1);
@@ -43,6 +44,7 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
             publish_expansion(&pool, destination);
             pool.inner.shutdown.store(true, Ordering::Release);
         });
+
         assert_eq!(pins.get(), 1);
         assert!(dropped.load(Ordering::Acquire));
         assert!(state.task_pool.lock().unwrap().is_empty());
@@ -69,6 +71,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
                 dropped.store(true, Ordering::Release);
             }
         }));
+
         let pins = Cell::new(0);
         worker_loop(&pool.inner, destination, 0, |set| {
             pins.set(pins.get() + 1);
@@ -89,6 +92,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
                 _ => panic!("the worker must exit after abandoning the dequeued task"),
             }
         });
+
         assert_eq!(pins.get(), 2);
         assert!(dropped.load(Ordering::Acquire));
         assert!(!pool.inner.poisoned.load(Ordering::Acquire));
@@ -124,6 +128,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
                 rejected.store(true, Ordering::Release);
             }
         }));
+
         let pins = Cell::new(0);
         let payload = panic::catch_unwind(AssertUnwindSafe(|| {
             worker_loop(&pool.inner, destination, 0, |set| {
@@ -145,6 +150,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
             });
         }))
         .unwrap_err();
+
         assert!(payload.is::<AffinityFailure>());
         assert_eq!(pins.get(), 2);
         assert!(rejected.load(Ordering::Acquire));
@@ -163,6 +169,7 @@ fn regional_pool() -> (Pool, GroupId) {
         .build();
     let target = pool.inner.policy.destination(&hardware);
     let state = pool.inner.registry.get_or_init(target.group);
+
     publish_affinity(
         state,
         hardware
@@ -172,6 +179,7 @@ fn regional_pool() -> (Pool, GroupId) {
             .take_all()
             .unwrap(),
     );
+
     (pool, target.group)
 }
 

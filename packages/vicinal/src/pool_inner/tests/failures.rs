@@ -52,13 +52,16 @@ fn disconnected_joined_panic_does_not_poison_pool() {
         pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
         let (release, wait) = mpsc::channel();
+
         let abandoned = scheduler.spawn(move || {
             wait.recv().unwrap();
             panic::panic_any(PanickingPayload);
         });
+
         drop(abandoned);
         release.send(()).unwrap();
         block_on(scheduler.spawn(|| {})).unwrap();
+
         assert!(!pool.inner.poisoned.load(Ordering::Acquire));
     });
 }
@@ -73,8 +76,10 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
             .build();
         pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
+
         let completed = scheduler.spawn(|| panic::panic_any(PanickingPayload));
         block_on(scheduler.spawn(|| {})).unwrap();
+
         drop(completed);
         assert!(!pool.inner.poisoned.load(Ordering::Acquire));
     });
@@ -93,6 +98,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         let target = pool.inner.policy.destination(&hardware);
         let state = pool.inner.registry.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
+
         pool.inner
             .enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
                 pool.inner
@@ -101,6 +107,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
                         set.pin_current_thread_to();
                     });
             });
+
         let scheduler = pool.scheduler();
         let (entered, arrivals) = mpsc::channel();
         let (release, wait) = mpsc::channel();
@@ -109,6 +116,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
             wait.recv().unwrap();
         });
         arrivals.recv().unwrap();
+
         let dropped = Arc::new(AtomicUsize::new(0));
         let task = || {
             let capture = CountOnDrop {
@@ -117,6 +125,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
             move || drop(capture)
         };
         let ordinary = scheduler.spawn(task());
+
         pin(&hardware, 8);
         let (other_entered, other_arrivals) = mpsc::channel();
         let (other_release, other_wait) = mpsc::channel();
@@ -126,10 +135,12 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         });
         other_arrivals.recv().unwrap();
         let other_queued = scheduler.spawn(task());
+
         pin(&hardware, 1);
         let expansion = scheduler.spawn_urgent(task());
         release.send(()).unwrap();
         block_on(running).unwrap();
+
         // Failure closes and drains the queues before it becomes merely a Pool-drop concern.
         for handle in [ordinary, expansion, other_queued] {
             let error = block_on(handle).unwrap_err();
@@ -138,6 +149,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
             error.into_body().unwrap()();
         }
         assert_eq!(dropped.load(Ordering::Acquire), 3);
+
         pin(&hardware, 8);
         assert_panics(|| scheduler.spawn_and_forget(|| {}));
         other_release.send(()).unwrap();

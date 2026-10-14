@@ -7,7 +7,8 @@ use std::time::Instant;
 
 use all_the_time::Session as TimeSession;
 use alloc_tracker::{Allocator, Session as AllocSession};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::measurement::WallTime;
+use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use events_once::EventPool;
 use futures::executor::block_on;
 use many_cpus::{ProcessorSet, SystemHardware};
@@ -55,7 +56,8 @@ fn simulate_work() -> u32 {
     value
 }
 
-fn entrypoint(c: &mut Criterion) {
+/// Shares affinity and measurement sessions across the dispatch comparisons.
+fn entrypoint(criterion: &mut Criterion) {
     // Pin the main thread to a single processor to eliminate OS migration impact.
     let one_processor = SystemHardware::current()
         .processors()
@@ -67,12 +69,41 @@ fn entrypoint(c: &mut Criterion) {
     let allocs = AllocSession::new();
     let times = TimeSession::new();
 
-    let mut g = c.benchmark_group("vicinal/spawn");
+    joined_dispatch(criterion, &allocs, &times, &one_processor);
+    fire_and_forget_dispatch(criterion, &allocs, &times);
+    policy_dispatch(criterion, &allocs, &times);
+    region_contention(criterion, &one_processor);
 
+    // The sessions emit their summaries and JSON after every group has completed.
+}
+
+/// Keeps joined task dispatch and its thread-based baselines in one comparison group.
+fn joined_dispatch(
+    criterion: &mut Criterion,
+    allocs: &AllocSession,
+    times: &TimeSession,
+    one_processor: &ProcessorSet,
+) {
+    let mut group = criterion.benchmark_group("vicinal/spawn");
+
+    spawn_regular(&mut group, allocs, times);
+    spawn_urgent(&mut group, allocs, times);
+    spawn_threads(&mut group, allocs, times);
+    spawn_threadpool(&mut group, allocs, times, one_processor);
+
+    group.finish();
+}
+
+/// Measures joined regular tasks individually and as a queued batch.
+fn spawn_regular(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &AllocSession,
+    times: &TimeSession,
+) {
     let spawn_single_alloc = allocs.operation("vicinal/spawn/spawn_single");
     let spawn_single_time = times.operation("vicinal/spawn/spawn_single");
 
-    g.bench_function("spawn_single", |b| {
+    group.bench_function("spawn_single", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
@@ -93,7 +124,7 @@ fn entrypoint(c: &mut Criterion) {
     let spawn_100_alloc = allocs.operation("vicinal/spawn/spawn_100");
     let spawn_100_time = times.operation("vicinal/spawn/spawn_100");
 
-    g.bench_function("spawn_100", |b| {
+    group.bench_function("spawn_100", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
@@ -121,11 +152,18 @@ fn entrypoint(c: &mut Criterion) {
             start.elapsed()
         });
     });
+}
 
+/// Applies the same dispatch workloads to the urgent queue.
+fn spawn_urgent(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &AllocSession,
+    times: &TimeSession,
+) {
     let spawn_urgent_single_alloc = allocs.operation("vicinal/spawn/spawn_urgent_single");
     let spawn_urgent_single_time = times.operation("vicinal/spawn/spawn_urgent_single");
 
-    g.bench_function("spawn_urgent_single", |b| {
+    group.bench_function("spawn_urgent_single", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
@@ -150,7 +188,7 @@ fn entrypoint(c: &mut Criterion) {
     let spawn_urgent_100_alloc = allocs.operation("vicinal/spawn/spawn_urgent_100");
     let spawn_urgent_100_time = times.operation("vicinal/spawn/spawn_urgent_100");
 
-    g.bench_function("spawn_urgent_100", |b| {
+    group.bench_function("spawn_urgent_100", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
@@ -182,11 +220,18 @@ fn entrypoint(c: &mut Criterion) {
             start.elapsed()
         });
     });
+}
 
+/// Provides the cost baseline of creating an operating-system thread for every task.
+fn spawn_threads(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &AllocSession,
+    times: &TimeSession,
+) {
     let thread_single_alloc = allocs.operation("vicinal/spawn/thread_single");
     let thread_single_time = times.operation("vicinal/spawn/thread_single");
 
-    g.bench_function("thread_single", |b| {
+    group.bench_function("thread_single", |b| {
         b.iter_custom(|iterations| {
             let _alloc_span = thread_single_alloc.measure_process().iterations(iterations);
             let _time_span = thread_single_time.measure_process().iterations(iterations);
@@ -204,7 +249,7 @@ fn entrypoint(c: &mut Criterion) {
     let thread_100_alloc = allocs.operation("vicinal/spawn/thread_100");
     let thread_100_time = times.operation("vicinal/spawn/thread_100");
 
-    g.bench_function("thread_100", |b| {
+    group.bench_function("thread_100", |b| {
         b.iter_custom(|iterations| {
             let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
 
@@ -229,27 +274,21 @@ fn entrypoint(c: &mut Criterion) {
             start.elapsed()
         });
     });
+}
 
+/// Compares an external pool at the same worker count and processor placement.
+fn spawn_threadpool(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &AllocSession,
+    times: &TimeSession,
+    one_processor: &ProcessorSet,
+) {
     let threadpool_single_alloc = allocs.operation("vicinal/spawn/threadpool_single");
     let threadpool_single_time = times.operation("vicinal/spawn/threadpool_single");
 
-    g.bench_function("threadpool_single", |b| {
-        // Match the number of workers Vicinal assigns to the selected processor.
-        let pool = ThreadPool::new(THREADPOOL_WORKER_COUNT);
+    group.bench_function("threadpool_single", |b| {
+        let pool = pinned_threadpool(one_processor);
         let event_pool = EventPool::<u32>::new();
-
-        // Submit more pinning callbacks than workers because the pool does not guarantee
-        // which worker runs each callback.
-        for _ in 0..THREADPOOL_PIN_TASK_COUNT {
-            pool.execute({
-                let one_processor = one_processor.clone();
-                move || {
-                    one_processor.pin_current_thread_to();
-                }
-            });
-        }
-
-        pool.join();
 
         b.iter_custom(|iterations| {
             let _alloc_span = threadpool_single_alloc
@@ -275,26 +314,12 @@ fn entrypoint(c: &mut Criterion) {
     let threadpool_100_alloc = allocs.operation("vicinal/spawn/threadpool_100");
     let threadpool_100_time = times.operation("vicinal/spawn/threadpool_100");
 
-    g.bench_function("threadpool_100", |b| {
-        // Match the number of workers Vicinal assigns to the selected processor.
-        let pool = ThreadPool::new(THREADPOOL_WORKER_COUNT);
+    group.bench_function("threadpool_100", |b| {
+        let pool = pinned_threadpool(one_processor);
         let event_pool = EventPool::<u32>::new();
 
-        // Submit more pinning callbacks than workers because the pool does not guarantee
-        // which worker runs each callback.
-        for _ in 0..THREADPOOL_PIN_TASK_COUNT {
-            pool.execute({
-                let one_processor = one_processor.clone();
-                move || {
-                    one_processor.pin_current_thread_to();
-                }
-            });
-        }
-
-        pool.join();
-
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
+            let mut receivers = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = threadpool_100_alloc
                 .measure_process()
@@ -304,10 +329,10 @@ fn entrypoint(c: &mut Criterion) {
 
             for _ in 0..iterations {
                 for _ in 0..TASK_BATCH_SIZE {
-                    let (tx, rx) = event_pool.rent();
-                    rxs.push(rx);
+                    let (sender, receiver) = event_pool.rent();
+                    receivers.push(receiver);
                     pool.execute(move || {
-                        tx.send(black_box(simulate_work()));
+                        sender.send(black_box(simulate_work()));
                     });
                 }
 
@@ -315,27 +340,55 @@ fn entrypoint(c: &mut Criterion) {
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
-                for rx in rxs.drain(..) {
-                    block_on(rx).unwrap();
+                for receiver in receivers.drain(..) {
+                    block_on(receiver).unwrap();
                 }
             }
 
             start.elapsed()
         });
     });
+}
 
-    g.finish();
+/// Prepares the comparison pool outside measurement, using the same placement for both cases.
+fn pinned_threadpool(one_processor: &ProcessorSet) -> ThreadPool {
+    let pool = ThreadPool::new(THREADPOOL_WORKER_COUNT);
 
-    // Benchmark group for fire-and-forget variants with EventPool<()> completion signaling.
-    // This group includes both regular spawn (with event) and spawn_and_forget for fair comparison.
-    let mut g = c.benchmark_group("vicinal/fire_and_forget");
+    // Submit more pinning callbacks than workers because the pool does not guarantee
+    // which worker runs each callback.
+    for _ in 0..THREADPOOL_PIN_TASK_COUNT {
+        pool.execute({
+            let one_processor = one_processor.clone();
+            move || one_processor.pin_current_thread_to()
+        });
+    }
+    pool.join();
 
+    pool
+}
+
+/// Uses identical event-channel completion signaling for joined and fire-and-forget dispatch.
+fn fire_and_forget_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &TimeSession) {
+    let mut group = criterion.benchmark_group("vicinal/fire_and_forget");
+
+    spawn_with_event(&mut group, allocs, times);
+    spawn_and_forget(&mut group, allocs, times);
+
+    group.finish();
+}
+
+/// Measures joined submission while an explicit event, rather than its handle, signals completion.
+fn spawn_with_event(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &AllocSession,
+    times: &TimeSession,
+) {
     let spawn_with_event_single_alloc =
         allocs.operation("vicinal/fire_and_forget/spawn_with_event_single");
     let spawn_with_event_single_time =
         times.operation("vicinal/fire_and_forget/spawn_with_event_single");
 
-    g.bench_function("spawn_with_event_single", |b| {
+    group.bench_function("spawn_with_event_single", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
         let event_pool = EventPool::<()>::new();
@@ -367,13 +420,13 @@ fn entrypoint(c: &mut Criterion) {
         allocs.operation("vicinal/fire_and_forget/spawn_with_event_100");
     let spawn_with_event_100_time = times.operation("vicinal/fire_and_forget/spawn_with_event_100");
 
-    g.bench_function("spawn_with_event_100", |b| {
+    group.bench_function("spawn_with_event_100", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
         let event_pool = EventPool::<()>::new();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
+            let mut receivers = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_with_event_100_alloc
                 .measure_process()
@@ -385,11 +438,11 @@ fn entrypoint(c: &mut Criterion) {
 
             for _ in 0..iterations {
                 for _ in 0..TASK_BATCH_SIZE {
-                    let (tx, rx) = event_pool.rent();
-                    rxs.push(rx);
+                    let (sender, receiver) = event_pool.rent();
+                    receivers.push(receiver);
                     let _handle = scheduler.spawn(move || {
                         let result = black_box(simulate_work());
-                        tx.send(());
+                        sender.send(());
                         result
                     });
                 }
@@ -398,21 +451,28 @@ fn entrypoint(c: &mut Criterion) {
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
-                for rx in rxs.drain(..) {
-                    block_on(rx).unwrap();
+                for receiver in receivers.drain(..) {
+                    block_on(receiver).unwrap();
                 }
             }
 
             start.elapsed()
         });
     });
+}
 
+/// Measures fire-and-forget dispatch with the same completion signals as the joined comparison.
+fn spawn_and_forget(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &AllocSession,
+    times: &TimeSession,
+) {
     let spawn_and_forget_single_alloc =
         allocs.operation("vicinal/fire_and_forget/spawn_and_forget_single");
     let spawn_and_forget_single_time =
         times.operation("vicinal/fire_and_forget/spawn_and_forget_single");
 
-    g.bench_function("spawn_and_forget_single", |b| {
+    group.bench_function("spawn_and_forget_single", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
         let event_pool = EventPool::<()>::new();
@@ -443,13 +503,13 @@ fn entrypoint(c: &mut Criterion) {
         allocs.operation("vicinal/fire_and_forget/spawn_and_forget_100");
     let spawn_and_forget_100_time = times.operation("vicinal/fire_and_forget/spawn_and_forget_100");
 
-    g.bench_function("spawn_and_forget_100", |b| {
+    group.bench_function("spawn_and_forget_100", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
         let event_pool = EventPool::<()>::new();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
+            let mut receivers = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_and_forget_100_alloc
                 .measure_process()
@@ -461,11 +521,11 @@ fn entrypoint(c: &mut Criterion) {
 
             for _ in 0..iterations {
                 for _ in 0..TASK_BATCH_SIZE {
-                    let (tx, rx) = event_pool.rent();
-                    rxs.push(rx);
+                    let (sender, receiver) = event_pool.rent();
+                    receivers.push(receiver);
                     scheduler.spawn_and_forget(move || {
                         black_box(simulate_work());
-                        tx.send(());
+                        sender.send(());
                     });
                 }
 
@@ -473,27 +533,20 @@ fn entrypoint(c: &mut Criterion) {
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
-                for rx in rxs.drain(..) {
-                    block_on(rx).unwrap();
+                for receiver in receivers.drain(..) {
+                    block_on(receiver).unwrap();
                 }
             }
 
             start.elapsed()
         });
     });
-
-    g.finish();
-
-    policy_dispatch(c, &allocs, &times);
-    region_contention(c, &one_processor);
-
-    // `allocs` and `times` print their summaries and write JSON to the Cargo
-    // target directory when they are dropped at the end of this function.
 }
 
 /// Compares locality routing with one submission and a short queued batch.
-fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession) {
-    let mut group = c.benchmark_group("vicinal/policy_dispatch");
+fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &TimeSession) {
+    let mut group = criterion.benchmark_group("vicinal/policy_dispatch");
+
     // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
     // tasks. This benchmark count does not track future changes to the pool's default.
     for (policy_name, policy) in [
@@ -505,24 +558,29 @@ fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession
             let name = format!("{policy_name}/{batch_size}");
             let allocation = allocs.operation(format!("vicinal/policy_dispatch/{name}"));
             let time = times.operation(format!("vicinal/policy_dispatch/{name}"));
+
             group.bench_function(name, |b| {
                 let pool = Pool::builder().worker_policy(policy.clone()).build();
                 let scheduler = pool.scheduler();
                 block_on(scheduler.spawn(|| {})).unwrap();
                 let mut handles = Vec::with_capacity(batch_size);
+
                 b.iter_custom(|iterations| {
                     let _allocations = allocation.measure_process().iterations(iterations);
                     let _time = time.measure_process().iterations(iterations);
                     let start = Instant::now();
+
                     for _ in 0..iterations {
                         for _ in 0..batch_size {
                             handles.push(scheduler.spawn(|| black_box(simulate_work())));
                         }
+
                         #[expect(clippy::iter_with_drain, reason = "reuse the batch vector")]
                         for handle in handles.drain(..) {
                             black_box(block_on(handle).unwrap());
                         }
                     }
+
                     start.elapsed()
                 });
             });
@@ -535,7 +593,7 @@ fn policy_dispatch(c: &mut Criterion, allocs: &AllocSession, times: &TimeSession
 ///
 /// The workspace has no `bench_on_threadpool` helper. A scoped-thread harness runs both
 /// caller-count cases with identical synchronization and measures only dispatch/completion.
-fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
+fn region_contention(criterion: &mut Criterion, caller: &ProcessorSet) {
     let region_id = caller.iter().next().unwrap().memory_region_id();
     let region = SystemHardware::current()
         .all_processors()
@@ -543,7 +601,8 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
         .filter(|p| p.memory_region_id() == region_id)
         .take_all()
         .unwrap();
-    let mut group = c.benchmark_group("vicinal/region_contention");
+    let mut group = criterion.benchmark_group("vicinal/region_contention");
+
     // A single submitter is the control; competing submitters expose regional queue contention.
     for callers in [1_usize, 2] {
         group.bench_function(format!("callers/{callers}"), |b| {
@@ -553,6 +612,7 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                 .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
                 .build();
             let scheduler = pool.scheduler();
+
             // Only producers submit, including during setup, so the controller cannot expand
             // worker affinity beyond this case's intended caller processors.
             b.iter_custom(|iterations| {
@@ -561,6 +621,7 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                     let participants = callers.checked_add(1).unwrap();
                     let start = Arc::new(Barrier::new(participants));
                     let finish = Arc::new(Barrier::new(participants));
+
                     for index in 0..callers {
                         // Small/one-CPU regions still exercise competing callers on the same CPU.
                         let processor = region
@@ -573,24 +634,29 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                             .filter(|p| p.id() == processor)
                             .take_all()
                             .unwrap();
+
                         scope.spawn({
                             let scheduler = scheduler.clone();
                             let start = Arc::clone(&start);
                             let finish = Arc::clone(&finish);
                             move || {
                                 affinity.pin_current_thread_to();
+
                                 // Membership expansion and initial slot/channel allocation are
                                 // setup, not steady-state dispatch contention.
                                 block_on(scheduler.spawn(|| {})).unwrap();
                                 let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
+
                                 // First rendezvous reports readiness; the second releases work.
                                 start.wait();
                                 start.wait();
+
                                 for _ in 0..iterations {
                                     for _ in 0..TASK_BATCH_SIZE {
                                         handles
                                             .push(scheduler.spawn(|| black_box(simulate_work())));
                                     }
+
                                     #[expect(
                                         clippy::iter_with_drain,
                                         reason = "reuse the batch vector"
@@ -603,17 +669,20 @@ fn region_contention(c: &mut Criterion, caller: &ProcessorSet) {
                             }
                         });
                     }
+
                     // All producers have prepared affinity/storage before the measured release.
                     // The symmetric barriers include the same controller handoff in both cases.
                     start.wait();
                     let started = Instant::now();
                     start.wait();
                     finish.wait();
+
                     started.elapsed()
                 })
             });
         });
     }
+
     group.finish();
 }
 

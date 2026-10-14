@@ -127,6 +127,7 @@ impl<R> TaskError<R> {
     pub fn into_diagnostic(self) -> impl Error + Send + Sync + 'static {
         let Self { failure, core } = self;
         drop(failure);
+
         TaskDiagnostic { core }
     }
 
@@ -161,6 +162,7 @@ impl<R> fmt::Debug for TaskFailure<R> {
             Self::Cancelled(_) => "cancelled",
             Self::Panicked(_) => "panicked",
         };
+
         f.debug_tuple(type_name::<Self>()).field(&kind).finish()
     }
 }
@@ -232,6 +234,7 @@ mod tests {
             } else {
                 assert!(diagnostic.source().unwrap().is::<TaskCancelled>());
             }
+
             drop(diagnostic);
             assert_eq!(dropped.load(Ordering::Relaxed), 1);
         }
@@ -278,6 +281,7 @@ mod tests {
         let error = TaskError::cancelled(move || capture.into_inner());
         assert!(error.is_cancel());
         assert!(!error.is_panic());
+
         let error = error.into_panic().unwrap_err();
         assert!(error.is_cancel());
         assert_eq!(error.into_body().unwrap()(), "captured value");
@@ -298,6 +302,7 @@ mod tests {
         let error = TaskError::<()>::panicked(Box::new(Cell::new(String::from("panic payload"))));
         assert!(error.is_panic());
         assert!(!error.is_cancel());
+
         let error = error.into_body().err().unwrap();
         let payload = error.into_panic().unwrap();
         assert_eq!(
