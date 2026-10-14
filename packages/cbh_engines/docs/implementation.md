@@ -19,6 +19,11 @@ Committed Criterion and Callgrind fixtures regression-test their recorded extern
 fixtures must be regenerated or the schemas otherwise validated when the external producers are
 upgraded.
 
+The Callgrind adapter accepts the supported schema identifiers and normalizes their
+profile containers and metric pairs. It reads only aggregate Callgrind metrics from
+the current run, ignoring baseline-only values, other tools and per-part copies.
+Separate real-output fixtures preserve coverage of both supported producer formats.
+
 Orchestration tests share minimal synthetic engine documents through the test-support
 module. These exercise the real adapters without repeatedly processing unrelated producer
 metadata. The committed external-output fixtures and live producer round trips retain

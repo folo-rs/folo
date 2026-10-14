@@ -19,7 +19,8 @@ ZIP creation uses the `zip` crate with only Deflate and the explicitly selected
 safe-Rust `miniz_oxide` backend through `flate2`.
 Staging and the ZIP writer stream executable bytes through the same bounded-copy
 checkpoints, retaining the root name
-and Unix permissions. A fixed ZIP timestamp avoids incidental source-file timestamp
+and Unix permissions. Entries with explicit Unix permissions declare Unix ZIP metadata
+independently of the writer's host. A fixed ZIP timestamp avoids incidental source-file timestamp
 variation; it is not a promise of byte-identical compression across tool versions.
 ZIP64 represents large entries without a separate archive format. Staged executables
 are promoted from an owned temporary file only after copying and flushing succeed.

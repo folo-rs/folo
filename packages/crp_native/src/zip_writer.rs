@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, Cursor, Read, Seek, Write};
 use flate2::Compression;
 use ohno::AppError;
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, DateTime, ZipWriter};
+use zip::{CompressionMethod, DateTime, System, ZipWriter};
 
 /// Writes one root executable with bounded buffering and cooperative interruption.
 pub(crate) fn write_archive(
@@ -22,7 +22,8 @@ pub(crate) fn write_archive(
         .last_modified_time(DateTime::default())
         .large_file(size >= u64::from(u32::MAX));
     if let Some(permissions) = permissions {
-        options = options.unix_permissions(permissions);
+        // Explicit Unix modes must retain their meaning independently of the writer's host.
+        options = options.system(System::Unix).unix_permissions(permissions);
     }
     let mut archive = ZipWriter::new(output);
     archive.start_file(name, options)?;
@@ -112,7 +113,7 @@ mod tests {
         let mut archive = ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
         assert_eq!(archive.len(), 1);
         let mut entry = archive.by_index(0).unwrap();
-        assert_eq!(entry.name(), "program with spaces");
+        assert_eq!(entry.name().unwrap(), "program with spaces");
         assert_eq!(entry.compression(), CompressionMethod::Deflated);
         assert_eq!(entry.unix_mode().unwrap() & 0o777, 0o751);
         let mut restored = Vec::new();
@@ -147,7 +148,7 @@ mod tests {
             let mut archive = ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
             let entry = archive.by_index(0).unwrap();
             assert_eq!(entry.size(), 0);
-            assert_eq!(entry.name(), "program.exe");
+            assert_eq!(entry.name().unwrap(), "program.exe");
         }
     }
 

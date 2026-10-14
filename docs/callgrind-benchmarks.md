@@ -327,6 +327,9 @@ Clippy), our build immediately surfaces the now-unfulfilled expectation and
 we can remove the suppression. This chapter is the repository source for that
 rationale, and the worked example above is the reference implementation.
 
+Benchmarks with unit-returning teardown hooks also include `unit_bindings` in
+that block because Gungraun binds the teardown result in its generated wrapper.
+
 ### Gungraun syntax gotchas
 
 These are easy to get wrong on the first attempt:
@@ -395,7 +398,7 @@ Install once:
 
 ```bash
 sudo apt install -y valgrind
-cargo install gungraun-runner --version 0.19.4 --locked
+cargo install gungraun-runner --version 0.20.0 --locked
 ```
 
 The `gungraun-runner` version must match the `gungraun` library version

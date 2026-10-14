@@ -33,6 +33,9 @@ be treated as mathematically exact.
 
 ## What Callgrind persists
 
+Collection supports Gungraun summary schemas 6 and 7. Both supply the current run's
+aggregate counts; baseline-only values and per-part copies are not collected.
+
 For Callgrind, layout-sensitivity is decisive at microbenchmark scale, so only the
 build-stable events are persisted: the instruction count (`Ir`) and the two branch-execution
 counts (`Bc`, `Bi`) — they count *what the code did*. The cache-simulation counts, the derived
