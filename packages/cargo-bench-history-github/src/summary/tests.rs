@@ -6,15 +6,18 @@
 use cbh_model::{BackfillCompletion, BackfillCounts, BackfillStop};
 use serde_json::{Value, json};
 
-use crate::result::tests::evidence;
-use crate::result::{AnalysisMode, Outcome};
+use crate::result::Outcome;
 use crate::summary::input::SummaryInput;
 use crate::summary::render::{InvalidSummary, render};
 
 /// Supplies an analyzer-shaped document without external I/O.
 fn report(outcome: Outcome, partial: bool) -> Value {
-    let evidence = evidence(AnalysisMode::History, outcome, true);
-    let report = evidence.report;
+    let (judged, in_scope) = match outcome {
+        Outcome::Findings | Outcome::Clean => (1, 1),
+        Outcome::Partial => (1, 2),
+        Outcome::InsufficientBaseline => (0, 1),
+        Outcome::NothingInScope => (0, 0),
+    };
     let coverage = match outcome {
         Outcome::Findings if partial => "partial",
         Outcome::Findings | Outcome::Clean => "full",
@@ -23,10 +26,10 @@ fn report(outcome: Outcome, partial: bool) -> Value {
         Outcome::Partial => "partial",
     };
     json!({
-        "tip_commit": report.commit.as_str(), "tip_dirty": false, "mode":"history",
+        "tip_commit": "a".repeat(40), "tip_dirty": false, "mode":"history",
         "outcome":outcome.as_str(), "notable":outcome == Outcome::Findings,
-        "census":{"coverage":coverage, "judged":report.judged,
-            "in_scope":if partial { 2 } else { report.in_scope }},
+        "census":{"coverage":coverage, "judged":judged,
+            "in_scope":if partial { 2 } else { in_scope }},
         "sets":[{"engine":"criterion", "target_triple":"x86_64-unknown-linux-gnu",
             "machine_key":"0123456789abcdef"}]
     })
@@ -62,9 +65,14 @@ fn render_report(input: Value, report: &Value) -> String {
 fn all_analysis_outcomes_keep_execution_publication_and_coverage_separate() {
     for (outcome, expected) in [
         (Outcome::Findings, "Notable benchmark changes"),
+        // Native coverage keeps the outcome matrix; Miri retains one representative card.
+        #[cfg(not(miri))]
         (Outcome::Clean, "No notable changes detected across"),
+        #[cfg(not(miri))]
         (Outcome::Partial, "among the series that could be judged"),
+        #[cfg(not(miri))]
         (Outcome::InsufficientBaseline, "Insufficient evidence"),
+        #[cfg(not(miri))]
         (Outcome::NothingInScope, "No metric series"),
     ] {
         let card = render_report(analysis(), &report(outcome, false));
