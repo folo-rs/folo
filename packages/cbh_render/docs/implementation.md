@@ -38,6 +38,9 @@ stored inspection rather than silently claiming the two sources are interchangea
 Condensed output budgets whole table rows and expandable evidence blocks, reserving space for
 the GitHub envelope. Aggregate qualifications cover every group before truncation; bounded
 group details and finding evidence explicitly point to the full report when omitted.
+Selection diagnostics have their own escaped-byte budget, separate from short identity labels.
+Ordinary explanations retain every exclusion and remedy. Oversized diagnostics omit whole lines
+with an explicit notice, continuing past long identity lines to retain later instructions.
 
 Ghosts and configured ignores remain in the census total but sit outside the in-scope
 denominator. Ignored-series disclosure is derived from that same census, including beside
