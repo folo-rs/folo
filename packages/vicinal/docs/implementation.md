@@ -62,8 +62,8 @@ Binary search keeps established submissions allocation-free and lock-free for me
 lookup, while table storage scales with eligible processors rather than the highest ID.
 Processor-local pools do not allocate this table. Expansion selects only already admitted
 CPUs plus the current submitting processor from the destination. The system destination
-admits eligible processors regardless
-of their memory region, reusing the same membership and refresh protocol as regional groups.
+admits eligible processors regardless of their memory region, reusing the same membership
+and refresh protocol as regional groups.
 
 Queue insertion, membership and snapshot publication happen under the selected queue's
 admission lock. Workers refresh after dequeueing but before invoking task code, so they
@@ -73,7 +73,7 @@ outside shared locks. Submissions from known processors neither construct a mask
 broadcast a wakeup.
 
 Wait-boundary tests observe workers after listener registration and the final queue/revision
-recheck, immediately before the unchanged listener wait. A group-local test-only callback
+recheck, immediately before the real listener wait. A group-local test-only callback
 holds those registered wait attempts while the test expands affinity. Initial admission
 finishes before these workers start, so earlier notifications cannot satisfy the waits.
 
