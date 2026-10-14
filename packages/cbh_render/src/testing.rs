@@ -9,6 +9,7 @@ use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
 use nonempty::nonempty;
 use serde_json::{Value, from_str, json};
 
+use crate::markup::markdown_text;
 use crate::{
     DEFAULT_SUMMARY_LIMIT, ReportFormat, ReportInput, SetSummary, chart_series, render,
     render_markdown_summary,
@@ -199,7 +200,12 @@ pub fn assert_full_report(input: &ReportInput<'_>, format: ReportFormat) {
         return;
     }
     for summary in input.sets {
-        assert!(output.contains(summary.set.machine_key.as_str()));
+        let machine = if format == ReportFormat::Markdown {
+            markdown_text(summary.set.machine_key.as_str())
+        } else {
+            summary.set.machine_key.to_string()
+        };
+        assert!(output.contains(&machine));
         assert!(!summary.findings.is_empty());
     }
     for finding in input.findings {

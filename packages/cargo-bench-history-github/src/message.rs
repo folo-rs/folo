@@ -521,6 +521,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exercises GitHub's fixed body limit with a full-size summary and large inventory; smaller message cases run under Miri."
+    )]
     fn scope_cannot_hide_results_or_overflow_a_bounded_core_summary() {
         let packages = (0..1000)
             .map(|index| format!("package_{index:04}_with_a_long_name"))

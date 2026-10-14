@@ -23,7 +23,7 @@ use rasciigraph::{Config, plot};
 use serde::Serialize;
 use serde_json::to_string_pretty;
 
-use crate::markup::{code_block, code_span, markdown_text, plain_text};
+use crate::markup::{code_block, code_span, html_text, markdown_text, plain_text};
 use crate::quantity::QuantityScale;
 use crate::{AnalysisOutcome, Coverage, CoverageState, Inspection};
 
@@ -1658,7 +1658,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         let block = format!(
             "\n<details>\n<summary>{}: {} evidence</summary>\n\n{}\n</details>\n",
             direction_label(finding.direction),
-            compact(&finding.id.qualified()),
+            html_text(&display_prefix(&finding.id.qualified())),
             finish(&evidence)
         );
         if finish(&lines)
@@ -1677,13 +1677,18 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
 
 /// Caps display-only identities; full reports and inspection retain the original value.
 fn compact(value: &str) -> String {
+    markdown_text(&display_prefix(value))
+}
+
+/// Shares the summary identity limit across Markdown cells and HTML labels.
+fn display_prefix(value: &str) -> String {
     // Keeps unusually long benchmark identifiers from overwhelming a GitHub table.
     const DISPLAY_CHARACTERS: usize = 160;
     let mut prefix: String = value.chars().take(DISPLAY_CHARACTERS).collect();
     if prefix.len() < value.len() {
         prefix.push_str("... [full text in full report]");
     }
-    markdown_text(&prefix)
+    prefix
 }
 
 /// Appends one finding as a Markdown block mirroring the text report: the benchmark
@@ -2157,7 +2162,7 @@ mod tests {
 
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
-        assert!(report.contains("| regression | mover_a / instruction count | Linux (x86_64-unknown-linux-gnu) / callgrind / machine m1 |"));
+        assert!(report.contains(r"| regression | mover\_a / instruction count | Linux (x86\_64-unknown-linux-gnu) / callgrind / machine m1 |"));
         assert!(!report.contains("_Filter:_"));
     }
 
@@ -2181,11 +2186,11 @@ mod tests {
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
         assert!(
-            report.contains("callgrind / x86_64-unknown-linux-gnu / machine m1"),
+            report.contains(r"callgrind / x86\_64-unknown-linux-gnu / machine m1"),
             "{report}"
         );
         assert!(
-            report.contains("criterion / x86_64-pc-windows-msvc / machine m1"),
+            report.contains(r"criterion / x86\_64-pc-windows-msvc / machine m1"),
             "{report}"
         );
     }
@@ -3530,7 +3535,7 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("## callgrind / x86_64-unknown-linux-gnu / machine m1"),
+            report.contains(r"## callgrind / x86\_64-unknown-linux-gnu / machine m1"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
         // The per-set tally mirrors the JSON metadata and the text header.
@@ -4575,7 +4580,7 @@ mod tests {
         };
         let report = render(&input, ReportFormat::Markdown, false);
         assert!(report.contains("drift"), "{report}");
-        assert!(report.contains("x86_64-unknown-linux-gnu"), "{report}");
+        assert!(report.contains(r"x86\_64-unknown-linux-gnu"), "{report}");
         assert!(
             !report.contains("aarch64-apple-darwin"),
             "the empty set is skipped: {report}"
@@ -4922,6 +4927,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exercises the fixed GitHub byte budget with oversized evidence; small escaping and rendering cases run under Miri."
+    )]
     fn summary_bounds_hostile_identities_without_cutting_markup_or_json_evidence() {
         let hostile = format!("|<details>`\n{}", "wide".repeat(20_000));
         let findings = [named_regression(&hostile, 0.3)];
@@ -4937,6 +4946,85 @@ mod tests {
         );
         let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
         assert_eq!(json["findings"][0]["segments"][0], hostile);
+    }
+
+    #[test]
+    fn summary_uses_context_specific_escaping_for_literal_identities() {
+        let findings = [named_regression("_case_*`<&>", 0.3)];
+        let summary = render_markdown_summary(&flat_input(&findings), DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains(r"| regression | \_case\_\*\`&lt;&amp;&gt; /"));
+        assert!(summary.contains("<summary>regression: _case_*`&lt;&amp;&gt; evidence</summary>"));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exercises fixed report and group-detail byte budgets; small truncation and qualification cases run under Miri."
+    )]
+    fn summary_limits_whole_rows_and_group_details_without_losing_qualifications() {
+        let findings: Vec<_> = (0..100)
+            .map(|index| {
+                let mut finding = branch_regression(false);
+                finding.id =
+                    BenchmarkId::new(nonempty![format!("bench_{index}{}", "&".repeat(160))]);
+                finding.set.machine_key = format!("machine_{index}").into();
+                finding
+            })
+            .collect();
+        let sets: Vec<_> = findings
+            .iter()
+            .map(|finding| SetSummary {
+                set: &finding.set,
+                runs: 20,
+                series: 1,
+                findings: vec![finding],
+                comparison_base_lags: Vec::new(),
+                branch_comparison: None,
+            })
+            .collect();
+        let input = ReportInput {
+            mode: AnalysisMode::Branch,
+            sets: &sets,
+            ..flat_input(&findings)
+        };
+        let summary = render_markdown_summary(&input, NonZero::new(findings.len()).unwrap());
+        let rows = summary.matches("\n| regression |").count();
+        assert!(rows > 0 && rows < findings.len());
+        assert!(summary.len() <= 48_000);
+        assert!(summary.contains("Historical comparison unavailable for 100"));
+        assert!(summary.contains("further groups are in the full report"));
+        assert!(summary.contains(&format!("Showing {rows} of 100 findings")));
+        assert_eq!(
+            summary.matches("<details>").count(),
+            summary.matches("</details>").count()
+        );
+    }
+
+    #[test]
+    fn unsafe_inspection_identity_is_disclosed_instead_of_silently_rewritten() {
+        let location = InspectionLocation {
+            directory: "work".into(),
+            repo: "repo".into(),
+            config: None,
+            local: None,
+        };
+        let findings = [named_regression("control\u{1b}name", 0.3)];
+        let input = ReportInput {
+            tip_dirty: true,
+            inspection: Some(Inspection {
+                location: &location,
+                base: "base",
+                since: "2026-04-14T00:00:00Z",
+                no_dirty: false,
+                exact_current: false,
+            }),
+            ..flat_input(&findings)
+        };
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("No copyable command"));
+        assert!(summary.contains("Dirty observations are ephemeral"));
+        assert!(!summary.contains("cargo bench-history examine"));
+        assert!(!summary.contains('\u{1b}'));
     }
 
     #[test]

@@ -10,7 +10,7 @@ pub(crate) fn markdown_text(value: &str) -> String {
             '>' => escaped.push_str("&gt;"),
             '|' => escaped.push_str("&#124;"),
             '\n' | '\r' => escaped.push(' '),
-            '\\' | '`' | '*' | '[' | ']' | '#' | '~' => {
+            '\\' | '`' | '*' | '_' | '[' | ']' | '#' | '~' => {
                 escaped.push('\\');
                 escaped.push(ch);
             }
@@ -19,6 +19,14 @@ pub(crate) fn markdown_text(value: &str) -> String {
         }
     }
     escaped
+}
+
+/// HTML summary labels use literal text, not Markdown backslash escapes.
+pub(crate) fn html_text(value: &str) -> String {
+    plain_text(value)
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Uses a code span for identities, with a delimiter longer than any embedded run.
@@ -66,5 +74,12 @@ mod tests {
         );
         assert_eq!(plain_text("a\n\u{1b}[31m"), r"a\n\u{1b}[31m");
         assert_eq!(code_block("text", "```\nx"), "````text\n```\nx\n````");
+    }
+
+    #[test]
+    fn markdown_and_html_preserve_literal_identity_punctuation() {
+        let identity = "_case_*`<&>\n";
+        assert_eq!(markdown_text(identity), "\\_case\\_\\*\\`&lt;&amp;&gt; ");
+        assert_eq!(html_text(identity), "_case_*`&lt;&amp;&gt;\\n");
     }
 }
