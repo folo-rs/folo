@@ -69,14 +69,18 @@ specific commit can be identified.
 
 Here is a series that steps, and the detector's own answer for it.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-clean-step.svg}}
+</figure>
 
 {{#include generated/detection-clean-step.md}}
 
 A series can contain more than one visible step. The split search still chooses one boundary,
 and later gates judge that single candidate.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-multi-step.svg}}
+</figure>
 
 {{#include generated/detection-multi-step.md}}
 
@@ -174,7 +178,9 @@ full range, because the detector does not try to pin down where the slope began 
 [`examine`](../commands/examine.md) prints every point, which is where to see the shape within
 the range and correlate it with commits yourself.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-slow-ramp.svg}}
+</figure>
 
 {{#include generated/detection-slow-ramp.md}}
 
@@ -199,7 +205,9 @@ cases: they are what the tool's usefulness rests on.
 
 ### A single elevated point
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-blip.svg}}
+</figure>
 
 {{#include generated/detection-blip.md}}
 
@@ -210,7 +218,9 @@ machine having a bad minute is the single most common thing a benchmark series d
 
 ### A series that is simply noisy
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-flat-noisy.svg}}
+</figure>
 
 {{#include generated/detection-flat-noisy.md}}
 
@@ -223,7 +233,9 @@ Everything downstream exists to reject it.
 An excursion that has since returned to where it started is silent too, however large it was
 while it lasted.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-blip-returned.svg}}
+</figure>
 
 {{#include generated/detection-blip-returned.md}}
 
@@ -267,13 +279,17 @@ and the reported magnitude is the excess beyond the nearest edge. Every verdict 
 figure is the real one. The base window is the recent base-ref first-parent commit sample for the
 same discriminant set, capped at 128 commits and anchored at the base ref, not at the merge base.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-branch-reported.svg}}
+</figure>
 
 {{#include generated/detection-branch-reported.md}}
 
 The same base window, with a tip that agrees with it:
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-branch-quiet.svg}}
+</figure>
 
 {{#include generated/detection-branch-quiet.md}}
 
@@ -301,7 +317,9 @@ by re-examining whatever follows the newest boundary it accepted, against that s
 with the same search on both sides of an unsupported split. Without that step the reverted
 observations would stay in the comparison range and hide a branch move of the same size.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-branch-base-moved.svg}}
+</figure>
 
 {{#include generated/detection-branch-base-moved.md}}
 
@@ -319,7 +337,9 @@ Branch mode keeps it. Removing a historical extreme would make the range narrowe
 stronger claim by hiding contrary evidence. A context value inside the full observed current-regime
 range cannot honestly be described as faster or slower than everything the base recently did.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/detection-branch-contended.svg}}
+</figure>
 
 {{#include generated/detection-branch-contended.md}}
 

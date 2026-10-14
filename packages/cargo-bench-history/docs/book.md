@@ -1,4 +1,4 @@
-# User guide skeleton
+# User guide architecture
 
 This document is the **blueprint** for the `cargo-bench-history` user guide (the mdBook under
 `packages/cargo-bench-history/book/`). It is not the guide itself: it lists the chapters, the
@@ -15,8 +15,8 @@ guide to it.
   snapshot-only benchmark tooling misses, and wire the tool into local work and CI.
 - **This guide owns**: the *why*, the *when*, and the task-level *how* — installing, choosing
   storage, collecting/backfilling history, reading analysis, and the mental model behind it.
-- **This guide does not own**: the library API surface (→ docs.rs) or internal architecture and
-  rationale (→ the in-repo design docs). Link out; never duplicate.
+- **This guide does not own**: the library API surface (→ docs.rs) or internal architecture.
+  Public documentation never links to maintainer design or implementation documents.
 - **Voice**: lead with value and motivation, not a flag dump. Every reference page states *what
   problem the command solves* before *how to invoke it*. Point at `--help` for the exhaustive,
   always-current flag list rather than transcribing it.
@@ -49,18 +49,20 @@ The teaching points that every chapter should reinforce, not just the concept ch
 
 ## Chapter map
 
-The guide begins with **orientation** (get it working), followed by **concepts** (the mental model
-and the full Data pipeline walkthrough), then **command reference** (task-level how).
-Command pages link back to concepts for the *why*; concept pages link to the commands that
-exercise them and to the Data pipeline chapters for the detailed mechanism.
+The primary journey is **understand → try locally → read a report → connect GitHub →
+investigate or accept → operate**. Concepts, the statistical pipeline and command
+reference follow the tasks. Reporting and investigation retain their `appendix/`
+URLs and anchors for existing links, but are top-level chapters in the reading order.
+Contracts have one owning page; other journeys link rather than reproduce them.
 
 ### Front matter — Introduction
 
 - **Goal**: sell the problem in the first paragraph — trends visible only in hindsight against
   noisy history (incremental slowdown; a regression at commit Z seen only later).
 - **Teach**: history-over-snapshots (tenet 1); the immutable-record + topology-reconstruction
-  model at a glance; who the guide is for and what it defers to docs.rs / design docs.
-- **Carry**: a one-diagram overview of producers → collect → storage → analyze → findings.
+  model at a glance; who the guide is for and what it defers to docs.rs.
+- **Carry**: producers → collect → storage → analyze → findings; an early link to the
+  generated report gallery and task navigation.
 
 ### Part 1 — Orientation
 
@@ -74,9 +76,49 @@ exercise them and to the Data pipeline chapters for the detailed mechanism.
 #### Getting started
 
 - **Goal**: one end-to-end walkthrough on local storage, from nothing to a first analysis.
-- **Teach**: the natural command order (install → backfill → collect → analyze → examine) and
-  *why a single collect is not enough* (tenet 1).
-- **Carry**: link forward to comparability + analysis for the mechanism.
+- **Teach**: check a supported engine and explicit target/features, separate storage/build/report
+  directories, collect one bounded scope, inspect stored partitions and a first analysis.
+- **Checkpoint**: a stored and inspectable measurement, not a guaranteed finding; a new history
+  normally lacks baseline evidence. Backfill is optional follow-up, not a prerequisite.
+- **Carry**: generated worked step/drift/inconclusive reports that need no benchmark execution;
+  never expose hidden import or faker commands as a supported tutorial.
+
+#### Read a report
+
+- **Goal**: interpret an actual result before learning statistical implementation detail.
+- **Carry**: generated history and branch summaries, every successful-analysis outcome,
+  downloadable text/Markdown/JSON, and production-rendered workflow/freshness examples.
+- **Teach**: units, direction, history representatives versus branch nearest-range-edge excess;
+  judged-series coverage versus platform completeness; freshness and next actions.
+- **Boundary**: sample names, commits and workflow facts are illustrative, never execution claims.
+  Annotations remain explanatory prose outside the production projection.
+
+#### Connect GitHub
+
+- **Order**: engine/platform/features → minimal config → canonical Azure setup → repository
+  variables → history caller and optional setup hook → first visible result → bounded baseline
+  bootstrap → PR caller.
+- **Carry**: push/PR/backfill/storage/artifact/optional-publication journey diagram.
+- **Teach**: reusable workflow responsibilities versus root-action/manual setup; publication
+  disabled is not no-write; same-repository and fork boundaries; conditional feature/platform
+  defaults; execution, analysis and publication are distinct.
+- **Boundary**: Azure setup owns provisioning; the action repository owns its input matrices and
+  detailed hook contract; the companion owns the offline workflow-card schema.
+
+#### Investigate and accept
+
+- **Goal**: turn findings and missing evidence into a justified next action.
+- **Carry**: symptom → evidence location → next action table; inspect → fix or scoped blessing
+  diagram; explicit anchor and persisted-scope audit; links to owning command contracts.
+- **Teach**: no guessed causes or probabilities; no broad acceptance merely to silence a report;
+  baseline exclusion can temporarily reduce evidence after an accepted change.
+
+#### Operate benchmark history
+
+- **Goal**: preserve comparable evidence within an intentional work and retention budget.
+- **Teach**: sparse machine-key histories; readiness is not a point-count guarantee; bounded
+  replay/resumption; rerun, skip, overwrite, inspect, ignore, bless and unbless distinctions;
+  durable storage versus expiring artifacts; protocol and tool upgrades.
 
 #### Storage backends
 
@@ -164,8 +206,8 @@ maintainer validates the tool against and what a user reads when a finding does 
 | 5. Detection | What a signal is, which detector establishes it, how a history change point is tested fairly after searching across possible splits, and what each mode does and does not do. |
 | 6. Noise gates | Every gate, in application order, with its computation and its threshold — and that gates short-circuit. |
 | 7. Multiplicity and coverage | Why a per-series test is not enough; what the false-discovery family is and why it includes series that raised nothing; that a judged short series can still fail to report a lone finding as the family grows. |
-| 8. Reporting | Ranking, report formats and derived outputs, charts, comparison-base lag, and the [analysis outcome](../book/src/appendix/reporting.md#analysis-outcomes) as the successful-analysis signal, distinct from external platform coverage. |
-| 9. Insights | Triage playbooks: what to do with each kind of finding, and what to do when an expected finding never arrives. |
+| Reporting (promoted into the primary journey) | Ranking, report formats and derived outputs, charts, comparison-base lag, and the [analysis outcome](../book/src/appendix/reporting.md#analysis-outcomes) as the successful-analysis signal, distinct from external platform coverage. |
+| Investigation (promoted into the primary journey) | Triage playbooks: what to do with each kind of finding, and what to do when an expected finding never arrives. |
 | 10. Limits | What the pipeline deliberately does not do, and what to do instead. |
 | Glossary | Every term the part defines, in plain language, with the technical name alongside. |
 | Reference tables | The generated lookup surface: metric kinds, engine outputs, key grammar, gate constants, evidence minimums, unjudged reasons, coverage states. |
@@ -195,10 +237,14 @@ maintainer validates the tool against and what a user reads when a finding does 
 
 - When the CLI changes, the affected reference page *and* any tenet it illustrates move together;
   keep the "single thing it must teach" column honest.
-- Prefer deleting a page's detail and linking to `--help` or a design doc over letting the guide
+- Prefer deleting a page's detail and linking to `--help` or its owning public guide over letting the guide
   drift from the code.
 - Generated evidence cannot be edited in place: change the code or the example data and re-run
   `just book-figures`. The figures package owns the reconciliation check; ordinary explanatory
   Markdown is edited in the chapter files themselves.
 - When Data pipeline gains coverage of something a concept page also explains, trim the concept page
   to the mental model and link down. The two must not both carry the mechanism.
+- SVG generation supplies meaningful titles, descriptions and accessible names without global IDs.
+  Semantic roles use labels/shapes, not color alone. Theme-aware text and keyboard-scrollable
+  figure containers preserve label size at narrow widths. Preview actual generated figures and
+  report pages in light/dark and narrow layouts; keep freshness and structural link checks.

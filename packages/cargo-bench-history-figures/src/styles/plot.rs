@@ -13,11 +13,12 @@
 //! otherwise.
 
 use std::error::Error;
+use std::fmt::Write as _;
 
 use plotters::backend::SVGBackend;
 use plotters::coord::Shift;
 use plotters::drawing::DrawingArea;
-use plotters::element::{Circle, PathElement, Rectangle, Text};
+use plotters::element::{Circle, Cross, PathElement, Rectangle, Text, TriangleMarker};
 use plotters::prelude::ChartBuilder;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
@@ -165,9 +166,6 @@ pub struct Note {
 
     /// The note's text.
     pub text: String,
-
-    /// The note's colour.
-    pub color: RGBColor,
 }
 
 /// One value-against-commit-position figure, or one pane of a stacked comparison.
@@ -314,18 +312,11 @@ impl Plot {
 
     /// Pins a note to a point in the plot.
     #[must_use]
-    pub fn note(
-        mut self,
-        position: usize,
-        value: f64,
-        text: impl Into<String>,
-        color: RGBColor,
-    ) -> Self {
+    pub fn note(mut self, position: usize, value: f64, text: impl Into<String>) -> Self {
         self.notes.push(Note {
             position,
             value,
             text: text.into(),
-            color,
         });
         self
     }
@@ -456,10 +447,17 @@ impl Plot {
                 band.color.mix(theme::BAND_OPACITY).filled(),
             )))?;
             if !band.label.is_empty() {
+                // Anchor right-side annotations inward so they fit inside the viewBox.
+                let right_side = band.from > self.span.saturating_div(2);
                 chart.draw_series(std::iter::once(Text::new(
                     band.label.clone(),
-                    (left, top),
-                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&band.color),
+                    (if right_side { right } else { left }, top),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK))
+                        .color(&theme::INK)
+                        .pos(Pos::new(
+                            if right_side { HPos::Right } else { HPos::Left },
+                            VPos::Top,
+                        )),
                 )))?;
             }
         }
@@ -471,10 +469,18 @@ impl Plot {
                 ShapeStyle::from(theme::REGRESSION).stroke_width(2),
             )))?;
             if !label.is_empty() {
+                // Split labels sit at the bottom, separate from the top-of-band labels.
+                let anchor = if *position > self.span.saturating_div(2) {
+                    HPos::Right
+                } else {
+                    HPos::Left
+                };
                 chart.draw_series(std::iter::once(Text::new(
                     label.clone(),
-                    (x, high),
-                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::REGRESSION),
+                    (x, low),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK))
+                        .color(&theme::INK)
+                        .pos(Pos::new(anchor, VPos::Bottom)),
                 )))?;
             }
         }
@@ -517,7 +523,7 @@ impl Plot {
                     rule.label.clone(),
                     (coord::of(self.span) - 0.6, rule.value + offset),
                     TextStyle::from((theme::FONT, theme::FONT_TICK))
-                        .color(&rule.color)
+                        .color(&theme::INK)
                         .pos(Pos::new(HPos::Right, VPos::Bottom)),
                 )))?;
             }
@@ -550,11 +556,36 @@ impl Plot {
                 }
             }
 
-            chart.draw_series(std::iter::once(Circle::new(
-                at,
-                theme::POINT_RADIUS,
-                color.filled(),
-            )))?;
+            // Shape, not color alone, identifies changes and the selected observation.
+            match observation.mark {
+                Mark::Regression => {
+                    chart.draw_series(std::iter::once(TriangleMarker::new(
+                        at,
+                        theme::POINT_RADIUS.saturating_add(2),
+                        color.filled(),
+                    )))?;
+                }
+                Mark::Added => {
+                    chart.draw_series(std::iter::once(Cross::new(
+                        at,
+                        theme::POINT_RADIUS.saturating_add(2),
+                        color.stroke_width(theme::DATA_STROKE),
+                    )))?;
+                }
+                Mark::Plain | Mark::Removed | Mark::Focus => {
+                    let style = if observation.mark == Mark::Focus {
+                        color.stroke_width(theme::DATA_STROKE)
+                    } else {
+                        color.filled()
+                    };
+                    let radius = if observation.mark == Mark::Focus {
+                        theme::POINT_RADIUS.saturating_add(2)
+                    } else {
+                        theme::POINT_RADIUS
+                    };
+                    chart.draw_series(std::iter::once(Circle::new(at, radius, style)))?;
+                }
+            }
 
             if observation.mark.struck() {
                 let span = (high - low) * 0.03;
@@ -573,7 +604,7 @@ impl Plot {
             chart.draw_series(std::iter::once(Text::new(
                 note.text.clone(),
                 (coord::of(note.position), note.value),
-                TextStyle::from((theme::FONT, theme::FONT_LABEL)).color(&note.color),
+                TextStyle::from((theme::FONT, theme::FONT_LABEL)).color(&theme::INK),
             )))?;
         }
 
@@ -583,7 +614,54 @@ impl Plot {
     /// Renders the plot as a standalone figure.
     #[must_use]
     pub fn render(&self) -> String {
-        crate::canvas::draw(theme::WIDTH, theme::HEIGHT, |root| self.draw(root))
+        crate::canvas::draw(
+            theme::WIDTH,
+            theme::HEIGHT,
+            &self.caption,
+            &self.description(),
+            |root| self.draw(root),
+        )
+    }
+
+    /// Supplies a text alternative using the same axes, annotations and values as the drawing.
+    pub(crate) fn description(&self) -> String {
+        let units = if self.value_label.is_empty() {
+            "illustrative metric units"
+        } else {
+            &self.value_label
+        };
+        let mut description = format!(
+            "{}. Values in {} against first-parent commit position, spanning {} commits. \
+             Filled circles are observations; hollow circles highlight focus; triangles mark \
+             regressions; plus signs mark added data; crossed points are excluded. \
+             Gaps are missing observations, not zero values.",
+            self.caption, units, self.span,
+        );
+        for rule in &self.rules {
+            write!(description, " {}: {}.", rule.label, rule.value)
+                .expect("writing to a String cannot fail");
+        }
+        for band in &self.bands {
+            write!(
+                description,
+                " {}: commit positions {} to {}.",
+                band.label, band.from, band.to,
+            )
+            .expect("writing to a String cannot fail");
+        }
+        for (position, label) in &self.splits {
+            write!(description, " {label}: position {position}.")
+                .expect("writing to a String cannot fail");
+        }
+        for note in &self.notes {
+            write!(
+                description,
+                " {}: position {}, value {}.",
+                note.text, note.position, note.value,
+            )
+            .expect("writing to a String cannot fail");
+        }
+        description
     }
 }
 

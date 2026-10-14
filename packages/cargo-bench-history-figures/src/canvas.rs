@@ -14,8 +14,8 @@
 //!   here to the CSS keyword `currentColor`, so the browser paints them in the reader's
 //!   text colour under either of mdBook's themes. The background is left unpainted for
 //!   the same reason — an opaque fill would punch a light rectangle into a dark page.
-//! * **Responsiveness.** The emitted root element keeps its `viewBox` but scales to the
-//!   width of the book's content column, so a figure never forces sideways scrolling.
+//! * **Accessibility.** Each SVG has a name and description independent of color.
+//!   The book's scrollable figure container preserves authored label sizes on narrow screens.
 
 use std::error::Error;
 
@@ -39,7 +39,7 @@ use crate::theme;
 /// with dimensions it chose itself, so the only way to fail is a bug in the drawing
 /// code, which must fail the generator loudly rather than emit a malformed figure.
 #[must_use]
-pub fn draw<F>(width: u32, height: u32, body: F) -> String
+pub fn draw<F>(width: u32, height: u32, title: &str, description: &str, body: F) -> String
 where
     F: FnOnce(&DrawingArea<SVGBackend<'_>, Shift>) -> Result<(), Box<dyn Error>>,
 {
@@ -50,7 +50,7 @@ where
         root.present()
             .expect("presenting an in-memory SVG buffer performs no I/O and cannot fail");
     }
-    to_svg(&buffer)
+    to_svg(&buffer, title, description)
 }
 
 /// Rewrites a raw `plotters` SVG into the form the book embeds.
@@ -64,13 +64,11 @@ where
 /// This is the generator's in-memory boundary for the responsive-SVG contract, so a
 /// shape the rewrite cannot handle is a figure defect rather than pass-through content.
 #[must_use]
-pub fn to_svg(raw: &str) -> String {
+pub fn to_svg(raw: &str, title: &str, description: &str) -> String {
     let themed = raw.replace(theme::INK_HEX, "currentColor");
 
-    // Fixed `width`/`height` attributes would hold the figure at its authored size on a
-    // narrow viewport and force sideways scrolling. Dropping them in favour of the
-    // `viewBox` that `plotters` already emits lets the figure take the width of the
-    // content column and derive its height from the aspect ratio.
+    // The viewBox keeps normal column scaling; the book's figure container supplies
+    // a minimum width and local scrolling so narrow screens do not shrink the labels.
     let rest = themed
         .strip_prefix("<svg width=")
         .expect("plotters SVG output must begin with a width-bearing root element");
@@ -80,7 +78,26 @@ pub fn to_svg(raw: &str) -> String {
     let tail = rest
         .get(view_box_start..)
         .expect("viewBox starts at an ASCII token boundary");
-    format!("<svg style=\"width:100%;height:auto\" {tail}")
+    let (attributes, content) = tail
+        .split_once('>')
+        .expect("the plotters root element must have a closing angle bracket");
+    let title = escape(title);
+    let description = escape(description);
+    // aria-label avoids document-global IDs: the same chart can occur more than once
+    // in mdBook's print page or the side-by-side theme preview.
+    format!(
+        "<svg role=\"img\" aria-label=\"{title}\" style=\"width:100%;height:auto\" \
+         {attributes}><title>{title}</title><desc>{description}</desc>{content}"
+    )
+}
+
+/// Escapes text used in SVG metadata and quoted attributes.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
@@ -94,7 +111,7 @@ mod tests {
             theme::INK_HEX
         );
 
-        let rewritten = to_svg(&raw);
+        let rewritten = to_svg(&raw, "Example", "Description");
 
         assert!(rewritten.contains("fill=\"currentColor\""));
         assert!(!rewritten.contains(theme::INK_HEX));
@@ -104,9 +121,9 @@ mod tests {
     fn the_root_element_scales_to_the_content_column() {
         let raw = "<svg width=\"680\" height=\"300\" viewBox=\"0 0 680 300\"><g/></svg>";
 
-        let rewritten = to_svg(raw);
+        let rewritten = to_svg(raw, "Example", "Description");
 
-        assert!(rewritten.starts_with("<svg style=\"width:100%;height:auto\" viewBox="));
+        assert!(rewritten.contains("style=\"width:100%;height:auto\" viewBox="));
         assert!(rewritten.contains("viewBox=\"0 0 680 300\""));
     }
 
@@ -114,7 +131,7 @@ mod tests {
     fn data_colours_are_left_alone_so_they_stay_distinguishable() {
         let raw = "<svg width=\"10\" height=\"10\" viewBox=\"0 0 10 10\"><path stroke=\"#D64541\"/></svg>";
 
-        let rewritten = to_svg(raw);
+        let rewritten = to_svg(raw, "Example", "Description");
 
         assert!(rewritten.contains("stroke=\"#D64541\""));
     }
@@ -124,7 +141,7 @@ mod tests {
     fn an_svg_without_the_plotters_width_prefix_panics() {
         let raw = "<svg viewBox=\"0 0 10 10\"><g/></svg>";
 
-        _ = to_svg(raw);
+        _ = to_svg(raw, "Example", "Description");
     }
 
     #[test]
@@ -132,7 +149,7 @@ mod tests {
     fn an_svg_without_a_view_box_panics() {
         let raw = "<svg width=\"10\" height=\"10\"><g/></svg>";
 
-        _ = to_svg(raw);
+        _ = to_svg(raw, "Example", "Description");
     }
 
     #[test]
@@ -142,12 +159,26 @@ mod tests {
     )]
     fn rendering_the_same_figure_twice_yields_identical_bytes() {
         let render = || {
-            draw(120, 80, |root| {
+            draw(120, 80, "Example", "Blank canvas", |root| {
                 root.fill(&plotters::style::WHITE)?;
                 Ok(())
             })
         };
 
         assert_eq!(render(), render());
+    }
+
+    #[test]
+    fn accessible_names_escape_markup_without_global_ids() {
+        let svg = to_svg(
+            "<svg width=\"10\" height=\"10\" viewBox=\"0 0 10 10\"><g/></svg>",
+            "A \"quoted\" <comparison>",
+            "Earlier & later values",
+        );
+        assert!(svg.contains("role=\"img\""));
+        assert!(svg.contains("aria-label=\"A &quot;quoted&quot; &lt;comparison&gt;\""));
+        assert!(svg.contains("<title>A &quot;quoted&quot; &lt;comparison&gt;</title>"));
+        assert!(svg.contains("<desc>Earlier &amp; later values</desc>"));
+        assert!(!svg.contains(" id="));
     }
 }

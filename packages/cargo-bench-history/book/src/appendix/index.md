@@ -7,7 +7,7 @@ The rest of this guide teaches the mental model. This part is the mechanism, in 
 the numbers. It exists for two readers:
 
 - **You have a finding that does not make sense**, and the concept chapters have not
-  settled it. Chapter [Insights](insights.md) is the triage entry point; it links back into
+  settled it. [Investigate and accept](insights.md) is the triage entry point; it links back into
   whichever stage you need.
 - **You maintain this tool, or you have to trust it**, and you want to check that what it
   does matches what it claims. Every stage below states what it computes and against which
@@ -64,6 +64,9 @@ historical base turns.
 The chapters are ordered along the pipeline, and each one assumes only the ones before it.
 Reading them in order builds the whole picture; stopping anywhere leaves you with a correct
 partial one.
+
+[Read a report](reporting.md) and [Investigate and accept](insights.md) are top-level
+tasks in the guide. Their reference sections link here when a deeper explanation is needed.
 
 Two conventions run throughout.
 

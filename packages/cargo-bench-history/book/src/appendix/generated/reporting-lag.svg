@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="same machine key: the comparison reaches back to older base data" style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg"><title>same machine key: the comparison reaches back to older base data</title><desc>same machine key: the comparison reaches back to older base data. Values in ns against first-parent commit position, spanning 13 commits. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; plus signs mark added data; crossed points are excluded. Gaps are missing observations, not zero values. no same-key base data: commit positions 8 to 11. comparison base: position 7. context commit: position 12.</desc>
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 same machine key: the comparison reaches back to older base data
 </text>
@@ -81,15 +81,15 @@ commit position
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="644,254 644,259 "/>
 <rect x="438" y="34" width="183" height="219" opacity="0.15" fill="#969BA0" stroke="none"/>
-<text x="438" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
+<text x="621" y="34" dy="0.76em" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 no same-key base data
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="393,253 393,34 "/>
-<text x="393" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="393" y="253" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 comparison base
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="621,253 621,34 "/>
-<text x="621" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="621" y="253" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 context commit
 </text>
 <circle cx="96" cy="228" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
@@ -99,6 +99,6 @@ context commit
 <circle cx="279" cy="228" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <circle cx="324" cy="226" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <circle cx="370" cy="224" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
-<circle cx="416" cy="227" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
-<circle cx="644" cy="60" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
+<circle cx="416" cy="227" r="5" opacity="1" fill="none" stroke="#306EC8" stroke-width="2"/>
+<polygon opacity="1" fill="#D64541" points="644,55 640,63 649,63 "/>
 </svg>

@@ -38,7 +38,9 @@ that are wrong is held below the target, because every rejection is displayed. I
 promise about any single report: one report can still carry a higher wrong share than the
 target, and only across many analyses does the average settle back to it.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/coverage-staircase.svg}}
+</figure>
 
 {{#include generated/coverage-staircase.md}}
 
@@ -59,7 +61,9 @@ to clear a stricter bar for a large judged family than for a small one.** The sa
 the same regression, the same data may report when this analysis judged a small family and stay
 silent when it judged a large one. The report's judged count is the denominator.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/coverage-family-size.svg}}
+</figure>
 
 {{#include generated/coverage-family-size.md}}
 
@@ -146,7 +150,9 @@ Full Markdown also ends with a Coverage section listing all counts and unjudged 
 JSON carries that account under `census`, on every `analyze` run. How each format presents it is the
 [Reporting](reporting.md) chapter's subject.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/coverage-census.svg}}
+</figure>
 
 A series that was not judged is always accounted for with a reason — never silently skipped.
 

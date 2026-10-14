@@ -31,6 +31,7 @@ mod private_test_util;
 pub use action::prepare_backfill_at;
 pub use cli::Cli;
 pub use operations::run;
+pub use summary::render_workflow_summary;
 
 #[cfg(any(test, feature = "private-test-util"))]
 #[doc(hidden)]

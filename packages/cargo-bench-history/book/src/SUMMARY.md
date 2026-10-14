@@ -2,12 +2,17 @@
 
 [Introduction](introduction.md)
 
-- [Installation](installation.md)
-- [Getting started](getting-started.md)
-- [Storage backends](storage.md)
-- [GitHub automation](github-automation.md)
+# Try and use
 
-# Concepts
+- [Install the tool](installation.md)
+- [Try locally](getting-started.md)
+- [Read a report](appendix/reporting.md)
+- [Connect GitHub](github-automation.md)
+- [Investigate and accept](appendix/insights.md)
+- [Operate benchmark history](operations.md)
+  - [Storage backends](storage.md)
+
+# Understand the evidence
 
 - [Benchmark engines](concepts/engines.md)
 - [Comparability and partitioning](concepts/comparability.md)
@@ -22,8 +27,6 @@
   - [Detection](appendix/detection.md)
   - [Noise gates](appendix/gates.md)
   - [Multiplicity and coverage](appendix/coverage.md)
-  - [Reporting](appendix/reporting.md)
-  - [Insights](appendix/insights.md)
   - [Limits](appendix/limits.md)
   - [Glossary](appendix/glossary.md)
   - [Reference tables](appendix/reference.md)

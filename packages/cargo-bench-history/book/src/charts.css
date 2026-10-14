@@ -1,0 +1,15 @@
+/* Generated charts retain their authored label sizes. Scroll the figure, not the page.
+   Geometry matches cargo-bench-history-figures::theme::WIDTH. */
+.chart {
+    margin: 1.5em 0;
+    overflow-x: auto;
+}
+
+.chart svg {
+    min-width: 680px;
+}
+
+.chart:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}

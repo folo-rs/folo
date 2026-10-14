@@ -1,7 +1,25 @@
-# Insights
+# Investigate and accept
 
-Everything before this chapter explains what the tool does. This one is about what *you* do
-with the result.
+<a id="insights"></a>
+
+Start with the report's commit, mode, coverage and freshness, then inspect its evidence.
+The [report-reading chapter](reporting.md) explains those fields and includes worked
+examples. This chapter helps decide what to do with your own result.
+
+## Symptom to next action
+
+| Symptom | Where to look | Next action |
+| --- | --- | --- |
+| The job failed or was cancelled | Workflow card, failing step and diagnostics | Resolve the execution failure. Do not interpret absent reports or completion files as clean or zero work. |
+| Collection completed but nothing was stored | Verbose harvest diagnostics and actual native output roots | Check the selected targets/features and [engine artifacts](../concepts/engines.md#check-native-output). Establish the cause before widening scope. |
+| Nothing was judged | Full Markdown Coverage section or JSON `census.reasons` | Inspect the selected partition and usable baseline; collect distinct comparable commits if evidence is missing. |
+| Some series were judged, others were not | Per-reason census and `analyze --verbose` | Investigate the unjudged subset. Findings and partial evidence can coexist. |
+| Analysis is clean but a platform is missing | Workflow card and collection jobs | Restore that platform's collection before treating the workflow as a complete all-clear. |
+| The card is stale or freshness was not checked | Analyzed context and the live PR/base head | Find the run for the intended head. Do not infer age or distance from a mismatch. |
+| Base comparison lags behind | Report's lag reason; `list discriminants` and `list runs` with report selectors | Check same-key base history and consider bounded backfill. |
+| A rerun did not replace a stored value | Collection collision mode and retained current-collection snapshot | Distinguish new execution evidence from preserved storage before explicitly choosing overwrite. |
+| A report selects no affected PR packages | Preparation's package-selection diagnostics | Check the diff and exclusions. Root-owned or unowned changes fall back to full-workspace scope, not a root-package limitation. |
+| A finding returned after an attempted acceptance | `list blessings` at the selected anchor | Verify its stored prefixes, scope and base first-parent membership; do not assume a branch commit survives a squash merge. |
 
 Start with the question you need to answer:
 
@@ -13,8 +31,12 @@ Start with the question you need to answer:
 
 ## I have a finding
 
+<figure class="chart" tabindex="0" role="group" aria-label="Finding investigation; scroll horizontally on small screens">
+
 ```mermaid
 flowchart TD
+    accTitle: Investigate a benchmark finding
+    accDescr: Identify the analysis mode, inspect measurements and correlated changes, then fix the cause or accept a justified scope.
     F["A finding"] --> Q0{"Which mode<br/>produced the report?"}
     Q0 -->|"branch"| BR["It compares your tip<br/>to the base"]
     Q0 -->|"history"| Q1{"Which method?"}
@@ -29,6 +51,8 @@ flowchart TD
     DR --> WIN["Examine the series;<br/>look for many small increments"]
     BR --> TIP["Re-run the tip;<br/>check for a lag warning"]
 ```
+
+</figure>
 
 Note that the method named on a finding tells you which comparison produced it: `change point` and
 `drift` come from history mode, `branch excursion` from branch mode. The report's header tells you
@@ -89,6 +113,44 @@ Your branch's intermediate commits are ignored — only the context state is eva
    produced at least as much report-wide out-of-range movement. It is historical context, not a
    confidence percentage.
 
+## Accept an intentional change
+
+Acceptance is a product decision about a measured tradeoff, not a way to repair
+missing evidence. Record its rationale in the change or review discussion.
+
+<figure class="chart" tabindex="0" role="group" aria-label="Scoped acceptance; scroll horizontally on small screens">
+
+```mermaid
+flowchart TD
+    accTitle: Fix or accept a scoped benchmark change
+    accDescr: Inspect evidence and cause. Fix unwanted changes. Accept intentional changes at their base-branch anchor, audit the stored blessing scope, and gather the new baseline.
+    I["Inspect report and qualified examine output"] --> C["Establish cause and intended behavior"]
+    C --> D{"Is the change intended?"}
+    D -->|No| F["Fix and measure the changed commit"]
+    D -->|Yes| S["Choose benchmark prefixes and discriminant scope"]
+    S --> B["Bless the actual base first-parent commit"]
+    B --> A["Audit persisted scope with list blessings"]
+    A --> H["Collect the new baseline and analyze"]
+```
+
+</figure>
+
+Use the benchmark prefix from the finding, but choose engine/target/machine
+restrictions from the **intent of the accepted change**, not just the machine where
+you investigated it. With no restrictions, blessing applies across current and
+future partitions for those prefixes. Avoid `--all` unless acceptance really covers
+every benchmark, including future identities.
+
+After a squash merge, bless the resulting base-branch commit, not the discarded
+feature-branch SHA. Read the warnings if the anchor is off the base's first-parent
+history or has no measured run. Then audit `list blessings` before relying on the
+new baseline.
+
+A blessing excludes earlier observations from detection without deleting them.
+It can leave too little base evidence for branch comparison until new measurements
+accumulate. [`bless / unbless`](../commands/bless.md) owns scope, anchor and revocation
+rules; revocation deletes complete records, not individual prefixes within a record.
+
 ## Reading a silent report
 
 "No notable changes detected" applies only to metric series that were actually **judged**.
@@ -105,8 +167,8 @@ When present, **Download the full report bundle** links to the full outputs:
 - **JSON** (`report.json` in the bundle, or the path passed to `--json`) carries the same
   account under `census`; the breakdown is `census.reasons`.
 - **Text on stdout and condensed Markdown summaries** show the in-scope judged ratio in
-  their headers when anything is in scope. They list unjudged reasons only when there are
-  no findings, while configured ignored-series counts remain visible beside findings.
+  their headers when anything is in scope. Unjudged reasons and configured exclusions
+  remain visible beside findings.
 
 The warning about in-scope series that could not be judged refers to the full Markdown
 **Coverage** section or the JSON **`census`**, not to additional detail hidden in the comment.
@@ -182,7 +244,8 @@ whether to accept it remain your judgment, recorded with [`bless`](../commands/b
 
 - [`backfill`](../commands/backfill.md) on each machine so each key
   accumulates its own usable history.
-- For a one-off infrastructure step you accept, `bless --all` re-baselines everything at once.
+- If evidence supports an intentional infrastructure change, choose the
+  [acceptance scope](#accept-an-intentional-change) that it actually affects.
 
 ## Unreliable benchmarks
 

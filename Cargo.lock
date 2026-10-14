@@ -543,6 +543,7 @@ dependencies = [
 name = "cargo-bench-history-figures"
 version = "0.4.6"
 dependencies = [
+ "cargo-bench-history-github",
  "cbh_analyze",
  "cbh_detect",
  "cbh_model",
@@ -552,6 +553,7 @@ dependencies = [
  "clap",
  "mimalloc",
  "plotters",
+ "serde_json",
  "tempfile",
  "testing",
 ]

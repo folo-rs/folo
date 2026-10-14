@@ -79,7 +79,9 @@ nothing at small magnitudes. A benchmark running at 3 ns per iteration that move
 moved by more than 6% — comfortably past the relative floor — and told you nothing you can act
 on.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/gates-absolute-floor.svg}}
+</figure>
 
 The floors differ per metric because the reasons differ:
 
@@ -97,7 +99,9 @@ For history, the tool fits the candidate's own model to the series (a step for a
 line for a drift), then measures how far a typical point sits from that model. The move must be
 several times that distance. Branch mode uses its stricter observed-range rule instead.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/gates-residual.svg}}
+</figure>
 
 The shaded band is what the series does anyway. A move inside it is indistinguishable from the
 series being itself.
@@ -120,11 +124,15 @@ So the tool asks a second, different question: **of every possible before-and-af
 what share agree the level moved?** That pairwise directional frequency is the agreement
 share — a direction-aware effect size, not another significance test.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/gates-agreement-separated.svg}}
+</figure>
 
 A genuine step: nearly every pairing agrees.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/gates-agreement-oscillating.svg}}
+</figure>
 
 A series that revisits both levels leaves a substantial share of pairings contradicting the
 split, and the candidate is declined — which matches what a human reads off the chart, namely
@@ -143,7 +151,9 @@ candidate away** — no interval ever creates one or relaxes another gate.
 **Disjointness.** If the two regimes' intervals overlap, the engine is telling you it cannot
 distinguish these levels.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/gates-interval-overlap.svg}}
+</figure>
 
 **Noise band.** The move must exceed a multiple of the engine's own reported imprecision,
 independently of how the two levels compare.

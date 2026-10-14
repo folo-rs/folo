@@ -13,6 +13,7 @@ site-url = "/folo/cargo-bench-history/"
 git-repository-url = "https://github.com/folo-rs/folo"
 edit-url-template = "https://github.com/folo-rs/folo/edit/main/packages/cargo-bench-history/book/{path}"
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
+additional-css = ["src/charts.css"]
 
 [output.html.playground]
 runnable = false

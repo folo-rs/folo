@@ -3,8 +3,8 @@
 `collect` runs the selected benches with `cargo bench`, automatically harvests every
 supported engine that produced output, and stores one result for the current commit. You
 select packages, bench targets, and Cargo features rather than an engine; engines that did
-not run simply contribute no data. Outside Linux, Callgrind benches compile to no-ops and
-produce nothing.
+not run simply contribute no data. The benchmark target and its native dependencies
+must support the selected platform; the collector does not make unsupported targets portable.
 
 Configured [benchmark ignores](analyze.md#ignoring-benchmarks) affect analysis only:
 they do not skip execution, discard harvested measurements, or remove results from
@@ -29,13 +29,13 @@ ever makes a case slower — so the minimum discards a transient slowdown. Every
 measure the same set of cases and the same metrics per case; any cross-run mismatch is a
 hard error.
 
-Two caveats: a runner that is slow for the *entire* job is not corrected by the minimum, and
-Callgrind's deterministic counts make min-of-N a costly no-op for that engine.
+Two caveats: a runner that is slow for the *entire* job is not corrected by the minimum,
+and repetitions may add cost without improving stable count measurements.
 
 Because the reduction keeps a minimum, `N` is part of the measurement protocol, not just a
 speed/quality knob: the expected minimum of `N` samples falls as `N` rises, so changing `N`
 can shift the recorded level of the whole suite at once. It moves a metric only to the extent
-that metric is noisy — a deterministic one is unaffected, as with Callgrind above, and any
+that metric is noisy — a metric that does not vary is unaffected, and any
 individual observation may land unchanged. Keep `N` fixed for a given machine
 and project if you want the history to stay a like-for-like record. Every stored run records
 the count it was reduced from, so a value's protocol is always recoverable from the stored

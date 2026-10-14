@@ -1,9 +1,163 @@
-# Reporting
+# Read a report
 
-Everything so far produced findings and a census. This chapter is how they reach you, and how
-to read what you get.
+<a id="reporting"></a>
 
-## Terms used here
+A report answers two questions together: **what moved, and what could be judged?**
+Start with the worked examples, then use the reference sections below for the exact
+meaning of each part. [Investigate and accept](insights.md) explains what to do next.
+
+## Read in this order
+
+<figure class="chart" tabindex="0" role="group" aria-label="Report anatomy; scroll horizontally on small screens">
+
+```mermaid
+flowchart TD
+    accTitle: Report reading order
+    accDescr: Check execution and context, then coverage and freshness, before interpreting a finding and opening its evidence.
+    E["Did execution succeed?"] --> C["Which commit, mode and partitions?"]
+    C --> V["What series and platforms are covered?"]
+    V --> F["Is the evidence current?"]
+    F --> M["Which metric moved, in which direction?"]
+    M --> A["Open evidence; investigate or collect more history"]
+```
+
+</figure>
+
+The workflow card describes execution and publication separately from analysis.
+In the report, a **series** means one benchmark metric within one engine, target
+and machine partition. A **census** accounts for judged and unjudged series.
+Neither a successful job nor an empty findings table establishes complete evidence.
+
+## Worked report gallery
+
+These examples run maintained synthetic series through the **production detectors,
+report renderers and workflow-card renderer**. They demonstrate output, not a real
+repository run: project names, commit labels, run counts and workflow facts are
+illustrative. No benchmark execution, Azure setup or hidden import command is required.
+The example workflow links use a reserved, non-resolving domain.
+
+### History: a step and a drift
+
+Expand the evidence below the table to compare the step with the gradual climb.
+History findings use **before and after representative levels**, not a latest
+single measurement. Positive changes are regressions because the recorded metrics
+are lower-is-better. Time values display a readable unit such as ns; JSON retains
+the metric's original unit and precision.
+
+{{#include generated/walkthrough-findings-summary.md:3:}}
+
+The warning belongs beside the findings: this example detects changes while other
+series lack enough evidence. A finding does not mean the entire suite was judged.
+
+### PR-comment-style example
+
+This is the same condensed projection used inside a PR comment. GitHub automation
+adds its publication wrapper and links; this example does not claim a comment was
+posted.
+
+{{#include generated/walkthrough-pr.md:3:}}
+
+| Part of the example | How to read it |
+| --- | --- |
+| Context and branch mode | The selected tip is the observation under judgment, not all intermediate branch commits. |
+| Current base range | The low and high recorded values in the selected base regime. |
+| Context measured | The branch observation, in the same displayed unit as the range. |
+| Excess beyond range edge | The signed distance from the nearest edge, not a change from the base mean. |
+| Comparable-base count | Observed historical context across the report; not a percentage probability of a regression. |
+| Expandable evidence | Chart orientation, scale, gaps and full identity; real query-backed reports also supply qualified inspection commands. |
+
+These synthetic reports have no repository to inspect, so they deliberately omit
+copyable `examine` commands. Use commands supplied by your own report rather than
+substituting the example's commit labels.
+
+### Other successful analyses
+
+These are different analysis outcomes, not different process exit codes. Expand
+each example to see the production wording and its coverage account.
+
+<details>
+<summary>Clean: every in-scope series was judged, without findings</summary>
+
+{{#include generated/walkthrough-clean-summary.md:3:}}
+
+Continue collecting. This says nothing about a collection platform absent from the
+analysis; [platform completeness is a separate check](#analysis-outcomes).
+
+</details>
+
+<details>
+<summary>Insufficient baseline: no in-scope series could be judged</summary>
+
+{{#include generated/walkthrough-insufficient_baseline-summary.md:3:}}
+
+Check the selected partition and collect or backfill distinct comparable commits.
+Repeating one commit does not create independent history.
+
+</details>
+
+<details>
+<summary>Partial: some series were judged, others were not</summary>
+
+{{#include generated/walkthrough-partial-summary.md:3:}}
+
+Read the per-reason account before interpreting the silence. Investigate the
+unjudged subset rather than accepting the whole suite as clean.
+
+</details>
+
+<details>
+<summary>Nothing in scope: only absent or intentionally ignored series remain</summary>
+
+{{#include generated/walkthrough-nothing_in_scope-summary.md:3:}}
+
+Inspect collection scope and configuration. Missing output alone does not identify
+a cause; [troubleshooting](insights.md#symptom-to-next-action) starts from the evidence.
+
+</details>
+
+### Workflow result card
+
+This generated example selects a single platform to keep the illustration compact;
+it does not represent the reusable workflows' default matrix.
+
+{{#include generated/walkthrough-workflow.md:3:}}
+
+**Execution** answers whether the work completed. **Analysis** and **judged coverage**
+describe the evidence. **Completed/missing platforms** describe collection jobs.
+**GitHub publication** describes the write request, not storage, and
+**freshness** compares the analyzed commit with an explicitly observed head.
+The example disables publication without claiming collection was a dry run.
+
+<details>
+<summary>Stale evidence: the same analysis no longer matches the observed head</summary>
+
+{{#include generated/walkthrough-stale.md:3:}}
+
+Open the run for the current head before acting. The differing IDs establish
+staleness, not elapsed time or commit distance. Without a live-head observation the
+card says freshness was not checked. Comparison-base lag, described below, is a
+different question: how recent the comparable base measurements are.
+
+</details>
+
+### Download the worked reports
+
+These complete projections are generated together with the excerpts above. Markdown
+downloads use the `.markdown` extension so the book serves them as source documents.
+JSON contains analysis, not a reusable observation archive.
+
+| Example | Text | Markdown | JSON |
+| --- | --- | --- | --- |
+| History step and drift | [Text](generated/walkthrough-findings.txt) | [Markdown](generated/walkthrough-findings.markdown) | [JSON](generated/walkthrough-findings.json) |
+| Branch excursion | [Text](generated/walkthrough-branch.txt) | [Markdown](generated/walkthrough-branch.markdown) | [JSON](generated/walkthrough-branch.json) |
+| Clean | [Text](generated/walkthrough-clean.txt) | [Markdown](generated/walkthrough-clean.markdown) | [JSON](generated/walkthrough-clean.json) |
+| Insufficient baseline | [Text](generated/walkthrough-insufficient_baseline.txt) | [Markdown](generated/walkthrough-insufficient_baseline.markdown) | [JSON](generated/walkthrough-insufficient_baseline.json) |
+| Partial | [Text](generated/walkthrough-partial.txt) | [Markdown](generated/walkthrough-partial.markdown) | [JSON](generated/walkthrough-partial.json) |
+| Nothing in scope | [Text](generated/walkthrough-nothing_in_scope.txt) | [Markdown](generated/walkthrough-nothing_in_scope.markdown) | [JSON](generated/walkthrough-nothing_in_scope.json) |
+
+## Report reference
+
+### Terms used here
 
 {{#include generated/terms-reporting.md}}
 
@@ -36,6 +190,10 @@ not against the observations. One column per commit,
 so a gap is a gap and the trailing stretch after the last observation is visible as one. That
 matters: a chart that packed the observations together would hide exactly the sparseness that
 [detection cannot see](reconstruction.md#gaps-are-holes-not-zeroes).
+
+Illustrated figures have a text description and labelled or shaped distinctions,
+not color alone. On a narrow screen, focus the figure and scroll horizontally to
+keep its labels readable instead of shrinking the whole chart.
 
 Where a series has more commits than the chart has columns, commits are grouped before
 plotting. Grouping first is deliberate — the alternative attenuates an isolated observation
@@ -132,7 +290,9 @@ the same discriminant set**. On a rotating CI pool, the newest base-ref commits 
 data under a different machine key — so your runner compares against base data from several
 commits back.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/reporting-lag.svg}}
+</figure>
 
 The empty stretch after the comparison base is the lag: commits that exist on the base ref, but
 not for the context run's machine key.
@@ -195,5 +355,5 @@ report when you want only those.
 
 ## What comes next
 
-Nothing — this is the end of the pipeline. If a report left you with a question rather than an
-answer, [Insights](insights.md) is the triage chapter.
+Follow [Investigate and accept](insights.md) for a finding or unexpected silence.
+For a new baseline, use [Operate benchmark history](../operations.md).

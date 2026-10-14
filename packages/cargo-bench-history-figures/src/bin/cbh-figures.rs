@@ -1,5 +1,5 @@
 //! Regenerates, verifies, or previews the assets embedded in the `cargo-bench-history`
-//! book's Data pipeline chapters.
+//! user guide.
 //!
 //! Normally driven through `just book-figures` and `just book-figures-check` rather than
 //! invoked directly.
@@ -24,9 +24,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const PREVIEW_PATH: &str = "target/appendix-figures.html";
 
 #[derive(Debug, Parser)]
-#[command(
-    about = "Generates figures and tables for the cargo-bench-history Data pipeline chapters"
-)]
+#[command(about = "Generates figures and worked reports for the cargo-bench-history user guide")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -78,7 +76,7 @@ fn check(root: &Path) -> ExitCode {
     let target = root.join(GENERATED_ROOT);
     match assets::check(&target) {
         Ok(None) => {
-            println!("Generated Data pipeline assets are up to date.");
+            println!("Generated book assets are up to date.");
             ExitCode::SUCCESS
         }
         Ok(Some(report)) => {

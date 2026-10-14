@@ -14,15 +14,16 @@
 
 use std::fmt::Write as _;
 use std::num::NonZero;
+use std::sync::Arc;
 
 use cbh_detect::{
-    AnalysisContext, AnalysisMode, Detection, Finding, Series, SeriesCensus, UnjudgedReason,
-    evaluate_with_log, examples, find_changes,
+    AnalysisContext, AnalysisMode, BranchComparison, Detection, Finding, Series, SeriesCensus,
+    UnjudgedReason, evaluate_with_log, examples, find_changes,
 };
 use cbh_model::{DiscriminantSet, Engine, MachineKey, MetricKind, TargetTriple};
 use cbh_render::{
     AnalysisOutcome, ComparisonBaseLag, ComparisonBaseLagReason, Coverage, DEFAULT_SUMMARY_LIMIT,
-    ReportFormat, ReportInput, SetSummary, render,
+    ReportFormat, ReportInput, SetSummary, render, render_markdown_summary,
 };
 
 use crate::assets::Asset;
@@ -56,7 +57,7 @@ const PROJECT: &str = "textproc";
 /// A full hexadecimal object name, because that is what the pipeline hands the renderer;
 /// the report abbreviates it itself, and an excerpt built from a pre-abbreviated commit
 /// would not show that it does.
-const TIP_COMMIT: &str = "9f2c4a1d3b5e708aab12cd34ef5678901234567a";
+pub(crate) const TIP_COMMIT: &str = "9f2c4a1d3b5e708aab12cd34ef5678901234567a";
 
 /// The oldest analyzed commit, which the header states alongside the tip so the reader
 /// sees the stretch of history the run covered.
@@ -188,7 +189,7 @@ fn worked_census() -> SeriesCensus {
 /// them here is what lets every excerpt in the chapter be a real rendering: one analysis
 /// feeds the text, Markdown and JSON forms, so none of them can drift from another or from
 /// the renderer.
-struct Analysis {
+pub(crate) struct Analysis {
     /// The mode the analysis ran in.
     mode: AnalysisMode,
 
@@ -203,18 +204,31 @@ struct Analysis {
 
     /// What the analysis judged, and why it left the rest unjudged.
     census: SeriesCensus,
+
+    /// Batch-derived historical context for branch reports.
+    comparisons: Vec<BranchComparison>,
 }
 
 impl Analysis {
     /// The report this analysis renders to, in `format`.
-    fn render(&self, format: ReportFormat) -> String {
+    pub(crate) fn render(&self, format: ReportFormat) -> String {
+        self.project(|input| render(input, format, false))
+    }
+
+    /// The exact condensed projection embedded in a GitHub comment.
+    pub(crate) fn summary(&self) -> String {
+        self.project(|input| render_markdown_summary(input, DEFAULT_SUMMARY_LIMIT))
+    }
+
+    /// Keeps full reports and comment summaries on the same evidence.
+    fn project(&self, project: impl FnOnce(&ReportInput<'_>) -> String) -> String {
         let sets = vec![SetSummary {
             set: &self.set,
             runs: RUNS_LOADED,
             series: self.coverage().in_scope(),
             findings: self.findings.iter().collect(),
             comparison_base_lags: self.lags.clone(),
-            branch_comparison: None,
+            branch_comparison: self.comparisons.first(),
         }];
         let input = ReportInput {
             inspection: None,
@@ -225,17 +239,21 @@ impl Analysis {
             runs: RUNS_LOADED,
             series: self.coverage().in_scope(),
             commit_span: Some((FIRST_COMMIT, TIP_COMMIT)),
-            report_improvements: false,
+            report_improvements: self.mode == AnalysisMode::Branch,
             findings: &self.findings,
             sets: &sets,
             hint: None,
             warning: None,
-            ghosts_excluded: GHOST_SERIES,
+            ghosts_excluded: self
+                .census
+                .reasons()
+                .find_map(|(reason, count)| (reason == UnjudgedReason::Ghost).then_some(count))
+                .unwrap_or(0),
             census: self.census.clone(),
         };
         // Colour is emitted as ANSI escape sequences, which a book page shows as
         // mojibake rather than as colour.
-        render(&input, format, false)
+        project(&input)
     }
 
     /// What the analysis judged, in the form the report reads it in.
@@ -280,6 +298,7 @@ fn worked_analysis() -> Analysis {
         findings,
         lags: Vec::new(),
         census,
+        comparisons: Vec::new(),
     }
 }
 
@@ -294,6 +313,7 @@ fn silent_analysis() -> Analysis {
         findings,
         lags: Vec::new(),
         census,
+        comparisons: Vec::new(),
     }
 }
 
@@ -309,6 +329,55 @@ fn lagging_analysis(lag: ComparisonBaseLag) -> Analysis {
         )],
         lags: vec![lag],
         census: worked_census(),
+        comparisons: Vec::new(),
+    }
+}
+
+/// Selects real detector inputs for each successful-analysis outcome in the gallery.
+pub(crate) fn gallery_analysis(outcome: AnalysisOutcome) -> Analysis {
+    let suite = match outcome {
+        AnalysisOutcome::Findings => return worked_analysis(),
+        AnalysisOutcome::Partial => return silent_analysis(),
+        AnalysisOutcome::Clean => vec![suite_series("steady", &examples::flat_noisy())],
+        AnalysisOutcome::InsufficientBaseline => vec![suite_series("new_case", &[100.0, 101.0])],
+        AnalysisOutcome::NothingInScope => Vec::new(),
+    };
+    let Detection {
+        findings, census, ..
+    } = detect_suite(&suite);
+    Analysis {
+        mode: AnalysisMode::History,
+        set: worked_set(),
+        findings,
+        lags: Vec::new(),
+        census,
+        comparisons: Vec::new(),
+    }
+}
+
+/// A branch excursion and its historical context from one production batch pass.
+pub(crate) fn gallery_branch() -> Analysis {
+    let values = examples::clean_step();
+    let base = values
+        .len()
+        .checked_div(2)
+        .and_then(|half| half.checked_sub(1))
+        .expect("the worked step contains two nonempty regimes");
+    let mut series = examples::with_base_window(suite_series("http_parse", &values), base);
+    series
+        .points
+        .last_mut()
+        .expect("the worked step has observations")
+        .commit = Some(Arc::from(TIP_COMMIT));
+    let context = examples::branch_context(&series, base);
+    let detection = find_changes(&[series], &context);
+    Analysis {
+        mode: AnalysisMode::Branch,
+        set: worked_set(),
+        findings: detection.findings,
+        lags: Vec::new(),
+        census: detection.census,
+        comparisons: detection.branch_comparisons,
     }
 }
 
@@ -528,7 +597,7 @@ fn census() -> String {
 
     markdown.push_str(
         "\nThe judged ratio heads each human-readable report that had anything in scope. \
-         Text prints the per-reason breakdown only when there are no findings, as here. \
+         Text prints the per-reason breakdown beside findings as well as in silent reports. \
          Full Markdown always includes it in the final Coverage section, and JSON always \
          carries it under `census.reasons`.\n",
     );

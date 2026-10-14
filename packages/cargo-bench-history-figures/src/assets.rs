@@ -140,7 +140,7 @@ fn check_registry(root: &Path, assets: &[Asset]) -> io::Result<Option<String>> {
     }
 
     let mut report = String::from(
-        "The generated Data pipeline assets are out of date: a checked-in copy differs from what \
+        "The generated book assets are out of date: a checked-in copy differs from what \
          the generator now produces. Run `just book-figures` to regenerate them, then review \
          the diff — for a behaviour-derived asset a change means the pipeline changed, while a \
          presentation-only asset may simply have been restyled.\n",

@@ -662,7 +662,6 @@ fn dirty_admission() -> Panes {
             base_side_dirty_position,
             base_side_dirty_value * DIRTY_EXCLUDED_NOTE_OFFSET,
             "dirty, base-side → excluded",
-            theme::REGRESSION,
         );
 
     Panes {
@@ -750,7 +749,6 @@ fn fold() -> Panes {
                 0,
                 values.first().copied().unwrap_or_default() * FOLD_NOTE_OFFSET,
                 kind.as_str(),
-                theme::ALTERNATE,
             );
     }
 

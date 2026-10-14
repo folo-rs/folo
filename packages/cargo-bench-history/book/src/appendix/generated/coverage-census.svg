@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 210" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="12 of 16 in-scope series judged (partial)" style="width:100%;height:auto" viewBox="0 0 680 210" xmlns="http://www.w3.org/2000/svg"><title>12 of 16 in-scope series judged (partial)</title><desc>judged: 12 series. ghosts: 5 series. ignored: 2 series. too few points: 3 series. too few points since blessing: 1 series.</desc>
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 12 of 16 in-scope series judged (partial)
 </text>
@@ -32,29 +32,49 @@ series
 20.0
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="582,164 582,169 "/>
-<rect x="22" y="41" width="336" height="43" opacity="0.75" fill="#239056" stroke="none"/>
-<rect x="358" y="41" width="140" height="43" opacity="0.75" fill="#969BA0" stroke="none"/>
-<rect x="498" y="41" width="56" height="43" opacity="0.75" fill="#969BA0" stroke="none"/>
-<rect x="554" y="41" width="84" height="43" opacity="0.75" fill="#306EC8" stroke="none"/>
-<rect x="638" y="41" width="29" height="43" opacity="0.75" fill="#9664BE" stroke="none"/>
-<rect x="22" y="91" width="12" height="8" opacity="0.75" fill="#239056" stroke="none"/>
+<rect x="22" y="41" width="336" height="43" opacity="0.15" fill="#239056" stroke="none"/>
+<rect x="22" y="41" width="336" height="43" opacity="1" fill="none" stroke="currentColor"/>
+<text x="190" y="60" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+1
+</text>
+<rect x="358" y="41" width="140" height="43" opacity="0.15" fill="#969BA0" stroke="none"/>
+<rect x="358" y="41" width="140" height="43" opacity="1" fill="none" stroke="currentColor"/>
+<text x="428" y="60" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+2
+</text>
+<rect x="498" y="41" width="56" height="43" opacity="0.15" fill="#969BA0" stroke="none"/>
+<rect x="498" y="41" width="56" height="43" opacity="1" fill="none" stroke="currentColor"/>
+<text x="526" y="60" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+3
+</text>
+<rect x="554" y="41" width="84" height="43" opacity="0.15" fill="#306EC8" stroke="none"/>
+<rect x="554" y="41" width="84" height="43" opacity="1" fill="none" stroke="currentColor"/>
+<text x="596" y="60" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+4
+</text>
+<rect x="638" y="41" width="29" height="43" opacity="0.15" fill="#9664BE" stroke="none"/>
+<rect x="638" y="41" width="29" height="43" opacity="1" fill="none" stroke="currentColor"/>
+<text x="652" y="60" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+5
+</text>
+<rect x="22" y="91" width="12" height="8" opacity="0.15" fill="#239056" stroke="none"/>
 <text x="41" y="91" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
-judged — 12
+1. judged — 12
 </text>
-<rect x="22" y="105" width="12" height="8" opacity="0.75" fill="#969BA0" stroke="none"/>
+<rect x="22" y="105" width="12" height="8" opacity="0.15" fill="#969BA0" stroke="none"/>
 <text x="41" y="105" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
-ghosts — 5
+2. ghosts — 5
 </text>
-<rect x="22" y="120" width="12" height="7" opacity="0.75" fill="#969BA0" stroke="none"/>
+<rect x="22" y="120" width="12" height="7" opacity="0.15" fill="#969BA0" stroke="none"/>
 <text x="41" y="120" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
-ignored — 2
+3. ignored — 2
 </text>
-<rect x="22" y="134" width="12" height="8" opacity="0.75" fill="#306EC8" stroke="none"/>
+<rect x="22" y="134" width="12" height="8" opacity="0.15" fill="#306EC8" stroke="none"/>
 <text x="41" y="134" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
-too few points — 3
+4. too few points — 3
 </text>
-<rect x="22" y="148" width="12" height="8" opacity="0.75" fill="#9664BE" stroke="none"/>
+<rect x="22" y="148" width="12" height="8" opacity="0.15" fill="#9664BE" stroke="none"/>
 <text x="41" y="148" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
-too few points since blessing — 1
+5. too few points since blessing — 1
 </text>
 </svg>

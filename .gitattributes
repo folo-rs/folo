@@ -2,6 +2,10 @@
 # from both Windows and Linux. This means they need to agree on the line endings! All text
 # is therefore using Linux line endings (LF).
 * text eol=lf
+# Generated book evidence preserves the production renderer's fixed-width chart columns
+# and terminal blank lines. Freshness checks, not whitespace edits, own these files.
+# Ref: packages/cargo-bench-history-figures/docs/implementation.md.
+packages/cargo-bench-history/book/src/appendix/generated/* whitespace=-blank-at-eol,-blank-at-eof
 # Binary files often seen in our documentation.
 *.png filter=lfs diff=lfs merge=lfs -text
 *.jpg filter=lfs diff=lfs merge=lfs -text

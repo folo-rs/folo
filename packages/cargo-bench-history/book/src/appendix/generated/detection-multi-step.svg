@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="several steps, one reported boundary" style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg"><title>several steps, one reported boundary</title><desc>several steps, one reported boundary. Values in ns against first-parent commit position, spanning 30 commits. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; plus signs mark added data; crossed points are excluded. Gaps are missing observations, not zero values. fitted before: 102.18814019682628. fitted after: 157.44539655217588. single after-side model: commit positions 15 to 29. change point: position 15.</desc>
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 several steps, one reported boundary
 </text>
@@ -86,11 +86,11 @@ commit position
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="578,254 578,259 "/>
 <rect x="370" y="34" width="297" height="219" opacity="0.15" fill="#D64541" stroke="none"/>
-<text x="370" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="370" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 single after-side model
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="370,253 370,34 "/>
-<text x="370" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="370" y="253" dy="-0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 change point
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="74,215 85,215 "/>
@@ -123,7 +123,7 @@ change point
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="607,215 619,215 "/>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="627,215 639,215 "/>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="647,215 659,215 "/>
-<text x="665" y="210" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#306EC8">
+<text x="665" y="210" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 fitted before
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="74,73 85,73 "/>
@@ -156,7 +156,7 @@ fitted before
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="607,73 619,73 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="627,73 639,73 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="647,73 659,73 "/>
-<text x="665" y="68" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="665" y="68" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 fitted after
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="2" points="83,213 103,228 "/>

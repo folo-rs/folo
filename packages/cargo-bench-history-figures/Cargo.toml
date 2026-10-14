@@ -1,7 +1,7 @@
 [package]
 # Cargo expects dashes in tool-style crate names. Okay.
 name = "cargo-bench-history-figures"
-description = "Generates the figures, tables and report excerpts embedded in the cargo-bench-history book's Data pipeline chapters"
+description = "Generates the figures, tables and worked reports embedded in the cargo-bench-history user guide"
 publish = false
 version = "0.4.6"
 
@@ -19,6 +19,8 @@ rust-version.workspace = true
 allowed_external_types = ["cbh_detect::*", "plotters::*", "plotters_svg::*"]
 
 [dependencies]
+# Book examples use the actual offline workflow-card projection, without GitHub or filesystem IO.
+cargo-bench-history-github = { path = "../cargo-bench-history-github", default-features = false }
 cbh_analyze = { workspace = true }
 cbh_detect = { path = "../cbh_detect", default-features = false, features = [
     "private-test-util",
@@ -34,6 +36,7 @@ plotters = { workspace = true, features = [
     "point_series",
     "svg_backend",
 ] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 cbh_probe = { path = "../cbh_probe", default-features = false }

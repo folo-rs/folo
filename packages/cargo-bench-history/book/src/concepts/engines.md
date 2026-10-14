@@ -1,5 +1,54 @@
 # Benchmark engines
 
+Use an engine your benchmark target already runs; the history tool is not a benchmark
+harness. Check the target's Cargo features and native dependencies on each selected
+platform before trying historical replay.
+
+## Check native output
+
+`collect --verbose` explains the output roots it scans and the files admitted by the
+run's freshness boundary. A successful compile, harness smoke pass, or console table
+is not a stored measurement. Check these native outputs under the resolved Cargo
+target directory:
+
+| Engine | Measurement output to inspect | Prerequisite check |
+| --- | --- | --- |
+| Criterion | `criterion/**/new/benchmark.json` paired with `estimates.json` | Run the measurement target, not just `--no-run` or test mode. Criterion writes its JSON during measurement. |
+| Gungraun / Callgrind | `gungraun/**/summary.json`, current-run aggregate counts in schema 6 or 7 | Prepare Gungraun's runner and Valgrind on a platform supported by those tools. Collection supplies `GUNGRAUN_SAVE_SUMMARY=pretty-json`; it does not install native prerequisites. |
+| `alloc_tracker` | Per-operation JSON under `alloc_tracker/` | Enable the producer's required features, instrument the measured allocator and finish the measurement session so it emits its output. |
+| `all_the_time` | Per-operation JSON under `all_the_time/` | Enable the producer's required features and finish the measurement session so it emits its output. |
+
+Follow the producer documentation for
+[Criterion](https://bheisler.github.io/criterion.rs/book/),
+[Gungraun](https://gungraun.github.io/gungraun/),
+[`alloc_tracker`](https://docs.rs/alloc_tracker/) and
+[`all_the_time`](https://docs.rs/all_the_time/).
+The collector's parser error or verbose harvest diagnostic is the evidence to investigate;
+empty output alone does not prove a particular engine or runner problem.
+
+The operation adapters require usable per-iteration slopes; absent or non-finite
+required slopes omit an operation. Allocation peaks are optional. The
+[data-shape reference](../appendix/shape.md#which-number-is-taken) owns estimator
+and metric details.
+
+### Target selection and names
+
+Check Cargo metadata for `required-features`, then run a small explicit `--package`
+and `--bench` scope with those features enabled. Do not assume a successful
+workspace build ran every feature-gated target. Local Cargo defaults and reusable
+workflow defaults differ; [GitHub onboarding](../github-automation.md) makes the
+workflow feature choice explicit.
+
+Benchmark IDs are not uniformly package-qualified. Criterion uses its group/function
+identity; the operation engines use operation names; Callgrind carries package
+attribution. Give unqualified names a workspace-wide convention to avoid collisions.
+Renames start new series, rather than transferring old evidence to the new name.
+The [identity reference](../appendix/shape.md#benchmark-identity) describes the
+engine mappings, and [comparability](comparability.md#benchmark-identity) explains
+their effect on history.
+
+## What the engines measure
+
 `cargo-bench-history` supports four benchmark engines. It does not run them by name — it
 enables the combined environment they all need and harvests whichever produced output. What
 drives the data model is **whether each measurement carries a confidence interval** (which

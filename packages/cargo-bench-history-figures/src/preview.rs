@@ -34,15 +34,17 @@ pub fn page(assets: &[Asset]) -> String {
     html.push_str(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>cargo-bench-history Data pipeline figures</title>\n<style>\n\
+         <title>cargo-bench-history book figures and reports</title>\n<style>\n\
          body { font-family: sans-serif; margin: 0; padding: 24px; background: #f4f4f4; }\n\
          h1 { font-size: 20px; }\n\
          .asset { margin: 0 0 32px; }\n\
          .asset h2 { font-size: 14px; font-family: monospace; font-weight: normal; }\n\
          .themes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }\n\
-         .theme { padding: 12px; border-radius: 6px; }\n\
+         .theme { padding: 12px; border-radius: 6px; min-width: 0; overflow-x: auto; }\n\
+         svg { min-width: 680px; }\n\
+         @media (max-width: 800px) { .themes { grid-template-columns: 1fr; } }\n\
          pre { white-space: pre-wrap; font-size: 12px; margin: 0; }\n\
-         </style>\n</head>\n<body>\n<h1>Data pipeline figures</h1>\n",
+         </style>\n</head>\n<body>\n<h1>Book figures and reports</h1>\n",
     );
 
     for asset in assets {
@@ -55,7 +57,7 @@ pub fn page(assets: &[Asset]) -> String {
         for (background, foreground) in [LIGHT, DARK] {
             write!(
                 html,
-                "<div class=\"theme\" style=\"background:{background};color:{foreground}\">"
+                "<div class=\"theme\" tabindex=\"0\" role=\"group\" aria-label=\"Scrollable figure preview\" style=\"background:{background};color:{foreground}\">"
             )
             .expect("writing to a String never fails");
             if asset.path.ends_with(".svg") {

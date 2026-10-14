@@ -20,7 +20,9 @@ A blessing sets a new baseline for the selected benchmarks. It does **not** remo
 data point: **all observations before the blessed commit are excluded from detection**.
 The blessed commit itself remains eligible and starts the new baseline.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include ../appendix/generated/reconstruction-blessing.svg}}
+</figure>
 
 The shaded prefix is the history no longer judged, not a hole at the blessing marker.
 The stored observations remain intact and visible in charts and [`examine`](examine.md);

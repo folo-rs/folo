@@ -1,0 +1,64 @@
+{
+  "project": "textproc",
+  "tip_commit": "9f2c4a1d3b5e708aab12cd34ef5678901234567a",
+  "tip_dirty": false,
+  "mode": "branch",
+  "outcome": "findings",
+  "notable": true,
+  "runs": 128,
+  "series": 1,
+  "regressions": 1,
+  "improvements": 0,
+  "ghosts_excluded": 0,
+  "census": {
+    "total": 1,
+    "in_scope": 1,
+    "judged": 1,
+    "unjudged": 0,
+    "coverage": "full",
+    "reasons": []
+  },
+  "findings": [
+    {
+      "engine": "criterion",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "a1b2c3d4",
+      "segments": [
+        "http_parse",
+        "case"
+      ],
+      "kind": "wall_time",
+      "method": "branch_excursion",
+      "direction": "regression",
+      "baseline": 103.46725066576893,
+      "latest": 126.07203526080744,
+      "relative_delta": 0.21847284478505108,
+      "commit": "9f2c4a1d3b5e708aab12cd34ef5678901234567a",
+      "branch": {
+        "reference_count": 10,
+        "reference_min": 96.92714627070083,
+        "reference_max": 103.46725066576893,
+        "excess": 22.60478459503851,
+        "relative_excess": 0.21847284478505108,
+        "matches_previous_regime": false,
+        "included_in_historical_comparison": true
+      }
+    }
+  ],
+  "sets": [
+    {
+      "engine": "criterion",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "a1b2c3d4",
+      "runs": 128,
+      "series": 1,
+      "regressions": 1,
+      "improvements": 0,
+      "branch_comparison": {
+        "evaluated_base_commits": 5,
+        "at_least_as_much": 0,
+        "series": 1
+      }
+    }
+  ]
+}

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::result::Outcome;
 use crate::summary::input::SummaryInput;
-use crate::summary::render::{InvalidSummary, render};
+use crate::summary::render::{InvalidSummary, render, render_workflow_summary};
 
 /// Supplies an analyzer-shaped document without external I/O.
 fn report(outcome: Outcome, partial: bool) -> Value {
@@ -59,6 +59,42 @@ fn render_report(input: Value, report: &Value) -> String {
         Ok(report.clone())
     })
     .unwrap()
+}
+
+#[test]
+fn json_projection_uses_the_same_evidence_and_renderer() {
+    // A minimal valid report covers the JSON boundary without repeating the inventory
+    // and outcome matrix in the renderer tests, keeping the interpreter workload bounded.
+    let input = input(json!({
+        "kind":"analysis", "report_file":"report.json",
+        "analyzed_sha":"a".repeat(40),
+        "expected_platforms":"linux", "completed_platforms":"linux"
+    }));
+    let report = json!({
+        "tip_commit":"a".repeat(40), "tip_dirty":false, "mode":"history",
+        "outcome":"clean", "notable":false,
+        "census":{"coverage":"full", "judged":1, "in_scope":1}
+    });
+    let expected = render_report(input.clone(), &report);
+    let actual = render_workflow_summary(input.to_string().as_bytes(), |path| {
+        assert_eq!(path.to_str(), Some("report.json"));
+        Ok(report.to_string().into_bytes())
+    })
+    .unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn json_projection_rejects_unknown_fields_before_reading_evidence() {
+    let result = render_workflow_summary(br#"{"unsupported":true}"#, |_| {
+        panic!("invalid input must not read evidence");
+    });
+    assert!(
+        result
+            .unwrap_err()
+            .find_source::<InvalidSummary>()
+            .is_some()
+    );
 }
 
 #[test]

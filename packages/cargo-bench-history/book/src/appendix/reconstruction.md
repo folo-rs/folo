@@ -24,7 +24,9 @@ A series is identified by three things together:
 So a single Callgrind benchmark contributes three series, and a run holding twenty benchmarks
 scatters points across sixty of them.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/reconstruction-fold.svg}}
+</figure>
 
 Each resulting point carries its value, its position in the first-parent topology, whether it
 came from a dirty working tree, and the confidence interval the engine reported if it reported
@@ -47,7 +49,9 @@ is what branch mode judges.
 A commit with no observation produces **no point**. Nothing is interpolated, and nothing is
 filled in.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/reconstruction-gap.svg}}
+</figure>
 
 The two panes are the same series twice. The first is what the **history** holds: each
 observation at the commit it was measured at, gaps drawn to scale, so a steady climb reads as the
@@ -75,7 +79,9 @@ manufactures changes.
 A benchmark with **no observation at the analyzed commit** is dropped entirely — every one of
 its metric series, before anything else happens.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/reconstruction-ghost.svg}}
+</figure>
 
 A couple of details matter:
 
@@ -110,7 +116,9 @@ as `ignored`. Neither exclusion applies to `list` or `examine`.
 A [blessing](../commands/bless.md) records that you looked at a change and accepted it. It
 re-baselines the series: detection sees only the commits from the blessed one onward.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/reconstruction-blessing.svg}}
+</figure>
 
 The full series is kept for charting, so the chart still shows you the whole story while
 detection judges only the active part. A blessed series that is left with too few points to
