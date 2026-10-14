@@ -2,6 +2,18 @@
 
 User-visible behavior is defined in the package [design](design.md).
 
+## Ownership and coordination
+
+The public pool controls worker lifetime; schedulers retain shared storage and submit work
+through it. Inside `pool_inner`, admission owns the task-transfer transaction, worker startup
+and cleanup own thread lifetime, and the worker loop owns affinity refresh and waiting.
+`WorkerCore` handles a single task iteration independently of thread management.
+
+Cold admission keeps startup, membership expansion and the first queue insertion under one
+registration lock. Separate preparation steps make that transaction readable without moving
+task ownership inside its unwind boundary. Admission reports an explicit outcome so rejected
+work cannot be confused with accepted work that needs an affinity wakeup.
+
 The default configuration uses two workers per processor, an internal tuning choice rather
 than a numeric API promise. Thread names use `p` or `r` before the destination ID to identify
 the policy compactly: `{pool_name}-p{processor_id}-{worker_index}` or
@@ -35,6 +47,9 @@ Task slot reservation happens while the allocation lock is held. Initialization 
 erasure happen after the lock is released so moving or dropping caller-owned task state
 cannot poison shared allocator state. Workers obtain pinned access through the owning
 handle, execute the task and then release the individual slot for reuse.
+
+Task wrappers own execution and result delivery. Shared panic-disposal helpers isolate
+user payload destruction from both task handling and pool cleanup.
 
 Result channels use a separate typed pool because their layout and lifecycle do not
 require heterogeneous task storage. Joined wrappers retain the original body and sender
@@ -155,6 +170,10 @@ Clean shutdown permits retained schedulers to cancel submissions normally. Poiso
 takes precedence over shutdown, permanently rejecting every submission with a panic.
 
 ## Logging coverage
+
+Pool lifecycle events use the pool implementation's tracing target, and task events use the
+task wrapper's target, including events emitted by their internal coordination and cleanup
+modules. Log filtering therefore follows the owning component rather than its helper layout.
 
 Ordinary unit and integration test executables initialize permanent silent formatting
 with `testing::init_tracing!()`. Existing private failure adapters can therefore exercise
