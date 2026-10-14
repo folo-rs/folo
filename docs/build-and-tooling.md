@@ -59,6 +59,22 @@ collection. The synthetic benchmark emits fixed data, not timed measurements; us
 for a local smoke run. The hosted canary checks the actual head and its first parent, so both
 must carry consistent fixture locks.
 
+### Workspace formatting
+
+`just format` and `just format-check` always cover the whole workspace, including
+when `package` selects a narrower scope for other commands. Both recipes run from
+the workspace root, so invocation from a package directory uses the same
+`unstable-rustfmt.toml` configuration.
+
+The pinned `cargo-each` tool runs the pinned nightly's `cargo fmt` sequentially
+for each workspace member. Cargo discovers each package's targets; the formatter's
+argument list grows with one package rather than the whole workspace, keeping
+ordinary long Windows worktree paths within the process command-line limit.
+Keep the inner formatter package-scoped: `--all` would expand the target list again.
+The recipes collect formatter failures across packages and return failure if any
+invocation fails. Manifest and derive sorting remain workspace-wide checks after
+Rust formatting succeeds.
+
 ## Development tool installation
 
 `scripts/setup/install-just.ps1` bootstraps the command runner without requiring Just.
