@@ -236,13 +236,17 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
 /// Pin acknowledgments prove idle workers refresh without needing one task per worker.
 #[test]
 fn idle_workers_refresh_even_without_a_task_for_each_worker() {
+    // Sibling workers expose whether expansion wakes workers without queued tasks.
+    const WORKERS: u32 = 2;
     with_watchdog(|| {
         let hardware = regional_hardware();
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(2)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(WORKERS)))
             .build();
+        // Validate capacity before waiting for an acknowledgment from every worker.
+        assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let target = pool.inner.policy.destination(&hardware);
         let state = pool.inner.registry.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
@@ -264,7 +268,7 @@ fn idle_workers_refresh_even_without_a_task_for_each_worker() {
         let second = updates.recv().unwrap();
         assert_ne!(first, second);
         let worker_count = pool.inner.worker_handles.lock().unwrap().len();
-        assert_eq!(worker_count, 2);
+        assert_eq!(worker_count, WORKERS as usize);
     });
 }
 

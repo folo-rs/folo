@@ -22,6 +22,9 @@ directly:
   benchmarks when no performance-relevant inputs changed. Required checks and
   review obligations still apply. Follow the
   [check-waiting policy](docs/git-workflow.md#check-waiting-and-merge-queue-readiness).
+* **Check queue failures, not just PR checks.** Before declaring a PR ready or
+  retrying queue submission, inspect its merge-queue attempts and refresh release
+  evidence. Follow [queue readiness](docs/git-workflow.md#queue-attempts-and-release-freshness).
 * **ARM64 is best-effort, minimally supported.** ARM64 validation may be skipped
   without separate approval when the change should logically work on that target,
   especially when the same logic passes on other platforms. Record the reasoning

@@ -31,8 +31,8 @@ use crate::{
 ///
 /// # Worker failures
 ///
-/// Infrastructure failures, including thread creation and affinity setup or refresh,
-/// are logged and stop the entire pool. Queued joined tasks are cancelled recoverably;
+/// Infrastructure failures, including thread creation, initialization and affinity setup or
+/// refresh, are logged and stop the entire pool. Queued joined tasks are cancelled recoverably;
 /// queued fire-and-forget tasks release their captures. Executing tasks may finish.
 /// The pool becomes permanently poisoned: every subsequent submission panics synchronously,
 /// including through retained schedulers after the pool is dropped.
