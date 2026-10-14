@@ -6,10 +6,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::executor::block_on;
+use futures::FutureExt;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
-use testing::assert_panics;
 
 use crate::{ErasedTaskHandle, Scheduler, VicinalTask, WorkerGroup, init_task};
 
@@ -87,15 +86,20 @@ pub(crate) fn assert_retained_scheduler(scheduler: &Scheduler) {
             drop(capture);
         }
     };
-    // Submission must return normally; only awaiting an abandoned handle panics.
+    // Joined captures remain recoverable; fire-and-forget captures are released immediately.
     let ordinary = scheduler.spawn(task());
     let urgent = scheduler.spawn_urgent(task());
     scheduler.spawn_and_forget(task());
     scheduler.spawn_urgent_and_forget(task());
-    assert_eq!(dropped.load(Ordering::Relaxed), 4);
+    assert_eq!(dropped.load(Ordering::Relaxed), 2);
     assert_eq!(executed.load(Ordering::Relaxed), 0);
-    assert_panics(|| block_on(ordinary));
-    assert_panics(|| block_on(urgent));
+    for handle in [ordinary, urgent] {
+        let error = handle.now_or_never().unwrap().unwrap_err();
+        assert!(error.is_cancel());
+        error.into_body().unwrap()();
+    }
+    assert_eq!(dropped.load(Ordering::Relaxed), 4);
+    assert_eq!(executed.load(Ordering::Relaxed), 2);
 }
 
 /// A larger region than the submitter set, plus a distinct sparse region.

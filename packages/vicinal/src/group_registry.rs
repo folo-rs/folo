@@ -72,7 +72,7 @@ mod tests {
                 .processor(ProcessorBuilder::new().id(3).memory_region(2))
                 .processor(ProcessorBuilder::new().id(4).memory_region(5)),
         );
-        let policy = WorkerPolicy::fixed_per_memory_region(nz!(1_u32));
+        let policy = WorkerPolicy::per_memory_region(nz!(1_u32));
         let registry = GroupRegistry::new(&hardware, &policy);
         assert_eq!(registry.groups.len(), 2);
         assert_eq!(registry.initialized().count(), 0);

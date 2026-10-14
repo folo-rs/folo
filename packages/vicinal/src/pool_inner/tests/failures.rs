@@ -17,13 +17,17 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
-        assert_panics(|| block_on(scheduler.spawn(|| panic!("task panic"))));
+        assert!(
+            block_on(scheduler.spawn(|| panic!("task panic")))
+                .unwrap_err()
+                .is_panic()
+        );
         scheduler.spawn_and_forget(|| panic!("fire-and-forget task panic"));
         scheduler.spawn_and_forget(|| panic::panic_any(PanickingPayload));
-        block_on(scheduler.spawn(|| {}));
+        block_on(scheduler.spawn(|| {})).unwrap();
         assert!(!pool.inner.poisoned.load(Ordering::Acquire));
 
         // This is the common boundary for topology, result-channel and task-slot failures.
@@ -43,7 +47,7 @@ fn disconnected_joined_panic_does_not_poison_pool() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build();
         pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
@@ -54,7 +58,7 @@ fn disconnected_joined_panic_does_not_poison_pool() {
         });
         drop(abandoned);
         release.send(()).unwrap();
-        block_on(scheduler.spawn(|| {}));
+        block_on(scheduler.spawn(|| {})).unwrap();
         assert!(!pool.inner.poisoned.load(Ordering::Acquire));
     });
 }
@@ -65,12 +69,12 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .build();
         pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
         let completed = scheduler.spawn(|| panic::panic_any(PanickingPayload));
-        block_on(scheduler.spawn(|| {}));
+        block_on(scheduler.spawn(|| {})).unwrap();
         drop(completed);
         assert!(!pool.inner.poisoned.load(Ordering::Acquire));
     });
@@ -78,13 +82,13 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
 
 /// A failed refresh drains every group while a blocked, already-running task may still finish.
 #[test]
-fn refresh_failure_stops_pool_and_disconnects_accepted_work() {
+fn refresh_failure_stops_pool_and_cancels_accepted_work() {
     with_watchdog(|| {
         let hardware = regional_hardware();
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let target = pool.inner.policy.destination(&hardware);
         let state = pool.inner.registry.get_or_init(target.group);
@@ -125,16 +129,19 @@ fn refresh_failure_stops_pool_and_disconnects_accepted_work() {
         pin(&hardware, 1);
         let expansion = scheduler.spawn_urgent(task());
         release.send(()).unwrap();
-        block_on(running);
+        block_on(running).unwrap();
         // Failure closes and drains the queues before it becomes merely a Pool-drop concern.
-        assert_panics(|| block_on(ordinary));
-        assert_panics(|| block_on(expansion));
-        assert_panics(|| block_on(other_queued));
+        for handle in [ordinary, expansion, other_queued] {
+            let error = block_on(handle).unwrap_err();
+            assert!(error.is_cancel());
+            assert!(!error.is_panic());
+            error.into_body().unwrap()();
+        }
         assert_eq!(dropped.load(Ordering::Acquire), 3);
         pin(&hardware, 8);
         assert_panics(|| scheduler.spawn_and_forget(|| {}));
         other_release.send(()).unwrap();
-        block_on(other_running);
+        block_on(other_running).unwrap();
         assert_panics(|| drop(pool));
         assert_panics(|| scheduler.spawn(|| {}));
     });
