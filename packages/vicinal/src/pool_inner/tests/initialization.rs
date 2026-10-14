@@ -36,9 +36,9 @@ fn assert_lazy_initialization(regional: bool) {
     with_watchdog(move || {
         let hardware = hardware();
         let policy = if regional {
-            WorkerPolicy::fixed_per_memory_region(nz!(WORKERS))
+            WorkerPolicy::per_memory_region(nz!(WORKERS))
         } else {
-            WorkerPolicy::fixed_per_processor(nz!(WORKERS))
+            WorkerPolicy::per_processor(nz!(WORKERS))
         };
         let (initialized, observations) = mpsc::channel();
         let pool = Pool::builder()
@@ -65,8 +65,8 @@ fn assert_lazy_initialization(regional: bool) {
         // The shared region grows before work reaches a separate region.
         for processor in [0, 1, 3] {
             pin(&hardware, processor);
-            assert!(block_on(scheduler.spawn(|| INITIALIZED.get())));
-            assert!(block_on(scheduler.spawn_urgent(|| INITIALIZED.get())));
+            assert!(block_on(scheduler.spawn(|| INITIALIZED.get())).unwrap());
+            assert!(block_on(scheduler.spawn_urgent(|| INITIALIZED.get())).unwrap());
             let (result, received) = mpsc::channel();
             scheduler.spawn_and_forget({
                 let result = result.clone();
@@ -107,7 +107,7 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
         let executed = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(WORKERS)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(WORKERS)))
             .thread_init({
                 let release = Arc::clone(&release);
                 move || {
@@ -127,7 +127,7 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
         });
         assert!(!executed.load(Ordering::Acquire));
         release.wait();
-        block_on(task);
+        block_on(task).unwrap();
         assert!(executed.load(Ordering::Acquire));
     });
 }
@@ -140,7 +140,7 @@ fn initializer_can_submit_to_its_pool() {
         let (result, received) = mpsc::channel();
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .thread_init({
                 // A weak capture avoids retaining a scheduler through its own pool.
                 let scheduler = Arc::downgrade(&scheduler);
@@ -155,21 +155,19 @@ fn initializer_can_submit_to_its_pool() {
             })
             .build();
         scheduler.set(pool.scheduler()).unwrap();
-        assert!(block_on(
-            scheduler.get().unwrap().spawn(|| INITIALIZED.get())
-        ));
+        assert!(block_on(scheduler.get().unwrap().spawn(|| INITIALIZED.get())).unwrap());
         assert!(received.recv().unwrap());
     });
 }
 
-/// A callback failure abandons accepted work and permanently poisons every submission path.
+/// A callback failure cancels accepted work and permanently poisons every submission path.
 #[test]
 fn initialization_panic_stops_the_pool() {
     with_watchdog(|| {
         let (release, wait) = mpsc::channel();
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_processor(nz!(1)))
+            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
             .thread_init({
                 let wait = Mutex::new(wait);
                 move || {
@@ -187,7 +185,7 @@ fn initialization_panic_stops_the_pool() {
             move || executed.store(true, Ordering::Relaxed)
         });
         release.send(()).unwrap();
-        assert_panics(|| block_on(task));
+        assert!(block_on(task).unwrap_err().is_cancel());
         assert!(!executed.load(Ordering::Relaxed));
         assert!(pool.inner.poisoned.load(Ordering::Acquire));
         assert_panics(|| drop(pool));

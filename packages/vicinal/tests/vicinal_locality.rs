@@ -58,7 +58,7 @@ fn tasks_execute_on_spawning_processor() {
             // Wait for all tasks to complete.
             for handle in task_handles {
                 // We use block_on from futures crate for simplicity in this example.
-                block_on(handle);
+                block_on(handle).unwrap();
             }
         }
     });
@@ -83,7 +83,7 @@ fn regional_tasks_use_only_submitting_processors() {
         let hardware = SystemHardware::current();
         let processors = hardware.all_processors();
         let pool = Pool::builder()
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
             .build();
         let scheduler = pool.scheduler();
         // Sequential CPU registration makes each expected cumulative mask deterministic.
@@ -118,7 +118,8 @@ fn regional_tasks_use_only_submitting_processors() {
                                 affinity.iter().map(Processor::id).collect::<BTreeSet<_>>(),
                                 expected
                             );
-                        }));
+                        }))
+                        .unwrap();
                     }
                 })
                 .join()

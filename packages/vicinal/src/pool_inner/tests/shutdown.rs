@@ -1,10 +1,15 @@
 //! Clean shutdown, retained schedulers and resource-release boundaries.
 
+use std::cell::Cell;
+use std::future::Future;
 use std::panic::{self, AssertUnwindSafe};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
+use std::task::{Context, Wake};
 use std::thread;
 
+use futures::FutureExt;
 use futures::executor::block_on;
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
@@ -14,14 +19,111 @@ use testing::{assert_panics, with_watchdog};
 use super::helpers::{
     OnDrop, PanickingPayload, assert_retained_scheduler, hardware, pin, probe, regional_hardware,
 };
-use crate::{GroupId, Pool, SubmissionTarget, WorkerPolicy};
+use crate::{GroupId, JoinHandle, Pool, Scheduler, SubmissionTarget, WorkerPolicy};
+
+/// A ready group without workers keeps both priority queues deterministic until shutdown.
+#[test]
+fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
+    let pool = Pool::builder()
+        .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+            nz!(1),
+            nz!(1),
+        )))
+        .build();
+    let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
+    state.startup.set(Ok(())).unwrap();
+    let scheduler = pool.scheduler();
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let task = || {
+        let capture = OnDrop(Some(Box::new({
+            let dropped = Arc::clone(&dropped);
+            move || {
+                dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        })));
+        // Neither captured state nor the output needs Sync, Clone or Unpin.
+        let value = Cell::new(String::from("recoverable"));
+        let future = async {};
+        move || {
+            drop((capture, future));
+            value
+        }
+    };
+    let ordinary = scheduler.spawn(task());
+    let urgent = scheduler.spawn_urgent(task());
+    drop(scheduler);
+    drop(pool);
+    assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    for handle in [ordinary, urgent] {
+        let error = handle.now_or_never().unwrap().err().unwrap();
+        assert!(error.is_cancel());
+        assert!(!error.is_panic());
+        assert_eq!(error.into_body().unwrap()().into_inner(), "recoverable");
+    }
+    assert_eq!(dropped.load(Ordering::Relaxed), 2);
+}
+
+/// Completion callbacks run outside pool locks for execution and cancellation alike.
+#[test]
+fn completion_waker_can_drop_handles_and_submit() {
+    /// Re-enters admission while disposing of the completed result and another pending handle.
+    struct OnWake {
+        handles: Mutex<Vec<JoinHandle<()>>>,
+        scheduler: Scheduler,
+        woke: AtomicUsize,
+    }
+
+    impl Wake for OnWake {
+        fn wake(self: Arc<Self>) {
+            self.handles.lock().unwrap().clear();
+            self.scheduler.spawn_and_forget(|| {});
+            self.woke.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    for cancel in [false, true] {
+        let pool = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .build();
+        let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
+        state.startup.set(Ok(())).unwrap();
+        let scheduler = pool.scheduler();
+        let mut handle = scheduler.spawn(|| {});
+        let sibling = scheduler.spawn(|| {});
+        let callback = Arc::new(OnWake {
+            handles: Mutex::new(Vec::new()),
+            scheduler,
+            woke: AtomicUsize::new(0),
+        });
+        let waker = Arc::clone(&callback).into();
+        assert!(
+            Pin::new(&mut handle)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        callback.handles.lock().unwrap().extend([handle, sibling]);
+        if cancel {
+            drop(pool);
+        } else {
+            let mut task = state.regular_queue.lock().unwrap().pop_front().unwrap();
+            task.as_pin_mut().call();
+            drop(task);
+            drop(pool);
+        }
+        assert_eq!(callback.woke.load(Ordering::Relaxed), 1);
+        assert!(callback.handles.lock().unwrap().is_empty());
+    }
+}
 
 /// Late registry initialization cannot escape the shutdown transition's startup gate.
 #[test]
 fn shutdown_before_lazy_state_creation_starts_no_workers() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
@@ -145,11 +247,11 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
 
 /// A queued destructor re-enters admission and releases the running task during clean shutdown.
 #[test]
-fn retained_scheduler_releases_queued_captures_and_disconnects_handles() {
+fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
         // Keep the submitter on one region throughout the shutdown scenario.
         let processors = pool.inner.hardware.all_processors();
@@ -174,17 +276,18 @@ fn retained_scheduler_releases_queued_captures_and_disconnects_handles() {
             move || {
                 // Reentrant admission must not deadlock or retain another task.
                 let reentrant = scheduler.spawn(|| panic!());
-                assert_panics(|| block_on(reentrant));
+                assert!(reentrant.now_or_never().unwrap().unwrap_err().is_cancel());
                 dropped.fetch_add(1, Ordering::Relaxed);
                 release.send(()).unwrap();
             }
         })));
-        let abandoned = scheduler.spawn(move || drop(capture));
+        scheduler.spawn_and_forget(move || drop(capture));
+        let abandoned = scheduler.spawn(|| panic!("must be cancelled"));
         let urgent = scheduler.spawn_urgent(|| panic!("must be abandoned"));
         drop(pool);
-        block_on(running);
-        assert_panics(|| block_on(abandoned));
-        assert_panics(|| block_on(urgent));
+        block_on(running).unwrap();
+        assert!(abandoned.now_or_never().unwrap().unwrap_err().is_cancel());
+        assert!(urgent.now_or_never().unwrap().unwrap_err().is_cancel());
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         assert_retained_scheduler(&scheduler);
     });
@@ -194,8 +297,8 @@ fn retained_scheduler_releases_queued_captures_and_disconnects_handles() {
 #[test]
 fn poisoned_pool_rejects_submissions_even_after_drop() {
     for policy in [
-        WorkerPolicy::fixed_per_processor(nz!(1)),
-        WorkerPolicy::fixed_per_memory_region(nz!(1)),
+        WorkerPolicy::per_processor(nz!(1)),
+        WorkerPolicy::per_memory_region(nz!(1)),
     ] {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let destination = policy.destination(&hardware);
@@ -226,16 +329,16 @@ fn post_shutdown_submissions_do_not_expand_or_activate() {
     pin(&hardware, 0);
     let pool = Pool::builder()
         .hardware(hardware.clone())
-        .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(1)))
+        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let scheduler = pool.scheduler();
-    block_on(scheduler.spawn(|| {}));
+    block_on(scheduler.spawn(|| {})).unwrap();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
     for processor in [1, 8] {
         pin(&hardware, processor);
         let task = scheduler.spawn(|| panic!("abandoned work must not execute"));
-        assert_panics(|| block_on(task));
+        assert!(task.now_or_never().unwrap().unwrap_err().is_cancel());
     }
     let existing = inner.registry.get_or_init(GroupId::MemoryRegion(2));
     assert_eq!(existing.affinity_revision.load(Ordering::Acquire), 1);

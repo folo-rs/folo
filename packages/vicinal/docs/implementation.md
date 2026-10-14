@@ -32,6 +32,29 @@ erasure happen after the lock is released so moving or dropping caller-owned tas
 cannot poison shared allocator state. Workers obtain pinned access through the owning
 handle, execute the task and then release the individual slot for reuse.
 
+Result channels use a separate typed pool because their layout and lifecycle do not
+require heterogeneous task storage. Joined wrappers retain the original body and sender
+together until execution consumes them. Dropping an unexecuted wrapper sends cancellation
+with the original body, completing pending handles even while schedulers retain the registry.
+Only cancellation boxes the body; normal execution uses the existing pooled task slot.
+The recovery API hides that storage behind an opaque callable type so storage choices remain
+internal to the implementation.
+Recovering the owning heterogeneous slot would require moving ownership out of the queue's
+handle rather than cancellation from the stored wrapper's destructor.
+
+The public error owns its recovery state separately from its shared diagnostic source:
+task captures and panic payloads need only be `Send`, not `Sync`. Error inspection exposes
+no user state; extraction consumes the error. Task panic payloads retain their owning wrapper
+with protected disposal, so dropping either channel endpoint or an unobserved panic error
+cannot turn its payload destructor into an infrastructure failure. Extracting a panic transfers
+disposal responsibility to the caller. Cancelled captures live in the result until recovery
+or disposal, rather than being destroyed by queue draining while a handle remains alive.
+
+Diagnostic conversion drops the recovery state and moves the existing `OhnoCore` into a private
+payload-free error. This preserves diagnostic ownership without formatting it into a new message
+or making recovery payloads `Sync`. The public conversion exposes only standard error bounds;
+the executable examples enable application-error support through development dependencies.
+
 ## Queue and worker lifecycle
 
 Normal and urgent queues are independent. A worker removes a task while holding only the
@@ -93,7 +116,9 @@ every handle and propagates worker failures after cleanup.
 The submission boundary retains caller-owned task state outside topology, result-channel
 and allocation operations. It also catches poisoned rejection before destroying captures.
 Wrapping transfers ownership into another protected preparation boundary; allocation consumes
-the wrapper only after slot reservation succeeds. Infrastructure failures stop admission
+the wrapper only after slot reservation succeeds. That boundary also retains the joined
+receiver, so a cancelled body with panicking captures is disposed of outside the original unwind
+when submission fails before returning a handle. Infrastructure failures stop admission
 before separately destroying retained captures, so reentrant destructors cannot submit work.
 The worker's dequeued-task boundary publishes the same pool-wide failure state before releasing
 its task; worker entry then signals groups, drains queued work and propagates the original failure.
@@ -114,15 +139,8 @@ Suppressed panic payloads are also destroyed behind an unwind boundary. If that 
 panics, its replacement payload is deliberately retained: recursively destroying arbitrary
 payloads cannot provide bounded cleanup. This exceptional retention lets the remaining
 tasks and worker handles be released while preserving the original failure.
-Clean shutdown permits retained schedulers to abandon submissions normally. Poisoning
+Clean shutdown permits retained schedulers to cancel submissions normally. Poisoning
 takes precedence over shutdown, permanently rejecting every submission with a panic.
-
-Result channels use a separate typed pool because their layout and lifecycle do not
-require heterogeneous task storage. Disconnecting abandoned senders completes pending
-join handles even while scheduler clones retain the registry. Task panic payloads have an
-owning wrapper with protected disposal. Dropping either result-channel endpoint therefore
-cannot turn an unobserved task panic's destructor into an infrastructure failure; awaiting
-the handle extracts and resumes the original payload.
 
 ## Logging coverage
 

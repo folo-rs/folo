@@ -13,7 +13,7 @@ use crate::fixtures::{OnDrop, PanicOnDrop, PanickingPayload, pool};
 /// A disconnected result's destructor fails outside the user-task unwind boundary.
 pub(crate) fn worker_failure(capture: &TracingCapture) {
     let first_entry = capture.snapshot().len();
-    let pool = pool(WorkerPolicy::fixed_per_processor(nz!(1)), "worker-failure");
+    let pool = pool(WorkerPolicy::per_processor(nz!(1)), "worker-failure");
     let scheduler = pool.scheduler();
     let (started, entered) = mpsc::channel();
     let (release, wait) = mpsc::channel();
@@ -52,10 +52,7 @@ pub(crate) fn worker_failure(capture: &TracingCapture) {
 /// Queued destructor failures during an outer unwind must be logged without replacing it.
 pub(crate) fn shutdown_during_unwind(capture: &TracingCapture) {
     let first_entry = capture.snapshot().len();
-    let pool = pool(
-        WorkerPolicy::fixed_per_processor(nz!(1)),
-        "shutdown-failure",
-    );
+    let pool = pool(WorkerPolicy::per_processor(nz!(1)), "shutdown-failure");
     let scheduler = pool.scheduler();
     let (started, entered) = mpsc::channel();
     let (release, wait) = mpsc::channel();
@@ -81,7 +78,7 @@ pub(crate) fn shutdown_during_unwind(capture: &TracingCapture) {
         },
         |message| assert!(message.contains("outer unwind canary")),
     );
-    block_on(running);
+    block_on(running).unwrap();
 
     let snapshot = capture.snapshot();
     let entries = snapshot.get(first_entry..).unwrap();
