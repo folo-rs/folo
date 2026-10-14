@@ -32,6 +32,7 @@ fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
         .build();
     let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
     state.startup.set(Ok(())).unwrap();
+
     let scheduler = pool.scheduler();
     let dropped = Arc::new(AtomicUsize::new(0));
     let task = || {
@@ -41,6 +42,7 @@ fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
                 dropped.fetch_add(1, Ordering::Relaxed);
             }
         })));
+
         // Neither captured state nor the output needs Sync, Clone or Unpin.
         let value = Cell::new(String::from("recoverable"));
         let future = async {};
@@ -49,17 +51,20 @@ fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
             value
         }
     };
+
     let ordinary = scheduler.spawn(task());
     let urgent = scheduler.spawn_urgent(task());
     drop(scheduler);
     drop(pool);
     assert_eq!(dropped.load(Ordering::Relaxed), 0);
+
     for handle in [ordinary, urgent] {
         let error = handle.now_or_never().unwrap().err().unwrap();
         assert!(error.is_cancel());
         assert!(!error.is_panic());
         assert_eq!(error.into_body().unwrap()().into_inner(), "recoverable");
     }
+
     assert_eq!(dropped.load(Ordering::Relaxed), 2);
 }
 
@@ -90,6 +95,7 @@ fn completion_waker_can_drop_handles_and_submit() {
             .build();
         let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
         state.startup.set(Ok(())).unwrap();
+
         let scheduler = pool.scheduler();
         let mut handle = scheduler.spawn(|| {});
         let sibling = scheduler.spawn(|| {});
@@ -98,6 +104,7 @@ fn completion_waker_can_drop_handles_and_submit() {
             scheduler,
             woke: AtomicUsize::new(0),
         });
+
         let waker = Arc::clone(&callback).into();
         assert!(
             Pin::new(&mut handle)
@@ -105,6 +112,7 @@ fn completion_waker_can_drop_handles_and_submit() {
                 .is_pending()
         );
         callback.handles.lock().unwrap().extend([handle, sibling]);
+
         if cancel {
             drop(pool);
         } else {
@@ -113,6 +121,7 @@ fn completion_waker_can_drop_handles_and_submit() {
             drop(task);
             drop(pool);
         }
+
         assert_eq!(callback.woke.load(Ordering::Relaxed), 1);
         assert!(callback.handles.lock().unwrap().is_empty());
     }
@@ -127,12 +136,15 @@ fn shutdown_before_lazy_state_creation_starts_no_workers() {
         .build();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
+
     let target = SubmissionTarget {
         group: GroupId::MemoryRegion(2),
         processor: 0,
     };
     let state = inner.registry.get_or_init(target.group);
+
     inner.enqueue_with(target, state, probe(state, || {}), false, |_| panic!());
+
     assert!(state.startup.get().is_none());
     assert!(inner.worker_handles.lock().unwrap().is_empty());
 }
@@ -156,6 +168,7 @@ fn shutdown_racing_enqueue_drops_outside_locks() {
             dropped.fetch_add(1, Ordering::Relaxed);
         }
     });
+
     drop(pool);
     inner.enqueue(
         SubmissionTarget {
@@ -166,6 +179,7 @@ fn shutdown_racing_enqueue_drops_outside_locks() {
         task,
         false,
     );
+
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.regular_queue.lock().unwrap().is_empty());
 }
@@ -188,7 +202,9 @@ fn shutdown_drains_both_queues_despite_a_destructor_panic() {
             dropped.fetch_add(1, Ordering::Relaxed);
         }
     }));
+
     assert_panics(|| drop(pool));
+
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.urgent_queue.lock().unwrap().is_empty());
     assert!(state.regular_queue.lock().unwrap().is_empty());
@@ -206,6 +222,7 @@ fn shutdown_contains_secondary_payload_destruction() {
         probe(state, || panic::panic_any(FirstFailure)),
         probe(state, || panic::panic_any(PanickingPayload)),
     ]);
+
     let dropped = Arc::new(AtomicUsize::new(0));
     state.regular_queue.lock().unwrap().push_back(probe(state, {
         let dropped = Arc::clone(&dropped);
@@ -213,7 +230,9 @@ fn shutdown_contains_secondary_payload_destruction() {
             dropped.fetch_add(1, Ordering::Relaxed);
         }
     }));
+
     let payload = panic::catch_unwind(AssertUnwindSafe(|| drop(pool))).unwrap_err();
+
     assert!(payload.is::<FirstFailure>());
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.task_pool.lock().unwrap().is_empty());
@@ -229,16 +248,19 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let pool = Pool::builder().hardware(hardware).build();
         let inner = Arc::clone(&pool.inner);
+
         // Inject unwinds directly: this exercises cleanup rather than panic-hook output,
         // keeping Miri's backtrace work focused on the failing payload destructor.
         inner.worker_handles.lock().unwrap().push(thread::spawn(|| {
             panic::resume_unwind(Box::new(PanickingPayload));
         }));
+
         let payload = panic::catch_unwind(AssertUnwindSafe(move || {
             let _pool = pool;
             panic::resume_unwind(Box::new(OuterFailure));
         }))
         .unwrap_err();
+
         assert!(payload.is::<OuterFailure>());
         assert!(inner.worker_handles.lock().unwrap().is_empty());
         assert!(inner.poisoned.load(Ordering::Acquire));
@@ -253,6 +275,7 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
             .hardware(hardware())
             .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
+
         // Keep the submitter on one region throughout the shutdown scenario.
         let processors = pool.inner.hardware.all_processors();
         processors
@@ -261,14 +284,17 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
             .take_all()
             .unwrap()
             .pin_current_thread_to();
+
         let scheduler = pool.scheduler();
         let (entered, arrivals) = mpsc::channel();
         let (release, wait) = mpsc::channel();
+
         let running = scheduler.spawn(move || {
             entered.send(()).unwrap();
             wait.recv().unwrap();
         });
         arrivals.recv().unwrap();
+
         let dropped = Arc::new(AtomicUsize::new(0));
         let capture = OnDrop(Some(Box::new({
             let scheduler = scheduler.clone();
@@ -284,8 +310,10 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
         scheduler.spawn_and_forget(move || drop(capture));
         let abandoned = scheduler.spawn(|| panic!("must be cancelled"));
         let urgent = scheduler.spawn_urgent(|| panic!("must be abandoned"));
+
         drop(pool);
         block_on(running).unwrap();
+
         assert!(abandoned.now_or_never().unwrap().unwrap_err().is_cancel());
         assert!(urgent.now_or_never().unwrap().unwrap_err().is_cancel());
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
@@ -308,6 +336,7 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
             .worker_policy(policy)
             .build();
         let scheduler = pool.scheduler();
+
         assert_panics(|| {
             let state = pool.inner.registry.get_or_init(destination.group);
             pool.inner
@@ -315,6 +344,7 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
                     panic!("injected startup failure")
                 });
         });
+
         drop(pool);
         assert_panics(|| scheduler.spawn(|| {}));
         assert_panics(|| scheduler.spawn_urgent(|| {}));
@@ -335,10 +365,13 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
             .build();
         let scheduler = pool.scheduler();
         block_on(scheduler.spawn(|| {})).unwrap();
+
         let inner = Arc::clone(&pool.inner);
         drop(pool);
+
         pin(&hardware, 3);
         assert_retained_scheduler(&scheduler);
+
         let state = inner.registry.get_or_init(GroupId::System);
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 1);
         assert!(state.regular_queue.lock().unwrap().is_empty());
@@ -366,13 +399,16 @@ fn post_shutdown_submissions_do_not_expand_or_activate() {
         .build();
     let scheduler = pool.scheduler();
     block_on(scheduler.spawn(|| {})).unwrap();
+
     let inner = Arc::clone(&pool.inner);
     drop(pool);
+
     for processor in [1, 8] {
         pin(&hardware, processor);
         let task = scheduler.spawn(|| panic!("abandoned work must not execute"));
         assert!(task.now_or_never().unwrap().unwrap_err().is_cancel());
     }
+
     let existing = inner.registry.get_or_init(GroupId::MemoryRegion(2));
     assert_eq!(existing.affinity_revision.load(Ordering::Acquire), 1);
     let unused = inner.registry.get_or_init(GroupId::MemoryRegion(5));

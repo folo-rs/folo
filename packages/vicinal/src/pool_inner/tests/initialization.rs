@@ -39,6 +39,7 @@ fn system_initialization_is_lazy_and_once_per_worker() {
 fn assert_lazy_initialization(kind: PolicyKind) {
     // Multiple workers expose missing initialization of otherwise idle siblings.
     const WORKERS: u32 = 2;
+
     with_watchdog(move || {
         let hardware = hardware();
         let policy = match kind {
@@ -61,6 +62,7 @@ fn assert_lazy_initialization(kind: PolicyKind) {
                 }
             })
             .build();
+
         let scheduler = pool.scheduler();
         assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
         assert_eq!(
@@ -85,14 +87,17 @@ fn assert_lazy_initialization(kind: PolicyKind) {
             assert!(received.recv().unwrap());
         }
         assert!(!INITIALIZED.get());
+
         // Joining also accounts for workers that never received a task.
         drop(pool);
+
         let mut threads = HashSet::new();
         let mut masks = Vec::new();
         for (id, mask) in observations.try_iter() {
             assert!(threads.insert(id));
             masks.push(mask);
         }
+
         let initial_processors = match kind {
             PolicyKind::Processor => vec![0, 1, 3],
             PolicyKind::MemoryRegion => vec![0, 3],
@@ -112,6 +117,7 @@ fn assert_lazy_initialization(kind: PolicyKind) {
 fn initialization_is_concurrent_and_submission_does_not_wait() {
     // Sibling workers must both reach initialization before the caller releases them.
     const WORKERS: u32 = 2;
+
     with_watchdog(|| {
         let release = Arc::new(Barrier::new(WORKERS as usize + 1));
         let executed = Arc::new(AtomicBool::new(false));
@@ -126,6 +132,7 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
                 }
             })
             .build();
+
         // Reject count mutations before starting callbacks with a fixed participant count.
         assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let task = pool.scheduler().spawn({
@@ -136,6 +143,7 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
             }
         });
         assert!(!executed.load(Ordering::Acquire));
+
         release.wait();
         block_on(task).unwrap();
         assert!(executed.load(Ordering::Acquire));
@@ -164,6 +172,7 @@ fn initializer_can_submit_to_its_pool() {
                 }
             })
             .build();
+
         scheduler.set(pool.scheduler()).unwrap();
         assert!(block_on(scheduler.get().unwrap().spawn(|| INITIALIZED.get())).unwrap());
         assert!(received.recv().unwrap());
@@ -186,6 +195,7 @@ fn initialization_panic_stops_the_pool() {
                 }
             })
             .build();
+
         // The controller releases exactly one initializer.
         assert_eq!(pool.inner.policy.count(), nz!(1));
         let scheduler = pool.scheduler();
@@ -194,10 +204,12 @@ fn initialization_panic_stops_the_pool() {
             let executed = Arc::clone(&executed);
             move || executed.store(true, Ordering::Relaxed)
         });
+
         release.send(()).unwrap();
         assert!(block_on(task).unwrap_err().is_cancel());
         assert!(!executed.load(Ordering::Relaxed));
         assert!(pool.inner.poisoned.load(Ordering::Acquire));
+
         assert_panics(|| drop(pool));
         assert_panics(|| scheduler.spawn(|| {}));
         assert_panics(|| scheduler.spawn_urgent(|| {}));

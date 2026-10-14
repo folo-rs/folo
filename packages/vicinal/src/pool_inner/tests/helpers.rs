@@ -81,11 +81,13 @@ pub(crate) fn assert_retained_scheduler(scheduler: &Scheduler) {
             }
         })));
         let executed = Arc::clone(&executed);
+
         move || {
             executed.fetch_add(1, Ordering::Relaxed);
             drop(capture);
         }
     };
+
     // Joined captures remain recoverable; fire-and-forget captures are released immediately.
     let ordinary = scheduler.spawn(task());
     let urgent = scheduler.spawn_urgent(task());
@@ -93,11 +95,13 @@ pub(crate) fn assert_retained_scheduler(scheduler: &Scheduler) {
     scheduler.spawn_urgent_and_forget(task());
     assert_eq!(dropped.load(Ordering::Relaxed), 2);
     assert_eq!(executed.load(Ordering::Relaxed), 0);
+
     for handle in [ordinary, urgent] {
         let error = handle.now_or_never().unwrap().unwrap_err();
         assert!(error.is_cancel());
         error.into_body().unwrap()();
     }
+
     assert_eq!(dropped.load(Ordering::Relaxed), 4);
     assert_eq!(executed.load(Ordering::Relaxed), 2);
 }
@@ -105,10 +109,12 @@ pub(crate) fn assert_retained_scheduler(scheduler: &Scheduler) {
 /// A larger region than the submitter set, plus a distinct sparse region.
 pub(crate) fn regional_hardware() -> SystemHardware {
     let mut builder = HardwareBuilder::new().max_processor_time(1.0);
+
     for id in [0, 1, 2, 3, 7] {
         builder = builder.processor(ProcessorBuilder::new().id(id).memory_region(2));
     }
     builder = builder.processor(ProcessorBuilder::new().id(8).memory_region(5));
+
     SystemHardware::fake(builder)
 }
 
@@ -117,7 +123,7 @@ pub(crate) fn pin(hardware: &SystemHardware, processor: u32) {
     hardware
         .all_processors()
         .to_builder()
-        .filter(|p| p.id() == processor)
+        .filter(|candidate| candidate.id() == processor)
         .take_all()
         .unwrap()
         .pin_current_thread_to();
