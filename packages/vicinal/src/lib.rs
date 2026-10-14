@@ -3,10 +3,14 @@
 
 //! Worker pool with configurable processor affinity.
 //!
+//! Processor affinity is the set of processors on which a worker is permitted to run.
+//!
 //! A memory region groups processors with their local physical memory, as reported by
 //! [`many_cpus`]. Access to memory local to a processor can be faster than access across regions.
 //!
-//! Tasks execute synchronously on the processor sampled during submission by default.
+//! A caller submits a task through one of a pool's [`Scheduler`] spawn methods. The pool samples
+//! the calling thread's current logical processor; this is the task's submitting processor.
+//! Tasks execute synchronously on that processor by default.
 //! [`WorkerPolicy`] can instead share workers across the caller's memory region or across
 //! the system. Each policy starts its fixed worker count lazily on first use of a destination.
 //!
@@ -43,14 +47,14 @@
 //! from that region do not add workers. Each pool accounts for its regions independently,
 //! and scheduler clones share their pool's workers.
 //!
-//! With [`WorkerPolicy::fixed_per_system`], all submitting processors share one configured
+//! With [`WorkerPolicy::per_system`], all submitting processors share one configured
 //! worker count per pool, regardless of memory region. Workers may move across regions but
 //! remain limited to processors that have submitted accepted work to that pool.
 //!
 //! Worker placement is tracked separately from concurrency. Workers use only processors that have
-//! submitted accepted work to that pool and destination. This set starts with the first submitter
-//! and grows when another processor in the destination submits work. Worker concurrency is configured
-//! explicitly, rather than calculated from this set or from a processor-time quota.
+//! submitted accepted work to that pool and destination. This set starts with the first submitting
+//! processor and grows when another processor in the destination submits work. Worker concurrency
+//! is configured explicitly, rather than calculated from this set or from a processor-time quota.
 //! This controls where tasks run, not where their memory is allocated.
 //!
 //! # Tradeoffs
@@ -58,11 +62,11 @@
 //! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
 //!   short-lived so that the pool is often idle.
 //! - Shared workers use only processors that submitted accepted work to their pool and destination.
-//!   A stable, quota-appropriate submitter set keeps worker placement within that set; membership
-//!   grows if new processors submit work and never shrinks. Quotas do not adjust worker counts.
+//!   Submitting tasks from a stable, quota-appropriate processor set keeps workers within that set.
+//!   Membership grows if new processors submit work and never shrinks. Quotas do not adjust counts.
 //!   Fractional quotas and other process work can still cause throttling: operating-system
 //!   delays after the process exceeds its processor-time allowance. See
-//!   [avoiding operating system quota penalties] for guidance on choosing the submitter set.
+//!   [avoiding operating system quota penalties] for guidance on choosing the processor set.
 //! - Shared worker affinity expands at task boundaries, without preempting running tasks.
 //!   Workers may migrate within their permitted set, even during one task.
 //!   Task code must preserve worker affinity. Affinity does not bind allocations, move data

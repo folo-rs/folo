@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn system_group_is_lazy_shared_and_pool_local() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(2), nz!(2)));
-        let policy = WorkerPolicy::fixed_per_system(nz!(1));
+        let policy = WorkerPolicy::per_system(nz!(1));
         let registry = GroupRegistry::new(&hardware, &policy);
         assert_eq!(registry.initialized().count(), 0);
         let first = registry.get_or_init(GroupId::System);

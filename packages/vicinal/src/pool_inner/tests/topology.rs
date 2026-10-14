@@ -87,11 +87,13 @@ fn processor_policy_does_not_allocate_submission_membership() {
 /// All submission APIs share a fixed count across regions without admitting unused processors.
 #[test]
 fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
+    // A minimal multiple-worker group exposes capacity multiplication during membership expansion.
+    const WORKERS: u32 = 2;
     with_watchdog(|| {
         let hardware = regional_hardware();
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_system(nz!(2)))
+            .worker_policy(WorkerPolicy::per_system(nz!(WORKERS)))
             .build();
         assert_eq!(pool.inner.registry.initialized().count(), 0);
         assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
@@ -115,7 +117,10 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
             }
             assert_eq!(received.recv().unwrap(), expected);
             assert_eq!(pool.inner.registry.initialized().count(), 1);
-            assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 2);
+            assert_eq!(
+                pool.inner.worker_handles.lock().unwrap().len(),
+                WORKERS as usize
+            );
         }
         let state = pool.inner.registry.get_or_init(GroupId::System);
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 4);
@@ -140,7 +145,7 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
         pin(&hardware, 2);
         let independent = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_system(nz!(1)))
+            .worker_policy(WorkerPolicy::per_system(nz!(1)))
             .build();
         assert_eq!(
             block_on(independent.scheduler().spawn({
@@ -264,7 +269,7 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
 /// Cross-region additions must preserve the same fixed capacity and task-boundary refresh.
 #[test]
 fn system_concurrent_additions_preserve_busy_workers_and_fixed_count() {
-    assert_concurrent_additions(WorkerPolicy::fixed_per_system(nz!(1)), [1, 8]);
+    assert_concurrent_additions(WorkerPolicy::per_system(nz!(1)), [1, 8]);
 }
 
 /// Exercises shared worker expansion without depending on which submitting thread runs first.
@@ -329,10 +334,10 @@ fn idle_workers_refresh_even_without_a_task_for_each_worker() {
 /// System workers must also refresh when an idle worker receives no task after expansion.
 #[test]
 fn system_idle_workers_refresh_even_without_a_task_for_each_worker() {
-    assert_idle_workers_refresh(WorkerPolicy::fixed_per_system(nz!(2)), 8);
+    assert_idle_workers_refresh(WorkerPolicy::per_system(nz!(2)), 8);
 }
 
-/// Observes each worker's affinity update independently of queue consumption.
+/// Expands affinity while each worker holds a fresh registered wait at the initial revision.
 fn assert_idle_workers_refresh(policy: WorkerPolicy, next_processor: u32) {
     with_watchdog(move || {
         let hardware = regional_hardware();
@@ -344,23 +349,55 @@ fn assert_idle_workers_refresh(policy: WorkerPolicy, next_processor: u32) {
         let target = pool.inner.policy.destination(&hardware);
         let state = pool.inner.registry.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
-        let (refreshed, updates) = mpsc::channel();
+        // Finish initial admission before starting threads, leaving no earlier notifications
+        // that could satisfy the registered waits whose expansion wakeup is under test.
         pool.inner
-            .enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
-                pool.inner
-                    .start_workers(target, handles, thread::Builder::spawn, move |set| {
-                        set.pin_current_thread_to();
-                        if set.len() > 1 {
-                            refreshed.send(thread::current().id()).unwrap();
-                        }
-                    });
-            });
-        block_on(pool.scheduler().spawn(|| {}));
+            .enqueue_with(target, state, init_task(slot, NoopTask), false, |_| {});
+        let initial_revision = state.affinity_revision.load(Ordering::Acquire);
+        let (waiting, waiters) = mpsc::channel();
+        assert!(
+            state
+                .before_wait
+                .set(Box::new(move |worker_index, revision| {
+                    if revision == initial_revision {
+                        let (resume, wait) = mpsc::channel();
+                        waiting
+                            .send((worker_index, thread::current().id(), resume))
+                            .unwrap();
+                        wait.recv().unwrap();
+                    }
+                }))
+                .is_ok()
+        );
+        let (refreshed, updates) = mpsc::channel();
+        pool.inner.start_workers(
+            target,
+            &mut pool.inner.worker_handles.lock().unwrap(),
+            thread::Builder::spawn,
+            move |set| {
+                set.pin_current_thread_to();
+                if set.len() > 1 {
+                    refreshed.send(thread::current().id()).unwrap();
+                }
+            },
+        );
+        let (first_index, first_id, first_resume) = waiters.recv().unwrap();
+        let (second_index, second_id, second_resume) = waiters.recv().unwrap();
+        assert_eq!(
+            BTreeSet::from([first_index, second_index]),
+            BTreeSet::from([0, 1])
+        );
+        assert_ne!(first_id, second_id);
         pin(&hardware, next_processor);
-        block_on(pool.scheduler().spawn(|| {}));
+        let task = pool.scheduler().spawn(|| {});
+        first_resume.send(()).unwrap();
+        second_resume.send(()).unwrap();
+        block_on(task);
         let first = updates.recv().unwrap();
         let second = updates.recv().unwrap();
         assert_ne!(first, second);
+        assert!([first_id, second_id].contains(&first));
+        assert!([first_id, second_id].contains(&second));
         let worker_count = pool.inner.worker_handles.lock().unwrap().len();
         assert_eq!(worker_count, 2);
     });

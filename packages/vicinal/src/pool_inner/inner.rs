@@ -496,6 +496,10 @@ pub(crate) fn worker_loop(
                 {
                     continue;
                 }
+                #[cfg(test)]
+                if let Some(before_wait) = state.before_wait.get() {
+                    before_wait(worker_index, revision);
+                }
                 listener.wait();
             }
         }

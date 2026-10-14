@@ -2,11 +2,15 @@
 
 Worker pool with configurable processor affinity.
 
+Processor affinity is the set of processors on which a worker is permitted to run.
+
 A memory region groups processors with their local physical memory, as reported by
 [`many_cpus`](https://docs.rs/many_cpus/). Access to local memory can be faster than access
 across regions. Many systems have only one region.
 
-Tasks execute synchronously on the processor sampled during submission by default.
+A caller submits a task through one of a pool's `Scheduler::spawn*` methods. The pool samples
+the calling thread's current logical processor; this is the task's submitting processor.
+Tasks execute synchronously on that processor by default.
 A regional policy shares a fixed worker count across submitting processors in each memory
 region. A system policy shares a fixed count across all submitting processors, regardless
 of region. Workers start on first use of a destination and persist until shutdown.
@@ -53,7 +57,7 @@ async fn memory_region_local() {
 async fn system_wide() {
     // Illustrative concurrency shared across every submitting processor in this pool.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::fixed_per_system(nz!(2_u32)))
+        .worker_policy(WorkerPolicy::per_system(nz!(2_u32)))
         .build();
 
     assert_eq!(pool.scheduler().spawn(|| 42).await, 42);
@@ -75,9 +79,9 @@ Regions describe processor locality, not the task's allocations or data.
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
   short-lived so that the pool is often idle.
-- Shared workers stay within the submitting processors. A stable, quota-appropriate
-  submitter set keeps worker placement within that set; changing submitters can grow the
-  cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
+- Shared workers stay within the submitting processors. Submitting tasks from a stable,
+  quota-appropriate processor set keeps worker placement within that set. Using new processors
+  grows the cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
   quotas and other process work can still cause throttling: operating-system delays after
   exceeding the process's processor-time allowance. See
   [avoiding operating system quota penalties].

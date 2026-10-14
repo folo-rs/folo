@@ -1,8 +1,12 @@
 # vicinal design
 
-`vicinal` executes synchronous tasks on processors used by their submitters. Callers choose
-whether locality means the same logical processor, the same memory region or the cumulative
-set of submitting processors across the system.
+`vicinal` executes synchronous tasks on worker threads. A caller submits a task by calling
+one of a pool's `Scheduler::spawn*` methods. The pool samples the calling thread's current
+logical processor during that call; this is the task's submitting processor.
+
+Callers choose whether locality means the same logical processor, the same memory region
+or the cumulative set of submitting processors across the system. Processor affinity is
+the set of processors on which a worker is permitted to run.
 
 ## Worker policies
 
@@ -28,7 +32,7 @@ let regional_pool = Pool::builder()
     .worker_policy(WorkerPolicy::fixed_per_memory_region(nz!(2_u32)))
     .build();
 let system_pool = Pool::builder()
-    .worker_policy(WorkerPolicy::fixed_per_system(nz!(2_u32)))
+    .worker_policy(WorkerPolicy::per_system(nz!(2_u32)))
     .build();
 ```
 

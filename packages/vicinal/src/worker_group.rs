@@ -1,6 +1,8 @@
 //! Shared state for workers assigned to one locality destination.
 
 use std::collections::VecDeque;
+#[cfg(test)]
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -47,6 +49,10 @@ pub(crate) struct WorkerGroup {
 
     /// Counter of total tasks admitted to this group.
     pub(crate) tasks_spawned: AtomicU64,
+
+    /// Observes registered wait attempts without replacing the worker's wait protocol.
+    #[cfg(test)]
+    pub(crate) before_wait: OnceLock<BeforeWait>,
 }
 
 impl WorkerGroup {
@@ -62,6 +68,8 @@ impl WorkerGroup {
             task_pool: Mutex::new(MultiPool::new()),
             result_channel_pool: EventLake::new(),
             tasks_spawned: AtomicU64::new(0),
+            #[cfg(test)]
+            before_wait: OnceLock::new(),
         }
     }
 
@@ -84,6 +92,10 @@ impl WorkerGroup {
         self.tasks_spawned.load(Ordering::Relaxed)
     }
 }
+
+/// Coordinates worker identity and applied affinity revision with a group-local test.
+#[cfg(test)]
+type BeforeWait = Box<dyn Fn(u32, usize) + Send + Sync + RefUnwindSafe + UnwindSafe>;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

@@ -24,7 +24,7 @@ fn concurrent_first_submissions_start_exact_configured_count() {
         for (policy, destination) in [
             (WorkerPolicy::fixed_per_processor(nz!(WORKERS)), "p0"),
             (WorkerPolicy::fixed_per_memory_region(nz!(WORKERS)), "r0"),
-            (WorkerPolicy::fixed_per_system(nz!(WORKERS)), "s"),
+            (WorkerPolicy::per_system(nz!(WORKERS)), "s"),
         ] {
             let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
             let pool = Pool::builder()

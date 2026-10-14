@@ -82,7 +82,7 @@ fn regional_tasks_use_only_submitting_processors() {
 
 #[test]
 fn system_tasks_use_only_submitting_processors() {
-    assert_submitting_processor_affinity(WorkerPolicy::fixed_per_system(nz!(2_u32)), false);
+    assert_submitting_processor_affinity(WorkerPolicy::per_system(nz!(2_u32)), false);
 }
 
 /// Verifies actual OS affinity, including cross-region masks on multi-region machines.

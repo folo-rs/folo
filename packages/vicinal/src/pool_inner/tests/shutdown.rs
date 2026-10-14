@@ -196,7 +196,7 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
     for policy in [
         WorkerPolicy::fixed_per_processor(nz!(1)),
         WorkerPolicy::fixed_per_memory_region(nz!(1)),
-        WorkerPolicy::fixed_per_system(nz!(1)),
+        WorkerPolicy::per_system(nz!(1)),
     ] {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let destination = policy.destination(&hardware);
@@ -228,7 +228,7 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::fixed_per_system(nz!(1)))
+            .worker_policy(WorkerPolicy::per_system(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         block_on(scheduler.spawn(|| {}));
