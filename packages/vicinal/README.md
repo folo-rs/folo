@@ -86,15 +86,21 @@ Regions describe processor locality, not the task's allocations or data.
 
 ## Task outcomes
 
-Awaiting a join handle returns `Result<R, TaskError<R>>`. Use `is_cancel()` and `is_panic()`
-to distinguish cancellation before execution from a task panic. `into_body()` recovers a
-cancelled task as `impl FnOnce() -> R + Send + 'static` for execution elsewhere, while
-`into_panic()` recovers the original panic payload. Both methods return the unchanged error if
-its outcome does not match the extraction. Dropping a handle does not cancel the task.
+Awaiting a join handle returns `Result<R, TaskError<R>>`:
+
+- **Success:** `Ok(value)` contains the task's return value.
+- **Cancellation:** `is_cancel()` identifies cancellation before execution.
+  `into_body()` recovers the task as `impl FnOnce() -> R + Send + 'static` for execution elsewhere.
+- **Panic:** `is_panic()` identifies a task panic.
+  `into_panic()` recovers the original panic payload.
+
+Calling a recovery method for the other outcome returns the unchanged error.
 
 When recovery is unnecessary, `into_diagnostic()` drops the body or panic payload and returns
 a `Send + Sync` error retaining the message, source chain, backtrace and enrichment. This supports
 application-level error reporting without turning the task error into a string.
+
+Dropping a handle does not cancel the task.
 
 ## Shutdown
 

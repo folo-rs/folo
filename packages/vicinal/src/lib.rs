@@ -82,13 +82,19 @@
 //!
 //! # Task outcomes
 //!
-//! Awaiting a [`JoinHandle`] returns `Result<R, TaskError<R>>`. Successful tasks return
-//! `Ok(value)`. Use [`TaskError::is_cancel()`] and [`TaskError::is_panic()`] to distinguish
-//! cancellation before execution from a task panic. [`TaskError::into_body()`] recovers a
-//! cancelled task for execution elsewhere; [`TaskError::into_panic()`] recovers the original
-//! panic payload. Both extraction methods return the unchanged error for the other outcome.
-//! When recovery is unnecessary, [`TaskError::into_diagnostic()`] discards recovery data while
-//! retaining a thread-safe error for reporting, including its source chain and backtrace.
+//! Awaiting a [`JoinHandle`] returns `Result<R, TaskError<R>>`:
+//!
+//! - **Success:** `Ok(value)` contains the task's return value.
+//! - **Cancellation:** [`TaskError::is_cancel()`] identifies cancellation before execution.
+//!   [`TaskError::into_body()`] recovers the original task body for execution elsewhere.
+//! - **Panic:** [`TaskError::is_panic()`] identifies a task panic.
+//!   [`TaskError::into_panic()`] recovers the original panic payload.
+//!
+//! Calling a recovery method for the other outcome returns the unchanged error.
+//!
+//! For reporting without recovery, [`TaskError::into_diagnostic()`] discards recovery data and
+//! retains a thread-safe error, including its source chain and backtrace.
+//!
 //! Fire-and-forget tasks log task panics instead.
 //!
 //! # Platform support
