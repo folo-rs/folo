@@ -112,7 +112,7 @@ fn all_analysis_outcomes_keep_execution_publication_and_coverage_separate() {
         (Outcome::NothingInScope, "No metric series"),
     ] {
         let card = render_report(analysis(), &report(outcome, false));
-        assert!(card.contains(expected));
+        assert_eq!(card.matches(expected).count(), 1);
         assert!(card.contains("| Execution | Completed |"));
         assert!(card.contains("Disabled; collection and storage are independent"));
         assert!(card.contains("in-scope metric series"));
@@ -124,22 +124,30 @@ fn all_analysis_outcomes_keep_execution_publication_and_coverage_separate() {
 }
 
 #[test]
-fn missing_platforms_prevent_clean_disposition_without_hiding_findings() {
-    for outcome in [Outcome::Findings, Outcome::Clean] {
-        let mut input = analysis();
-        input["result"]["completed_platforms"] = json!("linux");
-        input["execution"] = json!("failure");
-        let card = render_report(input, &report(outcome, outcome == Outcome::Findings));
-        assert!(card.contains("| Execution | Failed |"));
-        assert!(card.contains("Missing platforms | <code>windows</code>"));
-        assert!(card.contains("Incomplete platform coverage"));
-        if outcome == Outcome::Findings {
-            assert!(card.contains("| Report disposition | findings |"));
-            assert!(card.contains("Incomplete series evidence"));
-        } else {
-            assert!(card.contains("| Report disposition | inconclusive |"));
-            assert!(!card.contains("| Report disposition | clean |"));
-        }
+fn missing_platforms_do_not_hide_partial_findings() {
+    assert_missing_platforms(Outcome::Findings);
+}
+
+#[test]
+fn missing_platforms_prevent_clean_disposition() {
+    assert_missing_platforms(Outcome::Clean);
+}
+
+/// Exercises each independent coverage result without combining interpreter workloads.
+fn assert_missing_platforms(outcome: Outcome) {
+    let mut input = analysis();
+    input["result"]["completed_platforms"] = json!("linux");
+    input["execution"] = json!("failure");
+    let card = render_report(input, &report(outcome, outcome == Outcome::Findings));
+    assert!(card.contains("| Execution | Failed |"));
+    assert!(card.contains("Missing platforms | <code>windows</code>"));
+    assert!(card.contains("Incomplete platform coverage"));
+    if outcome == Outcome::Findings {
+        assert!(card.contains("| Report disposition | findings |"));
+        assert!(card.contains("Incomplete series evidence"));
+    } else {
+        assert!(card.contains("| Report disposition | inconclusive |"));
+        assert!(!card.contains("| Report disposition | clean |"));
     }
 }
 

@@ -452,7 +452,7 @@ fn finding_annotated() -> String {
     .expect("writing to a String never fails");
     markdown.push_str(
         "| the lines below it | The chart: the series drawn against topology, one column \
-         per commit, with its unit, scale, orientation and missing-data legend. |\n",
+         per commit; its values use the units of the finding above it. |\n",
     );
     markdown
 }
@@ -482,8 +482,8 @@ fn formats() -> String {
         markdown,
         "| Condensed summary | `--markdown-summary <path>` (`analyze` only) | A \
          size-limited destination, such as a pull request comment or a rolling issue body \
-         | at most the {} findings of greatest magnitude in a table with expandable \
-         evidence, plus full-analysis qualifications — lossy by design |",
+         | at most the {} findings of greatest magnitude in compact vertical blocks, \
+         plus material coverage and comparison qualifications — lossy by design |",
         summary_limit.get(),
     )
     .expect("writing to a String never fails");
@@ -503,7 +503,7 @@ fn formats() -> String {
          archive — the per-commit series behind the charts is obtained with `examine`. \
          Full Markdown always includes the same coverage counts and reasons in its final \
          Coverage section. Text also states the reason counts beside findings. \
-         Configured exclusions remain visible beside findings on every surface. The condensed \
+         Full reports retain configured exclusions and detailed evidence. The condensed \
          summary is lossy by design, so it is the one output that must not be automated \
          against: a check reading it cannot distinguish findings that were capped away from \
          findings that were never made. The outcome file repeats only JSON's top-level \
@@ -901,7 +901,7 @@ mod tests {
         let excerpt = census();
 
         let judged = format!(
-            "in-scope series judged: {} of {}",
+            "Judged {} of {} in-scope series",
             coverage.judged(),
             coverage.in_scope()
         );

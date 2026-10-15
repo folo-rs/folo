@@ -133,7 +133,7 @@ async fn finding_inspection_preserves_the_effective_query() {
         "--no-dirty",
     ];
     let json: serde_json::Value = serde_json::from_str(&workspace.drive_json(&args).await).unwrap();
-    let summary = workspace.drive_markdown_summary(&args).await;
+    let summary = workspace.drive_markdown(&args).await;
     let commit = json["tip_commit"].as_str().unwrap();
     assert!(summary.contains(&format!("--context='{commit}'")));
     assert!(summary.contains(&format!("--base='{commit}'")));
@@ -285,10 +285,7 @@ async fn analyze_reports_a_series_it_could_not_judge_rather_than_omitting_it() {
     let RunOutcome::Analyzed { report, .. } = text else {
         panic!("expected an analyzed outcome, got {text:?}");
     };
-    assert!(
-        report.contains("in-scope series judged: 0 of 1"),
-        "{report}"
-    );
+    assert!(report.contains("Judged 0 of 1 in-scope series"), "{report}");
     assert!(
         report.contains("this silence is not evidence that nothing moved"),
         "{report}"
@@ -453,17 +450,15 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
         summary.contains("## Benchmark history: testproj"),
         "{summary}"
     );
-    assert_eq!(summary.matches("\n| regression |").count(), 1);
-    assert!(summary.contains("<details>"));
-    assert!(summary.contains("Showing 1 of 1 findings"));
+    assert_eq!(summary.matches("\n### ").count(), 1);
+    assert!(!summary.contains("<details>"));
+    assert!(!summary.contains("Showing "));
     assert!(
         !summary.contains("## callgrind"),
         "the summary must be flat, without per-set headings: {summary}"
     );
-    assert!(
-        summary.contains("--machine-key='harness-auto-machine'"),
-        "{summary}"
-    );
+    assert!(!summary.contains("--machine-key"));
+    assert!(summary.contains("Linux x86\\_64"));
 }
 
 /// When an analysis produces more findings than the summary cap, `--markdown-summary`
@@ -503,11 +498,10 @@ async fn analyze_markdown_summary_caps_findings_and_names_the_total() {
     assert!(summary.contains("25 regressions detected."), "{summary}");
     // The truncation note names how many of the total are shown.
     assert!(
-        summary.contains("Showing 10 of 25 findings by magnitude."),
+        summary.contains("Showing 10 of 25 findings by magnitude;"),
         "{summary}"
     );
-    // Count decision rows independently of whether evidence fits the byte budget.
-    let summary_blocks = summary.matches("\n| regression |").count();
+    let summary_blocks = summary.matches("\n### ").count();
     assert_eq!(
         summary_blocks, 10,
         "summary should keep only the cap: {summary}"

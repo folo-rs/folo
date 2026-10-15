@@ -185,7 +185,7 @@ History values describe **before and after representative levels**, not the late
 measurement. Quantities include their units; time and byte values use a readable scale shared
 with the finding's chart. JSON retains the metric's original numeric unit and full precision.
 
-The chart states its orientation, scale and comparison context. It is drawn against **topology**,
+The full report's chart is drawn against **topology**,
 not against the observations. One column per commit,
 so a gap is a gap and the trailing stretch after the last observation is visible as one. That
 matters: a chart that packed the observations together would hide exactly the sparseness that
@@ -235,7 +235,7 @@ under `census`, which makes it the machine-readable signal: each finding
 self-describing, plus every unjudged reason. Text also states the unjudged reason counts. JSON
 deliberately omits the per-commit chart series — that is presentation, and
 [`examine`](../commands/examine.md) is the way to get the underlying points. The **condensed
-summary** is lossy by design — a capped findings table with expandable evidence — so it is
+summary** is lossy by design — capped, vertically arranged findings with small range sketches — so it is
 the one output you must not automate against. The outcome file repeats only the JSON report's
 top-level `outcome` field; it carries no report details. The full table is under
 [Where output goes](#where-output-goes).
@@ -274,12 +274,10 @@ This is given the same prominence as the findings on purpose. "No notable change
 cannot tell that statement apart from "the benchmarks did not run".
 
 The final **Coverage** section in full Markdown and the JSON `census` always contain the
-**reasons** series went unjudged, including when findings exist. Text and condensed summaries
-also state reason counts beside findings. Configured exclusions
-also receive a compact disclosure beside findings, so an intentional reduction in
-analysis scope stays visible. When in-scope series remain unjudged, an explicit warning keeps
-that incomplete coverage visible beside findings. Summary caps do not remove this warning or
-the full-analysis lag and historical-comparison qualifications. See
+**reasons** series went unjudged, including when findings exist. Text also states the reason counts.
+The condensed summary states whether the in-scope suite was fully judged, or shows the judged
+ratio with an incomplete-coverage warning. Exclusions and detailed comparisons remain available
+in the full report. Summary caps do not remove material coverage or comparison-lag qualifications. See
 [Reading a silent report](insights.md#reading-a-silent-report) for matching Markdown and JSON
 examples.
 
@@ -321,9 +319,20 @@ When too little shared history exists, the report says the comparison could not 
 still prints every factual range excursion. JSON exposes the same distinction: finding-level
 `branch` range metadata and set-level `branch_comparison` counts.
 
+## Compact findings
+
+The condensed summary gives each benchmark its own wrapping heading, followed by direction,
+metric and platform. Branch findings highlight the current measurement and percentage **excess**,
+with a short range sketch instead of separate numeric columns. The base range and current point
+share a linear scale; the sketch has no implied zero origin. A very small range may occupy one mark.
+History findings show the before/after representative levels and percentage change.
+
+Read the full report for the range endpoints, time-series plots, detailed historical comparisons,
+machine identities and inspection commands. These details do not repeat inside the summary.
+
 ## Inspecting the evidence
 
-Finding evidence includes copyable `examine` commands when the report has the original query
+Full finding evidence includes copyable `examine` commands when the report has the original query
 location. Choose the labelled shell syntax. The commands pin the benchmark, metric, engine,
 target, machine, context, base and resolved time window, and retain the repository,
 configuration and storage context. Branch reports include a separate clean-base command:

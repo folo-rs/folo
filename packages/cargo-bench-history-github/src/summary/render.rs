@@ -6,7 +6,6 @@ use cbh_model::{BackfillCompletion, BackfillStop};
 use ohno::AppError;
 use reqwest::Url;
 
-use crate::message::result_headline;
 use crate::model::CommitSha;
 use crate::result::{
     AnalysisReport, Coverage, Evidence, Execution, Outcome, PlatformCoverage, platform_list,
@@ -215,6 +214,20 @@ fn analysis(
     };
     write!(body, "**Next action:** {next}").expect("writing to String cannot fail");
     Ok(())
+}
+
+/// Gives the workflow card a readable verdict without embedding the full report.
+fn result_headline(evidence: &Evidence) -> &'static str {
+    match evidence.report.outcome {
+        Outcome::Findings => "Notable benchmark changes detected.",
+        Outcome::Clean if evidence.platforms.is_complete() => {
+            "No notable changes detected across the completed collection."
+        }
+        Outcome::Clean => "No notable changes detected on the completed platforms only.",
+        Outcome::InsufficientBaseline => "Insufficient evidence to judge the in-scope series.",
+        Outcome::NothingInScope => "No metric series was analyzed at this commit.",
+        Outcome::Partial => "No notable changes detected among the series that could be judged.",
+    }
 }
 
 /// Missing matrix legs remain unknown, never zero-count successful passes.

@@ -6,14 +6,17 @@ network or real-time delay. The production `RestGitHub` adapter is the only HTTP
 Repository identities are validated as literal owner/name path segments before REST URL
 construction, rejecting dot components as well as separators and escape syntax.
 
-The message wrapper embeds core summaries without rewriting their headings or findings.
+The message wrapper embeds core summaries without rewriting or repeating their verdicts,
+headings or findings. Advisory text follows the summary.
 Collection scope follows completed summaries in an expandable, escaped package inventory.
 Lifecycle and missing-platform warnings stay outside expandable details, preserving their
 visibility without re-deriving the core's judged-series coverage.
 
 Workflow card composition is an offline, synchronous projection over explicit orchestration
-facts and checked evidence. It shares the report parser, readable headline and publication-state
-gate with posts; the core JSON retains its analysis contract. The filesystem adapter reads
+facts and checked evidence. It shares the report parser and publication-state gate with posts.
+The card supplies its own readable headline because it does not embed the core report;
+posts use the embedded report's verdict without repeating it. The core JSON retains its
+analysis contract. The filesystem adapter reads
 caller-selected artifacts and creates a new Markdown file. The action owns a single final
 step-summary append and execution-only fallback, not a duplicate verdict implementation.
 Backfill completion decoding reuses the core model's typed count/range validation. Missing
