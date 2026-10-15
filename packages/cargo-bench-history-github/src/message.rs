@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use crate::cli::{Conclusion, PendingArgs};
 use crate::marker;
 use crate::model::{Instance, IssueKind};
-use crate::result::{Evidence, Outcome, PublicationState};
+use crate::result::{Evidence, PublicationState};
 
 const PR_HEADING: &str = "## Benchmark history";
 const WARNING_HEADING: &str = "> [!WARNING]";
@@ -28,10 +28,10 @@ pub(crate) fn regression_issue(
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
         marker::state(instance, state.marker_value()),
-        ADVISORY.to_owned(),
     ];
-    push_result_status(&mut sections, evidence);
+    push_platform_warning(&mut sections, evidence);
     sections.push(summary.to_owned());
+    sections.push(ADVISORY.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
 }
@@ -68,11 +68,11 @@ pub(crate) fn pr_result(
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
         marker::state(instance, state.marker_value()),
-        ADVISORY.to_owned(),
     ];
-    push_result_status(&mut sections, evidence);
+    push_platform_warning(&mut sections, evidence);
     sections.push(summary.to_owned());
     sections.push(format_scope(packages));
+    sections.push(ADVISORY.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
 }
@@ -134,7 +134,7 @@ pub(crate) fn inconclusive_details(
     artifact_url: Option<&str>,
 ) -> String {
     let mut sections = vec!["Analysis could not establish recovery.".to_owned()];
-    push_result_status(&mut sections, evidence);
+    push_platform_warning(&mut sections, evidence);
     sections.push(summary.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
@@ -218,8 +218,8 @@ pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
         .any(|line| line == empty_scope || line == failed)
 }
 
-/// Adds platform qualifications and the outcome headline without replacing domain prose.
-fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
+/// Collection completeness qualifies the core verdict without repeating that verdict.
+fn push_platform_warning(sections: &mut Vec<String>, evidence: &Evidence) {
     if !evidence.platforms.is_complete() {
         sections.push(format!(
             "{WARNING_HEADING}\n> Partial platform coverage. Completed: {}. Missing: {}.\n\
@@ -227,21 +227,6 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
             evidence.platforms.completed().join(", "),
             evidence.platforms.missing().join(", ")
         ));
-    }
-    sections.push(result_headline(evidence).to_owned());
-}
-
-/// Shares the readable checked result between GitHub posts and workflow cards.
-pub(crate) fn result_headline(evidence: &Evidence) -> &'static str {
-    match evidence.report.outcome {
-        Outcome::Findings => "Notable benchmark changes detected.",
-        Outcome::Clean if evidence.platforms.is_complete() => {
-            "No notable changes detected across the completed collection."
-        }
-        Outcome::Clean => "No notable changes detected on the completed platforms only.",
-        Outcome::InsufficientBaseline => "Insufficient evidence to judge the in-scope series.",
-        Outcome::NothingInScope => "No metric series was analyzed at this commit.",
-        Outcome::Partial => "No notable changes detected among the series that could be judged.",
     }
 }
 
@@ -317,7 +302,7 @@ mod tests {
     use crate::cli::RunArgs;
     use crate::model::CommitSha;
     use crate::result::tests::evidence;
-    use crate::result::{AnalysisMode, Coverage};
+    use crate::result::{AnalysisMode, Coverage, Outcome};
 
     fn instance() -> Instance {
         "default".parse().unwrap()
@@ -589,14 +574,14 @@ mod tests {
             "exact tool summary",
             None,
         );
-        assert!(body.contains("Notable benchmark changes detected."));
+        assert!(!body.contains("Notable benchmark changes detected."));
         assert_eq!(body.matches(WARNING_HEADING).count(), 1);
         assert!(body.contains("Missing: windows."));
         assert!(body.contains("exact tool summary"));
     }
 
     #[test]
-    fn silent_outcomes_select_distinct_qualified_messages() {
+    fn core_verdict_is_embedded_once_and_only_platform_coverage_is_added() {
         let cases = [
             (
                 Outcome::Clean,
@@ -612,16 +597,8 @@ mod tests {
         for (outcome, expected) in cases {
             let result = evidence(AnalysisMode::Branch, outcome, true);
             let state = result.require_state(result.publication_state()).unwrap();
-            let body = pr_result(
-                &instance(),
-                &owner(),
-                &result,
-                state,
-                "foo",
-                "tool summary",
-                None,
-            );
-            assert!(body.contains(expected), "{body}");
+            let body = pr_result(&instance(), &owner(), &result, state, "foo", expected, None);
+            assert_eq!(body.matches(expected).count(), 1, "{body}");
             assert!(!body.contains("Missing:"));
         }
         let result = evidence(AnalysisMode::Branch, Outcome::Clean, false);
@@ -637,7 +614,7 @@ mod tests {
             "tool summary",
             None,
         );
-        assert!(body.contains("completed platforms only"));
+        assert!(body.contains("apply only to completed platforms."));
         assert!(!body.contains("across the completed collection"));
     }
 }

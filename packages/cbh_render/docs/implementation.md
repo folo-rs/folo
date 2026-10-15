@@ -25,8 +25,8 @@ and full-analysis qualifications independently of their top-finding selection.
 Quantity formatting reads `MetricKind::as_unit`. One scale per finding governs its comparison
 values, signed deltas and plotted observations; JSON serialization bypasses display conversion.
 Topology binning and branch comparison columns remain independent of unit scaling.
-History captions distinguish the last measurement from an analyzed-context endpoint reached
-through trailing gaps. Multiline diagnostics preserve their paragraph and bullet layout;
+Time-series plots contain no prose, while retaining every topology column and gap.
+Multiline diagnostics preserve their paragraph and bullet layout;
 single-line identity escaping does not flatten those messages.
 
 The analysis boundary supplies resolved inspection context separately from findings. The
@@ -35,9 +35,16 @@ safely and refuses lossy or control-bearing command text. It does not read envir
 variables, discover repository remotes or acquire data. Exact-current provenance qualifies
 stored inspection rather than silently claiming the two sources are interchangeable.
 
-Condensed output budgets whole table rows and expandable evidence blocks, reserving space for
-the GitHub envelope. Aggregate qualifications cover every group before truncation; bounded
-group details and finding evidence explicitly point to the full report when omitted.
+Condensed output budgets whole vertical finding blocks, reserving space for the GitHub envelope.
+Its range sketch normalizes finite quantities before mapping them to a small fixed-width linear
+grid. The range and observation use distinct marks and direct labels, without a zero origin.
+Rounding can collapse a visually tiny range to one mark. Per-finding numeric highlights stay
+limited to current value/excess or before/after representatives/change.
+
+Aggregate material qualifications cover every group before truncation. Detailed comparison
+counts, inspection commands, exact machine identity and time-series evidence remain in full reports;
+machine identity only enters a summary when needed to disambiguate otherwise matching findings.
+The same coverage projection controls concise summary coverage and the complete full-report account.
 Selection diagnostics have their own escaped-byte budget, separate from short identity labels.
 Ordinary explanations retain every exclusion and remedy. Oversized diagnostics omit whole lines
 with an explicit notice, continuing past long identity lines to retain later instructions.
@@ -68,5 +75,5 @@ mutation testing covers the benchmark support without running benchmark targets.
 
 `cbh_render_reports_cg` pairs the full-report and quiet-text scenarios with identical fixtures.
 It counts formatting, charting, serialization and allocator instructions, not operating-system
-allocation latency. Criterion additionally measures the condensed table and its expandable
-evidence under the production size budget.
+allocation latency. Criterion additionally measures the compact summary blocks under the
+production size budget.

@@ -243,13 +243,16 @@ pub fn assert_summary(input: &ReportInput<'_>) {
     let output = render_markdown_summary(input, DEFAULT_SUMMARY_LIMIT);
     let retained = input.findings.len().min(DEFAULT_SUMMARY_LIMIT.get());
     assert!(output.contains(&format!("{} regressions detected.", input.findings.len())));
-    assert_eq!(output.matches("```text").count(), retained);
-    assert_eq!(output.matches("<details>").count(), retained);
-    assert_eq!(output.matches("| regression |").count(), retained);
-    assert!(output.contains(&format!(
-        "Showing {retained} of {} findings",
-        input.findings.len()
-    )));
+    assert_eq!(output.matches("\n### ").count(), retained);
+    assert!(!output.contains("```text"));
+    assert!(!output.contains("<details>"));
+    assert_eq!(
+        output.contains(&format!(
+            "Showing {retained} of {} findings",
+            input.findings.len()
+        )),
+        retained < input.findings.len()
+    );
     for (index, finding) in input.findings.iter().enumerate() {
         assert_eq!(output.contains(&finding.id.qualified()), index < retained);
     }

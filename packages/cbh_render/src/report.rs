@@ -24,9 +24,10 @@ use serde::Serialize;
 use serde_json::to_string_pretty;
 
 use crate::markup::{
-    code_block, code_span, html_text, markdown_lines, markdown_text, plain_lines, plain_text,
+    code_block, code_span, markdown_lines, markdown_text, plain_lines, plain_text,
 };
 use crate::quantity::QuantityScale;
+use crate::range_sketch::range_sketch;
 use crate::{AnalysisOutcome, Coverage, CoverageState, Inspection};
 
 /// Height, in rows, of a finding chart.
@@ -518,22 +519,23 @@ fn set_label(set: &DiscriminantSet) -> String {
     )
 }
 
-/// Adds a familiar platform name while retaining the exact target identity.
+/// Keeps platform context readable; full reports retain the exact target and machine.
 fn platform_label(set: &DiscriminantSet) -> String {
     let target = set.target_triple.as_str();
     let platform = if target.contains("-windows-") {
-        "Windows"
+        Some("Windows")
     } else if target.contains("-linux-") {
-        "Linux"
+        Some("Linux")
     } else if target.ends_with("-apple-darwin") {
-        "macOS"
+        Some("macOS")
     } else {
-        "Target"
+        None
     };
-    format!(
-        "{platform} ({target}) / {} / machine {}",
-        set.engine, set.machine_key
-    )
+    let platform = platform.map_or_else(
+        || target.to_owned(),
+        |name| format!("{name} {}", target.split('-').next().unwrap_or(target)),
+    );
+    format!("{platform} · {}", set.engine.as_str().replace('_', " "))
 }
 
 /// A comparison uses one readable scale across values, deltas and chart labels.
@@ -561,29 +563,9 @@ fn metric_label(kind: MetricKind) -> String {
 fn overview(input: &ReportInput<'_>, markdown: bool) -> Vec<String> {
     let coverage = Coverage::from_census(&input.census);
     let mut lines = Vec::new();
-    if input.findings.is_empty() {
-        lines.push(coverage.verdict().to_owned());
-    } else {
-        let regressions = count_top(input.findings, Direction::Regression);
-        let regressions_noun = if regressions == 1 {
-            "regression"
-        } else {
-            "regressions"
-        };
-        let mut headline = format!("{regressions} {regressions_noun}");
-        if input.report_improvements {
-            let improvements = count_top(input.findings, Direction::Improvement);
-            let noun = if improvements == 1 {
-                "improvement"
-            } else {
-                "improvements"
-            };
-            write!(headline, ", {improvements} {noun}").expect("writing to a String never fails");
-        }
-        lines.push(format!("{headline} detected."));
-    }
+    lines.push(finding_verdict(input, &coverage));
     let ratio = format!(
-        "Judged {} of {} in-scope series (one benchmark/metric per platform/engine/machine).",
+        "Judged {} of {} in-scope series.",
         coverage.judged(),
         coverage.in_scope()
     );
@@ -714,22 +696,6 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     // the process is run. The guard restores auto-detection on return.
     let _color = ColorOverride::force(color);
 
-    let coverage = Coverage::from_census(&input.census);
-    let regressions = count_top(input.findings, Direction::Regression);
-
-    let mut header = vec![format!(
-        "runs: {}",
-        runs_with_span(input.runs, input.commit_span)
-    )];
-    header.extend(judged_field(&coverage));
-    header.push(format!("regressions: {regressions}"));
-    if input.report_improvements {
-        header.push(format!(
-            "improvements: {}",
-            count_top(input.findings, Direction::Improvement)
-        ));
-    }
-
     let mut lines = vec![
         format!(
             "Analyzed project {} ({} mode)",
@@ -740,7 +706,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             "  commit: {}",
             plain_text(&tip_label(input.tip_commit, input.tip_dirty))
         ),
-        format!("  {}", header.join("  ")),
+        format!("  runs: {}", runs_with_span(input.runs, input.commit_span)),
     ];
     lines.splice(1..1, overview(input, false));
 
@@ -889,30 +855,6 @@ fn set_counts_line(summary: &SetSummary<'_>, report_improvements: bool) -> Strin
     format!("  {}", fields.join("  "))
 }
 
-/// The header field disclosing how much of the suite was judged, as
-/// `in-scope series judged: 42 of 53`. `None` when nothing was in scope, where a `0 of
-/// 0` ratio would be noise and the verdict — or the empty-outcome hint — speaks instead.
-fn judged_field(coverage: &Coverage) -> Option<String> {
-    (coverage.in_scope() > 0).then(|| {
-        format!(
-            "in-scope series judged: {} of {}",
-            coverage.judged(),
-            coverage.in_scope()
-        )
-    })
-}
-
-/// The Markdown bullet form of [`judged_field`].
-fn judged_bullet(coverage: &Coverage) -> Option<String> {
-    (coverage.in_scope() > 0).then(|| {
-        format!(
-            "- In-scope series judged: {} of {}",
-            coverage.judged(),
-            coverage.in_scope()
-        )
-    })
-}
-
 /// Formats the run tally with the analyzed commit span appended, so the report
 /// header states both how many runs entered the analysis and the stretch of history
 /// they cover. A single analyzed commit collapses the range to that one commit; with
@@ -937,7 +879,7 @@ fn detail_text(finding: &Finding) -> String {
     let scale = finding_scale(finding);
     if let Some(branch) = &finding.branch {
         return format!(
-            "current base range: {} to {} · excess beyond nearest range edge: {} / {} · {}",
+            "current base range: {} to {} · excess: {} / {} · {}",
             scale.quantity(branch.reference_min),
             scale.quantity(branch.reference_max),
             scale.signed(branch.excess),
@@ -1221,7 +1163,7 @@ fn count_as_f64(count: usize) -> f64 {
 /// baseline and context commit stay legible rather than becoming aliased edge columns.
 fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
     let scale = finding_scale(finding);
-    let plot = match scope {
+    match scope {
         ChartScope::FullHistory => {
             let points: Vec<(usize, f64)> = finding
                 .series
@@ -1240,56 +1182,7 @@ fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
                 .map(|value| scale.value(value))
                 .collect::<Vec<_>>(),
         ),
-    }?;
-    let axis = match scope {
-        ChartScope::FullHistory => {
-            let first = finding
-                .series
-                .first()
-                .and_then(|point| point.commit.as_deref())
-                .map_or_else(|| "oldest".to_owned(), short_commit);
-            let last = finding
-                .series
-                .last()
-                .and_then(|point| point.commit.as_deref())
-                .map_or_else(|| "newest".to_owned(), short_commit);
-            let trailing = finding.series.last().map_or(0, |point| {
-                finding
-                    .chart_base_ref
-                    .map_or(0, |end| end.saturating_sub(point.topo_index))
-            });
-            let endpoint = if trailing > 0 {
-                let noun = if trailing == 1 { "commit" } else { "commits" };
-                format!(
-                    "analyzed context ({trailing} unmeasured {noun} after last measurement {})",
-                    plain_text(&last)
-                )
-            } else {
-                plain_text(&last)
-            };
-            format!(
-                "History: {} -> {endpoint}, oldest to newest; first-parent commit positions.\n\
-                Empty columns = no measurements, not zero; wide histories average columns.\n\
-                Finding marker: {}.",
-                plain_text(&first),
-                plain_text(&attribution_text(finding))
-            )
-        }
-        ChartScope::BranchComparison => format!(
-            "Comparison: range edge | recent base history -> CONTEXT {} (last column).\n\
-             Context is placed after base, not a continuation of the branch's commit history.\n\
-             Empty columns = missing base measurements; intermediate branch commits are omitted.",
-            finding
-                .commit
-                .as_deref()
-                .map_or_else(|| "commit".to_owned(), short_commit)
-        ),
-    };
-    Some(format!(
-        "{} ({}, linear scale; lower is better)\n{plot}\n{axis}",
-        metric_label(finding.kind),
-        scale.unit
-    ))
+    }
 }
 
 /// Renders a compact line chart of `values` over commits at the report's chart height.
@@ -1331,7 +1224,6 @@ pub fn chart(values: &[f64]) -> Option<String> {
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
     let coverage = Coverage::from_census(&input.census);
-    let regressions = count_top(input.findings, Direction::Regression);
 
     let mut lines = vec![
         format!(
@@ -1355,14 +1247,6 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             .into_iter()
             .flat_map(|line| [line, String::new()]),
     );
-    lines.extend(judged_bullet(&coverage));
-    lines.push(format!("- Regressions: {regressions}"));
-    if input.report_improvements {
-        lines.push(format!(
-            "- Improvements: {}",
-            count_top(input.findings, Direction::Improvement)
-        ));
-    }
 
     let render_empty_branch_sets = should_render_empty_branch_sets(input);
     if input.findings.is_empty() {
@@ -1472,227 +1356,191 @@ fn push_markdown_coverage(lines: &mut Vec<String>, coverage: &Coverage) {
     }
 }
 
-/// Renders a bounded findings table with expandable evidence.
+/// Renders compact, vertically arranged findings for a size-limited destination.
 ///
-/// Retains at most `limit` findings, in their supplied ranking. Counts, coverage and
-/// comparison qualifications describe the complete analysis. Omitted rows or evidence
-/// are disclosed; full reports retain the complete findings.
+/// Coverage and material qualifications describe the complete analysis. Full reports
+/// retain detailed evidence and inspection commands; omitted findings are disclosed.
 #[must_use]
 pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -> String {
     // Leave room inside GitHub's body limit for the companion's scope and lifecycle notices.
     const SUMMARY_BYTES: usize = 48_000;
-    const CONTEXT_BYTES: usize = 10_000;
+    // Reserve space for attribution and an omission notice after the final complete finding.
+    const FOOTER_BYTES: usize = 512;
     let mut lines = vec![
         format!("## Benchmark history: {}", compact(input.project)),
         String::new(),
     ];
-    lines.extend(overview(input, true));
-    lines.push(String::new());
-    lines.push(format!(
-        "Context: {} · {} mode · {} runs.",
-        compact(&tip_label(input.tip_commit, input.tip_dirty)),
-        input.mode.as_str(),
-        input.runs,
-    ));
+    lines.extend(summary_overview(input));
     if input.findings.is_empty()
         && let Some(hint) = input.hint
     {
         lines.push(String::new());
         lines.push(summary_diagnostic(hint));
     }
-    // These qualifications describe the entire report, not just the retained top findings.
-    let lags = input
+    let mut retained = 0_usize;
+    let mut bytes = finish(&lines).len();
+    for finding in input.findings.iter().take(limit.get()) {
+        let block = summary_finding(input, finding);
+        // Never cut an identity or sketch in half. Reserve space for attribution/omissions.
+        let next = bytes.saturating_add(block.len()).saturating_add(1);
+        if next.saturating_add(FOOTER_BYTES) > SUMMARY_BYTES {
+            break;
+        }
+        bytes = next;
+        lines.push(block);
+        retained = retained.saturating_add(1);
+    }
+    if retained < input.findings.len() {
+        lines.push(format!(
+            "\nShowing {retained} of {} findings by magnitude; see the full report for the rest.",
+            input.findings.len()
+        ));
+    }
+    lines.push(format!(
+        "\nAnalyzed commit: {}.",
+        code_span(&short_commit(input.tip_commit))
+    ));
+    finish(&lines)
+}
+
+/// A summary has one verdict and only qualifications that affect its interpretation.
+fn summary_overview(input: &ReportInput<'_>) -> Vec<String> {
+    let coverage = Coverage::from_census(&input.census);
+    let mut lines = vec![finding_verdict(input, &coverage)];
+    match coverage.state() {
+        CoverageState::Full => lines.push("All in-scope series judged.".to_owned()),
+        CoverageState::Partial | CoverageState::NothingJudged => lines.push(format!(
+            "\n> [!WARNING]\n> Incomplete coverage: judged {} of {} in-scope series.",
+            coverage.judged(),
+            coverage.in_scope()
+        )),
+        CoverageState::NoSeries | CoverageState::NothingInScope => {}
+    }
+    if let Some(lag) = input
         .sets
         .iter()
         .flat_map(|set| &set.comparison_base_lags)
-        .collect::<Vec<_>>();
-    if let Some(maximum) = lags.iter().map(|lag| lag.commits_behind.get()).max() {
-        let mut reasons = Vec::new();
-        if lags
-            .iter()
-            .any(|lag| lag.reason == ComparisonBaseLagReason::DiscriminantSetMismatch)
-        {
-            reasons.push("newer data belongs to another machine");
-        }
-        if lags
-            .iter()
-            .any(|lag| lag.reason == ComparisonBaseLagReason::NoRecentBaseData)
-        {
-            reasons.push("no base data at more recent commits");
-        }
-        lines.push(String::new());
+        .map(|lag| lag.commits_behind)
+        .max()
+    {
+        let noun = if lag.get() == 1 { "commit" } else { "commits" };
         lines.push(format!(
-            "> Comparison bases lag by up to {maximum} commits ({}). This includes findings omitted below.",
-            reasons.join("; ")
+            "\n> Comparison data lags the base by up to {lag} {noun}."
         ));
     }
-    if input.mode == AnalysisMode::Branch {
-        lines.push("Change = excess beyond the nearest observed current-base range edge, not a mean-to-context change.".to_owned());
-        let unavailable = input
-            .sets
-            .iter()
-            .filter(|set| set.branch_comparison.is_none())
-            .count();
-        let outside = input
-            .sets
-            .iter()
-            .flat_map(|summary| {
-                summary
-                    .findings
-                    .iter()
-                    .filter(|finding| !is_primary_finding(summary, finding))
-            })
-            .count();
-        lines.push(format!(
-            "Historical comparison unavailable for {unavailable} platform/engine/machine groups; {outside} excursions outside the shared-history comparison."
-        ));
-        let previous = input
-            .findings
-            .iter()
-            .filter(|finding| {
-                finding
-                    .branch
-                    .as_ref()
-                    .is_some_and(|branch| branch.matches_previous_regime)
-            })
-            .count();
-        if previous > 0 {
-            lines.push(format!(
-                "{previous} findings match an earlier base regime; see their evidence."
-            ));
-        }
-        let mut context = Vec::new();
-        let mut omitted = 0_usize;
-        for summary in input.sets {
-            let mut section = vec![format!(
-                "**{}:** {}",
-                compact(&set_label(summary.set)),
-                historical_comparison_text(
-                    summary.branch_comparison,
-                    has_findings_in_historical_comparison(summary)
-                ),
-            )];
-            for lag in &summary.comparison_base_lags {
-                section.push(comparison_base_lag_warning(lag));
-            }
-            if finish(&context)
-                .len()
-                .saturating_add(finish(&section).len())
-                <= CONTEXT_BYTES
-            {
-                context.extend(section);
-                context.push(String::new());
-            } else {
-                omitted = omitted.saturating_add(1);
-            }
-        }
-        if omitted > 0 {
-            context.push(format!(
-                "Details for {omitted} further groups are in the full report."
-            ));
-        }
-        lines.push(format!(
-            "\n<details>\n<summary>Comparison evidence by platform</summary>\n\n{}\n</details>\n",
-            finish(&context)
-        ));
-    } else {
-        lines.push("Before and after are representative historical levels, not the latest single observation.".to_owned());
+    if input.mode == AnalysisMode::Branch
+        && !input.findings.is_empty()
+        && input.sets.iter().any(|set| {
+            !set.findings.is_empty()
+                && (set.branch_comparison.is_none()
+                    || set
+                        .findings
+                        .iter()
+                        .any(|finding| !is_primary_finding(set, finding)))
+        })
+    {
+        lines.push(
+            "\nLimited shared base history; see the full report for comparison context.".to_owned(),
+        );
     }
+    if input.findings.iter().any(|finding| {
+        finding
+            .branch
+            .as_ref()
+            .is_some_and(|branch| branch.matches_previous_regime)
+    }) {
+        lines.push("\nSome findings match an earlier base regime.".to_owned());
+    }
+    if let Some(warning) = input.warning {
+        lines.push(format!("\n{}", summary_diagnostic(warning)));
+    } else if input.tip_dirty {
+        lines
+            .push("\n> Includes uncommitted changes; dirty measurements are ephemeral.".to_owned());
+    }
+    lines
+}
+
+/// Tallies only reported directions; a zero improvement count is not a finding.
+fn finding_verdict(input: &ReportInput<'_>, coverage: &Coverage) -> String {
     if input.findings.is_empty() {
-        return finish(&lines);
+        return coverage.verdict().to_owned();
     }
-    lines.extend([
-        String::new(),
-        if input.mode == AnalysisMode::Branch {
-            "| Direction | Benchmark / metric | Platform / engine / machine | Current base range | Context measured | Excess beyond range edge |".to_owned()
-        } else {
-            "| Direction | Benchmark / metric | Platform / engine / machine | Before representative | After representative | Change |".to_owned()
-        },
-        "| --- | --- | --- | --- | --- | --- |".to_owned(),
-    ]);
-    let mut retained = Vec::new();
-    for finding in input.findings.iter().take(limit.get()) {
-        let scale = finding_scale(finding);
-        let (before, change) = finding.branch.as_ref().map_or_else(
-            || {
-                (
-                    scale.quantity(finding.baseline),
-                    format!(
-                        "{} ({})",
-                        scale.signed(finding.delta),
-                        format_percent(finding.relative_delta)
-                    ),
-                )
-            },
-            |branch| {
-                (
-                    format!(
-                        "{} to {}",
-                        scale.quantity(branch.reference_min),
-                        scale.quantity(branch.reference_max)
-                    ),
-                    format!(
-                        "{} ({})",
-                        scale.signed(branch.excess),
-                        format_percent(branch.relative_excess)
-                    ),
-                )
-            },
-        );
-        let row = format!(
-            "| {} | {} / {} | {} | {before} | {} | {change} |",
-            direction_label(finding.direction),
-            compact(&finding.id.qualified()),
-            metric_label(finding.kind),
-            compact(&platform_label(&finding.set)),
+    let mut counts = Vec::new();
+    for (direction, singular, plural) in [
+        (Direction::Regression, "regression", "regressions"),
+        (Direction::Improvement, "improvement", "improvements"),
+    ] {
+        if direction == Direction::Improvement && !input.report_improvements {
+            continue;
+        }
+        let count = count_top(input.findings, direction);
+        if count > 0 {
+            counts.push(format!(
+                "{count} {}",
+                if count == 1 { singular } else { plural }
+            ));
+        }
+    }
+    format!("{} detected.", counts.join(", "))
+}
+
+/// One finding reads top to bottom, with at most three numeric comparison highlights.
+fn summary_finding(input: &ReportInput<'_>, finding: &Finding) -> String {
+    // Historical plot extremes do not choose the units of a current comparison.
+    let scale = QuantityScale::new(
+        finding.kind,
+        [finding.baseline, finding.latest].into_iter().chain(
+            finding
+                .branch
+                .iter()
+                .flat_map(|branch| [branch.reference_min, branch.reference_max]),
+        ),
+    );
+    let direction = match finding.direction {
+        Direction::Regression => "Regression",
+        Direction::Improvement => "Improvement",
+    };
+    let mut platform = platform_label(&finding.set);
+    if input.findings.iter().any(|other| {
+        other.id == finding.id
+            && other.kind == finding.kind
+            && platform_label(&other.set) == platform
+            && other.set.target_triple != finding.set.target_triple
+    }) {
+        write!(platform, " · {}", finding.set.target_triple)
+            .expect("writing to a String never fails");
+    }
+    // Machine fingerprints are only needed here to distinguish otherwise identical findings.
+    if input.findings.iter().any(|other| {
+        other.id == finding.id
+            && other.kind == finding.kind
+            && other.set.engine == finding.set.engine
+            && other.set.target_triple == finding.set.target_triple
+            && other.set.machine_key != finding.set.machine_key
+    }) {
+        write!(platform, " · machine {}", finding.set.machine_key)
+            .expect("writing to a String never fails");
+    }
+    let identity = code_span(&describe_id(&finding.id));
+    let context = format!("{} · {}", metric_label(finding.kind), compact(&platform));
+    if let Some(branch) = &finding.branch {
+        format!(
+            "\n### {identity}\n\n**{direction} · {} excess**  \n{context}  \nCurrent: **{}**\n\n{}\n",
+            format_percent(branch.relative_excess),
             scale.quantity(finding.latest),
-        );
-        // Keep whole rows and reserve room for the explicit omission notice.
-        if finish(&lines)
-            .len()
-            .saturating_add(row.len())
-            .saturating_add(512)
-            > SUMMARY_BYTES
-        {
-            break;
-        }
-        lines.push(row);
-        retained.push(finding);
+            code_block(
+                "text",
+                &range_sketch(branch.reference_min, branch.reference_max, finding.latest)
+            )
+        )
+    } else {
+        format!(
+            "\n### {identity}\n\n**{direction} · {}**  \n{context}  \nBefore: **{}** → after: **{}** (representative levels).\n",
+            format_percent(finding.relative_delta),
+            scale.quantity(finding.baseline),
+            scale.quantity(finding.latest),
+        )
     }
-    lines.push(format!("\nShowing {} of {} findings by magnitude. Full Markdown and JSON retain every finding and complete identities.", retained.len(), input.findings.len()));
-    for finding in retained {
-        let mut evidence = Vec::new();
-        evidence.push(format!(
-            "Platform / engine / machine: {}",
-            markdown_text(&set_label(&finding.set))
-        ));
-        if input
-            .sets
-            .iter()
-            .any(|summary| *summary.set == finding.set && !is_primary_finding(summary, finding))
-        {
-            evidence.push("**Outside the historical comparison:** This excursion did not meet the shared-history requirements of the compared family.".to_owned());
-        }
-        push_finding_markdown(&mut evidence, finding, "####", chart_scope(input.mode));
-        push_inspection(&mut evidence, input, finding, true);
-        let block = format!(
-            "\n<details>\n<summary>{}: {} evidence</summary>\n\n{}\n</details>\n",
-            direction_label(finding.direction),
-            html_text(&display_prefix(&finding.id.qualified())),
-            finish(&evidence)
-        );
-        if finish(&lines)
-            .len()
-            .saturating_add(block.len())
-            .saturating_add(512)
-            > SUMMARY_BYTES
-        {
-            lines.push("\nFurther charts and inspection commands are in the full report (summary size limit).".to_owned());
-            break;
-        }
-        lines.push(block);
-    }
-    finish(&lines)
 }
 
 /// Caps display-only identities; full reports and inspection retain the original value.
@@ -1729,7 +1577,7 @@ fn summary_diagnostic(value: &str) -> String {
 
 /// Shares the summary identity limit across Markdown cells and HTML labels.
 fn display_prefix(value: &str) -> String {
-    // Keeps unusually long benchmark identifiers from overwhelming a GitHub table.
+    // Bounds auxiliary metadata; benchmark names keep their own wrapping heading.
     const DISPLAY_CHARACTERS: usize = 160;
     let mut prefix: String = value.chars().take(DISPLAY_CHARACTERS).collect();
     if prefix.len() < value.len() {
@@ -2134,7 +1982,7 @@ mod tests {
         assert!(report.contains("5 regressions detected."), "{report}");
         // The truncation note names how many of the total are shown.
         assert!(
-            report.contains("Showing 3 of 5 findings by magnitude."),
+            report.contains("Showing 3 of 5 findings by magnitude;"),
             "{report}"
         );
         // The three largest movers are kept; the two smallest are dropped.
@@ -2182,23 +2030,19 @@ mod tests {
     }
 
     #[test]
-    fn markdown_summary_draws_a_fenced_chart_in_history_mode() {
-        // `flat_input` fixes the mode to `history`, where a retained finding with a
-        // series is rendered with its per-commit chart — so the summary reuses the full
-        // report's chart-in-history behaviour rather than dropping it.
+    fn history_summary_keeps_representatives_without_repeating_the_time_series() {
         let findings = vec![regression_with_series()];
         let input = flat_input(&findings);
 
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
-        // The chart sits inside a fenced `text` block (its axis marker proves a chart was
-        // drawn) and carries no ANSI escapes.
-        assert!(report.contains("```text"), "{report}");
-        assert!(report.contains('┤') || report.contains('┼'), "{report}");
+        assert!(!report.contains("```text"));
+        assert!(
+            report
+                .contains("Before: **100 count** → after: **130 count** (representative levels).")
+        );
         assert!(!report.contains('\u{1b}'), "{report}");
-        assert!(report.contains("<details>"));
-        assert!(report.contains("linear scale; lower is better"));
-        assert!(report.contains("Empty columns = no measurements"));
+        assert!(!report.contains("<details>"));
         assert!(!report.contains("_Filter:_"));
     }
 
@@ -2209,7 +2053,9 @@ mod tests {
 
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
-        assert!(report.contains(r"| regression | mover\_a / instruction count | Linux (x86\_64-unknown-linux-gnu) / callgrind / machine m1 |"));
+        assert!(report.contains("### `mover_a`"));
+        assert!(report.contains(r"instruction count · Linux x86\_64 · callgrind"));
+        assert!(!report.contains("machine m1"));
         assert!(!report.contains("_Filter:_"));
     }
 
@@ -2232,14 +2078,123 @@ mod tests {
 
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
-        assert!(
-            report.contains(r"callgrind / x86\_64-unknown-linux-gnu / machine m1"),
-            "{report}"
-        );
-        assert!(
-            report.contains(r"criterion / x86\_64-pc-windows-msvc / machine m1"),
-            "{report}"
-        );
+        assert!(report.contains(r"Linux x86\_64 · callgrind"), "{report}");
+        assert!(report.contains(r"Windows x86\_64 · criterion"), "{report}");
+    }
+
+    #[test]
+    fn summary_only_names_machines_to_disambiguate_matching_findings() {
+        let first = named_regression("same", 0.5);
+        let mut second = first.clone();
+        second.set.machine_key = "other".into();
+        let findings = [first, second];
+        let summary = render_markdown_summary(&flat_input(&findings), DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("machine m1"));
+        assert!(summary.contains("machine other"));
+        assert_eq!(summary.matches("### `same`").count(), 2);
+    }
+
+    #[test]
+    fn summary_distinguishes_target_variants_with_the_same_readable_platform() {
+        let first = named_regression("same", 0.5);
+        let mut second = first.clone();
+        second.set.target_triple = "x86_64-unknown-linux-musl".into();
+        let findings = [first, second];
+        let summary = render_markdown_summary(&flat_input(&findings), DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("unknown-linux-gnu"));
+        assert!(summary.contains("unknown-linux-musl"));
+        assert!(!summary.contains("machine "));
+    }
+
+    #[test]
+    fn historical_plot_extremes_do_not_choose_summary_units() {
+        let mut finding = branch_regression(true);
+        finding.kind = MetricKind::WallTime;
+        finding.series = vec![SeriesValue {
+            commit: None,
+            value: 1e12,
+            dirty: false,
+            topo_index: 0,
+        }];
+        let findings = [finding];
+        let summary = render_markdown_summary(&flat_input(&findings), DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("Current: **130 ns**"));
+        assert!(!summary.contains("0.000"));
+    }
+
+    #[test]
+    fn compact_findings_keep_long_names_and_fewer_than_five_numeric_highlights() {
+        let name = "textproc/streaming_parser/normalize_unicode_and_validate_nested_records_for_incremental_batches/large_input";
+        let mut branch = branch_regression(true);
+        branch.id = BenchmarkId::new(nonempty![name.to_owned()]);
+        branch.kind = MetricKind::InstructionCount;
+        branch.latest = 126_000_000.0;
+        branch.baseline = 104_000_000.0;
+        let range = branch.branch.as_mut().unwrap();
+        range.reference_min = 96_000_000.0;
+        range.reference_max = 104_000_000.0;
+        range.relative_excess = 22.0 / 104.0;
+        let findings = [branch];
+        let input = flat_input(&findings);
+        let block = summary_finding(&input, &findings[0]);
+        assert_eq!(block.matches(name).count(), 1);
+        assert!(block.contains("126 million"));
+        assert!(!block.contains("126000000"));
+        assert_eq!(block.matches("**").count(), 4);
+        assert!(!block.contains("<details>"));
+        let sketch = block
+            .split_once("```text\n")
+            .unwrap()
+            .1
+            .split_once("\n```")
+            .unwrap()
+            .0;
+        assert_eq!(sketch.lines().count(), 1);
+        assert!(sketch.len() < 40);
+        assert!(!sketch.chars().any(|ch| ch.is_ascii_digit()));
+        let mut history = findings[0].clone();
+        history.branch = None;
+        let block = summary_finding(&input, &history);
+        assert_eq!(block.matches("**").count(), 6);
+        assert!(!block.contains("```"));
+        assert!(block.contains("representative levels"));
+    }
+
+    #[test]
+    fn complete_summary_drops_zero_counters_and_repeated_evidence() {
+        let set = discriminant_set();
+        let findings = [branch_regression(true)];
+        let comparison = BranchComparison {
+            set: set.clone(),
+            evaluated_base_commits: 5,
+            at_least_as_much: 0,
+            series: 1,
+        };
+        let sets = [SetSummary {
+            set: &set,
+            runs: 128,
+            series: 1,
+            findings: findings.iter().collect(),
+            comparison_base_lags: Vec::new(),
+            branch_comparison: Some(&comparison),
+        }];
+        let input = ReportInput {
+            mode: AnalysisMode::Branch,
+            report_improvements: true,
+            runs: 128,
+            sets: &sets,
+            ..flat_input(&findings)
+        };
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("1 regression detected."));
+        assert!(summary.contains("All in-scope series judged."));
+        assert!(!summary.contains("0 improvements"));
+        assert!(!summary.contains("128"));
+        assert!(!summary.contains("Showing "));
+        assert!(!summary.contains("unavailable"));
+        assert!(!summary.contains("machine m1"));
+        assert!(!summary.contains("<details>"));
+        assert_eq!(summary.matches("nm/nm::observe/pull").count(), 1);
     }
 
     #[test]
@@ -2306,14 +2261,11 @@ mod tests {
         };
         let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("Analyzed project folo"), "{report}");
-        assert!(report.contains("regressions: 0"), "{report}");
+        assert!(!report.contains("regressions: 0"), "{report}");
         assert!(report.contains("No notable changes detected."), "{report}");
         // The verdict is qualified by how much of the suite it covers, so the silence
         // cannot be read as an all-clear over series that were never looked at.
-        assert!(
-            report.contains("in-scope series judged: 1 of 1"),
-            "{report}"
-        );
+        assert!(report.contains("Judged 1 of 1 in-scope series"), "{report}");
         assert!(
             report
                 .contains("Judged 1 of 1 in-scope series; no reportable move survived the gates."),
@@ -2372,7 +2324,7 @@ mod tests {
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(!summary.contains("## Coverage"));
-        assert!(summary.contains("Judged 4 of 7 in-scope series"));
+        assert!(summary.contains("judged 4 of 7 in-scope series"));
         assert!(!markdown.contains("see full report for details"));
     }
 
@@ -2482,7 +2434,7 @@ mod tests {
         };
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.contains("in-scope series judged: 4 of 7"), "{text}");
+        assert!(text.contains("Judged 4 of 7 in-scope series"), "{text}");
         assert!(
             text.contains("Judged 4 of 7 in-scope series; no reportable move survived the gates."),
             "{text}"
@@ -2497,17 +2449,17 @@ mod tests {
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(
-            markdown.contains("- In-scope series judged: 4 of 7"),
+            markdown.contains("Judged 4 of 7 in-scope series"),
             "{markdown}"
         );
         assert!(markdown.contains("Not judged: 2 series"), "{markdown}");
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(
-            summary.contains("Judged 4 of 7 in-scope series"),
+            summary.contains("judged 4 of 7 in-scope series"),
             "{summary}"
         );
-        assert!(summary.contains("Not judged: 2 series"), "{summary}");
+        assert!(!summary.contains("Not judged: 2 series"), "{summary}");
     }
 
     #[test]
@@ -2524,7 +2476,6 @@ mod tests {
         for report in [
             render(&input, ReportFormat::Text, false),
             render(&input, ReportFormat::Markdown, false),
-            render_markdown_summary(&input, NonZero::<usize>::MIN),
         ] {
             assert!(
                 report
@@ -2538,6 +2489,9 @@ mod tests {
         assert_eq!(json["census"]["in_scope"], 2);
         assert_eq!(json["census"]["reasons"][0]["reason"], "ignored");
         assert_eq!(json["outcome"], "findings");
+        let summary = render_markdown_summary(&input, NonZero::<usize>::MIN);
+        assert!(summary.contains("All in-scope series judged."));
+        assert!(!summary.contains("Incomplete coverage"));
     }
 
     #[test]
@@ -2547,21 +2501,20 @@ mod tests {
             census: census_of(0, &[(UnjudgedReason::Ignored, 2)]),
             ..flat_input(&[])
         };
-        for report in [
-            render(&input, ReportFormat::Text, false),
-            render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
-        ] {
-            assert_eq!(report.matches("ignored by configuration").count(), 1);
-            assert!(report.contains("nothing was judged"));
-            assert!(!report.contains("No notable changes"));
-            assert!(!report.contains("None of the 2 series"));
-        }
+        let report = render(&input, ReportFormat::Text, false);
+        assert_eq!(report.matches("ignored by configuration").count(), 1);
+        assert!(report.contains("nothing was judged"));
+        assert!(!report.contains("No notable changes"));
+        assert!(!report.contains("None of the 2 series"));
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(markdown.contains("Not judged: 2 series ignored by configuration."));
         assert!(markdown.contains("| ignored by configuration | 2 |"));
         assert!(!markdown.contains("No notable changes"));
         let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
         assert_eq!(json["outcome"], "nothing_in_scope");
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("Nothing was in analysis scope"));
+        assert!(!summary.contains("No notable changes"));
     }
 
     #[test]
@@ -2592,10 +2545,6 @@ mod tests {
         for (surface, rendering) in [
             ("text", render(&input, ReportFormat::Text, false)),
             ("markdown", render(&input, ReportFormat::Markdown, false)),
-            (
-                "summary",
-                render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
-            ),
         ] {
             assert!(
                 rendering.contains("No notable changes detected."),
@@ -2613,6 +2562,10 @@ mod tests {
                 "{surface}: {rendering}"
             );
         }
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("No notable changes detected."));
+        assert!(summary.contains("All in-scope series judged."));
+        assert!(!summary.contains("Incomplete coverage"));
     }
 
     #[test]
@@ -2627,7 +2580,7 @@ mod tests {
         };
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.contains("in-scope series judged: 0 of 7"), "{text}");
+        assert!(text.contains("Judged 0 of 7 in-scope series"), "{text}");
         assert!(
             text.contains("this silence is not evidence that nothing moved"),
             "{text}"
@@ -2784,9 +2737,29 @@ mod tests {
 
     #[test]
     fn silent_summary_reports_coverage() {
-        assert_silent_surface_coverage(|input| {
-            render_markdown_summary(input, DEFAULT_SUMMARY_LIMIT)
-        });
+        for (_, census, _, _) in silent_surface_cases() {
+            let coverage = Coverage::from_census(&census);
+            let input = ReportInput {
+                census,
+                ..flat_input(&[])
+            };
+            let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+            assert!(summary.contains(coverage.verdict()));
+            assert_eq!(
+                summary.contains("Incomplete coverage"),
+                matches!(
+                    coverage.state(),
+                    CoverageState::Partial | CoverageState::NothingJudged
+                )
+            );
+            if coverage.state() == CoverageState::Partial {
+                assert!(summary.contains(&format!(
+                    "judged {} of {}",
+                    coverage.judged(),
+                    coverage.in_scope()
+                )));
+            }
+        }
     }
 
     fn assert_silent_surface_coverage(render: impl Fn(&ReportInput<'_>) -> String) {
@@ -2821,7 +2794,7 @@ mod tests {
         };
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.contains("in-scope series judged: 1 of 1"), "{text}");
+        assert!(text.contains("Judged 1 of 1 in-scope series"), "{text}");
         assert!(
             text.contains("Not judged: 2 series not measured at the analyzed context commit."),
             "{text}"
@@ -3124,7 +3097,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("current base range: 99 count to 110 count · excess beyond nearest range edge: +20 count"),
+            text.contains("current base range: 99 count to 110 count · excess: +20 count"),
             "{text}"
         );
         assert!(!text.contains("change point"), "{text}");
@@ -3135,12 +3108,8 @@ mod tests {
         assert_eq!(json["sets"][0]["branch_comparison"]["at_least_as_much"], 3);
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-        assert!(
-            summary.contains(
-                "3 of 10 comparable base commits showed at least as much out-of-range movement"
-            ),
-            "{summary}"
-        );
+        assert!(!summary.contains("comparable base commits"));
+        assert!(summary.contains("+18.18% excess"));
         assert!(
             !summary.contains("Outside the historical comparison"),
             "{summary}"
@@ -3221,18 +3190,12 @@ mod tests {
         );
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-        assert!(
-            summary.contains(
-                "The branch produced no reportable out-of-range movement in this comparison \
-                 (1 series and 10 comparable base commits)."
-            ),
-            "{summary}"
-        );
+        assert!(!summary.contains("comparable base commits"));
         assert!(
             summary.contains("No notable changes detected among the series that were judged."),
             "{summary}"
         );
-        assert!(summary.contains("Not judged: 1 series"), "{summary}");
+        assert!(summary.contains("Incomplete coverage: judged 1 of 2"));
     }
 
     #[test]
@@ -3272,7 +3235,8 @@ mod tests {
         assert!(markdown.contains(expected), "{markdown}");
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-        assert!(summary.contains(expected), "{summary}");
+        assert!(!summary.contains(expected), "{summary}");
+        assert!(summary.contains("All in-scope series judged."));
     }
 
     #[test]
@@ -3317,7 +3281,10 @@ mod tests {
         assert!(markdown.contains(&expected_lag), "{markdown}");
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-        assert!(summary.contains(&expected_lag), "{summary}");
+        assert!(
+            summary.contains("Comparison data lags the base by up to 2 commits."),
+            "{summary}"
+        );
     }
 
     #[test]
@@ -3357,14 +3324,9 @@ mod tests {
         };
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains("Limited shared base history"), "{summary}");
         assert!(
-            summary.contains("**Outside the historical comparison:**"),
-            "{summary}"
-        );
-        assert!(
-            summary.contains(
-                "The branch produced no reportable out-of-range movement in this comparison"
-            ),
+            !summary.contains("reportable out-of-range movement in this comparison"),
             "{summary}"
         );
         assert!(
@@ -4086,21 +4048,18 @@ mod tests {
     }
 
     #[test]
-    fn markdown_summary_charts_the_branch_comparison() {
-        // The summary is the third renderer that must chart branch findings; and, like the
-        // full reports, it must keep the context commit visible while windowing out
-        // ancient history. See
-        // `branch_mode_text_charts_the_bounded_comparison_including_the_context`.
-        let findings = vec![regression_with_long_series()];
+    fn branch_summary_uses_a_range_sketch_instead_of_repeating_the_time_series() {
+        let mut finding = branch_regression(true);
+        finding.series = regression_with_long_series().series;
+        let findings = vec![finding];
         let mut input = flat_input(&findings);
         input.mode = AnalysisMode::Branch;
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
         assert!(report.contains("```text"), "{report}");
-        assert!(
-            report.contains("130 ┤") || report.contains("130 ┼"),
-            "the context value must head the summary chart's y-axis: {report}"
-        );
+        assert!(report.contains(&range_sketch(99.0, 110.0, 130.0)));
+        assert!(report.contains("Current: **130 count**"));
+        assert!(!report.contains('┤'));
         assert!(
             !report.contains("1000"),
             "the branch summary must exclude ancient history: {report}"
@@ -4692,10 +4651,13 @@ mod tests {
         for report in [
             render(&input, ReportFormat::Text, false),
             render(&input, ReportFormat::Markdown, false),
-            render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
         ] {
             assert!(report.contains(expected), "{report}");
         }
+        assert!(
+            render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT)
+                .contains("Comparison data lags the base by up to 5 commits.")
+        );
     }
 
     #[test]
@@ -4772,7 +4734,7 @@ mod tests {
             &mut summaries,
         );
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-        let warning = "Warning: comparison base is 3 commits behind base (newer data belongs to another machine)";
+        let warning = "Comparison data lags the base by up to 3 commits.";
         assert_eq!(summary.matches(warning).count(), 1, "{summary}");
     }
 
@@ -4857,11 +4819,11 @@ mod tests {
         // that was judged qualifies every verdict in the report, so it is stated.
         let text = render(&input, ReportFormat::Text, false);
         assert!(!text.contains("series: "), "{text}");
-        assert!(text.contains("in-scope series judged: 1 of 1"), "{text}");
+        assert!(text.contains("Judged 1 of 1 in-scope series"), "{text}");
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(!markdown.contains("- Series: "), "{markdown}");
         assert!(
-            markdown.contains("- In-scope series judged: 1 of 1"),
+            markdown.contains("Judged 1 of 1 in-scope series"),
             "{markdown}"
         );
 
@@ -4928,8 +4890,8 @@ mod tests {
                     Direction::Improvement => "80.12",
                 };
                 assert!(summary.contains(&format!("{displayed} {}", kind.as_unit())));
-                assert!(summary.contains("Excess beyond range edge"));
-                assert!(summary.contains(direction_label(direction)));
+                assert!(summary.contains("excess"));
+                assert!(summary.to_lowercase().contains(direction_label(direction)));
                 let raw_json = render(&input, ReportFormat::Json, false);
                 let json: Value = from_str(&raw_json).unwrap();
                 assert_eq!(json["findings"][0]["baseline"], 105.0);
@@ -4965,11 +4927,11 @@ mod tests {
             ..flat_input(&findings)
         };
         let summary = render_markdown_summary(&input, NonZero::<usize>::MIN);
-        let table = summary.find("| Direction |").unwrap();
-        assert!(summary.find("Incomplete coverage").unwrap() < table);
-        assert!(summary.find("lag by up to 7 commits").unwrap() < table);
-        assert!(summary.contains("3 series with too few base-ref commits"));
-        assert!(!summary.contains("| regression | omitted"));
+        let finding = summary.find("### `retained`").unwrap();
+        assert!(summary.find("Incomplete coverage").unwrap() < finding);
+        assert!(summary.find("lags the base by up to 7 commits").unwrap() < finding);
+        assert!(summary.contains("judged 2 of 5"));
+        assert!(!summary.contains("### `omitted`"));
         assert!(summary.contains("Showing 1 of 2 findings"));
     }
 
@@ -4984,9 +4946,9 @@ mod tests {
         let input = flat_input(&findings);
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(summary.len() <= 48_000);
-        assert_eq!(summary.matches("\n| regression |").count(), 1);
+        assert_eq!(summary.matches("\n### ").count(), 0);
         assert!(!summary.contains("|<details>"));
-        assert!(summary.contains("summary size limit"));
+        assert!(summary.contains("Showing 0 of 1 findings"));
         assert_eq!(
             summary.matches("<details>").count(),
             summary.matches("</details>").count()
@@ -4999,8 +4961,8 @@ mod tests {
     fn summary_uses_context_specific_escaping_for_literal_identities() {
         let findings = [named_regression("_case_*`<&>", 0.3)];
         let summary = render_markdown_summary(&flat_input(&findings), DEFAULT_SUMMARY_LIMIT);
-        assert!(summary.contains(r"| regression | \_case\_\*\`&lt;&amp;&gt; /"));
-        assert!(summary.contains("<summary>regression: _case_*`&lt;&amp;&gt; evidence</summary>"));
+        assert!(summary.contains("### `` _case_*`<&> ``"));
+        assert!(!summary.contains("<summary>"));
     }
 
     #[test]
@@ -5065,7 +5027,7 @@ mod tests {
     }
 
     #[test]
-    fn history_chart_distinguishes_last_measurement_from_trailing_context() {
+    fn history_chart_keeps_trailing_gaps_without_adding_prose() {
         let mut finding = regression();
         finding.series = vec![
             SeriesValue {
@@ -5081,22 +5043,11 @@ mod tests {
                 topo_index: 1,
             },
         ];
-        for (end, endpoint) in [
-            (1, "History: c0 -> c1,"),
-            (
-                2,
-                "History: c0 -> analyzed context (1 unmeasured commit after last measurement c1),",
-            ),
-            (
-                4,
-                "History: c0 -> analyzed context (3 unmeasured commits after last measurement c1),",
-            ),
-        ] {
+        for end in [1, 2, 4] {
             finding.chart_base_ref = Some(end);
             let rendered = scoped_chart(&finding, ChartScope::FullHistory).unwrap();
             let plotted = chart_series(&[(0, 100.0), (1, 130.0)], Some(end)).unwrap();
-            assert!(rendered.contains(&plotted));
-            assert!(rendered.contains(endpoint), "{rendered}");
+            assert_eq!(rendered, plotted);
         }
     }
 
@@ -5105,12 +5056,12 @@ mod tests {
         miri,
         ignore = "Exercises fixed report and group-detail byte budgets; small truncation and qualification cases run under Miri."
     )]
-    fn summary_limits_whole_rows_and_group_details_without_losing_qualifications() {
+    fn summary_limits_whole_findings_without_losing_qualifications() {
         let findings: Vec<_> = (0..100)
             .map(|index| {
                 let mut finding = branch_regression(false);
                 finding.id =
-                    BenchmarkId::new(nonempty![format!("bench_{index}{}", "&".repeat(160))]);
+                    BenchmarkId::new(nonempty![format!("bench_{index}{}", "&".repeat(1000))]);
                 finding.set.machine_key = format!("machine_{index}").into();
                 finding
             })
@@ -5132,12 +5083,11 @@ mod tests {
             ..flat_input(&findings)
         };
         let summary = render_markdown_summary(&input, NonZero::new(findings.len()).unwrap());
-        let rows = summary.matches("\n| regression |").count();
-        assert!(rows > 0 && rows < findings.len());
+        let retained = summary.matches("\n### ").count();
+        assert!(retained > 0 && retained < findings.len());
         assert!(summary.len() <= 48_000);
-        assert!(summary.contains("Historical comparison unavailable for 100"));
-        assert!(summary.contains("further groups are in the full report"));
-        assert!(summary.contains(&format!("Showing {rows} of 100 findings")));
+        assert!(summary.contains("Limited shared base history"));
+        assert!(summary.contains(&format!("Showing {retained} of 100 findings")));
         assert_eq!(
             summary.matches("<details>").count(),
             summary.matches("</details>").count()
@@ -5153,6 +5103,8 @@ mod tests {
             local: None,
         };
         let findings = [named_regression("control\u{1b}name", 0.3)];
+        let mut summaries = Vec::new();
+        let set = findings[0].set.clone();
         let input = ReportInput {
             tip_dirty: true,
             inspection: Some(Inspection {
@@ -5162,9 +5114,9 @@ mod tests {
                 no_dirty: false,
                 exact_current: false,
             }),
-            ..flat_input(&findings)
+            ..single_set_input("folo", &set, &findings, &mut summaries)
         };
-        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        let summary = render(&input, ReportFormat::Markdown, false);
         assert!(summary.contains("No copyable command"));
         assert!(summary.contains("Dirty observations are ephemeral"));
         assert!(!summary.contains("cargo bench-history examine"));
@@ -5180,6 +5132,8 @@ mod tests {
             local: Some("selected store".into()),
         };
         let findings = [branch_regression(true)];
+        let mut summaries = Vec::new();
+        let set = findings[0].set.clone();
         let input = ReportInput {
             mode: AnalysisMode::Branch,
             inspection: Some(Inspection {
@@ -5189,9 +5143,9 @@ mod tests {
                 no_dirty: true,
                 exact_current: true,
             }),
-            ..flat_input(&findings)
+            ..single_set_input("folo", &set, &findings, &mut summaries)
         };
-        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        let summary = render(&input, ReportFormat::Markdown, false);
         let powershell = summary
             .lines()
             .find(|line| line.starts_with("Set-Location"))

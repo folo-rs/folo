@@ -85,7 +85,7 @@ fn findings_remain_findings_with_partial_platform_and_series_coverage() {
     findings.evidence.report.coverage = Coverage::Partial;
     publish(&github, &findings, 1);
     let issue = only_issue(&github);
-    assert!(issue.body.contains("Notable benchmark changes detected."));
+    assert!(!issue.body.contains("Notable benchmark changes detected."));
     assert!(issue.body.contains("Missing: windows."));
     assert_eq!(issue.body.matches("> [!WARNING]").count(), 1);
     assert!(issue.body.contains(&findings.summary));
@@ -111,7 +111,7 @@ fn clean_replaces_report_leaves_issue_open_and_date_follows_body_updates_only() 
     assert_eq!(after.number, before.number);
     assert_ne!(after.title, before.title);
     assert!(after.open);
-    assert!(after.body.contains("No notable changes detected"));
+    assert_eq!(after.body.matches(&clean.summary).count(), 1);
     assert_eq!(
         marker::find_state(&after.body, &context().instance),
         Some("clean")

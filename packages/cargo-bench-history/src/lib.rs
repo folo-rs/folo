@@ -135,14 +135,16 @@
 //! Human reports lead with findings and judged coverage. Incomplete coverage remains
 //! explicit even when findings exist. Quantities include readable units; history
 //! values identify before and after representatives, while branch values identify the
-//! measured context and its excess beyond the nearest observed current-base range edge.
+//! measured context and its excess relative to the observed current-base range.
 //! JSON retains stable metric identifiers, original numeric units and full precision.
 //!
-//! `--markdown-summary <path>` writes a bounded findings table with expandable evidence.
-//! It discloses omitted findings or details and keeps full-analysis qualifications visible.
+//! `--markdown-summary <path>` writes compact finding blocks with wrapping benchmark names.
+//! Branch findings show a base-range sketch, the current value and percentage excess;
+//! history findings show representative levels and change. Material coverage and freshness
+//! qualifications remain visible. Detailed evidence and inspection commands stay in full reports.
 //! Use full Markdown or JSON for the complete result, not the condensed summary.
 //!
-//! Finding evidence includes shell-labelled `examine` commands with the selected query
+//! Full finding evidence includes shell-labelled `examine` commands with the selected query
 //! context. These inspect stored observations; exact collection snapshots can contain
 //! different current measurements. Stored data, configuration and dirty working-tree
 //! state may change after the report.

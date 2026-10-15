@@ -1706,7 +1706,7 @@ pub(crate) fn time_result_set_with_dispersion(
 /// cannot support any claim about the detectors.
 pub(crate) fn judged_series(report: &str) -> usize {
     let (_, tail) = report
-        .split_once("in-scope series judged: ")
+        .split_once("Judged ")
         .unwrap_or_else(|| panic!("the report header states its series coverage: {report}"));
     let (judged, _) = tail
         .split_once(" of ")
