@@ -82,7 +82,7 @@ fn preflight_marks_clean_results_stale_without_changing_the_retained_verdict() {
             .report
             .contains("Benchmark results are 1 commit behind HEAD.")
     );
-    assert!(parsed.report.contains("No notable changes detected"));
+    assert_eq!(parsed.report.matches(&clean.summary).count(), 1);
     assert!(parsed.report.contains(&clean.summary));
     let annotation = parsed.annotation.unwrap();
     assert!(matches!(annotation.state, AnnotationState::Preflight));
@@ -118,7 +118,7 @@ fn inconclusive_retains_report_commit_and_staleness_and_replaces_one_annotation(
     assert_eq!(parsed.commit, sha('a'));
     assert!(after.body.contains("2 commits behind HEAD"));
     assert!(after.body.contains("Missing: windows."));
-    assert!(after.body.contains("completed platforms only"));
+    assert!(after.body.contains("apply only to completed platforms."));
     assert_eq!(
         after
             .body

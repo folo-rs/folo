@@ -21,14 +21,6 @@ pub(crate) fn markdown_text(value: &str) -> String {
     escaped
 }
 
-/// HTML summary labels use literal text, not Markdown backslash escapes.
-pub(crate) fn html_text(value: &str) -> String {
-    plain_text(value)
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// Preserves diagnostic paragraphs and bullets while escaping each Markdown line.
 pub(crate) fn markdown_lines(value: &str) -> String {
     value
@@ -91,10 +83,9 @@ mod tests {
     }
 
     #[test]
-    fn markdown_and_html_preserve_literal_identity_punctuation() {
+    fn markdown_preserves_literal_identity_punctuation() {
         let identity = "_case_*`<&>\n";
         assert_eq!(markdown_text(identity), "\\_case\\_\\*\\`&lt;&amp;&gt; ");
-        assert_eq!(html_text(identity), "_case_*`&lt;&amp;&gt;\\n");
     }
 
     #[test]

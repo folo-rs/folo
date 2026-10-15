@@ -79,8 +79,9 @@ findings or re-derives analysis vocabulary.
 
 Reports use a shared message catalogue, including advisory wording and the public
 [report-reading guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
-Completed reports use the embedded summary's heading and commit attribution without repeating
-them in the GitHub envelope. The core summary owns judged-series coverage and keeps incomplete
+Completed reports use the embedded summary's verdict, heading and commit attribution without
+repeating them in the GitHub envelope. Advisory wording follows the findings rather than
+displacing the decision. The core summary owns judged-series coverage and keeps incomplete
 coverage visible even beside findings. Missing collection platforms and stale results retain
 their independent warnings. Completed comments place the decision and summary before the
 expandable package inventory; pending comments also keep the inventory expandable. Exceptionally

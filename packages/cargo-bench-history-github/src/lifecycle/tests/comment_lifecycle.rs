@@ -266,7 +266,7 @@ fn successful_partial_analysis_uses_comment_inconclusive_publication() {
     ))
     .unwrap();
     let body = only_comment(&github).body;
-    assert!(body.contains("completed platforms only"));
+    assert!(body.contains("apply only to completed platforms."));
     assert_eq!(
         marker::find_state(&body, &context().instance),
         Some("no-data")

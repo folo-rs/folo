@@ -13,7 +13,7 @@ pub fn format_quantity(kind: MetricKind, value: f64) -> String {
 /// One scale for a comparison and its chart, so their numbers remain comparable.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct QuantityScale {
-    pub(crate) unit: &'static str,
+    unit: &'static str,
     divisor: f64,
 }
 
@@ -35,6 +35,13 @@ impl QuantityScale {
                 (1024.0, "KiB"),
                 (1.0, "bytes"),
             ],
+            // Ordinary counts stay exact-looking; decimal words keep large counts readable.
+            "count" => &[
+                (1e12, "trillion"),
+                (1e9, "billion"),
+                (1e6, "million"),
+                (1.0, "count"),
+            ],
             unit => return Self { unit, divisor: 1.0 },
         };
         let (divisor, unit) = units
@@ -50,7 +57,15 @@ impl QuantityScale {
     }
 
     pub(crate) fn quantity(self, value: f64) -> String {
-        format!("{} {}", format_value(self.value(value)), self.unit)
+        // Use compact notation once even the largest named unit would be a long integer.
+        const SCIENTIFIC_THRESHOLD: f64 = 1e6;
+        let scaled = self.value(value);
+        let value = if scaled.abs() >= SCIENTIFIC_THRESHOLD {
+            format!("{scaled:.3e}")
+        } else {
+            format_value(scaled)
+        };
+        format!("{value} {}", self.unit)
     }
 
     pub(crate) fn signed(self, value: f64) -> String {
@@ -88,6 +103,10 @@ mod tests {
             format_quantity(MetricKind::AllocatedBytes, 1_048_576.0),
             "1 MiB"
         );
+        assert_eq!(
+            format_quantity(MetricKind::InstructionCount, 126_123_456.0),
+            "126.1 million"
+        );
     }
 
     #[test]
@@ -97,5 +116,15 @@ mod tests {
         assert_eq!(scale.quantity(1100.0), "1.1 us");
         assert_eq!(scale.signed(-200.0), "-0.2 us");
         assert!(scale.value(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn extreme_quantities_remain_readable_after_the_largest_unit() {
+        for kind in MetricKind::ALL {
+            let formatted = format_quantity(kind, f64::MAX);
+            assert!(formatted.len() < 24);
+            assert!(formatted.contains('e'));
+            assert!(!formatted.contains("inf"));
+        }
     }
 }

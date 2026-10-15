@@ -6,7 +6,8 @@ network or real-time delay. The production `RestGitHub` adapter is the only HTTP
 Repository identities are validated as literal owner/name path segments before REST URL
 construction, rejecting dot components as well as separators and escape syntax.
 
-The message wrapper embeds core summaries without rewriting their headings or findings.
+The message wrapper embeds core summaries without rewriting or repeating their verdicts,
+headings or findings. Advisory text follows the summary.
 Collection scope follows completed summaries in an expandable, escaped package inventory.
 Lifecycle and missing-platform warnings stay outside expandable details, preserving their
 visibility without re-deriving the core's judged-series coverage.

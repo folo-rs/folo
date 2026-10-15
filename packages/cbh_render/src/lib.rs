@@ -23,6 +23,7 @@ mod coverage;
 mod inspection;
 mod markup;
 mod quantity;
+mod range_sketch;
 mod report;
 
 pub use coverage::*;

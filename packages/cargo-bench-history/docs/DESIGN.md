@@ -1531,18 +1531,19 @@ findings are never duplicated under the per-set breakdown, which carries only id
 tallies. JSON keeps full precision and omits the per-commit series (a charting concern the
 human reports draw from internally, not data a consumer reconstructs); the text and
 Markdown values round to four significant figures. Human quantities use readable time and binary
-byte units, consistently across each finding's values, deltas and chart. Metric identifiers,
+byte units and decimal words for large counts, consistently across each finding's values,
+deltas and chart. Metric identifiers,
 numeric units and full precision remain unchanged in JSON. History values are labelled before
 and after representatives, not current measurements. Branch values identify the measured context,
 the observed current-base range and the excess beyond its nearest edge; their percentage is not
-a mean-to-context change. Charts state their unit, linear scale, oldest-to-newest orientation,
-missing-data gaps and finding or context marker alongside the plot.
+a mean-to-context change. The human label is **excess**. Time-series plots contain only the
+visualization; the surrounding finding supplies their metric, unit and comparison context.
 
 Reports lead with findings and judged coverage together. An explicit incomplete-coverage warning
 remains visible beside findings, while the full account distinguishes unjudged in-scope series
 from configured and context-presence exclusions. Ephemeral-data warnings precede findings.
 
-Findings include copyable, read-only `examine` commands in explicitly labelled PowerShell and
+Full reports include copyable, read-only `examine` commands in explicitly labelled PowerShell and
 POSIX syntax when the query's filesystem context is available. They retain the actual working
 directory, repository, configuration override and local storage selection, the resolved context
 and base commits, an absolute time cutoff and the finding's exact engine, target and machine.
@@ -1564,22 +1565,30 @@ Every format also states what the analysis **judged** (§8.9): an in-scope judge
 report headers, prose qualifying a silent result where there are no findings, and a complete
 coverage account in both the final Markdown **Coverage** section and JSON's structured `census`.
 That account includes all counts, the coverage state and the per-reason breakdown even when
-findings exist. Text and condensed summaries also disclose the reason counts beside findings.
+findings exist. Text also discloses the reason counts beside findings. Condensed summaries
+state whether all in-scope series were judged, or retain the judged ratio with an explicit
+incomplete-coverage warning. The complete reason breakdown remains in full reports.
 This evidence supports detailed coverage
 policy without replacing the successful-analysis outcome.
 
 Separate from those canonical formats, `analyze` can also render a condensed Markdown
-**summary** — a derived view for a size-limited consumer. A scan-friendly table keeps the top
-findings by magnitude and names direction, benchmark/metric, platform/engine/machine, comparison
-values and change. Expandable evidence holds per-finding charts and inspection commands,
-so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
-total it shows and leaves the full reports to be consulted separately. Because it drops the
-grouping, each row identifies its comparable group. Coverage, lag reasons and maximum lag,
-unavailable historical comparisons and excursions outside those comparisons describe the complete
-analysis, including findings omitted by the cap. Per-group comparison evidence is expandable.
-The summary bounds complete rows and evidence blocks, never cuts through Markdown, and discloses
-omitted identities or evidence. Full Markdown and JSON retain complete finding identities and
-the complete census. The size budget leaves room for a GitHub envelope.
+**summary** — a derived view for a size-limited consumer. Vertically arranged finding blocks
+keep the top findings by magnitude and let realistic benchmark names wrap. Each block names the
+direction, metric and readable platform. Machine fingerprints appear only when needed to distinguish
+otherwise identical findings.
+
+A branch block highlights the measured value and percentage excess. Its single-line sketch places
+the observed base range and current measurement on a shared linear span without inventing a zero
+origin. A flat or visually tiny range becomes one mark. A history block highlights the before/after
+representative levels and percentage change. Summary blocks never repeat the full time-series plot,
+raw inspection commands or detailed comparison account.
+
+The overview omits zero finding counts and redundant run/series inventories. It keeps material
+incomplete coverage, maximum comparison lag and limited shared-history qualifications across the
+complete analysis, including findings omitted by the cap. Full reports retain detailed
+per-group historical comparisons, provenance, all finding identities and the complete census.
+The summary bounds whole finding blocks, never cuts through their Markdown, and names the retained
+count only when some findings are omitted. The size budget leaves room for a GitHub envelope.
 Because it exists to
 fit a downstream cap rather than to present the analysis, it is offered only by `analyze`,
 never by the enumerating commands, and the retained-count is a fixed policy of the renderer.
@@ -1618,8 +1627,8 @@ Because partial runs can leave different findings in one set with different comp
 reasons, the lag is reported **per discriminant set** as a deduplicated, deterministically ordered
 list rather than a single value; the normal whole-suite case yields exactly one warning line per
 affected set. It is per-set metadata, distinct from the top-level dirty-base-tip warning, surfaced
-in every format (§8.7) — after each affected set's header in text and Markdown, once per affected
-set in the condensed summary, and as an optional `comparison_base_lags` array on each JSON set — and
+in every format (§8.7) — after each affected set's header in text and Markdown, as a maximum-lag
+qualification in the condensed summary, and as an optional `comparison_base_lags` array on each JSON set — and
 never changes finding selection or the exit code.
 
 ### 8.9 Accounting for what was judged
