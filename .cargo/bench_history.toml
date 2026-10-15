@@ -63,6 +63,7 @@ benchmarks = [
     "region_local/read/get_pin_two",
     "region_local/get_set_pin/",
     # Cross-thread scheduling and completion, including measured OS-thread creation.
+    "vicinal/initialization/",
     "vicinal/spawn/",
     "vicinal/fire_and_forget/",
     "vicinal/policy_dispatch/",

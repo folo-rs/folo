@@ -233,17 +233,17 @@ impl PoolInner {
     }
 
     /// Resolves a populated CPU without allocating or locking on established submissions.
-    fn membership(&self, processor: ProcessorId) -> &AtomicBool {
+    pub(crate) fn membership(&self, processor: ProcessorId) -> &AtomicBool {
         let index = self
-            .submitted_processors
+            .member_processors
             .binary_search_by_key(&processor, |(id, _)| *id)
             .expect("a submitting processor must belong to the eligible topology");
-        let (_, submitted) = self
-            .submitted_processors
+        let (_, member) = self
+            .member_processors
             .get(index)
             .expect("binary search returns an existing membership slot");
 
-        submitted
+        member
     }
 }
 
@@ -265,14 +265,5 @@ fn ensure_started(
         return;
     }
 
-    let result = panic::catch_unwind(AssertUnwindSafe(|| start(handles)));
-    let readiness = if result.is_ok() { Ok(()) } else { Err(()) };
-    state
-        .startup
-        .set(readiness)
-        .expect("startup is published once under the worker handle lock");
-
-    if let Err(payload) = result {
-        panic::resume_unwind(payload);
-    }
+    PoolInner::start_group(state, || start(handles));
 }

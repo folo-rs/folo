@@ -23,7 +23,7 @@ Default pool names include an incrementing pool counter. Only the inclusion of a
 chosen name is contractual; its position and the rest of the naming scheme are
 implementation details.
 
-The pool maintains an indexed registry of worker groups created on demand. A typed
+The pool maintains an indexed registry of worker groups created eagerly or on demand. A typed
 destination distinguishes logical processors, memory regions and the system. Each submission
 samples one processor and derives its regional destination from the same cached topology entry.
 This coherent target is reused for startup, allocation, queueing and diagnostics.
@@ -33,7 +33,7 @@ startup outcome. Workers consume only their group's queues.
 Processor groups use direct indexed lookup. Regional groups use compact slots for the
 populated regions, with binary search over sorted IDs; storage does not scale with the
 highest region ID. Regions without eligible processors have no slot. System pools have a
-single lazy group, independent of processor and region counts. Initialized lookups
+single group, independent of processor and region counts. Initialized lookups
 require neither a global map lock nor topology filtering.
 
 ## Task storage
@@ -106,17 +106,45 @@ the callback. Different workers may initialize concurrently, and queued tasks re
 untouched by each worker until its own initialization returns. Shutdown joins initializing
 workers as well as workers executing tasks.
 
+### Eager construction
+
+The builder owns its optional processor selection and resolves final configuration only at build
+time. It creates the shutdown-owning pool before starting threads, so an unwind always stops
+and joins registered workers even though workers retain shared references to the inner state.
+
+Eager preparation validates both supplied processor handles and processors rebuilt through the
+selection's backing hardware against the pool's eligible set. Full processor equality includes
+hardware-instance identity; supplied handles alone do not establish the backend used for pinning.
+It partitions the selection into
+singletons for distinct processors, distinct regions or one system mask according to the policy.
+Repeated entries never create additional worker groups. Group masks and shared
+membership are seeded before spawning; no synthetic task is allocated, counted or executed.
+
+Lazy and eager startup share worker entry, handle registration and affinity acknowledgment.
+The same buffered channel subsequently acknowledges successful callback completion. Lazy callers
+discard each completion receiver immediately; eager construction collects them directly into its
+construction-wide list without per-group buffers. It starts all selected groups, releases the
+registration lock and then waits for completion. Worker callbacks can overlap across groups.
+Receipt publishes initialization effects to the constructing thread. A callback panic disconnects
+its completion sender and remains owned by the registered thread handle; construction retrieves
+the original failure by stopping and joining workers, using the ordinary protected cleanup path.
+
+Workers enter the loop with their already-applied initial affinity revision. The first real
+submission from a selected processor therefore needs neither startup nor membership expansion.
+Unselected processors retain the ordinary lazy-startup and cumulative-expansion behavior.
+
 ### Affinity and failure coordination
 
-Workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
-hard operating-system restrictions independently of processor-time quotas. Processor groups
+Lazy workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
+hard operating-system restrictions independently of processor-time quotas. Eager workers start
+with the selected destination mask. Processor groups
 keep that affinity. Regional and system groups publish an immutable shared affinity snapshot and
 revision when admitting work from a new CPU. A pool-wide sorted table pairs populated CPU IDs
 with atomic membership flags because each CPU belongs to one fixed group within a pool.
 Binary search keeps established submissions allocation-free and lock-free for membership
 lookup, while table storage scales with eligible processors rather than the highest ID.
-Processor-local pools do not allocate this table. Expansion selects only already admitted
-CPUs plus the current submitting processor from the destination. The system destination
+Processor-local pools do not allocate this table. Expansion selects initial members and already
+admitted CPUs plus the current submitting processor from the destination. The system destination
 admits eligible processors regardless of their memory region, reusing the same membership
 and refresh protocol as regional groups.
 
@@ -168,6 +196,27 @@ payloads cannot provide bounded cleanup. This exceptional retention lets the rem
 tasks and worker handles be released while preserving the original failure.
 Clean shutdown permits retained schedulers to cancel submissions normally. Poisoning
 takes precedence over shutdown, permanently rejecting every submission with a panic.
+
+## Initialization benchmarks
+
+The Criterion `vicinal/initialization` group compares lazy and eager startup separately from
+steady-state dispatch. Both modes use the same fixed processor-local worker count and a caller
+pinned to the eager selection's single processor. This keeps the first submission on an already
+selected destination rather than measuring lazy expansion of an eager pool. No application
+initialization callback runs, so the comparison isolates the library's startup costs.
+
+The `create` cases time `PoolBuilder::build()`, including eager worker readiness. Builder
+configuration and processor-selection cloning happen outside measurement. The `first_task` cases
+build a fresh pool and acquire its scheduler outside measurement, then time regular submission
+through successful join-handle completion using the same small CPU-only task as the dispatch
+benchmarks. No task has previously run on that pool, so both modes include first-use task storage
+and result-channel allocation; lazy submission also includes worker startup.
+
+Per-iteration batching keeps pool teardown and worker joins outside both measurements and finishes
+them before preparing another pool. Criterion warmup also uses fresh pools rather than warming
+the pool that a later iteration measures. These wall-clock comparisons include OS scheduling and
+worker creation, so `.cargo/bench_history.toml` excludes the entire group from automated analysis
+while retaining results for manual inspection. They have no Callgrind counterpart.
 
 ## Logging coverage
 

@@ -379,7 +379,7 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
         assert!(inner.worker_handles.lock().unwrap().is_empty());
         assert_eq!(
             inner
-                .submitted_processors
+                .member_processors
                 .iter()
                 .map(|(id, submitted)| (*id, submitted.load(Ordering::Acquire)))
                 .collect::<Vec<_>>(),

@@ -17,6 +17,7 @@ pub(crate) fn worker_loop(
     inner: &PoolInner,
     destination: GroupId,
     worker_index: u32,
+    mut revision: usize,
     pin: impl Fn(&ProcessorSet),
 ) {
     let state = inner.registry.get_or_init(destination);
@@ -25,7 +26,6 @@ pub(crate) fn worker_loop(
         &state.regular_queue,
         &state.shutdown_flag,
     );
-    let mut revision = 0;
     let shared = inner.policy.shares_processors();
 
     loop {
