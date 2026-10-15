@@ -2,8 +2,8 @@
 
 /// Draws the observed base range and current measurement on one shared linear span.
 pub(crate) fn range_sketch(minimum: f64, maximum: f64, current: f64) -> String {
-    // Fits beside short endpoint labels in a narrow GitHub comment without scrolling.
-    const COLUMNS: usize = 19;
+    // Includes both labels within a mobile code block's interior, after page/block gutters.
+    const COLUMNS: usize = 11;
     const LAST: usize = COLUMNS - 1;
     let low = minimum.min(current);
     let high = maximum.max(current);
@@ -65,20 +65,14 @@ mod tests {
     fn range_and_measurement_keep_their_relative_positions_in_both_directions() {
         assert_eq!(
             range_sketch(100.0, 110.0, 120.0),
-            "base [========]--------* current"
+            "base [====]----* current"
         );
-        assert_eq!(
-            range_sketch(100.0, 110.0, 90.0),
-            "current *--------[========] base"
-        );
+        assert_eq!(range_sketch(100.0, 110.0, 90.0), "current *----[====] base");
         assert_eq!(
             range_sketch(100.0, 100.0, 120.0),
-            "base |-----------------* current"
+            "base |---------* current"
         );
-        assert_eq!(
-            range_sketch(100.0, 100.0, 90.0),
-            "current *-----------------| base"
-        );
+        assert_eq!(range_sketch(100.0, 100.0, 90.0), "current *---------| base");
     }
 
     #[test]
@@ -88,15 +82,21 @@ mod tests {
         assert_eq!(range_sketch(-20.0, -10.0, 0.0), ordinary);
         assert_eq!(range_sketch(1e300, 1.1e300, 1.2e300), ordinary);
         assert_eq!(range_sketch(1e-300, 1.1e-300, 1.2e-300), ordinary);
-        assert_eq!(
-            range_sketch(1.0, 2.0, f64::MAX),
-            "base |-----------------* current"
-        );
-        assert_eq!(
-            range_sketch(0.0, 0.0, 0.0),
-            "base ---------*--------- current"
-        );
+        assert_eq!(range_sketch(1.0, 2.0, f64::MAX), "base |---------* current");
+        assert_eq!(range_sketch(0.0, 0.0, 0.0), "base -----*----- current");
         assert_eq!(range_sketch(-0.0, 0.0, 0.0), range_sketch(0.0, 0.0, 0.0));
         assert_eq!(column(0.25, 22), 6);
+    }
+
+    #[test]
+    fn labels_and_grid_fit_the_mobile_code_interior() {
+        for (minimum, maximum, current) in [
+            (96.0, 104.0, 126.0),
+            (96.0, 104.0, 80.0),
+            (100.0, 100.0, 126.0),
+        ] {
+            // Bounded independently of page width; the preview verifies actual CSS gutters.
+            assert!(range_sketch(minimum, maximum, current).len() <= 24);
+        }
     }
 }
