@@ -90,8 +90,8 @@ Contracts have one owning page; other journeys link rather than reproduce them.
   downloadable text/Markdown/JSON, and production-rendered workflow/freshness examples.
 - **Teach**: units, direction, history representatives versus branch excess; judged-series
   coverage versus platform completeness; freshness and next actions.
-- **Layout**: short finding blocks and wrapping names. Branch sketches use a full-line,
-  zero-based scale; narrow views scroll inside the code block rather than
+- **Layout**: short finding blocks and wrapping names. Branch sketches use a full-line
+  scale that includes zero; narrow views scroll inside the code block rather than
   compressing the sketch or widening the document. No dense numeric table, repetitive
   metadata or plot commentary.
 - **Boundary**: sample names, commits and workflow facts are illustrative, never execution claims.
