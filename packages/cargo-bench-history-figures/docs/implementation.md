@@ -9,6 +9,8 @@ prose stays in the book. Worked reports use detector-owned series with long qual
 names and large counts; the core renderer owns their layout. Workflow cards use the
 companion's offline JSON projection with an in-memory evidence reader. Illustrative invocation facts never
 claim an actual benchmark execution, repository topology or GitHub publication.
+Analyzed history examples align their latest measurements to one shared context;
+shorter histories start later. Deliberate ghosts stay outside detection and enter the census separately.
 
 The registry includes downloadable full reports as well as embedded summaries and
 figures. Markdown downloads use `.markdown` to avoid mdBook's chapter-link rewriting.
@@ -17,7 +19,9 @@ No supported import or synthetic-engine command is part of the user walkthrough.
 
 ## Accessible figures
 
-Styles supply titles and data-derived descriptions at the SVG boundary. The boundary
+Styles share horizontal-index labels between axes and text alternatives, distinguishing
+commit positions from compacted observation positions. They supply titles and data-derived
+descriptions at the SVG boundary. The boundary
 escapes metadata and supplies `role="img"` with an accessible name. Names use no global
 IDs, because mdBook's print view and the theme preview can include the same figure more
 than once.

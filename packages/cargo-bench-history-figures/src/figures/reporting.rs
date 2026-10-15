@@ -166,11 +166,52 @@ fn silent_suite() -> Vec<Series> {
     suite
 }
 
-/// One batch detection pass over `suite`, with ghosts accounted for after the pass.
-fn detect_suite(suite: &[Series]) -> Detection {
+/// Aligns measured examples without turning their shorter histories into ghosts.
+///
+/// Every analyzed benchmark is present at the context. A short history starts later;
+/// deliberately absent benchmarks belong in the separately attached exclusion census.
+fn align_history_context(suite: &mut [Series], context: &AnalysisContext) {
+    for series in suite {
+        let last = series
+            .points
+            .last()
+            .expect("every worked history series contains measurements")
+            .topo_index;
+        let offset = context
+            .tip_index
+            .checked_sub(last)
+            .expect("the shared context is the maximum position in the worked suite");
+        for point in &mut series.points {
+            point.topo_index = point
+                .topo_index
+                .checked_add(offset)
+                .expect("shifting an ordered example never passes its shared context");
+            point.object_ordinal = u32::try_from(point.topo_index)
+                .expect("worked examples contain far fewer positions than u32::MAX");
+            point.commit = Some(Arc::from(if point.topo_index == context.tip_index {
+                TIP_COMMIT.to_owned()
+            } else {
+                format!("commit{}", point.topo_index)
+            }));
+        }
+    }
+}
+
+/// One batch detection pass over context-present examples, with exclusions attached afterward.
+fn detect_suite(mut suite: Vec<Series>) -> Detection {
+    let context = suite_context(&suite);
+    align_history_context(&mut suite, &context);
+    assert!(
+        suite.iter().all(|series| series
+            .points
+            .iter()
+            .any(|point| point.topo_index == context.tip_index
+                && point.commit.as_deref() == Some(TIP_COMMIT))),
+        "worked analyzed series must be measured at the shared context"
+    );
     let Detection {
         findings, census, ..
-    } = find_changes(suite, &suite_context(suite));
+    } = find_changes(&suite, &context);
     Detection {
         findings,
         census: attach_exclusions(census),
@@ -180,7 +221,7 @@ fn detect_suite(suite: &[Series]) -> Detection {
 
 /// The census the worked analyses account for their suite with.
 fn worked_census() -> SeriesCensus {
-    detect_suite(&worked_suite()).census
+    detect_suite(worked_suite()).census
 }
 
 /// A worked analysis, held as the owned data a report is rendered from.
@@ -291,7 +332,7 @@ fn judge_branch(name: &str, values: &[f64], kind: MetricKind) -> Finding {
 fn worked_analysis() -> Analysis {
     let Detection {
         findings, census, ..
-    } = detect_suite(&worked_suite());
+    } = detect_suite(worked_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
@@ -306,7 +347,7 @@ fn worked_analysis() -> Analysis {
 fn silent_analysis() -> Analysis {
     let Detection {
         findings, census, ..
-    } = detect_suite(&silent_suite());
+    } = detect_suite(silent_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
@@ -344,7 +385,7 @@ pub(crate) fn gallery_analysis(outcome: AnalysisOutcome) -> Analysis {
     };
     let Detection {
         findings, census, ..
-    } = detect_suite(&suite);
+    } = detect_suite(suite);
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
@@ -752,6 +793,38 @@ fn describe_reason(reason: ComparisonBaseLagReason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_histories_start_later_but_share_the_measured_context() {
+        let mut suite = vec![
+            suite_series("short", &[10.0, 11.0]),
+            suite_series("long", &[20.0, 21.0, 22.0, 23.0]),
+        ];
+        let context = suite_context(&suite);
+
+        align_history_context(&mut suite, &context);
+
+        let short = suite.first().unwrap();
+        assert!(short.points.iter().map(|point| point.topo_index).eq([2, 3]));
+        assert!(
+            short
+                .points
+                .iter()
+                .map(|point| point.value)
+                .eq([10.0, 11.0])
+        );
+        for series in &suite {
+            let last = series.points.last().unwrap();
+            assert_eq!(last.topo_index, context.tip_index);
+            assert_eq!(last.commit.as_deref(), Some(TIP_COMMIT));
+            for point in &series.points {
+                assert_eq!(
+                    usize::try_from(point.object_ordinal).unwrap(),
+                    point.topo_index
+                );
+            }
+        }
+    }
 
     #[test]
     #[cfg_attr(

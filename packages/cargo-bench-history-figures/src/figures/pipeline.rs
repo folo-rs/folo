@@ -809,6 +809,7 @@ fn gap() -> Panes {
         GAP_OBSERVATIONS,
     )
     .value_label("ns")
+    .position_label("observation position")
     .values(&values);
 
     Panes {

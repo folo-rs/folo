@@ -6,11 +6,10 @@
 //! shape one implementation is what keeps fifty figures looking like one document, and
 //! it is why a style module composes a [`Plot`] rather than driving `plotters` directly.
 //!
-//! The x axis is a **commit position**, not a time and not an index into the observed
-//! values. That distinction is itself one of the book's lessons: a commit with no
-//! observation leaves an empty column, and the detectors never see how wide that gap is.
-//! Laying every figure out this way means the pictures cannot accidentally imply
-//! otherwise.
+//! The default x axis is a **commit position**, not elapsed time. A compacted sequence
+//! instead labels its observation positions explicitly. That distinction is one of
+//! the book's lessons: a commit without a measurement leaves a hole in history, while
+//! a detector receiving only observed values cannot see that gap.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -176,6 +175,7 @@ pub struct Note {
 pub struct Plot {
     caption: String,
     value_label: String,
+    position_label: String,
     span: usize,
     observations: Vec<Observation>,
     connect: bool,
@@ -187,7 +187,7 @@ pub struct Plot {
 }
 
 impl Plot {
-    /// An empty plot covering `span` commit positions.
+    /// An empty plot covering `span` positions, measured in commits by default.
     ///
     /// The span is given rather than derived from the observations because the gaps at
     /// the end of a series are exactly what several figures exist to show: a series
@@ -198,6 +198,7 @@ impl Plot {
         Self {
             caption: caption.into(),
             value_label: String::new(),
+            position_label: "commit position".to_owned(),
             span,
             observations: Vec::new(),
             connect: true,
@@ -213,6 +214,13 @@ impl Plot {
     #[must_use]
     pub fn value_label(mut self, label: impl Into<String>) -> Self {
         self.value_label = label.into();
+        self
+    }
+
+    /// Labels positions when a transformation changes the horizontal index's meaning.
+    #[must_use]
+    pub fn position_label(mut self, label: impl Into<String>) -> Self {
+        self.position_label = label.into();
         self
     }
 
@@ -241,7 +249,7 @@ impl Plot {
         self
     }
 
-    /// Plots `values` at consecutive commit positions starting from zero, all in the
+    /// Plots `values` at consecutive positions starting from zero, all in the
     /// plain role — the common case for a figure about a dense series.
     #[must_use]
     pub fn values(self, values: &[f64]) -> Self {
@@ -432,7 +440,7 @@ impl Plot {
             .light_line_style(theme::INK.mix(0.0))
             .bold_line_style(theme::INK.mix(theme::GRID_OPACITY))
             .axis_style(theme::INK)
-            .x_desc("commit position")
+            .x_desc(self.position_label.as_str())
             .y_desc(self.value_label.as_str())
             .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
             .x_label_formatter(&|position| format!("{position:.0}"))
@@ -631,11 +639,11 @@ impl Plot {
             &self.value_label
         };
         let mut description = format!(
-            "{}. Values in {} against first-parent commit position, spanning {} commits. \
+            "{}. Values in {} against {}, spanning {} positions. \
              Filled circles are observations; hollow circles highlight focus; triangles mark \
              regressions; X marks identify added data; crossed-out circles are excluded. \
              Gaps are missing observations, not zero values.",
-            self.caption, units, self.span,
+            self.caption, units, self.position_label, self.span,
         );
         for rule in &self.rules {
             write!(description, " {}: {}.", rule.label, rule.value)
@@ -644,7 +652,7 @@ impl Plot {
         for band in &self.bands {
             write!(
                 description,
-                " {}: commit positions {} to {}.",
+                " {}: positions {} to {}.",
                 band.label, band.from, band.to,
             )
             .expect("writing to a String cannot fail");
@@ -668,6 +676,26 @@ impl Plot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics; the test checks rendered axis metadata"
+    )]
+    fn the_position_label_drives_both_axis_and_text_alternative() {
+        let label = "observation position";
+        let plot = Plot::new("compacted input", 2)
+            .position_label(label)
+            .values(&[10.0, 20.0]);
+
+        let description = plot.description();
+        let svg = plot.render();
+
+        assert!(description.contains(label));
+        assert!(svg.contains(&format!("<desc>{description}</desc>")));
+        assert_eq!(svg.matches(label).count(), 2);
+        assert!(!svg.contains("commit position"));
+    }
 
     #[test]
     fn a_flat_series_still_gets_a_usable_value_axis() {

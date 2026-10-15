@@ -14,16 +14,16 @@ criterion / x86_64-unknown-linux-gnu / machine a1b2c3d4
 
 http_parse/case
   regression: +29.57% wall time
-    regression via change point · before representative: 100.4 ns → after representative: 130.1 ns · change: +29.68 ns · somewhere near commit10
- 135 ┤           ╭─╮╭─╮╭╮           
- 126 ┤         ╭─╯ ╰╯ ╰╯╰─          
- 116 ┤         │                    
- 106 ┤ ╭╮ ╭─╮╭─╯                    
-  97 ┼─╯╰─╯ ╰╯                     
+    regression via change point · before representative: 100.4 ns → after representative: 130.1 ns · change: +29.68 ns · somewhere near commit20
+ 135 ┤           ╭─╮╭─╮╭╮ 
+ 126 ┤         ╭─╯ ╰╯ ╰╯╰ 
+ 116 ┤         │          
+ 106 ┤ ╭╮ ╭─╮╭─╯          
+  97 ┼─╯╰─╯ ╰╯           
 
 index_build/case
   regression: +10.40% wall time
-    regression via drift · before representative: 98.5 ns → after representative: 108.7 ns · change: +10.24 ns · accumulated commit0 → commit29
+    regression via drift · before representative: 98.5 ns → after representative: 108.7 ns · change: +10.24 ns · accumulated commit0 → 9f2c4a1d3b5e708aab12cd34ef5678901234567a
  113 ┤                    ╭╮    ╭── 
  109 ┤          ╭╮╭╮╭─╮   ││ ╭╮╭╯   
  105 ┤ ╭╮     ╭─╯╰╯╰╯ ╰─╮╭╯╰─╯╰╯    

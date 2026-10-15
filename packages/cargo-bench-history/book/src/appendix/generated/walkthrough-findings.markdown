@@ -21,20 +21,20 @@ Not judged (including out-of-scope series): 2 series not measured at the analyze
 ### `http_parse/case`
 **regression: +29.57%** wall time
 
-regression via change point · before representative: 100.4 ns → after representative: 130.1 ns · change: +29.68 ns · somewhere near commit10
+regression via change point · before representative: 100.4 ns → after representative: 130.1 ns · change: +29.68 ns · somewhere near commit20
 
 ```text
- 135 ┤           ╭─╮╭─╮╭╮           
- 126 ┤         ╭─╯ ╰╯ ╰╯╰─          
- 116 ┤         │                    
- 106 ┤ ╭╮ ╭─╮╭─╯                    
-  97 ┼─╯╰─╯ ╰╯                     
+ 135 ┤           ╭─╮╭─╮╭╮ 
+ 126 ┤         ╭─╯ ╰╯ ╰╯╰ 
+ 116 ┤         │          
+ 106 ┤ ╭╮ ╭─╮╭─╯          
+  97 ┼─╯╰─╯ ╰╯           
 ```
 
 ### `index_build/case`
 **regression: +10.40%** wall time
 
-regression via drift · before representative: 98.5 ns → after representative: 108.7 ns · change: +10.24 ns · accumulated commit0 → commit29
+regression via drift · before representative: 98.5 ns → after representative: 108.7 ns · change: +10.24 ns · accumulated commit0 → 9f2c4a1d3b5e708aab12cd34ef5678901234567a
 
 ```text
  113 ┤                    ╭╮    ╭── 
