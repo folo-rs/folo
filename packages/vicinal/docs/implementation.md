@@ -197,6 +197,27 @@ tasks and worker handles be released while preserving the original failure.
 Clean shutdown permits retained schedulers to cancel submissions normally. Poisoning
 takes precedence over shutdown, permanently rejecting every submission with a panic.
 
+## Initialization benchmarks
+
+The Criterion `vicinal/initialization` group compares lazy and eager startup separately from
+steady-state dispatch. Both modes use the same fixed processor-local worker count and a caller
+pinned to the eager selection's single processor. This keeps the first submission on an already
+selected destination rather than measuring lazy expansion of an eager pool. No application
+initialization callback runs, so the comparison isolates the library's startup costs.
+
+The `create` cases time `PoolBuilder::build()`, including eager worker readiness. Builder
+configuration and processor-selection cloning happen outside measurement. The `first_task` cases
+build a fresh pool and acquire its scheduler outside measurement, then time regular submission
+through successful join-handle completion using the same small CPU-only task as the dispatch
+benchmarks. No task has previously run on that pool, so both modes include first-use task storage
+and result-channel allocation; lazy submission also includes worker startup.
+
+Per-iteration batching keeps pool teardown and worker joins outside both measurements and finishes
+them before preparing another pool. Criterion warmup also uses fresh pools rather than warming
+the pool that a later iteration measures. These wall-clock comparisons include OS scheduling and
+worker creation, so `.cargo/bench_history.toml` excludes the entire group from automated analysis
+while retaining results for manual inspection. They have no Callgrind counterpart.
+
 ## Logging coverage
 
 Pool lifecycle events use the pool implementation's tracing target, and task events use the

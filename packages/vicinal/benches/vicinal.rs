@@ -8,7 +8,9 @@ use std::time::Instant;
 use all_the_time::Session as TimeSession;
 use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::measurement::WallTime;
-use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkGroup, Criterion, SamplingMode, criterion_group, criterion_main,
+};
 use events_once::EventPool;
 use futures::executor::block_on;
 use many_cpus::{ProcessorSet, SystemHardware};
@@ -56,7 +58,7 @@ fn simulate_work() -> u32 {
     value
 }
 
-/// Shares affinity and measurement sessions across the dispatch comparisons.
+/// Shares affinity and measurement sessions across initialization and dispatch comparisons.
 fn entrypoint(criterion: &mut Criterion) {
     // Pin the main thread to a single processor to eliminate OS migration impact.
     let one_processor = SystemHardware::current()
@@ -69,12 +71,67 @@ fn entrypoint(criterion: &mut Criterion) {
     let allocs = AllocSession::new();
     let times = TimeSession::new();
 
+    initialization(criterion, &one_processor);
     joined_dispatch(criterion, &allocs, &times, &one_processor);
     fire_and_forget_dispatch(criterion, &allocs, &times);
     policy_dispatch(criterion, &allocs, &times);
     region_contention(criterion, &one_processor);
 
     // The sessions emit their summaries and JSON after every group has completed.
+}
+
+/// Separates pool construction from the first joined task on a fresh pool.
+///
+/// Both modes use the same pinned caller and worker capacity. The pool itself supplies
+/// the worker threads; an additional harness pool would not contribute to either measurement.
+fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
+    let mut group = criterion.benchmark_group("vicinal/initialization");
+    // OS worker startup and teardown exceed the default window with linear sampling's
+    // minimum triangular iteration schedule. Flat sampling retains the full sample count.
+    group.sampling_mode(SamplingMode::Flat);
+
+    for (name, eager) in [("lazy", false), ("eager", true)] {
+        let builder = || {
+            // Fix the destination capacity to match the dispatch comparison, independently
+            // of future changes to the library default. No application initializer is installed.
+            let builder = Pool::builder().worker_policy(WorkerPolicy::per_processor(nz!(2_u32)));
+            if eager {
+                builder.eager(one_processor.clone())
+            } else {
+                builder
+            }
+        };
+
+        group.bench_function(format!("create/{name}"), |b| {
+            b.iter_batched(
+                &builder,
+                |builder| black_box(builder.build()),
+                // Drop and join each returned pool outside measurement before creating another.
+                // Larger batches would leave idle worker pools competing with later iterations.
+                BatchSize::PerIteration,
+            );
+        });
+
+        group.bench_function(format!("first_task/{name}"), |b| {
+            b.iter_batched_ref(
+                || {
+                    let pool = builder().build();
+                    let scheduler = pool.scheduler();
+                    // Do not submit warmup work: task slots and result channels must be cold.
+                    (pool, scheduler)
+                },
+                |(_, scheduler)| {
+                    let handle = scheduler.spawn(|| black_box(simulate_work()));
+                    black_box(block_on(handle).unwrap());
+                },
+                // Keep pool creation, scheduler acquisition and teardown outside measurement.
+                // Each iteration owns a fresh pool, including during Criterion's warmup.
+                BatchSize::PerIteration,
+            );
+        });
+    }
+
+    group.finish();
 }
 
 /// Keeps joined task dispatch and its thread-based baselines in one comparison group.
