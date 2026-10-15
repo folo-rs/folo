@@ -77,7 +77,7 @@ under `census`, which makes it the machine-readable signal: each finding
 self-describing, plus every unjudged reason. Text also states the unjudged reason counts. JSON
 deliberately omits the per-commit chart series — that is presentation, and
 [`examine`](../commands/examine.md) is the way to get the underlying points. The **condensed
-summary** is lossy by design — capped, vertically arranged findings with small range sketches — so it is
+summary** is lossy by design — capped, vertically arranged findings with range sketches — so it is
 the one output you must not automate against. The outcome file repeats only the JSON report's
 top-level `outcome` field; it carries no report details. The full table is under
 [Where output goes](#where-output-goes).
@@ -165,8 +165,11 @@ still prints every factual range excursion. JSON exposes the same distinction: f
 
 The condensed summary gives each benchmark its own wrapping heading, followed by direction,
 metric and platform. Branch findings highlight the current measurement and percentage **excess**,
-with a short range sketch instead of separate numeric columns. The base range and current point
-share a linear scale; the sketch has no implied zero origin. A very small range may occupy one mark.
+with a full-line range sketch instead of separate numeric columns. The bracketed base range and
+current marker `*` share a linear scale anchored at `0`. Values increase from left to right,
+including for improvements. Negative measurements extend left of zero rather than being clipped.
+A very small range may occupy one cell; an all-zero comparison stays at the origin.
+The full-line strip scrolls inside its code block on narrow views.
 History findings show the before/after representative levels and percentage change.
 
 Read the full report for the range endpoints, time-series plots, detailed historical comparisons,

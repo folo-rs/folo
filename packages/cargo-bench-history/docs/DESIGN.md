@@ -1577,9 +1577,13 @@ keep the top findings by magnitude and let realistic benchmark names wrap. Each 
 direction, metric and readable platform. Machine fingerprints appear only when needed to distinguish
 otherwise identical findings.
 
-A branch block highlights the measured value and percentage excess. Its single-line sketch places
-the observed base range and current measurement on a shared linear span without inventing a zero
-origin. A flat or visually tiny range becomes one mark. A history block highlights the before/after
+A branch block highlights the measured value and percentage excess. Its full-line sketch places
+the observed base range and current measurement on a shared linear span anchored at actual zero.
+Values increase from left to right in both directions of change. Finite negative observations
+extend the span to the left of zero. A flat or visually tiny range occupies one cell, and an
+all-zero comparison does not invent a nonzero span. The desktop-width illustration
+scrolls inside its code block on narrow views, without widening the document.
+A history block highlights the before/after
 representative levels and percentage change. Summary blocks never repeat the full time-series plot,
 raw inspection commands or detailed comparison account.
 
