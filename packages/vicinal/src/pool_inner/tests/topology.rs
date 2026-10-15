@@ -153,27 +153,47 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
             ]
         );
 
-        // A separate pool's first submitter must not inherit or widen this pool's mask.
-        pin(&hardware, 2);
-        let independent = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_system(nz!(1)))
-            .build();
-        assert_eq!(
-            block_on(independent.scheduler().spawn({
-                let hardware = hardware.clone();
-                move || affinity(&hardware)
-            }))
-            .unwrap(),
-            BTreeSet::from([2])
-        );
-
+        // Repeating a known submitter must not publish another revision.
         pin(&hardware, 0);
         assert_eq!(
             block_on(scheduler.spawn(move || affinity(&hardware))).unwrap(),
             expected
         );
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 4);
+    });
+}
+
+/// Independent pools sharing hardware must neither inherit nor expand each other's membership.
+#[test]
+fn system_pools_keep_processor_membership_independent() {
+    with_watchdog(|| {
+        let hardware = hardware();
+        let build = || {
+            Pool::builder()
+                .hardware(hardware.clone())
+                .worker_policy(WorkerPolicy::per_system(nz!(1)))
+                .build()
+        };
+        let first = build();
+        let second = build();
+
+        // Distinct initial regions and expansion of only one pool expose shared membership.
+        for (pool, processor, expected) in [
+            (&first, 0, BTreeSet::from([0])),
+            (&second, 3, BTreeSet::from([3])),
+            (&first, 1, BTreeSet::from([0, 1])),
+            (&second, 3, BTreeSet::from([3])),
+        ] {
+            pin(&hardware, processor);
+            assert_eq!(
+                block_on(pool.scheduler().spawn({
+                    let hardware = hardware.clone();
+                    move || affinity(&hardware)
+                }))
+                .unwrap(),
+                expected
+            );
+        }
     });
 }
 

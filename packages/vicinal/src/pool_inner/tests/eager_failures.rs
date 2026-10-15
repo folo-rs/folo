@@ -18,10 +18,21 @@ use crate::{Pool, WorkerPolicy};
 /// Failure in another group still owns and joins the first group's worker.
 #[test]
 fn eager_partial_spawn_failure_joins_workers() {
-    with_watchdog(|| {
+    assert_partial_spawn_failure(WorkerPolicy::per_memory_region(nz!(1)));
+}
+
+/// A partially started group owns its earlier siblings even before startup is published.
+#[test]
+fn eager_sibling_spawn_failure_joins_workers() {
+    assert_partial_spawn_failure(WorkerPolicy::per_system(nz!(2)));
+}
+
+/// Shares the failure boundary assertions for partially started groups and later groups.
+fn assert_partial_spawn_failure(policy: WorkerPolicy) {
+    with_watchdog(move || {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(policy)
             .build();
         let mut spawned = 0_u32;
         let payload = failed_construction(
@@ -45,12 +56,23 @@ fn eager_partial_spawn_failure_joins_workers() {
 /// A later affinity failure must also clean up successfully initialized siblings.
 #[test]
 fn eager_partial_affinity_failure_joins_workers() {
+    assert_partial_affinity_failure(WorkerPolicy::per_memory_region(nz!(1)));
+}
+
+/// A sibling's failed affinity must also clean up workers in the same incomplete group.
+#[test]
+fn eager_sibling_affinity_failure_joins_workers() {
+    assert_partial_affinity_failure(WorkerPolicy::per_system(nz!(2)));
+}
+
+/// Shares pin-failure cleanup assertions without depending on the destination boundary.
+fn assert_partial_affinity_failure(policy: WorkerPolicy) {
     struct AffinityFailure;
 
-    with_watchdog(|| {
+    with_watchdog(move || {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(policy)
             .build();
         // Only the atomic invocation index selects the failing pin; it publishes no other state.
         let pins = Arc::new(AtomicUsize::new(0));

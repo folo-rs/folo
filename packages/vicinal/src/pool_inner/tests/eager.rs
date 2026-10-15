@@ -155,10 +155,19 @@ fn assert_expansion(kind: PolicyKind) {
             .all_processors()
             .filter(|processor| [0, 3].contains(&processor.id()))
             .unwrap();
+        // Eager completion and task messages publish these increments, not the counter itself.
+        let initialized = Arc::new(AtomicUsize::new(0));
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(policy(kind, nz!(1)))
             .eager(processors)
+            .thread_init({
+                let initialized = Arc::clone(&initialized);
+                move || {
+                    assert!(!INITIALIZED.replace(true));
+                    initialized.fetch_add(1, Ordering::Relaxed);
+                }
+            })
             .build();
         let scheduler = pool.scheduler();
         let mut members = BTreeSet::from([0, 3]);
@@ -173,7 +182,10 @@ fn assert_expansion(kind: PolicyKind) {
             let (sent, received) = mpsc::channel();
             let task = {
                 let hardware = hardware.clone();
-                move || sent.send(affinity(&hardware)).unwrap()
+                move || {
+                    assert!(INITIALIZED.get());
+                    sent.send(affinity(&hardware)).unwrap();
+                }
             };
             match variant {
                 0 => block_on(scheduler.spawn(task)).unwrap(),
@@ -198,6 +210,7 @@ fn assert_expansion(kind: PolicyKind) {
                 pool.inner.worker_handles.lock().unwrap().len(),
                 expected_count
             );
+            assert_eq!(initialized.load(Ordering::Relaxed), expected_count);
         }
         assert_eq!(
             pool.inner
@@ -256,14 +269,21 @@ fn eager_setters_replace_configuration_without_starting_workers() {
     });
 }
 
-/// Identical numeric topology must not make different hardware instances interchangeable.
+/// A valid prefix cannot start workers before a foreign entry fails complete-set validation.
 #[test]
 fn eager_selection_rejects_foreign_hardware_before_initialization() {
+    let foreign = hardware();
+    let hardware = hardware();
+    let processors = hardware.all_processors();
+    let mut selection = processors.processors().clone();
+    // The foreign entry repeats a valid ID, so deduplication must not hide its provenance.
+    selection.push(foreign.all_processors().processors().first().clone());
+    let processors = processors.to_builder().take_exact(selection);
     // Rejection must precede startup; this counter observes calls rather than publishing readiness.
     let initialized = Arc::new(AtomicUsize::new(0));
     let builder = Pool::builder()
-        .hardware(hardware())
-        .eager(hardware().all_processors())
+        .hardware(hardware)
+        .eager(processors)
         .thread_init({
             let initialized = Arc::clone(&initialized);
             move || {
@@ -272,6 +292,33 @@ fn eager_selection_rejects_foreign_hardware_before_initialization() {
         });
     assert_panics(|| builder.build());
     assert_eq!(initialized.load(Ordering::Relaxed), 0);
+}
+
+/// An unused eager pool needs neither an initializer nor a task to shut down all its workers.
+#[test]
+fn eager_unused_pool_without_initializer_joins_workers() {
+    with_watchdog(|| {
+        let hardware = hardware();
+        // Idle siblings exercise cleanup independently of task execution and initializer callbacks.
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(WorkerPolicy::per_system(nz!(2)))
+            .eager(hardware.all_processors())
+            .build();
+        let inner = Arc::clone(&pool.inner);
+        let scheduler = pool.scheduler();
+        assert_eq!(inner.worker_handles.lock().unwrap().len(), 2);
+        let state = inner.registry.get_or_init(GroupId::System);
+        assert_eq!(state.get_tasks_spawned(), 0);
+        assert!(state.task_pool.lock().unwrap().is_empty());
+
+        drop(pool);
+
+        assert!(inner.worker_handles.lock().unwrap().is_empty());
+        assert!(state.shutdown_flag.load(Ordering::Acquire));
+        assert!(!inner.poisoned.load(Ordering::Acquire));
+        assert_retained_scheduler(&scheduler);
+    });
 }
 
 /// Construction cannot serialize callbacks to completion, even across destination boundaries.
