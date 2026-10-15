@@ -114,12 +114,14 @@ and joins registered workers even though workers retain shared references to the
 
 Eager preparation validates every processor against the hardware's eligible set using full
 processor equality, including hardware-instance identity. It partitions the selection into
-singletons, distinct regions or one system mask according to the policy. Group masks and shared
+singletons for distinct processors, distinct regions or one system mask according to the policy.
+Repeated entries never create additional worker groups. Group masks and shared
 membership are seeded before spawning; no synthetic task is allocated, counted or executed.
 
 Lazy and eager startup share worker entry, handle registration and affinity acknowledgment.
 The same buffered channel subsequently acknowledges successful callback completion. Lazy callers
-discard the completion receivers; eager construction starts all selected groups, releases the
+discard each completion receiver immediately; eager construction collects them directly into its
+construction-wide list without per-group buffers. It starts all selected groups, releases the
 registration lock and then waits for completion. Worker callbacks can overlap across groups.
 Receipt publishes initialization effects to the constructing thread. A callback panic disconnects
 its completion sender and remains owned by the registered thread handle; construction retrieves

@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashSet};
+use std::num::NonZero;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, OnceLock, mpsc};
 use std::{iter, thread};
@@ -34,10 +35,10 @@ fn eager_system_workers_are_ready_without_submissions() {
     assert_ready(PolicyKind::System);
 }
 
-/// Includes idle siblings, sparse regions and a strict subset of one region.
+/// Includes duplicate entries, idle siblings, sparse regions and a strict subset of one region.
 fn assert_ready(kind: PolicyKind) {
     // Siblings expose partial initialization; selected CPUs exceed the fake hardware's quota.
-    const WORKERS: u32 = 2;
+    const WORKERS: NonZero<u32> = nz!(2);
     with_watchdog(move || {
         let hardware = regional_hardware();
         pin(&hardware, 1);
@@ -45,6 +46,10 @@ fn assert_ready(kind: PolicyKind) {
             .all_processors()
             .filter(|processor| [0, 3, 8].contains(&processor.id()))
             .unwrap();
+        // take_exact preserves repeated entries, but they still identify the same destinations.
+        let mut selection = processors.processors().clone();
+        selection.push(selection.first().clone());
+        let processors = processors.to_builder().take_exact(selection);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let pool = Pool::builder()
             .name("prestarted")
@@ -77,7 +82,7 @@ fn assert_ready(kind: PolicyKind) {
         let group_count = expected_masks.len();
         let mut expected: Vec<_> = expected_masks
             .into_iter()
-            .flat_map(|mask| iter::repeat_n(mask, WORKERS as usize))
+            .flat_map(|mask| iter::repeat_n(mask, WORKERS.get() as usize))
             .collect();
         expected.sort();
         let observations = observations.lock().unwrap().clone();
@@ -152,7 +157,7 @@ fn assert_expansion(kind: PolicyKind) {
             .unwrap();
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(policy(kind, 1))
+            .worker_policy(policy(kind, nz!(1)))
             .eager(processors)
             .build();
         let scheduler = pool.scheduler();
@@ -210,6 +215,7 @@ fn assert_expansion(kind: PolicyKind) {
 fn eager_setters_replace_configuration_without_starting_workers() {
     with_watchdog(|| {
         let hardware = hardware();
+        // Setters start no workers; build's completion handshake publishes callback increments.
         let initialized = Arc::new(AtomicUsize::new(0));
         let builder = Pool::builder()
             .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
@@ -253,6 +259,7 @@ fn eager_setters_replace_configuration_without_starting_workers() {
 /// Identical numeric topology must not make different hardware instances interchangeable.
 #[test]
 fn eager_selection_rejects_foreign_hardware_before_initialization() {
+    // Rejection must precede startup; this counter observes calls rather than publishing readiness.
     let initialized = Arc::new(AtomicUsize::new(0));
     let builder = Pool::builder()
         .hardware(hardware())
@@ -340,6 +347,7 @@ fn eager_idle_workers_apply_the_initial_mask_once() {
             .hardware(hardware.clone())
             .worker_policy(WorkerPolicy::per_system(nz!(1)))
             .build();
+        // Pool destruction joins every worker before the relaxed observation of pin calls.
         let pins = Arc::new(AtomicUsize::new(0));
         pool.inner
             .start_eager_with(hardware.all_processors(), thread::Builder::spawn, {
@@ -356,10 +364,10 @@ fn eager_idle_workers_apply_the_initial_mask_once() {
 }
 
 /// Keeps each policy's concurrency explicit without coupling fixtures to the default count.
-fn policy(kind: PolicyKind, count: u32) -> WorkerPolicy {
+fn policy(kind: PolicyKind, count: NonZero<u32>) -> WorkerPolicy {
     match kind {
-        PolicyKind::Processor => WorkerPolicy::per_processor(count.try_into().unwrap()),
-        PolicyKind::MemoryRegion => WorkerPolicy::per_memory_region(count.try_into().unwrap()),
-        PolicyKind::System => WorkerPolicy::per_system(count.try_into().unwrap()),
+        PolicyKind::Processor => WorkerPolicy::per_processor(count),
+        PolicyKind::MemoryRegion => WorkerPolicy::per_memory_region(count),
+        PolicyKind::System => WorkerPolicy::per_system(count),
     }
 }

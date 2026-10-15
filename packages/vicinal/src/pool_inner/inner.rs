@@ -4,7 +4,8 @@ use std::any::{Any, type_name};
 use std::collections::VecDeque;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle as ThreadJoinHandle, Result as ThreadResult};
 use std::{fmt, io, mem};
 
@@ -77,14 +78,14 @@ impl PoolInner {
 
     /// Publishes the affinity-startup outcome while the caller serializes worker registration.
     #[cfg_attr(test, mutants::skip)] // Missing startup publication can start duplicate workers.
-    pub(crate) fn start_group<R>(state: &WorkerGroup, start: impl FnOnce() -> R) -> R {
+    pub(crate) fn start_group(state: &WorkerGroup, start: impl FnOnce()) {
         let result = panic::catch_unwind(AssertUnwindSafe(start));
         state
             .startup
             .set(if result.is_ok() { Ok(()) } else { Err(()) })
             .expect("startup is published once under the worker handle lock");
 
-        result.unwrap_or_else(|payload| panic::resume_unwind(payload))
+        result.unwrap_or_else(|payload| panic::resume_unwind(payload));
     }
 
     /// Pins every new worker to the first submitter before admitting any work.
@@ -110,13 +111,13 @@ impl PoolInner {
         let affinity = Arc::new(affinity);
 
         // Lazy admission waits only for affinity; completion receivers are needed by eager builds.
-        _ = self.start_workers_on(destination, &affinity, handles, spawn, pin);
+        self.start_workers_on(destination, &affinity, handles, spawn, pin, drop);
     }
 
     /// Shares worker entry and affinity readiness between lazy and eager group startup.
     ///
-    /// Each returned receiver acknowledges initializer completion after its affinity message
-    /// has been consumed here. Disconnection leaves the worker's panic in its registered handle.
+    /// Passes each completion receiver to the caller after consuming its affinity message.
+    /// Disconnection leaves the worker's panic in its registered handle.
     #[cfg_attr(test, mutants::skip)] // Broken acknowledgments or registration can strand workers.
     pub(crate) fn start_workers_on(
         self: &Arc<Self>,
@@ -125,7 +126,8 @@ impl PoolInner {
         handles: &mut Vec<ThreadJoinHandle<()>>,
         mut spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
-    ) -> Vec<mpsc::Receiver<ThreadResult<()>>> {
+        mut completion: impl FnMut(Receiver<ThreadResult<()>>),
+    ) {
         // Startup owns registration, so this revision describes the supplied initial mask.
         // Acquiring pairs with eager snapshot publication before threads are spawned.
         let revision = self
@@ -133,12 +135,10 @@ impl PoolInner {
             .get_or_init(destination)
             .affinity_revision
             .load(Ordering::Acquire);
-        let mut initialized = Vec::new();
-
         for worker_index in 0..self.policy.count().get() {
             // The buffer permits initialization to finish without waiting for the constructor.
             // Affinity and initialization share the channel, in that order.
-            let (ready, receiver) = mpsc::sync_channel(1);
+            let (ready, receiver) = sync_channel(1);
             let entry: WorkerEntry = Box::new({
                 let inner = Arc::clone(self);
                 let affinity = Arc::clone(affinity);
@@ -165,10 +165,8 @@ impl PoolInner {
                 Ok(Err(payload)) => panic::resume_unwind(payload),
                 Err(error) => panic!("worker in {destination:?} exited before readiness: {error}"),
             }
-            initialized.push(receiver);
+            completion(receiver);
         }
-
-        initialized
     }
 
     /// Contains initialization and the task loop within the worker's infrastructure boundary.
@@ -179,7 +177,7 @@ impl PoolInner {
         destination: GroupId,
         worker_index: u32,
         revision: usize,
-        ready: mpsc::SyncSender<ThreadResult<()>>,
+        ready: SyncSender<ThreadResult<()>>,
         pin: impl Fn(&ProcessorSet),
     ) {
         let result = panic::catch_unwind(AssertUnwindSafe(|| {

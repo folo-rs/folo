@@ -1,10 +1,11 @@
 //! Construction-time selection, affinity seeding and full worker readiness.
 
 use std::collections::BTreeSet;
+use std::io;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
-use std::{io, panic};
 
 use many_cpus::{Processor, ProcessorSet, SystemHardware};
 
@@ -30,11 +31,11 @@ impl PoolInner {
         mut spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
     ) {
-        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let groups = eager_groups(&self.hardware, self.policy.kind(), processors);
             let mut initialized = Vec::new();
             let mut handles = self.worker_handles.lock().expect(NEVER_POISONED);
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 // Publish complete masks before any initializer runs. The pool is not exposed
                 // yet, so there is no task admission to coordinate with these initial members.
                 // Ref: docs/implementation.md, "Eager construction".
@@ -52,15 +53,16 @@ impl PoolInner {
                 }
                 for (destination, affinity) in groups {
                     let state = self.registry.get_or_init(destination);
-                    initialized.extend(Self::start_group(state, || {
+                    Self::start_group(state, || {
                         self.start_workers_on(
                             destination,
                             &affinity,
                             &mut handles,
                             &mut spawn,
                             pin.clone(),
-                        )
-                    }));
+                            |receiver| initialized.push(receiver),
+                        );
+                    });
                 }
             }));
             if result.is_err() {
@@ -111,16 +113,21 @@ fn eager_groups(
     );
 
     match policy {
-        PolicyKind::Processor => processors
-            .decompose()
-            .into_iter()
-            .map(|set| {
-                (
-                    GroupId::Processor(set.processors().first().id()),
-                    Arc::new(set),
-                )
-            })
-            .collect(),
+        PolicyKind::Processor => {
+            // Repeated processor entries still denote one destination and one startup outcome.
+            let mut destinations = BTreeSet::new();
+            processors
+                .decompose()
+                .into_iter()
+                .filter(|set| destinations.insert(set.processors().first().id()))
+                .map(|set| {
+                    (
+                        GroupId::Processor(set.processors().first().id()),
+                        Arc::new(set),
+                    )
+                })
+                .collect()
+        }
         PolicyKind::MemoryRegion => processors
             .iter()
             .map(Processor::memory_region_id)

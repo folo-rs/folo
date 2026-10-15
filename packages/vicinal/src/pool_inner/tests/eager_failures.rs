@@ -52,6 +52,7 @@ fn eager_partial_affinity_failure_joins_workers() {
             .hardware(hardware())
             .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
             .build();
+        // Only the atomic invocation index selects the failing pin; it publishes no other state.
         let pins = Arc::new(AtomicUsize::new(0));
         let payload = failed_construction(pool, 2, thread::Builder::spawn, move |processors| {
             if pins.fetch_add(1, Ordering::Relaxed) == 1 {
@@ -147,6 +148,7 @@ fn failed_construction(
     let inner = Arc::clone(&pool.inner);
     let scheduler = pool.scheduler();
     let processors = inner.hardware.all_processors();
+    // Owner unwinding joins workers after their exit guards increment, publishing the count.
     let exited = Arc::new(AtomicUsize::new(0));
     let payload = panic::catch_unwind(AssertUnwindSafe({
         let exited = Arc::clone(&exited);

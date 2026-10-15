@@ -230,9 +230,8 @@ impl PoolBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if an eager selection does not belong to the configured hardware, or eager worker
-    /// creation, affinity setup or initialization fails. Started workers are joined before the
-    /// panic propagates.
+    /// Panics if eager worker creation, affinity setup or initialization fails.
+    /// Started workers are joined before the panic propagates.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Omitting eager startup can strand initializer coordination.
     pub fn build(self) -> Pool {
