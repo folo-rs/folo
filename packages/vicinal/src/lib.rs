@@ -12,7 +12,8 @@
 //! the calling thread's current logical processor; this is the task's submitting processor.
 //! Tasks execute synchronously on that processor by default.
 //! [`WorkerPolicy`] can instead share workers across the caller's memory region or across
-//! the system. Each policy starts its fixed worker count lazily on first use of a destination.
+//! the system. Each policy starts its fixed worker count on first use of a destination by default.
+//! [`PoolBuilder::eager`] initializes selected destinations during construction instead.
 //!
 //! # Quick start
 //!
@@ -45,26 +46,41 @@
 //! Regions are identified by [`many_cpus::MemoryRegionId`], not by a task's allocations or data.
 //!
 //! With a regional [`WorkerPolicy`], submissions from processors in the same region share one
-//! configured worker count. The first submission activates those workers; further submissions
-//! from that region do not add workers. Each pool accounts for its regions independently,
-//! and scheduler clones share their pool's workers.
+//! configured worker count. Eager construction or the first submission activates those workers;
+//! further submissions from that region do not add workers. Each pool accounts for its regions
+//! independently, and scheduler clones share their pool's workers.
 //!
 //! With [`WorkerPolicy::per_system`], all submitting processors share one configured
 //! worker count per pool, regardless of memory region. Workers may move across regions but
-//! remain limited to processors that have submitted accepted work to that pool.
+//! remain limited to eagerly selected processors and those that have submitted accepted work.
 //!
-//! Worker placement is tracked separately from concurrency. Workers use only processors that have
-//! submitted accepted work to that pool and destination. This set starts with the first submitting
-//! processor and grows when another processor in the destination submits work. Worker concurrency
+//! Worker placement is tracked separately from concurrency. The permitted set starts with the eager
+//! selection or the first submitting processor and grows when another processor in the destination
+//! submits accepted work. Worker concurrency
 //! is configured explicitly, rather than calculated from this set or from a processor-time quota.
 //! This controls where tasks run, not where their memory is allocated.
+//!
+//! # Eager initialization
+//!
+//! [`PoolBuilder::eager`] takes ownership of a [`many_cpus::ProcessorSet`] from the pool's hardware
+//! instance. Construction waits for the configured workers in each selected destination to apply
+//! affinity and complete [`PoolBuilder::thread_init`]. Regional workers use only the selected
+//! processors in their region; system workers use the entire selection.
+//!
+//! Use the same processor set for eager selection and the application's submitting threads.
+//! The selection is not a permanent limit: submissions from other eligible processors still
+//! start missing destinations lazily or expand shared-worker affinity.
+//!
+//! Initializers may overlap and must not depend on construction returning, including to publish
+//! the pool's scheduler. Eager construction leaves the calling thread's affinity unchanged.
+//! It prepares workers, not task-specific allocations or caches.
 //!
 //! # Tradeoffs
 //!
 //! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
 //!   short-lived so that the pool is often idle.
-//! - Shared workers use only processors that submitted accepted work to their pool and destination.
-//!   Submitting tasks from a stable, quota-appropriate processor set keeps workers within that set.
+//! - Shared workers use eagerly selected processors and accepted submitters in their destination.
+//!   Using one stable, quota-appropriate set for selection and submissions keeps workers in it.
 //!   Membership grows if new processors submit work and never shrinks. Quotas do not adjust counts.
 //!   Fractional quotas and other process work can still cause throttling: operating-system
 //!   delays after the process exceeds its processor-time allowance. See

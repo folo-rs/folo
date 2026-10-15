@@ -13,91 +13,107 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{NoopTask, OnDrop, PanickingPayload, affinity, hardware, probe};
-use crate::{GroupId, Pool, SubmissionTarget, WorkerPolicy, init_task};
+use crate::{GroupId, PolicyKind, Pool, SubmissionTarget, WorkerPolicy, init_task};
 
-/// Simultaneous first submitters block every worker so exact startup capacity is observable.
+/// Processor-local startup must serialize concurrent first submitters.
 #[test]
-fn concurrent_first_submissions_start_exact_configured_count() {
+fn concurrent_processor_submissions_start_exact_configured_count() {
+    assert_concurrent_startup(PolicyKind::Processor);
+}
+
+/// A shared region starts one worker group despite concurrent first submitters.
+#[test]
+fn concurrent_regional_submissions_start_exact_configured_count() {
+    assert_concurrent_startup(PolicyKind::MemoryRegion);
+}
+
+/// System-wide startup must not multiply capacity for concurrent first submitters.
+#[test]
+fn concurrent_system_submissions_start_exact_configured_count() {
+    assert_concurrent_startup(PolicyKind::System);
+}
+
+/// Each policy gets a bounded Miri case with every worker occupied to expose exact capacity.
+fn assert_concurrent_startup(kind: PolicyKind) {
     // More workers than processors proves that intentional oversubscription is retained.
     const WORKERS: u32 = 2;
 
-    with_watchdog(|| {
-        for (policy, destination) in [
-            (WorkerPolicy::per_processor(nz!(WORKERS)), "p0"),
-            (WorkerPolicy::per_memory_region(nz!(WORKERS)), "r0"),
-            (WorkerPolicy::per_system(nz!(WORKERS)), "s"),
-        ] {
-            let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-            let pool = Pool::builder()
-                .name("workers")
-                .hardware(hardware.clone())
-                .worker_policy(policy)
-                .build();
+    with_watchdog(move || {
+        let (policy, destination) = match kind {
+            PolicyKind::Processor => (WorkerPolicy::per_processor(nz!(WORKERS)), "p0"),
+            PolicyKind::MemoryRegion => (WorkerPolicy::per_memory_region(nz!(WORKERS)), "r0"),
+            PolicyKind::System => (WorkerPolicy::per_system(nz!(WORKERS)), "s"),
+        };
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+        let pool = Pool::builder()
+            .name("workers")
+            .hardware(hardware.clone())
+            .worker_policy(policy)
+            .build();
 
-            // Validate capacity before waiting for a task on every worker.
-            assert_eq!(pool.inner.policy.count().get(), WORKERS);
-            let scheduler = pool.scheduler();
-            let start = Arc::new(Barrier::new(WORKERS as usize));
-            let (entered, arrivals) = mpsc::channel();
-            let mut submitters = Vec::new();
-            let mut releases = Vec::new();
+        // Validate capacity before waiting for a task on every worker.
+        assert_eq!(pool.inner.policy.count().get(), WORKERS);
+        let scheduler = pool.scheduler();
+        let start = Arc::new(Barrier::new(WORKERS as usize));
+        let (entered, arrivals) = mpsc::channel();
+        let mut submitters = Vec::new();
+        let mut releases = Vec::new();
 
-            for _ in 0..WORKERS {
-                let (release, wait) = mpsc::channel();
-                releases.push(release);
-                submitters.push(thread::spawn({
-                    let start = Arc::clone(&start);
-                    let scheduler = scheduler.clone();
-                    let entered = entered.clone();
-                    let hardware = hardware.clone();
-                    move || {
-                        start.wait();
+        for _ in 0..WORKERS {
+            let (release, wait) = mpsc::channel();
+            releases.push(release);
+            submitters.push(thread::spawn({
+                let start = Arc::clone(&start);
+                let scheduler = scheduler.clone();
+                let entered = entered.clone();
+                let hardware = hardware.clone();
+                move || {
+                    start.wait();
 
-                        scheduler.spawn(move || {
-                            entered
-                                .send((
-                                    thread::current().name().unwrap().to_owned(),
-                                    affinity(&hardware),
-                                ))
-                                .unwrap();
-                            wait.recv().unwrap();
-                        })
-                    }
-                }));
-            }
-
-            drop(entered);
-            let mut names = BTreeSet::new();
-            for _ in 0..WORKERS {
-                let (name, mask) = arrivals.recv().unwrap();
-                assert_eq!(mask, BTreeSet::from([0]));
-                assert!(names.insert(name));
-            }
-
-            assert_eq!(
-                names,
-                (0..WORKERS)
-                    .map(|i| format!("workers-{destination}-{i}"))
-                    .collect()
-            );
-            assert_eq!(
-                pool.inner.worker_handles.lock().unwrap().len(),
-                WORKERS as usize
-            );
-
-            for release in releases {
-                release.send(()).unwrap();
-            }
-            for submitter in submitters {
-                block_on(submitter.join().unwrap()).unwrap();
-            }
-
-            block_on(scheduler.spawn(|| {})).unwrap();
-            assert_eq!(
-                pool.inner.worker_handles.lock().unwrap().len(),
-                WORKERS as usize
-            );
+                    scheduler.spawn(move || {
+                        entered
+                            .send((
+                                thread::current().name().unwrap().to_owned(),
+                                affinity(&hardware),
+                            ))
+                            .unwrap();
+                        wait.recv().unwrap();
+                    })
+                }
+            }));
         }
+
+        drop(entered);
+        let mut names = BTreeSet::new();
+        for _ in 0..WORKERS {
+            let (name, mask) = arrivals.recv().unwrap();
+            assert_eq!(mask, BTreeSet::from([0]));
+            assert!(names.insert(name));
+        }
+
+        assert_eq!(
+            names,
+            (0..WORKERS)
+                .map(|i| format!("workers-{destination}-{i}"))
+                .collect()
+        );
+        assert_eq!(
+            pool.inner.worker_handles.lock().unwrap().len(),
+            WORKERS as usize
+        );
+
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for submitter in submitters {
+            block_on(submitter.join().unwrap()).unwrap();
+        }
+
+        block_on(scheduler.spawn(|| {})).unwrap();
+        assert_eq!(
+            pool.inner.worker_handles.lock().unwrap().len(),
+            WORKERS as usize
+        );
     });
 }
 
