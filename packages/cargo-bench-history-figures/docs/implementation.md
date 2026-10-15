@@ -6,8 +6,10 @@ and preview for the `cargo-bench-history` user guide. The owning application's
 
 Statistical fixtures and production projections feed generated content; explanatory
 prose stays in the book. Worked reports use detector-owned series with long qualified
-names and large counts; the core renderer owns their layout. Workflow cards use the
-companion's offline JSON projection with an in-memory evidence reader. Illustrative invocation facts never
+names and large counts; the core renderer owns their layout. The book preserves the shared
+branch sketch's scale and width, allowing code-block scrolling without document overflow.
+Workflow cards use the companion's offline JSON projection with an in-memory evidence reader.
+Illustrative invocation facts never
 claim an actual benchmark execution, repository topology or GitHub publication.
 Analyzed history examples align their latest measurements to one shared context;
 shorter histories start later. Deliberate ghosts stay outside detection and enter the census separately.
