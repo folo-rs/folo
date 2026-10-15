@@ -1,50 +1,54 @@
-//! A compact positional comparison, without a fabricated zero origin or numeric axis.
+//! A full-line, zero-anchored comparison of the base range and current observation.
 
 /// Draws the observed base range and current measurement on one shared linear span.
 pub(crate) fn range_sketch(minimum: f64, maximum: f64, current: f64) -> String {
-    // Includes both labels within a mobile code block's interior, after page/block gutters.
-    const COLUMNS: usize = 11;
+    // Fill the desktop book's code area after its padding, including both delimiters and
+    // a coincident zero/current mark. Narrow readers scroll instead of losing resolution.
+    const COLUMNS: usize = 83;
     const LAST: usize = COLUMNS - 1;
-    let low = minimum.min(current);
-    let high = maximum.max(current);
+    let low = minimum.min(current).min(0.0);
+    let high = maximum.max(current).max(0.0);
+    if high <= low {
+        // Every value is zero: a long axis would invent a nonzero span.
+        return "0[*]".to_owned();
+    }
     // Normalize before subtracting so large finite values cannot overflow the span.
     let magnitude = low.abs().max(high.abs());
     let position = |value: f64| {
-        if high <= low {
-            return LAST.div_ceil(2);
-        }
         let fraction = (value / magnitude - low / magnitude) / (high / magnitude - low / magnitude);
         column(fraction, LAST)
     };
     let start = position(minimum);
     let end = position(maximum);
     let point = position(current);
-    let mut cells = ['-'; COLUMNS];
-    for (index, cell) in cells.iter_mut().enumerate() {
-        if index >= start && index <= end {
-            *cell = if start == end {
-                '|'
-            } else if index == start {
-                '['
-            } else if index == end {
-                ']'
-            } else {
+    let zero = position(0.0);
+    let mut sketch = String::new();
+    for index in 0..COLUMNS {
+        if index == zero {
+            sketch.push('0');
+        }
+        if index == start {
+            sketch.push('[');
+        }
+        // Delimiters enclose scaled cells, rather than replacing an endpoint. Keep both
+        // zero and the observation visible when they coincide at this display resolution.
+        if index == point {
+            sketch.push('*');
+        } else if index != zero {
+            sketch.push(if index >= start && index <= end {
                 '='
-            };
+            } else {
+                '-'
+            });
+        }
+        if index == end {
+            sketch.push(']');
         }
     }
-    if let Some(cell) = cells.get_mut(point) {
-        *cell = '*';
-    }
-    let sketch: String = cells.into_iter().collect();
-    if current < minimum {
-        format!("current {sketch} base")
-    } else {
-        format!("base {sketch} current")
-    }
+    sketch
 }
 
-/// Rounds within the display grid; tiny ranges can honestly collapse to a single mark.
+/// Rounds within the display grid; tiny ranges can honestly collapse to a single cell.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -62,41 +66,90 @@ mod tests {
     use super::*;
 
     #[test]
-    fn range_and_measurement_keep_their_relative_positions_in_both_directions() {
+    fn nonnegative_comparisons_start_at_zero_and_use_the_full_line() {
+        let regression = range_sketch(100.0, 110.0, 120.0);
         assert_eq!(
-            range_sketch(100.0, 110.0, 120.0),
-            "base [====]----* current"
+            regression,
+            format!("0{}[{}]{}*", "-".repeat(67), "=".repeat(8), "-".repeat(6))
         );
-        assert_eq!(range_sketch(100.0, 110.0, 90.0), "current *----[====] base");
+        let improvement = range_sketch(100.0, 120.0, 90.0);
         assert_eq!(
-            range_sketch(100.0, 100.0, 120.0),
-            "base |---------* current"
+            improvement,
+            format!("0{}*{}[{}]", "-".repeat(61), "-".repeat(5), "=".repeat(15))
         );
-        assert_eq!(range_sketch(100.0, 100.0, 90.0), "current *---------| base");
+        assert_eq!(regression.len(), 85);
+        assert_eq!(improvement.len(), 85);
+        assert_eq!(column(0.25, 82), 21);
     }
 
     #[test]
-    fn scale_translation_and_extreme_values_do_not_create_a_zero_origin() {
+    fn scaling_preserves_positions_but_translation_keeps_the_real_zero_anchor() {
         let ordinary = range_sketch(100.0, 110.0, 120.0);
         assert_eq!(range_sketch(1000.0, 1100.0, 1200.0), ordinary);
-        assert_eq!(range_sketch(-20.0, -10.0, 0.0), ordinary);
         assert_eq!(range_sketch(1e300, 1.1e300, 1.2e300), ordinary);
         assert_eq!(range_sketch(1e-300, 1.1e-300, 1.2e-300), ordinary);
-        assert_eq!(range_sketch(1.0, 2.0, f64::MAX), "base |---------* current");
-        assert_eq!(range_sketch(0.0, 0.0, 0.0), "base -----*----- current");
-        assert_eq!(range_sketch(-0.0, 0.0, 0.0), range_sketch(0.0, 0.0, 0.0));
-        assert_eq!(column(0.25, 22), 6);
+        let translated = range_sketch(0.0, 10.0, 20.0);
+        assert_ne!(translated, ordinary);
+        assert!(translated.starts_with("0["));
+        assert!(translated.ends_with('*'));
     }
 
     #[test]
-    fn labels_and_grid_fit_the_mobile_code_interior() {
-        for (minimum, maximum, current) in [
-            (96.0, 104.0, 126.0),
-            (96.0, 104.0, 80.0),
-            (100.0, 100.0, 126.0),
-        ] {
-            // Bounded independently of page width; the preview verifies actual CSS gutters.
-            assert!(range_sketch(minimum, maximum, current).len() <= 24);
-        }
+    fn zero_flat_and_coincident_values_keep_every_mark_without_inventing_a_span() {
+        assert_eq!(range_sketch(0.0, 0.0, 0.0), "0[*]");
+        assert_eq!(range_sketch(-0.0, 0.0, -0.0), "0[*]");
+        assert_eq!(
+            range_sketch(0.0, 0.0, 120.0),
+            format!("0[]{}*", "-".repeat(81))
+        );
+        assert_eq!(
+            range_sketch(120.0, 120.0, 0.0),
+            format!("0*{}[=]", "-".repeat(81))
+        );
+        assert_eq!(
+            range_sketch(60.0, 60.0, 120.0),
+            format!("0{}[=]{}*", "-".repeat(40), "-".repeat(40))
+        );
+        assert_eq!(
+            range_sketch(120.0, 120.0, 120.0),
+            format!("0{}[*]", "-".repeat(81))
+        );
+    }
+
+    #[test]
+    fn negative_values_remain_left_of_zero_on_the_same_increasing_scale() {
+        // Stored and fitted measurements admit finite negatives, so do not clip their range.
+        assert_eq!(
+            range_sketch(-120.0, -100.0, -90.0),
+            format!("[{}]{}*{}0", "=".repeat(15), "-".repeat(6), "-".repeat(60))
+        );
+        assert_eq!(
+            range_sketch(-110.0, -100.0, -120.0),
+            format!("*{}[{}]{}0", "-".repeat(6), "=".repeat(8), "-".repeat(67))
+        );
+        assert_eq!(
+            range_sketch(-60.0, 60.0, 120.0),
+            format!("[{}0{}]{}*", "=".repeat(27), "=".repeat(28), "-".repeat(26))
+        );
+    }
+
+    #[test]
+    fn extreme_finite_values_and_rounding_collisions_never_overflow_or_hide_zero() {
+        let extreme = range_sketch(-f64::MAX, f64::MAX, 0.0);
+        assert_eq!(extreme, format!("[{}0*{}]", "=".repeat(41), "=".repeat(41)));
+        assert_eq!(extreme.len(), 86);
+        assert_eq!(
+            range_sketch(1.0, 2.0, f64::MAX),
+            format!("0[]{}*", "-".repeat(81))
+        );
+        let tiny = f64::from_bits(1);
+        assert_eq!(
+            range_sketch(tiny, tiny * 2.0, tiny * 4.0),
+            format!("0{}[{}]{}*", "-".repeat(20), "=".repeat(21), "-".repeat(40))
+        );
+        let rounded = range_sketch(100.0, 120.0, 120.01);
+        assert!(rounded.starts_with('0'));
+        assert!(rounded.ends_with("*]"));
+        assert_eq!(rounded.matches('*').count(), 1);
     }
 }

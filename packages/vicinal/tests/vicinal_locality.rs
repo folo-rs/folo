@@ -4,6 +4,7 @@
 )]
 
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 use futures::executor::block_on;
 use many_cpus::{Processor, SystemHardware};
@@ -51,6 +52,67 @@ fn regional_tasks_use_only_submitting_processors() {
 #[test]
 fn system_tasks_use_only_submitting_processors() {
     assert_submitting_processor_affinity(WorkerPolicy::per_system(nz!(2_u32)), false);
+}
+
+/// Eager initializers observe the exact selected regional mask through the real OS adapter.
+#[test]
+fn eager_regional_initializers_have_selected_affinity() {
+    assert_eager_affinity(WorkerPolicy::per_memory_region(nz!(1)), true);
+}
+
+/// System startup applies its full selection before invoking any user initialization.
+#[test]
+fn eager_system_initializers_have_selected_affinity() {
+    assert_eager_affinity(WorkerPolicy::per_system(nz!(1)), false);
+}
+
+/// Bounded native coverage complements simulated sparse/multi-region unit tests.
+fn assert_eager_affinity(policy: WorkerPolicy, regional: bool) {
+    with_watchdog(move || {
+        let hardware = SystemHardware::current();
+        // A small selection tests multi-CPU affinity without creating machine-sized pools.
+        let processors = hardware
+            .processors()
+            .take(nz!(2))
+            .unwrap_or_else(|| hardware.processors());
+        let expected: BTreeSet<_> = processors.iter().map(Processor::id).collect();
+        let regions: BTreeSet<_> = processors.iter().map(Processor::memory_region_id).collect();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let pool = Pool::builder()
+            .worker_policy(policy)
+            .eager(processors.clone())
+            .thread_init({
+                let observations = Arc::clone(&observations);
+                move || {
+                    let permitted = hardware
+                        .all_processors()
+                        .to_builder()
+                        .where_available_for_current_thread()
+                        .take_all()
+                        .unwrap();
+                    observations.lock().unwrap().push((
+                        hardware.current_memory_region_id(),
+                        permitted.iter().map(Processor::id).collect::<BTreeSet<_>>(),
+                    ));
+                }
+            })
+            .build();
+        let observations = observations.lock().unwrap();
+        assert_eq!(observations.len(), if regional { regions.len() } else { 1 });
+        for (region, actual) in observations.iter() {
+            let expected = if regional {
+                processors
+                    .iter()
+                    .filter(|processor| processor.memory_region_id() == *region)
+                    .map(Processor::id)
+                    .collect()
+            } else {
+                expected.clone()
+            };
+            assert_eq!(*actual, expected);
+        }
+        drop(pool);
+    });
 }
 
 /// Verifies actual OS affinity, including cross-region masks on multi-region machines.

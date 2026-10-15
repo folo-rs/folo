@@ -36,9 +36,12 @@ variables, discover repository remotes or acquire data. Exact-current provenance
 stored inspection rather than silently claiming the two sources are interchangeable.
 
 Condensed output budgets whole vertical finding blocks, reserving space for the GitHub envelope.
-Its range sketch normalizes finite quantities before mapping them to a small fixed-width linear
-grid. The range and observation use distinct marks and direct labels, without a zero origin.
-Rounding can collapse a visually tiny range to one mark. Per-finding numeric highlights stay
+Its range sketch includes actual zero in the shared linear span and normalizes finite quantities
+before mapping them to a full-line grid. Nonnegative observations start at zero; finite negatives
+extend to its left rather than being clipped. The zero label, bracketed base range and current
+marker remain visible even when they share a display cell. An all-zero comparison has no span
+to draw. Narrow readers scroll the code block rather than the page.
+Rounding can collapse a visually tiny range to one cell. Per-finding numeric highlights stay
 limited to current value/excess or before/after representatives/change.
 
 Aggregate material qualifications cover every group before truncation. Detailed comparison

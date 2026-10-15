@@ -137,7 +137,7 @@
 //! JSON retains stable metric identifiers, original numeric units and full precision.
 //!
 //! `--markdown-summary <path>` writes compact finding blocks with wrapping benchmark names.
-//! Branch findings show a base-range sketch, the current value and percentage excess;
+//! Branch findings show a zero-anchored base-range sketch, the current value and percentage excess;
 //! history findings show representative levels and change. Material coverage and freshness
 //! qualifications remain visible. Detailed evidence and inspection commands stay in full reports.
 //! Use full Markdown or JSON for the complete result, not the condensed summary.

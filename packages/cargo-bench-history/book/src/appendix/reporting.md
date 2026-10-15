@@ -291,8 +291,9 @@ the range measurements; set-level `branch_comparison` contains the historical co
 ## Compact findings
 
 Each summary finding has its own wrapping heading. Branch findings highlight the current
-measurement and percentage **excess**; history findings show representative levels and
-percentage change.
+measurement and percentage **excess**. The bracketed base range and current marker `*`
+share a linear scale that includes `0`. The full-line sketch scrolls inside its code block
+on narrow views. History findings show representative levels and percentage change.
 
 Read the full report for the range endpoints, time-series plots, detailed historical comparisons,
 machine identities and inspection commands. These details do not repeat inside the summary.

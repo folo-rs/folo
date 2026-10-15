@@ -2150,8 +2150,15 @@ mod tests {
             .unwrap()
             .0;
         assert_eq!(sketch.lines().count(), 1);
-        assert!(sketch.len() < 40);
-        assert!(!sketch.chars().any(|ch| ch.is_ascii_digit()));
+        assert_eq!(sketch.len(), 85);
+        assert!(sketch.starts_with('0'));
+        assert_eq!(
+            sketch
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>(),
+            "0"
+        );
         let mut history = findings[0].clone();
         history.branch = None;
         let block = summary_finding(&input, &history);
