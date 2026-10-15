@@ -26,7 +26,7 @@ flowchart TD
 The workflow card describes execution and publication separately from analysis.
 In the report, a **series** means one benchmark metric within one engine, target
 and machine partition. A **census** accounts for judged and unjudged series.
-Neither a successful job nor an empty findings table establishes complete evidence.
+Neither a successful job nor an absence of findings establishes complete evidence.
 
 ## Worked report gallery
 
@@ -38,11 +38,8 @@ The example workflow links use a reserved, non-resolving domain.
 
 ### History: a step and a drift
 
-Expand the evidence below the table to compare the step with the gradual climb.
-History findings use **before and after representative levels**, not a latest
-single measurement. Positive changes are regressions because the recorded metrics
-are lower-is-better. Time values display a readable unit such as ns; JSON retains
-the metric's original unit and precision.
+These examples show a step and a gradual drift. History findings use **before and
+after representative levels**, not the latest single measurement.
 
 {{#include generated/walkthrough-findings-summary.md:3:}}
 
@@ -57,18 +54,9 @@ posted.
 
 {{#include generated/walkthrough-pr.md:3:}}
 
-| Part of the example | How to read it |
-| --- | --- |
-| Context and branch mode | The selected tip is the observation under judgment, not all intermediate branch commits. |
-| Current base range | The low and high recorded values in the selected base regime. |
-| Context measured | The branch observation, in the same displayed unit as the range. |
-| Excess beyond range edge | The signed distance from the nearest edge, not a change from the base mean. |
-| Comparable-base count | Observed historical context across the report; not a percentage probability of a regression. |
-| Expandable evidence | Chart orientation, scale, gaps and full identity; real query-backed reports also supply qualified inspection commands. |
-
-These synthetic reports have no repository to inspect, so they deliberately omit
-copyable `examine` commands. Use commands supplied by your own report rather than
-substituting the example's commit labels.
+**Excess** measures movement outside the observed base range, not a change from its
+average. These worked examples have no repository to inspect; use the `examine`
+commands in your own full report.
 
 ### Other successful analyses
 
@@ -181,23 +169,11 @@ an observed range plus report-wide historical context instead of a probability s
 
 {{#include generated/reporting-finding-annotated.md}}
 
-History values describe **before and after representative levels**, not the latest single
-measurement. Quantities include their units; time and byte values use a readable scale shared
-with the finding's chart. JSON retains the metric's original numeric unit and full precision.
-
-The full report's chart is drawn against **topology**,
-not against the observations. One column per commit,
-so a gap is a gap and the trailing stretch after the last observation is visible as one. That
-matters: a chart that packed the observations together would hide exactly the sparseness that
-[detection cannot see](reconstruction.md#gaps-are-holes-not-zeroes).
-
-Illustrated figures have a text description and labelled or shaped distinctions,
-not color alone. On a narrow screen, focus the figure and scroll horizontally to
-keep its labels readable instead of shrinking the whole chart.
-
-Where a series has more commits than the chart has columns, commits are grouped before
-plotting. Grouping first is deliberate — the alternative attenuates an isolated observation
-surrounded by gaps into nothing.
+History values describe **before and after representative levels**, not the latest
+single measurement. Human-readable quantities use readable scales; JSON retains the
+metric's original numeric unit and full precision. Use [`examine`](../commands/examine.md)
+for raw points and [reconstruction](reconstruction.md#gaps-are-holes-not-zeroes)
+for the timeline details.
 
 ## Analysis outcomes
 
@@ -235,7 +211,7 @@ under `census`, which makes it the machine-readable signal: each finding
 self-describing, plus every unjudged reason. Text also states the unjudged reason counts. JSON
 deliberately omits the per-commit chart series — that is presentation, and
 [`examine`](../commands/examine.md) is the way to get the underlying points. The **condensed
-summary** is lossy by design — capped, vertically arranged findings with small range sketches — so it is
+summary** is lossy by design — a capped selection of findings — so it is
 the one output you must not automate against. The outcome file repeats only the JSON report's
 top-level `outcome` field; it carries no report details. The full table is under
 [Where output goes](#where-output-goes).
@@ -264,8 +240,8 @@ necessary for counts, reasons and findings.
 
 ## The coverage line is not decoration
 
-Text and Markdown headers state how many in-scope series were judged when anything was in scope.
-JSON records those counts in `census`. This terminal example shows a silent report:
+Full reports state how many in-scope series were judged. Summaries qualify their coverage;
+JSON records the counts in `census`. This terminal example shows a silent report:
 
 {{#include generated/reporting-census.md}}
 
@@ -305,34 +281,25 @@ against a base state ten commits old is a comparison against a base state ten co
 
 ## Branch range and historical context
 
-A branch finding does not borrow history-mode change-point wording. It states the measured context
-value, the lowest and highest values observed in the selected current-base regime, and the excess
-beyond the nearest edge. Being slower than every current-base observation is a claim about
-recorded observations, not a probability estimate.
+A branch finding compares the context measurement with the observed current-base range.
+**Excess** measures movement past the nearer range edge, not a change from the base mean.
+It is a claim about recorded observations, not a probability estimate.
 
-The discriminant-set section gives the report-wide historical comparison. Expand
-**Comparison evidence by platform** in the [generated PR example](#pr-comment-style-example):
-its count describes comparable base commits with at least as much out-of-range movement,
-not a percentage probability.
-
-When too little shared history exists, the report says the comparison could not be formed and
-still prints every factual range excursion. JSON exposes the same distinction: finding-level
-`branch` range metadata and set-level `branch_comparison` counts.
+Full reports and JSON retain detailed evidence. JSON's finding-level `branch` contains
+the range measurements; set-level `branch_comparison` contains the historical comparison.
 
 ## Compact findings
 
-The condensed summary gives each benchmark its own wrapping heading, followed by direction,
-metric and platform. Branch findings highlight the current measurement and percentage **excess**,
-with a short range sketch instead of separate numeric columns. The base range and current point
-share a linear scale; the sketch has no implied zero origin. A very small range may occupy one mark.
-History findings show the before/after representative levels and percentage change.
+Each summary finding has its own wrapping heading. Branch findings highlight the current
+measurement and percentage **excess**; history findings show representative levels and
+percentage change.
 
 Read the full report for the range endpoints, time-series plots, detailed historical comparisons,
 machine identities and inspection commands. These details do not repeat inside the summary.
 
 ## Inspecting the evidence
 
-Full finding evidence includes copyable `examine` commands when the report has the original query
+Full reports include copyable `examine` commands when the report has the original query
 location. Choose the labelled shell syntax. The commands pin the benchmark, metric, engine,
 target, machine, context, base and resolved time window, and retain the repository,
 configuration and storage context. Branch reports include a separate clean-base command:

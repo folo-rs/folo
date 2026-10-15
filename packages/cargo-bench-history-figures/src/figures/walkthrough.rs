@@ -123,8 +123,17 @@ mod tests {
         assert_eq!(report.get("mode").unwrap(), "branch");
         assert_eq!(report.get("ghosts_excluded").unwrap(), 0);
         let findings = report.get("findings").unwrap().as_array().unwrap();
+        assert_eq!(findings.len(), 2);
+        let directions = findings
+            .iter()
+            .map(|finding| finding.get("direction").unwrap().as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(directions.contains(&"regression"));
+        assert!(directions.contains(&"improvement"));
         for finding in findings {
             assert_eq!(finding.get("commit"), report.get("tip_commit"));
+            assert_eq!(finding.get("engine").unwrap(), "callgrind");
+            assert_eq!(finding.get("kind").unwrap(), "instruction_count");
         }
     }
 

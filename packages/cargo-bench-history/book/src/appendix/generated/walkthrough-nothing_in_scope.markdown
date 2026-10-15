@@ -9,7 +9,6 @@ Not judged: 2 series not measured at the analyzed context commit; 1 series ignor
 - Commit: 9f2c4a1d3b5e708aab12cd34ef5678901234567a
 - Mode: history
 - Runs analyzed: 128 (4d17b0c93ea2 → 9f2c4a1d3b5e)
-- Regressions: 0
 
 
 ## Coverage

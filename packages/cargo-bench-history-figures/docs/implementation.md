@@ -5,9 +5,9 @@ and preview for the `cargo-bench-history` user guide. The owning application's
 [book architecture](../../cargo-bench-history/docs/book.md) defines the reader journeys.
 
 Statistical fixtures and production projections feed generated content; explanatory
-prose stays in the book. Worked reports reuse detector-owned example series and the
-core renderer. Workflow cards consume those reports through the companion's offline
-JSON projection with an in-memory evidence reader. Illustrative invocation facts never
+prose stays in the book. Worked reports use detector-owned series with long qualified
+names and large counts; the core renderer owns their layout. Workflow cards use the
+companion's offline JSON projection with an in-memory evidence reader. Illustrative invocation facts never
 claim an actual benchmark execution, repository topology or GitHub publication.
 
 The registry includes downloadable full reports as well as embedded summaries and

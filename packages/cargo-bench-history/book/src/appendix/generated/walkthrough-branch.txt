@@ -1,22 +1,27 @@
 Analyzed project textproc (branch mode)
-1 regression, 0 improvements detected.
-Judged 1 of 1 in-scope series (one benchmark/metric per platform/engine/machine).
+1 regression, 1 improvement detected.
+Judged 2 of 2 in-scope series.
   commit: 9f2c4a1d3b5e708aab12cd34ef5678901234567a
-  runs: 128 (4d17b0c93ea2 → 9f2c4a1d3b5e)  in-scope series judged: 1 of 1  regressions: 1  improvements: 0
+  runs: 128 (4d17b0c93ea2 → 9f2c4a1d3b5e)
 
-criterion / x86_64-unknown-linux-gnu / machine a1b2c3d4
-  runs: 128  regressions: 1  improvements: 0
-  None of 5 comparable base commits showed as much out-of-range movement as this branch (1 series compared).
+callgrind / x86_64-unknown-linux-gnu / machine a1b2c3d4
+  runs: 128  regressions: 1  improvements: 1
+  None of 5 comparable base commits showed as much out-of-range movement as this branch (2 series compared).
 
-http_parse/case
-  regression: 126.1 ns wall time - slower than all 10 current-base observations
-    current base range: 96.93 ns to 103.5 ns · excess beyond nearest range edge: +22.6 ns / +21.85% · @ 9f2c4a1d3b5e708aab12cd34ef5678901234567a
-wall time (ns, linear scale; lower is better)
+textproc/streaming_parser/normalize_unicode_and_validate_nested_records_for_incremental_batches/large_input
+  regression: 126.1 million instruction count - higher than all 10 current-base observations
+    current base range: 96.93 million to 103.5 million · excess: +22.6 million / +21.85% · @ 9f2c4a1d3b5e708aab12cd34ef5678901234567a
  126 ┤          ╭ 
  119 ┤          │ 
  111 ┤          │ 
  104 ┼────╮╭────╯ 
   97 ┤    ╰╯     
-Comparison: range edge | recent base history -> CONTEXT 9f2c4a1d3b5e (last column).
-Context is placed after base, not a continuation of the branch's commit history.
-Empty columns = missing base measurements; intermediate branch commits are omitted.
+
+textproc/streaming_parser/scan_and_classify_multilingual_text_with_incremental_boundary_checks/large_input
+  improvement: 99.81 million instruction count - lower than all 10 current-base observations
+    current base range: 126.1 million to 135.1 million · excess: -26.26 million / -20.83% · @ 9f2c4a1d3b5e708aab12cd34ef5678901234567a
+ 135 ┤ ╭───╮╭─╮╭╮ 
+ 126 ┼─╯   ╰╯ ╰╯│ 
+ 117 ┤          │ 
+ 109 ┤          │ 
+ 100 ┤          ╰

@@ -17,4 +17,4 @@ Not judged: 2 series not measured at the analyzed context commit; 1 series ignor
 | `Judged 3 of 6 in-scope series; no reportable move survived the gates.` | How far the verdict reaches: the share of the in-scope suite it is a statement about. |
 | `Not judged: 2 series not measured at the analyzed context commit; 1 series ignored by configuration; 3 series with too few points in the analyzed window.` | What the verdict does not cover, named reason by reason. The judged count and these reasons account for every series between them. |
 
-The judged ratio heads each human-readable report that had anything in scope. Text prints the per-reason breakdown beside findings as well as in silent reports. Full Markdown always includes it in the final Coverage section, and JSON always carries it under `census.reasons`.
+The full report states the judged ratio when anything is in scope. Text prints the per-reason breakdown beside findings as well as in silent reports. Full Markdown always includes it in the final Coverage section, and JSON always carries it under `census.reasons`.

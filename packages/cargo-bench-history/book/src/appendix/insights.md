@@ -166,9 +166,8 @@ When present, **Download the full report bundle** links to the full outputs:
   unjudged counts, and a count for each unjudged reason. It is present even when findings exist.
 - **JSON** (`report.json` in the bundle, or the path passed to `--json`) carries the same
   account under `census`; the breakdown is `census.reasons`.
-- **Text on stdout and condensed Markdown summaries** show the in-scope judged ratio in
-  their headers when anything is in scope. Unjudged reasons and configured exclusions
-  remain visible beside findings.
+- **Text on stdout and condensed Markdown summaries** qualify coverage and keep
+  material warnings visible beside findings.
 
 The warning about in-scope series that could not be judged refers to the full Markdown
 **Coverage** section or the JSON **`census`**, not to additional detail hidden in the comment.

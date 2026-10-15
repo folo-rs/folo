@@ -355,25 +355,64 @@ pub(crate) fn gallery_analysis(outcome: AnalysisOutcome) -> Analysis {
     }
 }
 
-/// A branch excursion and its historical context from one production batch pass.
+/// Long names and large counts exercise both directions in the branch report layout.
 pub(crate) fn gallery_branch() -> Analysis {
-    let values = examples::clean_step();
-    let base = values
+    // Model a large text-processing batch so numeric labels cannot rely on tiny sample values.
+    const INSTRUCTION_SCALE: f64 = 1_000_000.0;
+
+    let counts: Vec<f64> = examples::clean_step()
+        .into_iter()
+        .map(|value| (value * INSTRUCTION_SCALE).round())
+        .collect();
+    let base = counts
         .len()
         .checked_div(2)
         .and_then(|half| half.checked_sub(1))
         .expect("the worked step contains two nonempty regimes");
-    let mut series = examples::with_base_window(suite_series("http_parse", &values), base);
-    series
-        .points
-        .last_mut()
-        .expect("the worked step has observations")
-        .commit = Some(Arc::from(TIP_COMMIT));
-    let context = examples::branch_context(&series, base);
-    let detection = find_changes(&[series], &context);
+    let set = DiscriminantSet {
+        engine: Engine::Callgrind,
+        ..worked_set()
+    };
+    let mut improved = counts.clone();
+    improved.reverse();
+
+    // Namespace-qualified names remain intact; the renderer owns their visual wrapping.
+    let suite = [
+        (
+            "normalize_unicode_and_validate_nested_records_for_incremental_batches",
+            counts,
+        ),
+        (
+            "scan_and_classify_multilingual_text_with_incremental_boundary_checks",
+            improved,
+        ),
+    ]
+    .map(|(function, values)| {
+        let mut series = examples::series(PROJECT, &values, MetricKind::InstructionCount, 0);
+        series.id.segments.tail = vec![
+            "streaming_parser".to_owned(),
+            function.to_owned(),
+            "large_input".to_owned(),
+        ];
+        series.set = set.clone();
+        let mut series = examples::with_base_window(series, base);
+        series
+            .points
+            .last_mut()
+            .expect("the worked step has observations")
+            .commit = Some(Arc::from(TIP_COMMIT));
+        series
+    });
+    let context = examples::branch_context(
+        suite
+            .first()
+            .expect("the worked suite contains both directions"),
+        base,
+    );
+    let detection = find_changes(&suite, &context);
     Analysis {
         mode: AnalysisMode::Branch,
-        set: worked_set(),
+        set,
         findings: detection.findings,
         lags: Vec::new(),
         census: detection.census,
@@ -411,7 +450,7 @@ fn finding_block(report: &str, id: &str) -> Vec<String> {
         .collect()
 }
 
-/// One finding with every part of it named.
+/// One production-rendered finding, without repeating its layout as an annotation table.
 fn finding_annotated() -> String {
     let analysis = worked_analysis();
     let report = analysis.render(ReportFormat::Text);
@@ -421,39 +460,8 @@ fn finding_annotated() -> String {
         .expect("the worked analysis reports");
     let block = finding_block(&report, &finding.id.qualified());
 
-    let mut lines = block.iter().map(|line| line.trim());
-    let identity = lines.next().unwrap_or_default();
-    let headline = lines.next().unwrap_or_default();
-    let detail = lines.next().unwrap_or_default();
-
     let mut markdown = String::from("A finding, as the text report prints it:\n\n");
     markdown.push_str(&fenced("text", &block.join("\n")));
-    markdown.push_str("\n| Part | What it carries |\n|---|---|\n");
-    writeln!(
-        markdown,
-        "| `{identity}` | The benchmark identity: every benchmark-ID segment joined by `/`. \
-         This slash-rendered identity is the string accepted by \
-         [`examine`](../commands/examine.md) and matched by the benchmark-ID prefix supplied \
-         to [`bless`](../commands/bless.md). |"
-    )
-    .expect("writing to a String never fails");
-    writeln!(
-        markdown,
-        "| `{headline}` | The headline: the move as a percentage of the baseline, and the \
-         metric kind that moved. Findings are ranked by the magnitude of that percentage. |"
-    )
-    .expect("writing to a String never fails");
-    writeln!(
-        markdown,
-        "| `{detail}` | The detail: direction, the detector that produced the finding, \
-         the before and after representative values with units, and a commit somewhere near \
-         the change. |"
-    )
-    .expect("writing to a String never fails");
-    markdown.push_str(
-        "| the lines below it | The chart: the series drawn against topology, one column \
-         per commit; its values use the units of the finding above it. |\n",
-    );
     markdown
 }
 
@@ -596,7 +604,7 @@ fn census() -> String {
     }
 
     markdown.push_str(
-        "\nThe judged ratio heads each human-readable report that had anything in scope. \
+        "\nThe full report states the judged ratio when anything is in scope. \
          Text prints the per-reason breakdown beside findings as well as in silent reports. \
          Full Markdown always includes it in the final Coverage section, and JSON always \
          carries it under `census.reasons`.\n",

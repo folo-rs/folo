@@ -88,8 +88,10 @@ Contracts have one owning page; other journeys link rather than reproduce them.
 - **Goal**: interpret an actual result before learning statistical implementation detail.
 - **Carry**: generated history and branch summaries, every successful-analysis outcome,
   downloadable text/Markdown/JSON, and production-rendered workflow/freshness examples.
-- **Teach**: units, direction, history representatives versus branch nearest-range-edge excess;
-  judged-series coverage versus platform completeness; freshness and next actions.
+- **Teach**: units, direction, history representatives versus branch excess; judged-series
+  coverage versus platform completeness; freshness and next actions.
+- **Layout**: short finding blocks, wrapping names and compact comparisons; no dense numeric
+  table, repetitive metadata or plot commentary.
 - **Boundary**: sample names, commits and workflow facts are illustrative, never execution claims.
   Annotations remain explanatory prose outside the production projection.
 
@@ -156,7 +158,7 @@ Contracts have one owning page; other journeys link rather than reproduce them.
   *and* absolute, on every metric) and what they are *not* for (tenet 2); how branch mode compares
   the whole report with historical base turns; that a finding carries no confidence score; the
   history false-discovery family being every judged history series; the two
-  auto-selected modes (tenet 7); full-history vs. bounded baseline-and-tip charts; re-baselining
+  auto-selected modes (tenet 7); full-report charts vs. compact branch comparisons; re-baselining
   via blessings; the three report formats sharing one pass and the
   advisory-finding / machine-readable-outcome split (tenet 6); no severity classification.
 - **Boundary**: this page owns the *mental model* and stops there. Mechanism with numbers — which
