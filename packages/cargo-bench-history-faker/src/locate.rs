@@ -1,50 +1,44 @@
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::LazyLock;
 
-/// Returns the absolute path to the freshly built `cargo-bench-history-faker` binary.
+/// Returns a stable absolute path to the faker binary.
 ///
-/// The binary is built on demand (a fast no-op once it is up to date) and rebuilt
-/// automatically after edits, so the path is always present and current; it is
-/// resolved once per process. A test runner that has already built the binary may
-/// point the `CBH_FAKER` environment variable at it to skip the per-process
-/// build — the value is trusted only when it names an existing file.
+/// Resolves once per process. On-demand builds retain their executable until the
+/// target tree is cleaned, independently of subsequent faker builds.
+/// A test runner may supply an existing file through `CBH_FAKER` to skip building.
+/// The runner must keep that file available for the lifetime of its consumers.
+///
+/// # Panics
+///
+/// Panics if preparing or building the executable fails.
 #[must_use]
 pub fn binary_path() -> &'static str {
     static PATH: LazyLock<String> = LazyLock::new(locate_or_build);
     PATH.as_str()
 }
 
-/// Resolves the path [`binary_path`] caches: trust `CBH_FAKER` when it names an
-/// existing file, otherwise build this crate and read the path Cargo reports. Split out
-/// from the `LazyLock` initializer so it can be exercised directly, and passing
-/// [`run_cargo_build`] by name (rather than wrapping it in a closure) keeps the build seam
-/// a single named function the tests can call on its own.
+/// Supplies the process environment to the cached locator.
 fn locate_or_build() -> String {
-    resolve(std::env::var_os("CBH_FAKER"), run_cargo_build)
+    prepare_binary(
+        std::env::var_os("CBH_FAKER"),
+        &engine_target_dir(std::env::var_os("CARGO_TARGET_DIR")),
+    )
 }
 
-/// The outcome of spawning `cargo build`, reduced to the fields the resolver inspects.
+/// Prepares an executable for test runners with an explicit override and cache.
 ///
-/// Modeling it as a plain struct rather than [`std::process::Output`] keeps
-/// [`interpret_build`] unit-testable: an `ExitStatus` cannot be constructed portably,
-/// but these fields can be filled in directly to exercise every branch without
-/// spawning a real process.
-struct BuildOutput {
-    /// Whether the build process exited successfully.
-    success: bool,
-    /// The process exit code, if it terminated normally with one.
-    code: Option<i32>,
-    /// The captured standard output (Cargo's JSON build messages).
-    stdout: Vec<u8>,
-    /// The captured standard error (Cargo's rendered diagnostics).
-    stderr: Vec<u8>,
-}
-
-/// Resolves the faker binary path: trust an existing file named by
-/// `env_override`, otherwise build the crate via `build` and read the path Cargo
-/// reports for the binary artifact.
-fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) -> String {
+/// An existing override is returned as an absolute path; the caller owns its
+/// lifetime. Otherwise, builds share intermediate artifacts under `target_dir`
+/// but retain separate executables until that directory is cleaned.
+///
+/// # Panics
+///
+/// Panics if preparing or building the executable fails.
+#[must_use]
+pub fn prepare_binary(env_override: Option<OsString>, target_dir: &Path) -> String {
     if let Some(path) = env_override {
         let path = PathBuf::from(path);
         if path.is_file() {
@@ -70,39 +64,50 @@ fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) 
         }
     }
 
-    interpret_build(&build())
+    let target_dir = std::path::absolute(target_dir)
+        .unwrap_or_else(|error| panic!("cannot resolve faker target directory: {error}"));
+    fs::create_dir_all(&target_dir)
+        .unwrap_or_else(|error| panic!("cannot create faker target directory: {error}"));
+    // Cargo's final artifacts belong to this preparation, not to the shared build
+    // cache. A later build may replace cache entries but cannot unlink this path.
+    // Ref: docs/implementation.md, "Executable ownership".
+    let output_dir = tempfile::Builder::new()
+        .prefix("run-")
+        .tempdir_in(&target_dir)
+        .unwrap_or_else(|error| panic!("cannot reserve faker output directory: {error}"));
+    let executable = interpret_build(&run_cargo_build(
+        output_dir.path(),
+        &target_dir.join("build"),
+    ));
+
+    // Consumers keep only the path, including across processes via CBH_FAKER.
+    // Retain the directory until explicit target-tree cleanup, not process exit.
+    _ = output_dir.keep();
+    executable
 }
 
 /// Spawns `cargo build` for this crate and captures its outcome.
-fn run_cargo_build() -> BuildOutput {
+fn run_cargo_build(output_dir: &Path, build_dir: &Path) -> BuildOutput {
     // `--manifest-path` (absolute, derived from this crate's own manifest directory)
     // makes the build independent of the current working directory, which some tests
     // change before first touching the engine. `--locked` matches the
     // `just _faker-path` recipe and refuses to silently rewrite the lockfile.
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-    // Build into a dedicated target directory (see `engine_target_dir`) instead of the
-    // shared workspace `target/` tree. Cargo swaps a binary into place by unlinking the old
-    // file and then hard-linking the new one, so anything that stats the path during that
-    // window observes it momentarily absent. On the shared tree any concurrent cargo
-    // invocation — the outer test harness, a sibling test thread, another test process —
-    // can open that window under our build. Giving the engine its own tree means only builds
-    // that target *this* directory ever touch the file, and Cargo's per-directory build lock
-    // serialises those, so no reader is exposed to a partial state: not this crate's own
-    // build-seam tests, not `binary_path`, and not the integration tests that spawn the
-    // resolved binary (issue #332).
-    let target_dir = engine_target_dir(std::env::var_os("CARGO_TARGET_DIR"));
-    let output = std::process::Command::new(env!("CARGO"))
+    let output = Command::new(env!("CARGO"))
         .args([
             "build",
             "--locked",
+            "--bin",
+            "cargo-bench-history-faker",
             "--message-format=json-render-diagnostics",
             "--manifest-path",
         ])
         .arg(&manifest_path)
         .arg("--target-dir")
-        .arg(&target_dir)
+        .arg(output_dir)
+        .env("CARGO_BUILD_BUILD_DIR", build_dir)
         .output()
-        .expect("spawning `cargo build` for cargo-bench-history-faker should succeed");
+        .unwrap_or_else(|error| panic!("cannot spawn cargo build for faker: {error}"));
     BuildOutput {
         success: output.status.success(),
         code: output.status.code(),
@@ -111,14 +116,12 @@ fn run_cargo_build() -> BuildOutput {
     }
 }
 
-/// The dedicated target directory the on-demand `cargo build` writes into, isolating the
-/// engine binary from the shared workspace `target/` tree (see [`run_cargo_build`] for why).
+/// Anchors the faker cache and retained executables within the active target tree.
 ///
 /// It nests under the active target directory — the ambient `CARGO_TARGET_DIR` when one is
 /// set (as coverage runs do), otherwise the workspace `target/` — so it stays git-ignored,
 /// is cached in CI alongside everything else, and is removed by `cargo clean`. The
-/// `just _faker-path` recipe passes the same `--target-dir`, so a pre-built
-/// `CBH_FAKER` and an on-demand build resolve to the very same isolated binary. The
+/// `just _faker-path` recipe uses the same cache and separate output directories. The
 /// ambient value is taken as a parameter (rather than read here) so the mapping stays
 /// unit-testable without mutating process-wide environment.
 ///
@@ -144,6 +147,14 @@ fn engine_target_dir(ambient_target_dir: Option<OsString>) -> PathBuf {
         },
     );
     base.join("faker")
+}
+
+/// Cargo's outcome as plain values, for in-process diagnostic and JSON tests.
+struct BuildOutput {
+    success: bool,
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 /// Reads the built binary's path from Cargo's JSON build output, panicking with the
@@ -304,19 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn no_env_override_falls_through_to_building() {
-        // `None` skips the file check entirely, so this exercises `resolve`'s build
-        // path without touching the filesystem (and stays Miri-safe).
-        let resolved = resolve(None, || {
-            ok_build(artifact_line(
-                "cargo-bench-history-faker",
-                "/tmp/cargo-bench-history-faker",
-            ))
-        });
-        assert_eq!(resolved, "/tmp/cargo-bench-history-faker");
-    }
-
-    #[test]
     fn engine_target_dir_uses_an_absolute_ambient_target_dir_as_is() {
         // An absolute `CARGO_TARGET_DIR` (the normal case, e.g. a coverage run) is honored
         // verbatim as the base, so the isolated tree stays inside that tree.
@@ -353,108 +351,6 @@ mod tests {
         assert!(
             dir.is_absolute(),
             "the default target dir should be absolute: {dir:?}"
-        );
-    }
-
-    // The remaining cases consult the filesystem (`Path::is_file`), which Miri's
-    // isolation does not support, so they are native-only.
-
-    #[cfg(not(miri))]
-    #[test]
-    fn env_override_naming_an_existing_absolute_file_is_returned_unchanged() {
-        // This crate's own manifest is an absolute path that is guaranteed to exist;
-        // making an already-absolute path absolute leaves it unchanged, so the override
-        // passes through without a build.
-        let existing = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        let resolved = resolve(Some(existing.clone().into_os_string()), || {
-            panic!("must not build when the env override names an existing file")
-        });
-        assert_eq!(resolved, existing.to_string_lossy());
-    }
-
-    #[cfg(not(miri))]
-    #[test]
-    fn env_override_with_a_relative_path_is_resolved_to_absolute() {
-        // A bare manifest name resolves against the test's working directory (the package
-        // root cargo sets). `binary_path` promises an absolute path, so a relative override
-        // must be made absolute now — otherwise the cached value would break once a later
-        // `--chdir` moves the working directory.
-        let relative = PathBuf::from("Cargo.toml");
-        assert!(
-            relative.is_file(),
-            "expected the package manifest relative to the test working directory"
-        );
-        let resolved = resolve(Some(relative.into_os_string()), || {
-            panic!("must not build when the env override names an existing file")
-        });
-        let resolved = Path::new(&resolved);
-        assert!(
-            resolved.is_absolute(),
-            "a relative override should resolve to an absolute path, got {resolved:?}"
-        );
-        assert!(
-            resolved.ends_with("Cargo.toml"),
-            "the resolved path should still name the manifest, got {resolved:?}"
-        );
-    }
-
-    #[cfg(not(miri))]
-    #[test]
-    fn env_override_naming_a_missing_file_falls_through_to_building() {
-        let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("does-not-exist.invalid");
-        let resolved = resolve(Some(missing.into_os_string()), || {
-            ok_build(artifact_line(
-                "cargo-bench-history-faker",
-                "/tmp/cargo-bench-history-faker",
-            ))
-        });
-        assert_eq!(resolved, "/tmp/cargo-bench-history-faker");
-    }
-
-    // The two cases below drive the real build seam (not the injected fakes): they spawn
-    // `cargo build` and read the filesystem, so they are native-only. Cargo's freshness
-    // check makes the build a fast no-op once the crate is already compiled.
-
-    #[cfg(not(miri))]
-    #[test]
-    fn run_cargo_build_reports_an_existing_executable() {
-        // Exercises the real spawn-and-capture path and feeds its output through the real
-        // `interpret_build`, proving the resolver actually builds and locates this crate's
-        // own binary end to end.
-        let output = run_cargo_build();
-        assert!(
-            output.success,
-            "building cargo-bench-history-faker should succeed; stderr:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let resolved = interpret_build(&output);
-        let resolved = Path::new(&resolved);
-        assert!(
-            resolved.is_file(),
-            "the reported executable should exist: {resolved:?}"
-        );
-        assert!(
-            resolved
-                .to_string_lossy()
-                .contains("cargo-bench-history-faker"),
-            "the reported executable should be the faker: {resolved:?}"
-        );
-    }
-
-    #[cfg(not(miri))]
-    #[test]
-    fn binary_path_returns_an_existing_absolute_file() {
-        // Drives `binary_path` (and thus `locate_or_build`) through whichever branch the
-        // ambient environment selects — `CBH_FAKER` when a test runner pre-built
-        // the engine, an on-demand build otherwise — and confirms the contract either way.
-        let resolved = Path::new(binary_path());
-        assert!(
-            resolved.is_absolute(),
-            "binary_path should be absolute: {resolved:?}"
-        );
-        assert!(
-            resolved.is_file(),
-            "binary_path should name an existing file: {resolved:?}"
         );
     }
 }

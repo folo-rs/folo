@@ -4,6 +4,17 @@ Tracking notes for follow-up work that is intentionally deferred. Each entry
 should describe the task, the trigger condition that makes it actionable, and
 links to the relevant code.
 
+## Give dure-test-helper preparations stable executable ownership
+
+The [helper locator](packages/dure-test-helper/src/locate.rs) returns a shared
+Cargo final artifact after its build lock is released. Concurrent helper builds
+can replace that path while readers inspect or spawn it. Its target-directory
+comment also overstates what crate-level isolation guarantees. Address this in
+a separately scoped helper repair, with deterministic filesystem/process
+integration coverage, using the
+[faker executable-ownership model](packages/cargo-bench-history-faker/docs/implementation.md#executable-ownership)
+as prior art. Do not wait for a timing-dependent failure to make this actionable.
+
 ## Consider filter-safe cross-package classification hashing
 
 Classification shares eligible fresh Git listings but keeps per-package
