@@ -112,8 +112,10 @@ The builder owns its optional processor selection and resolves final configurati
 time. It creates the shutdown-owning pool before starting threads, so an unwind always stops
 and joins registered workers even though workers retain shared references to the inner state.
 
-Eager preparation validates every processor against the hardware's eligible set using full
-processor equality, including hardware-instance identity. It partitions the selection into
+Eager preparation validates both supplied processor handles and processors rebuilt through the
+selection's backing hardware against the pool's eligible set. Full processor equality includes
+hardware-instance identity; supplied handles alone do not establish the backend used for pinning.
+It partitions the selection into
 singletons for distinct processors, distinct regions or one system mask according to the policy.
 Repeated entries never create additional worker groups. Group masks and shared
 membership are seeded before spawning; no synthetic task is allocated, counted or executed.

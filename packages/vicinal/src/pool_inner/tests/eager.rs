@@ -294,6 +294,40 @@ fn eager_selection_rejects_foreign_hardware_before_initialization() {
     assert_eq!(initialized.load(Ordering::Relaxed), 0);
 }
 
+/// Valid processor handles cannot vouch for the set's independent pinning backend.
+#[test]
+fn eager_selection_rejects_foreign_backing_hardware_before_initialization() {
+    with_watchdog(|| {
+        let foreign = hardware();
+        let hardware = hardware();
+        let processors = foreign
+            .all_processors()
+            .to_builder()
+            .take_exact(hardware.all_processors().processors().clone());
+        // No callback may start on rejected input; this counter does not publish readiness.
+        let initialized = Arc::new(AtomicUsize::new(0));
+
+        for kind in [
+            PolicyKind::Processor,
+            PolicyKind::MemoryRegion,
+            PolicyKind::System,
+        ] {
+            let builder = Pool::builder()
+                .hardware(hardware.clone())
+                .worker_policy(policy(kind, nz!(1)))
+                .eager(processors.clone())
+                .thread_init({
+                    let initialized = Arc::clone(&initialized);
+                    move || {
+                        initialized.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            assert_panics(|| builder.build());
+            assert_eq!(initialized.load(Ordering::Relaxed), 0);
+        }
+    });
+}
+
 /// An unused eager pool needs neither an initializer nor a task to shut down all its workers.
 #[test]
 fn eager_unused_pool_without_initializer_joins_workers() {

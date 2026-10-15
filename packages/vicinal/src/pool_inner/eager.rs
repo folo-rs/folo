@@ -105,10 +105,17 @@ fn eager_groups(
     processors: ProcessorSet,
 ) -> Vec<(GroupId, Arc<ProcessorSet>)> {
     let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
+    // take_exact can combine handles with a different backing hardware used for pinning.
+    // Rebuilding resolves processor identities from that backing hardware rather than the handles.
+    let backing_processors = processors
+        .to_builder()
+        .take_all()
+        .expect("a nonempty selection retains candidates on its backing hardware");
     // Processor equality includes its hardware instance: equal numeric IDs are not sufficient.
     assert!(
         processors
             .iter()
+            .chain(backing_processors.iter())
             .all(|processor| eligible.contains(processor))
     );
 
