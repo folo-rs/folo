@@ -10,7 +10,7 @@ instruction count · Linux x86\_64 · callgrind
 Current: **126.1 million**
 
 ```text
-base [=]-------* current
+0--------------------------------------------------------------[=====]--------------*
 ```
 
 
@@ -21,7 +21,7 @@ instruction count · Linux x86\_64 · callgrind
 Current: **99.81 million**
 
 ```text
-current *------[==] base
+0------------------------------------------------------------*---------------[======]
 ```
 
 
