@@ -2,7 +2,7 @@
 name = "vicinal"
 description = "Worker pool with configurable processor affinity"
 publish = true
-version = "0.2.3"
+version = "0.2.4"
 
 authors.workspace = true
 edition.workspace = true
@@ -16,11 +16,12 @@ all-features = true
 
 # Baseline of external types intentionally exposed in the public API. Cross-crate
 # first-party types are listed individually by their canonical defining crate
-# (many_cpus re-exports `SystemHardware` from its `many_cpus_impl` partition).
+# (many_cpus re-exports hardware and processor sets from its `many_cpus_impl` partition).
 # Task errors expose ohno's diagnostic traits through their Error implementation.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
 allowed_external_types = [
+    "many_cpus_impl::processor_set::ProcessorSet",
     "many_cpus_impl::system_hardware::SystemHardware",
     "ohno::enrichable::Enrichable",
     "ohno::error_ext::ErrorExt",

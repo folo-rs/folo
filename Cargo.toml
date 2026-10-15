@@ -160,7 +160,7 @@ toml_edit = { version = "0.25.12", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
-vicinal = { version = "0.2.3", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.2.4", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 zip = { version = "9.0.0", default-features = false }
 

@@ -1,5 +1,6 @@
 //! Example from the README.
 
+use many_cpus::SystemHardware;
 use new_zealand::nz;
 use ohno::AppError;
 use vicinal::{Pool, TaskError, WorkerPolicy};
@@ -30,10 +31,12 @@ async fn processor_local() -> Result<(), AppError> {
 }
 
 async fn memory_region_local() -> Result<(), AppError> {
-    // Workers share each region's cumulative set of submitting processors.
+    // Use this same selection for the application's submitting threads.
+    let processors = SystemHardware::current().processors();
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+        .eager(processors)
         .build();
 
     assert_eq!(

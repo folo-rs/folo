@@ -13,8 +13,8 @@ use crate::{
 /// Each task uses its submitting processor according to the pool's
 /// [`WorkerPolicy`][crate::WorkerPolicy]: that processor by default, or its memory
 /// region for a regional policy, or all submitting processors for a system policy.
-/// Shared worker affinity accumulates the processors that submit accepted work to this pool
-/// and destination. All submission methods use the same policy.
+/// Shared worker affinity includes the pool's eager selection and accumulates the processors
+/// that submit accepted work to this pool and destination. All submission methods use the same policy.
 /// Tasks execute synchronously and must preserve worker affinity.
 ///
 /// # Cloning
