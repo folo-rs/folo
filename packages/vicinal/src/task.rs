@@ -83,6 +83,9 @@ impl<F> VicinalTask for TaskWrapper<F>
 where
     F: FnOnce() + Send + 'static,
 {
+    // Omitting execution strands task-provided handshakes: cancellation retains their senders
+    // in recoverable bodies. Ref: docs/implementation.md, "Mutation-test termination".
+    #[cfg_attr(test, mutants::skip)]
     fn call(self: Pin<&mut Self>) {
         let this = self.project();
 

@@ -70,7 +70,8 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             }));
 
             assert_eq!(spawned, WORKERS);
-            assert_eq!(inner.worker_handles.lock().unwrap().len(), WORKERS as usize);
+            let worker_count = inner.worker_handles.lock().unwrap().len();
+            assert_eq!(worker_count, WORKERS as usize);
 
             assert_panics(|| drop(pool));
             assert_eq!(initialized.load(Ordering::Relaxed), WORKERS as usize);
