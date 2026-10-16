@@ -166,20 +166,12 @@ excerpt for a size-limited downstream consumer.
 
 Full Markdown ends with a **Coverage** section listing counts and reasons for unjudged metric
 series, whether or not findings exist. JSON carries the same account under `census`.
-Text and condensed summaries give the judged ratio in their headers and the reason breakdown
-only when there are no findings. [Insights](../appendix/insights.md#reading-a-silent-report)
-shows matching Markdown and JSON examples and explains how to interpret incomplete coverage.
+Text and condensed summaries qualify coverage and keep material warnings visible.
+[Investigate and accept](../appendix/insights.md#reading-a-silent-report) explains
+how to interpret incomplete evidence.
 
-Human-readable findings include a compact, **topology-accurate** chart: one column per
-first-parent commit from the first observation onward, so a commit with no measurement
-renders as a gap (a broken line) rather than being collapsed away. Leading gaps are trimmed
-and interior gaps kept, and a trailing gap up to the analyzed context commit is the visual form of
-the "no newer data" disclosure — a benchmark not measured on the most recent commits. History
-mode shows the full selected series, including pre-blessing context; branch mode shows the
-comparison baseline and a bounded recent tail ending at the context commit, dropping the interior
-branch commits and drawing the [comparison-base lag](#comparison-base-lag) as the empty columns
-between the newest base observation and the context commit, so the commit being judged remains
-visible without compressing months of history into the same chart.
+Full reports retain time-series charts; branch summaries show the context measurement
+against the observed base range. [`examine`](../commands/examine.md) supplies the raw points.
 
 There is **no severity classification**: a finding's magnitude is conveyed by its
 relative-change percent, and which findings warrant action is left to human or agent judgment.

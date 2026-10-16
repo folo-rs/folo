@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="two levels the engine cannot separate" style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg"><title>two levels the engine cannot separate</title><desc>two levels the engine cannot separate. Values in ns against commit position, spanning 20 positions. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; X marks identify added data; crossed-out circles are excluded. Gaps are missing observations, not zero values. the earlier level&apos;s interval: positions 0 to 19. the later level&apos;s interval: positions 0 to 19. change point: position 10. declined by interval_disjoint: position 10, value 115.21000811634298.</desc>
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 two levels the engine cannot separate
 </text>
@@ -111,15 +111,15 @@ commit position
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="622,254 622,259 "/>
 <rect x="74" y="131" width="593" height="90" opacity="0.15" fill="#306EC8" stroke="none"/>
-<text x="74" y="131" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#306EC8">
+<text x="74" y="131" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 the earlier level&apos;s interval
 </text>
 <rect x="74" y="70" width="593" height="91" opacity="0.15" fill="#D64541" stroke="none"/>
-<text x="74" y="70" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="74" y="70" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 the later level&apos;s interval
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="370,253 370,34 "/>
-<text x="370" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="370" y="253" dy="-0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 change point
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="2" points="88,177 118,180 "/>
@@ -221,7 +221,7 @@ change point
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="646,169 657,169 "/>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="646,78 657,78 "/>
 <circle cx="652" cy="123" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
-<text x="385" y="146" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#969BA0">
+<text x="385" y="146" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="currentColor">
 declined by interval_disjoint
 </text>
 </svg>

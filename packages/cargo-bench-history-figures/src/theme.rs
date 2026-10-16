@@ -65,9 +65,9 @@ pub const ALTERNATE: RGBColor = RGBColor(150, 100, 190);
 
 /// The opacity shaded regions are filled at.
 ///
-/// Bands, regime shading and dead-zones sit *behind* the data and must never compete
-/// with it, but a band the reader cannot see teaches nothing. This is the weakest fill
-/// that stays visible against both themes.
+/// Bands, regime shading and symbol-bearing cells sit behind data and labels. A light
+/// tint preserves foreground-text contrast in both themes; symbols carry cell roles
+/// independently of the tint.
 pub const BAND_OPACITY: f64 = 0.15;
 
 /// The opacity gridlines are drawn at.
@@ -92,8 +92,8 @@ pub const FONT_TICK: i32 = 11;
 /// Width of a full-width figure, in SVG user units.
 ///
 /// The book's content column is around 700 units wide at its default typography, so a
-/// figure this wide fills the column without forcing the reader to scroll sideways,
-/// and scales down cleanly on a narrow viewport because the SVG carries a `viewBox`.
+/// figure this wide fills the column. The book's charts.css uses this as its minimum
+/// width within locally scrollable figures so narrow screens retain readable labels.
 pub const WIDTH: u32 = 680;
 
 /// Height of a standard single-pane figure, in SVG user units.

@@ -1,69 +1,111 @@
-# GitHub automation
+# Connect GitHub
 
-Use the prebuilt
-[benchmark-history workflows](https://github.com/folo-rs/cargo-bench-history-action)
-to collect benchmark history and turn it into GitHub reports:
+<a id="github-automation"></a>
 
-* The **history workflow** collects measurements on pushes to `main`, analyzes the
-  accumulated history and maintains a rolling issue for findings.
-* The **pull-request workflow** considers all workspace packages and automatically
-  selects the benchmarks affected by a PR. It compares their results against the
-  PR's base and maintains a report comment.
-* The **backfill workflow** fills gaps across a commit range, skipping measurements
-  already stored for the runner's platform and machine key. It only stores data;
-  it does not analyze or publish reports.
+Use the [reusable workflows](https://github.com/folo-rs/cargo-bench-history-action)
+for the complete collection, analysis and reporting path. Start with base-branch
+history, verify its first visible result, bootstrap comparable evidence, then add
+PR comparisons. This guide uses `main` as the history branch; substitute your real
+branch consistently, including Azure federation.
 
-The workflows handle checkout, tool installation and collection; history and PR also
-handle analysis and report publication. Their default collection platforms are Linux
-and Windows. Apple Silicon macOS is also supported: add
-`platforms: ubuntu-latest,windows-latest,macos-latest` to
-each caller's `with:` block to include it. Your benchmarks and their dependencies
-must support the selected platforms. You add the caller files and connect shared storage.
+<figure class="chart" tabindex="0" role="group" aria-label="Workflow journey; scroll horizontally on small screens">
 
-[Benchmark ignore prefixes](commands/analyze.md#ignoring-benchmarks) in the selected
-configuration govern analysis on the checked-out revision. They do not shrink collection
-scope or change platform-completeness accounting. Use an action/tool release supporting
-the setting. An all-ignored analysis is inconclusive, not evidence that a previous
-regression recovered.
+```mermaid
+flowchart TD
+    accTitle: Benchmark history on GitHub
+    accDescr: Base pushes and same-repository pull requests collect into shared storage and produce analysis artifacts and workflow cards. Backfill only collects. Issue and comment publication is optional.
+    H["Base-branch push"] --> C["History collection"]
+    P["Same-repository PR"] --> S["Affected benchmark scope"]
+    S --> PC["PR collection"]
+    B["Scheduled or manual bounded backfill"] --> HC["Historical collection"]
+    C --> ST[("Shared Azure history")]
+    PC --> ST
+    HC --> ST
+    C --> A["History analysis"]
+    PC --> PA["Branch analysis"]
+    ST --> A
+    ST --> PA
+    A --> R["Report artifacts and workflow card"]
+    PA --> R
+    HC --> BC["Completion artifacts and workflow card"]
+    A -. "optional publication" .-> I["Rolling findings issue"]
+    PA -. "optional publication" .-> CO["PR comment"]
+```
 
-First, run `cargo bench --workspace --all-features` to check your benchmarks. If you
-are adding benchmarks, start with a [supported benchmark engine](concepts/engines.md).
+</figure>
 
-## 1. Set up Azure storage
+The **root action** is a lower-level building block for manually composed jobs.
+It does not replace the reusable workflows' checkout, matrix orchestration,
+prerequisite setup, artifact reconciliation and lifecycle handling. Use the
+[action's root commands and inputs](https://github.com/folo-rs/cargo-bench-history-action#root-commands-and-inputs)
+when composing that path; do not combine its installation assumptions with this guide.
 
-Follow [`setup-azure`](commands/setup-azure.md) to provision storage and a workflow
-identity for your repository, using `main` as the history branch. Keep its printed
-storage account, container, managed identity client ID and Azure tenant ID for the
-following steps. For other storage choices, see [Storage backends](storage.md).
+## 1. Check engines, platforms and features
 
-Create `.cargo/bench_history.toml` in your repository root. Set `project.id` to a name
-for your workspace's benchmark history, and copy the account and container from
-the setup output:
+Verify a [supported benchmark target and its native artifacts](concepts/engines.md#check-native-output)
+locally first. A successful Cargo build alone does not show that a measurement target ran.
+Choose platforms your benchmarks and dependencies support.
+
+Reusable workflows select Linux and Windows by default. The action also documents
+Apple Silicon macOS support; opt into it only for compatible targets. Consult the
+selected action release for supported runner/target pairs and prepared native tools,
+rather than assuming every engine runs on every runner.
+
+The reusable workflows enable `all-features` by default. For a narrower feature
+selection, set `all-features: false` and the intended `features` and
+`no-default-features` inputs consistently in **history, PR and backfill**.
+Choose a stable `best-of` repetition count and matching compiler flags as part of
+the same protocol. `--engine` is an analysis filter, not a collection selector.
+
+## 2. Create the project configuration
+
+Run `cargo bench-history install` from the repository root for a commented starter
+`.cargo/bench_history.toml`. Choose a stable project ID now; fill in the Azure values
+from the next step before committing:
 
 ```toml
 [project]
-id = "my-workspace"
+id = "textproc"
 
 [storage.azure]
 account = "myhistoryaccount"
 container = "bench-history"
 ```
 
-In **Settings → Secrets and variables → Actions → Variables**, create these
-repository variables from the same output:
+The names illustrate the fields, not existing resources. Local storage paths stay
+out of this shared file. [Ignore prefixes](commands/analyze.md#ignoring-benchmarks)
+are optional analysis policy; they do not shrink collection or platform-completeness
+accounting.
 
-| Variable | Value |
+<a id="1-set-up-azure-storage"></a>
+
+## 3. Provision Azure through the canonical setup
+
+Follow [`setup-azure`](commands/setup-azure.md) for the reviewable deployment bundle,
+prerequisites and deployment command. Use the same GitHub repository and history
+branch as these callers. Copy the resulting account and container into the config,
+and retain the printed client and tenant IDs.
+
+The setup owns Azure resource and identity provisioning. It does not install
+benchmark prerequisites, create repository variables or commit caller workflows.
+Do not replace it with a separately maintained cloud recipe.
+
+## 4. Add repository variables
+
+In **Settings → Secrets and variables → Actions → Variables**, set:
+
+| Variable | Setup output |
 | --- | --- |
 | `AZURE_CLIENT_ID` | Managed identity client ID |
 | `AZURE_TENANT_ID` | Azure tenant ID |
 
-These are identifiers, not secrets. The workflows use short-lived identity tokens
-to authenticate; you do not need a stored credential or an `azure/login` step.
-GitHub token requests retry transient service and connection failures with bounded backoff.
-Authentication and permission rejections are not retried, and exhausting retries reports a
-failure without switching credentials.
+These are identifiers, not secrets. The workflows use short-lived federated identity
+tokens; no stored credential or `azure/login` step is needed. Authentication failures
+remain failures rather than switching to another credential.
 
-## 2. Add the history workflow
+<a id="2-add-the-history-workflow"></a>
+
+## 5. Add the history caller
 
 Create `.github/workflows/benchmark-history.yml`:
 
@@ -83,24 +125,130 @@ jobs:
       actions: read
       id-token: write
       issues: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v2
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v3
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
-The workflow collects your workspace's benchmarks and stores the measurements in
-Azure. The permissions let it read the repository and run artifacts, authenticate
-to Azure, and publish findings or workflow-failure alerts as issues.
+Use the same chosen action release across callers. The reusable workflow owns
+checkout, tool installation, collection, analysis, artifacts and the result card.
+Issue publication is enabled by default. `publish: false` disables public issue
+writes, **not collection or storage writes**. A true local collection dry run is
+[`collect --no-store`](commands/collect.md#storage-behavior), not this publication setting.
 
-Commit the configuration and workflow to `main`. Open **Actions → Benchmark history**
-to watch the first run. When it finishes, download the `bench-history-report-…`
-artifact from the run's **Artifacts** section. It contains the full Markdown report,
-JSON report and condensed summary.
+### Optional repository setup hook
 
-To run it manually, select **Run workflow** on that Actions page and choose `main`.
+If your targets need repository-specific preparation beyond the workflow's setup,
+provide `.github/actions/bench-history-setup/action.yml`. For example, a repository
+that already owns a fixture-preparation script can invoke it:
 
-## 3. Add the pull-request workflow
+```yaml
+name: Prepare benchmark fixtures
+description: Prepare this repository's input data before measurement
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: ./scripts/prepare-benchmark-fixtures.ps1
+```
+
+The script in this illustration is **your repository's script**, not supplied by the
+history tool. It must support the chosen platforms and prepare reproducible inputs
+without changing benchmark identity or protocol unintentionally. The fixed hook comes
+from the invocation checkout, including during backfill, not each historical commit.
+See the [workflow configuration and hook documentation](https://github.com/folo-rs/cargo-bench-history-action#workflow-configuration)
+for the execution boundary and complete setup rules. Use the workflows' `rustflags`
+input for shared compiler options rather than maintaining a second flag-composition recipe.
+
+<a id="5-read-the-reports"></a>
+
+## 6. Inspect the first visible result
+
+Commit the configuration and caller to the history branch. Open **Actions → Benchmark
+history**, or dispatch that workflow on the history branch.
+
+Start at the workflow's **Benchmark workflow results** card. It separates execution,
+analysis outcome, judged-series coverage, expected/completed platforms, freshness and
+GitHub publication, and links the available evidence. Then download the
+`bench-history-report-…` artifact: the full Markdown, JSON and condensed summary
+are different views of the analysis, not separate benchmark executions.
+
+Use an action release that includes workflow result cards. If setup fails before
+the tool is available, the workflow can only show execution diagnostics, not a validated
+benchmark verdict. Hard cancellation can prevent a final summary write. Missing
+card or artifact evidence is a reason to inspect the run, never an all-clear.
+
+Expect **insufficient baseline** on a new history. The
+[report gallery](appendix/reporting.md#worked-report-gallery) shows what to look for.
+No issue on the first run is normal: only findings create the rolling
+`Benchmark history findings for …` issue. A later fully covered clean report marks an
+existing issue all-clear but leaves it open. Inconclusive evidence cannot clear it.
+
+Execution failures are separate. A failed history workflow attempts a
+`Benchmark history workflow failed for …` alert when publication is enabled.
+Successful later runs do not close those alerts.
+
+<a id="4-fill-gaps-with-backfill"></a>
+
+## 7. Bootstrap comparable base history
+
+Keep collecting as commits reach the base, or add
+`.github/workflows/benchmark-backfill.yml` for deliberate bounded replay:
+
+```yaml
+name: Benchmark backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Oldest first-parent commit to include
+        required: true
+        type: string
+      to:
+        description: Newest first-parent commit to include
+        required: true
+        type: string
+
+jobs:
+  backfill:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v3
+    with:
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      from: ${{ inputs.from }}
+      to: ${{ inputs.to }}
+      # Start with a small attempt budget before scheduling broader replay.
+      max-commits: '1'
+```
+
+Dispatch on the history branch, with a reviewed range from the base's first-parent
+history. Preparation freezes its inclusive endpoints. Execution visits missing
+commits newest-first in the runner's own partition. The bound limits attempted
+commits, not duration. Repeating the same range and protocol fills the next missing
+commits without replacing existing clean data.
+
+The completion card and artifacts account for stored, skipped, empty, failed and
+deferred commits when final evidence is available. They carry **no benchmark verdict**:
+backfill collects only, and later history analysis uses that data. A timeout or
+infrastructure failure can leave partial writes without final accounting.
+
+For scheduled replay, the owning [backfill workflow documentation](https://github.com/folo-rs/cargo-bench-history-action#backfill-historical-measurements)
+describes `lookback`, `minimum-age`, optional endpoint overrides and queue behavior.
+Do not mix explicit `from` with rolling-range inputs. Start with an intentional cost
+budget rather than assuming a calendar span guarantees readiness. See
+[baseline operations](operations.md#bootstrap-and-check-a-baseline) and the
+[core backfill contract](commands/backfill.md).
+
+<a id="3-add-the-pull-request-workflow"></a>
+
+## 8. Add the PR caller
 
 Create `.github/workflows/benchmark-pr.yml`:
 
@@ -120,144 +268,41 @@ jobs:
       actions: read
       id-token: write
       pull-requests: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v2
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v3
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
-Commit this file to `main`, then open a PR that changes benchmarked code, using a
-branch in your repository. The workflow posts a pending comment, runs the benchmarks,
-and updates that comment with the result and a link to the `pr-bench-history-report-…`
-artifact. Pushing another commit updates the same comment; closing the PR cancels
-any outstanding benchmark run.
+Commit the caller to the base branch, then open a same-repository PR changing
+benchmarked code. Preparation selects affected benchmark packages; root-owned or
+unowned changes fall back to the workspace rather than silently ignoring them.
+No selected packages produces an explicit empty-scope result, not measured clean evidence.
 
-The PR workflow skips forks. With GitHub's default settings, GitHub's servers remove
-`id-token: write` from fork PR jobs, so those jobs cannot request the identity token
-needed to access Azure. Editing the workflow or approving its run does not restore
-that permission. Workflows running in the fork itself use the fork's identity, which
-does not match your Azure trust. Azure's PR trust rule names your repository, not the
-PR's source repository: GitHub's permission restriction, not that Azure rule or a
-workflow condition, prevents fork access.
+With publication enabled, the workflow maintains one PR comment: pending or stale
+while work runs, then findings, clean or inconclusive with the available artifact link.
+It also produces the workflow card and `pr-bench-history-report-…` artifact.
+Pushing a new commit updates the same comment; closing the PR cancels outstanding work.
+`publish: false` disables comment writes but still permits collection, storage and
+analysis. A complete all-clear requires both judged in-scope series and completed
+expected platforms.
 
-## 4. Fill gaps with backfill
+### Same-repository and fork boundary
 
-Backfill is useful when hosted runners leave sparse per-machine history or when you
-want to seed earlier commits. Create `.github/workflows/benchmark-backfill.yml`:
+The reusable workflow skips fork-origin PRs. GitHub's default fork permission policy
+removes the OIDC write permission needed for Azure access; approving a run does not
+restore it. A workflow running in the fork uses the fork's identity, not the target
+repository's Azure trust.
 
-```yaml
-name: Benchmark backfill
+Azure's repository PR subject is **not a fork-head filter**. Keep the explicit
+same-repository policy and do not substitute a privileged `pull_request_target`
+checkout of untrusted head code. Fork benchmarking needs a separate authorization
+design; it is not a setup step in this guide.
 
-on:
-  schedule:
-    - cron: '0 2 * * *'
-  workflow_dispatch:
-    inputs:
-      to:
-        description: Optional range-end override
-        required: false
-        type: string
+## Next: use and maintain the evidence
 
-jobs:
-  backfill:
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-      id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v2
-    with:
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
-      lookback: 14 days
-      minimum-age: 24 hours
-      to: ${{ inputs.to }}
-```
-
-This example runs nightly and permits manual dispatch on `main`, matching the Azure
-branch trust configured above. Shared preparation chooses the newest first-parent
-commit at least `minimum-age` old, then finds its oldest first-parent ancestor within
-`lookback` of preparation time. The optional `to` input overrides the age-based end
-selection; the lookback still runs from preparation time, not from the selected end.
-If that history is older than the horizon, backfill measures just the selected end.
-If no automatic end is eligible, the workflow explains the no-op and starts no
-benchmark jobs.
-
-Both duration inputs are required for rolling selection. They accept friendly spans
-such as `24 hours` or `24 hours ago`, and ISO spans such as `P14D`; their magnitudes are
-resolved from one UTC clock snapshot, including calendar units. `lookback` must be
-nonzero; `minimum-age` may be zero.
-
-To select an explicit range instead, replace the duration inputs with `from` and
-`to`, each a nonblank, single-line commit reference. Do not combine `from` with
-`lookback` or `minimum-age`. The start must be a first-parent ancestor of the end.
-Preparation freezes the range to full commit SHAs and execution checks out its end.
-The core tool visits the inclusive range newest-first, using each historical workspace
-rather than filtering against benchmarks present at the invocation head.
-
-Already-stored commits are skipped in the current platform/machine partition, so you
-can resume an interrupted run by dispatching the same range. Each platform job has a
-six-hour ceiling and runs independently of other platforms' failures. Backfill runs
-queue without deduplicating or cancelling earlier invocations; project/platform
-queues also serialize config paths that identify the same storage project.
-
-Set `max-commits: '1'` to attempt at most one missing commit per platform job, or choose
-another positive integer. Omitted or empty input leaves replay unlimited. The limit applies
-after skipping recorded commits in the current partition and does not shorten the inclusive
-range. Failed, empty and write-time duplicate attempts count, while pre-check skips do not.
-Each attempt completes all repetitions and engine storage, and a bounded pass exits normally
-with a deferred-work count after cleanup. This bounds work, not elapsed time.
-
-Build or benchmark failures stop by default. Set `ignore-errors: true` to continue
-past individual failing commits; infrastructure errors still fail. The workflow preserves
-unsuccessful job conclusions and has no whole-job failure-suppression option.
-A hosted-runner timeout is not a successful bounded pass.
-
-Backfill accepts the same measurement and installation settings as the other workflows:
-`platforms`, `working-directory`, `config`, `exclude`, `bench`, `best-of`, `all-features`,
-`no-default-features`, `features`, `rustflags`, `install-method` and `source-path`. Match your history
-caller's feature and repetition settings so measurements remain comparable. There is
-no package allowlist or overwrite option in the reusable workflow.
-
-Configuration, source-installed tools and the optional
-`.github/actions/bench-history-setup/action.yml` hook come from the invocation checkout,
-not the historical commits. The shared workflow invokes that fixed hook before
-benchmarking; no setup-path input is needed. A nested `working-directory` selects the
-same relative project directory in each historical worktree.
-
-`rustflags` appends rustc arguments using Cargo's whitespace-separated `RUSTFLAGS`
-syntax, without shell quoting. Existing encoded Cargo arguments take precedence over
-ambient `RUSTFLAGS` and keep their argument boundaries. An empty input preserves the
-environment. Set the same compiler options for history, PR and backfill; custom setup
-hooks need only prepare repository-specific build prerequisites.
-
-The reusable workflow calculates the range; your caller supplies only parameters
-and a schedule. It emits no receipts, report
-artifacts or public outputs, and has no analysis or publication sink; later history
-runs analyze the stored measurements. See [backfill](commands/backfill.md) for core
-range, storage and measurement semantics.
-
-## 5. Read the reports
-
-Findings describe benchmark changes and are advisory: they do not fail the workflow.
-Read the report's coverage information alongside its findings. A complete all-clear
-requires enough comparable data and successful collection on every expected platform.
-
-The first runs often have too little history to compare against. Their publication
-state is **inconclusive**, not clean. An inconclusive report can also mean that only
-some benchmarks could be judged or that collection coverage was incomplete. The
-report's [analysis outcome](appendix/reporting.md#analysis-outcomes) and coverage
-explain the cause; inconclusive publication does not mean analysis failed.
-Let the history workflow collect measurements as new commits reach `main`, or
-seed earlier commits with [backfill](commands/backfill.md).
-
-Only findings create the rolling `Benchmark history findings for …` issue.
-An initial clean or inconclusive history report therefore leaves no issue; inspect
-its artifact instead. Once a findings issue exists, a later complete clean report
-marks it all-clear but leaves it open. Inconclusive results cannot clear it.
-PRs receive a comment even for clean or inconclusive results. If no benchmark
-packages were affected, the comment explains that nothing was benchmarked.
-
-Execution failures are different: inspect the failed Actions run and its diagnostics.
-For a failed history run, the workflow also attempts to publish a
-`Benchmark history workflow failed for …` alert issue. Later successful runs do not
-close these alerts.
+Use [Investigate and accept](appendix/insights.md) for report-driven decisions.
+[Operate benchmark history](operations.md) covers reruns, scope, baseline effects,
+cost, storage/artifact retention and upgrades. The
+[action repository](https://github.com/folo-rs/cargo-bench-history-action#workflow-configuration)
+owns the complete reusable-workflow and action-only input matrices.

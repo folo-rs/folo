@@ -14,15 +14,16 @@
 
 use std::fmt::Write as _;
 use std::num::NonZero;
+use std::sync::Arc;
 
 use cbh_detect::{
-    AnalysisContext, AnalysisMode, Detection, Finding, Series, SeriesCensus, UnjudgedReason,
-    evaluate_with_log, examples, find_changes,
+    AnalysisContext, AnalysisMode, BranchComparison, Detection, Finding, Series, SeriesCensus,
+    UnjudgedReason, evaluate_with_log, examples, find_changes,
 };
 use cbh_model::{DiscriminantSet, Engine, MachineKey, MetricKind, TargetTriple};
 use cbh_render::{
     AnalysisOutcome, ComparisonBaseLag, ComparisonBaseLagReason, Coverage, DEFAULT_SUMMARY_LIMIT,
-    ReportFormat, ReportInput, SetSummary, render,
+    ReportFormat, ReportInput, SetSummary, render, render_markdown_summary,
 };
 
 use crate::assets::Asset;
@@ -56,7 +57,7 @@ const PROJECT: &str = "textproc";
 /// A full hexadecimal object name, because that is what the pipeline hands the renderer;
 /// the report abbreviates it itself, and an excerpt built from a pre-abbreviated commit
 /// would not show that it does.
-const TIP_COMMIT: &str = "9f2c4a1d3b5e708aab12cd34ef5678901234567a";
+pub(crate) const TIP_COMMIT: &str = "9f2c4a1d3b5e708aab12cd34ef5678901234567a";
 
 /// The oldest analyzed commit, which the header states alongside the tip so the reader
 /// sees the stretch of history the run covered.
@@ -165,11 +166,52 @@ fn silent_suite() -> Vec<Series> {
     suite
 }
 
-/// One batch detection pass over `suite`, with ghosts accounted for after the pass.
-fn detect_suite(suite: &[Series]) -> Detection {
+/// Aligns measured examples without turning their shorter histories into ghosts.
+///
+/// Every analyzed benchmark is present at the context. A short history starts later;
+/// deliberately absent benchmarks belong in the separately attached exclusion census.
+fn align_history_context(suite: &mut [Series], context: &AnalysisContext) {
+    for series in suite {
+        let last = series
+            .points
+            .last()
+            .expect("every worked history series contains measurements")
+            .topo_index;
+        let offset = context
+            .tip_index
+            .checked_sub(last)
+            .expect("the shared context is the maximum position in the worked suite");
+        for point in &mut series.points {
+            point.topo_index = point
+                .topo_index
+                .checked_add(offset)
+                .expect("shifting an ordered example never passes its shared context");
+            point.object_ordinal = u32::try_from(point.topo_index)
+                .expect("worked examples contain far fewer positions than u32::MAX");
+            point.commit = Some(Arc::from(if point.topo_index == context.tip_index {
+                TIP_COMMIT.to_owned()
+            } else {
+                format!("commit{}", point.topo_index)
+            }));
+        }
+    }
+}
+
+/// One batch detection pass over context-present examples, with exclusions attached afterward.
+fn detect_suite(mut suite: Vec<Series>) -> Detection {
+    let context = suite_context(&suite);
+    align_history_context(&mut suite, &context);
+    assert!(
+        suite.iter().all(|series| series
+            .points
+            .iter()
+            .any(|point| point.topo_index == context.tip_index
+                && point.commit.as_deref() == Some(TIP_COMMIT))),
+        "worked analyzed series must be measured at the shared context"
+    );
     let Detection {
         findings, census, ..
-    } = find_changes(suite, &suite_context(suite));
+    } = find_changes(&suite, &context);
     Detection {
         findings,
         census: attach_exclusions(census),
@@ -179,7 +221,7 @@ fn detect_suite(suite: &[Series]) -> Detection {
 
 /// The census the worked analyses account for their suite with.
 fn worked_census() -> SeriesCensus {
-    detect_suite(&worked_suite()).census
+    detect_suite(worked_suite()).census
 }
 
 /// A worked analysis, held as the owned data a report is rendered from.
@@ -188,7 +230,7 @@ fn worked_census() -> SeriesCensus {
 /// them here is what lets every excerpt in the chapter be a real rendering: one analysis
 /// feeds the text, Markdown and JSON forms, so none of them can drift from another or from
 /// the renderer.
-struct Analysis {
+pub(crate) struct Analysis {
     /// The mode the analysis ran in.
     mode: AnalysisMode,
 
@@ -203,18 +245,31 @@ struct Analysis {
 
     /// What the analysis judged, and why it left the rest unjudged.
     census: SeriesCensus,
+
+    /// Batch-derived historical context for branch reports.
+    comparisons: Vec<BranchComparison>,
 }
 
 impl Analysis {
     /// The report this analysis renders to, in `format`.
-    fn render(&self, format: ReportFormat) -> String {
+    pub(crate) fn render(&self, format: ReportFormat) -> String {
+        self.project(|input| render(input, format, false))
+    }
+
+    /// The exact condensed projection embedded in a GitHub comment.
+    pub(crate) fn summary(&self) -> String {
+        self.project(|input| render_markdown_summary(input, DEFAULT_SUMMARY_LIMIT))
+    }
+
+    /// Keeps full reports and comment summaries on the same evidence.
+    fn project(&self, project: impl FnOnce(&ReportInput<'_>) -> String) -> String {
         let sets = vec![SetSummary {
             set: &self.set,
             runs: RUNS_LOADED,
             series: self.coverage().in_scope(),
             findings: self.findings.iter().collect(),
             comparison_base_lags: self.lags.clone(),
-            branch_comparison: None,
+            branch_comparison: self.comparisons.first(),
         }];
         let input = ReportInput {
             inspection: None,
@@ -225,17 +280,21 @@ impl Analysis {
             runs: RUNS_LOADED,
             series: self.coverage().in_scope(),
             commit_span: Some((FIRST_COMMIT, TIP_COMMIT)),
-            report_improvements: false,
+            report_improvements: self.mode == AnalysisMode::Branch,
             findings: &self.findings,
             sets: &sets,
             hint: None,
             warning: None,
-            ghosts_excluded: GHOST_SERIES,
+            ghosts_excluded: self
+                .census
+                .reasons()
+                .find_map(|(reason, count)| (reason == UnjudgedReason::Ghost).then_some(count))
+                .unwrap_or(0),
             census: self.census.clone(),
         };
         // Colour is emitted as ANSI escape sequences, which a book page shows as
         // mojibake rather than as colour.
-        render(&input, format, false)
+        project(&input)
     }
 
     /// What the analysis judged, in the form the report reads it in.
@@ -273,13 +332,14 @@ fn judge_branch(name: &str, values: &[f64], kind: MetricKind) -> Finding {
 fn worked_analysis() -> Analysis {
     let Detection {
         findings, census, ..
-    } = detect_suite(&worked_suite());
+    } = detect_suite(worked_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
         findings,
         lags: Vec::new(),
         census,
+        comparisons: Vec::new(),
     }
 }
 
@@ -287,13 +347,14 @@ fn worked_analysis() -> Analysis {
 fn silent_analysis() -> Analysis {
     let Detection {
         findings, census, ..
-    } = detect_suite(&silent_suite());
+    } = detect_suite(silent_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
         findings,
         lags: Vec::new(),
         census,
+        comparisons: Vec::new(),
     }
 }
 
@@ -309,6 +370,94 @@ fn lagging_analysis(lag: ComparisonBaseLag) -> Analysis {
         )],
         lags: vec![lag],
         census: worked_census(),
+        comparisons: Vec::new(),
+    }
+}
+
+/// Selects real detector inputs for each successful-analysis outcome in the gallery.
+pub(crate) fn gallery_analysis(outcome: AnalysisOutcome) -> Analysis {
+    let suite = match outcome {
+        AnalysisOutcome::Findings => return worked_analysis(),
+        AnalysisOutcome::Partial => return silent_analysis(),
+        AnalysisOutcome::Clean => vec![suite_series("steady", &examples::flat_noisy())],
+        AnalysisOutcome::InsufficientBaseline => vec![suite_series("new_case", &[100.0, 101.0])],
+        AnalysisOutcome::NothingInScope => Vec::new(),
+    };
+    let Detection {
+        findings, census, ..
+    } = detect_suite(suite);
+    Analysis {
+        mode: AnalysisMode::History,
+        set: worked_set(),
+        findings,
+        lags: Vec::new(),
+        census,
+        comparisons: Vec::new(),
+    }
+}
+
+/// Long names and large counts exercise both directions in the branch report layout.
+pub(crate) fn gallery_branch() -> Analysis {
+    // Model a large text-processing batch so numeric labels cannot rely on tiny sample values.
+    const INSTRUCTION_SCALE: f64 = 1_000_000.0;
+
+    let counts: Vec<f64> = examples::clean_step()
+        .into_iter()
+        .map(|value| (value * INSTRUCTION_SCALE).round())
+        .collect();
+    let base = counts
+        .len()
+        .checked_div(2)
+        .and_then(|half| half.checked_sub(1))
+        .expect("the worked step contains two nonempty regimes");
+    let set = DiscriminantSet {
+        engine: Engine::Callgrind,
+        ..worked_set()
+    };
+    let mut improved = counts.clone();
+    improved.reverse();
+
+    // Namespace-qualified names remain intact; the renderer owns their visual wrapping.
+    let suite = [
+        (
+            "normalize_unicode_and_validate_nested_records_for_incremental_batches",
+            counts,
+        ),
+        (
+            "scan_and_classify_multilingual_text_with_incremental_boundary_checks",
+            improved,
+        ),
+    ]
+    .map(|(function, values)| {
+        let mut series = examples::series(PROJECT, &values, MetricKind::InstructionCount, 0);
+        series.id.segments.tail = vec![
+            "streaming_parser".to_owned(),
+            function.to_owned(),
+            "large_input".to_owned(),
+        ];
+        series.set = set.clone();
+        let mut series = examples::with_base_window(series, base);
+        series
+            .points
+            .last_mut()
+            .expect("the worked step has observations")
+            .commit = Some(Arc::from(TIP_COMMIT));
+        series
+    });
+    let context = examples::branch_context(
+        suite
+            .first()
+            .expect("the worked suite contains both directions"),
+        base,
+    );
+    let detection = find_changes(&suite, &context);
+    Analysis {
+        mode: AnalysisMode::Branch,
+        set,
+        findings: detection.findings,
+        lags: Vec::new(),
+        census: detection.census,
+        comparisons: detection.branch_comparisons,
     }
 }
 
@@ -342,7 +491,7 @@ fn finding_block(report: &str, id: &str) -> Vec<String> {
         .collect()
 }
 
-/// One finding with every part of it named.
+/// One production-rendered finding, without repeating its layout as an annotation table.
 fn finding_annotated() -> String {
     let analysis = worked_analysis();
     let report = analysis.render(ReportFormat::Text);
@@ -352,39 +501,8 @@ fn finding_annotated() -> String {
         .expect("the worked analysis reports");
     let block = finding_block(&report, &finding.id.qualified());
 
-    let mut lines = block.iter().map(|line| line.trim());
-    let identity = lines.next().unwrap_or_default();
-    let headline = lines.next().unwrap_or_default();
-    let detail = lines.next().unwrap_or_default();
-
     let mut markdown = String::from("A finding, as the text report prints it:\n\n");
     markdown.push_str(&fenced("text", &block.join("\n")));
-    markdown.push_str("\n| Part | What it carries |\n|---|---|\n");
-    writeln!(
-        markdown,
-        "| `{identity}` | The benchmark identity: every benchmark-ID segment joined by `/`. \
-         This slash-rendered identity is the string accepted by \
-         [`examine`](../commands/examine.md) and matched by the benchmark-ID prefix supplied \
-         to [`bless`](../commands/bless.md). |"
-    )
-    .expect("writing to a String never fails");
-    writeln!(
-        markdown,
-        "| `{headline}` | The headline: the move as a percentage of the baseline, and the \
-         metric kind that moved. Findings are ranked by the magnitude of that percentage. |"
-    )
-    .expect("writing to a String never fails");
-    writeln!(
-        markdown,
-        "| `{detail}` | The detail: direction, the detector that produced the finding, \
-         the before and after representative values with units, and a commit somewhere near \
-         the change. |"
-    )
-    .expect("writing to a String never fails");
-    markdown.push_str(
-        "| the lines below it | The chart: the series drawn against topology, one column \
-         per commit; its values use the units of the finding above it. |\n",
-    );
     markdown
 }
 
@@ -527,8 +645,8 @@ fn census() -> String {
     }
 
     markdown.push_str(
-        "\nThe judged ratio heads each human-readable report that had anything in scope. \
-         Text prints the per-reason breakdown only when there are no findings, as here. \
+        "\nThe full report states the judged ratio when anything is in scope. \
+         Text prints the per-reason breakdown beside findings as well as in silent reports. \
          Full Markdown always includes it in the final Coverage section, and JSON always \
          carries it under `census.reasons`.\n",
     );
@@ -675,6 +793,38 @@ fn describe_reason(reason: ComparisonBaseLagReason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_histories_start_later_but_share_the_measured_context() {
+        let mut suite = vec![
+            suite_series("short", &[10.0, 11.0]),
+            suite_series("long", &[20.0, 21.0, 22.0, 23.0]),
+        ];
+        let context = suite_context(&suite);
+
+        align_history_context(&mut suite, &context);
+
+        let short = suite.first().unwrap();
+        assert!(short.points.iter().map(|point| point.topo_index).eq([2, 3]));
+        assert!(
+            short
+                .points
+                .iter()
+                .map(|point| point.value)
+                .eq([10.0, 11.0])
+        );
+        for series in &suite {
+            let last = series.points.last().unwrap();
+            assert_eq!(last.topo_index, context.tip_index);
+            assert_eq!(last.commit.as_deref(), Some(TIP_COMMIT));
+            for point in &series.points {
+                assert_eq!(
+                    usize::try_from(point.object_ordinal).unwrap(),
+                    point.topo_index
+                );
+            }
+        }
+    }
 
     #[test]
     #[cfg_attr(

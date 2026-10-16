@@ -834,7 +834,6 @@ fn interval_overlap() -> Asset {
             span.saturating_div(2),
             f64::midpoint(before_level, after_level),
             format!("declined by {declined}"),
-            theme::MUTED,
         );
 
     Asset::new("gates-interval-overlap.svg", plot.render())

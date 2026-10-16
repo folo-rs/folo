@@ -14,6 +14,21 @@ use crate::summary::input::{
     BackfillPlatform, Publication, ReportDetails, ResultInput, SummaryInput, UnavailableReason,
 };
 
+/// Renders a workflow card from JSON and caller-supplied evidence.
+///
+/// Evidence paths are passed unchanged to `read`; the caller supplies their resolution context.
+///
+/// # Errors
+///
+/// Returns an error for invalid inputs, inconsistent evidence or a failed evidence read.
+pub fn render_workflow_summary(
+    input: &[u8],
+    read: impl FnMut(&Path) -> Result<Vec<u8>, AppError>,
+) -> Result<String, AppError> {
+    let input = serde_json::from_slice(input).map_err(InvalidSummary::caused_by)?;
+    render(input, read)
+}
+
 /// Projects explicit job facts and validated evidence without scraping logs or report prose.
 pub(crate) fn render(
     input: SummaryInput,

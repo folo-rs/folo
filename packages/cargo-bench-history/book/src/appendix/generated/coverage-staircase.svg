@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="5 candidates against rank thresholds in a family of 12" style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg"><title>5 candidates against rank thresholds in a family of 12</title><desc>parse_headers: chance level 0.002, rank threshold 0.008333333333333333, retained circle. tokenize: chance level 0.011, rank threshold 0.016666666666666666, retained circle. index_build: chance level 0.031, rank threshold 0.025, retained circle. flush: chance level 0.033, rank threshold 0.03333333333333333, retained circle. compress: chance level 0.045, rank threshold 0.04166666666666667, struck-out circle.</desc>
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 5 candidates against rank thresholds in a family of 12
 </text>

@@ -114,30 +114,23 @@ report. Without this option, ordinary shared-store querying is unchanged.
 
 ## Output
 
-Each finding names the benchmark and metric, quantifies the move, names a commit somewhere
-near the change, and draws a compact, topology-accurate chart — one column per first-parent
-commit, so a commit with no measurement is a gap rather than being collapsed away. History
-mode charts the full selected series, keeping a trailing gap up to the analyzed tip when a
-benchmark has not been measured on the most recent commits. Branch mode charts the comparison
-baseline followed by the recent per-commit tail ending at the tip, keeping the one commit
-being judged visible and drawing any comparison-base lag as the empty columns before the tip;
-intermediate branch points do not change the tip-only judgment.
+Each finding names the benchmark and metric and quantifies the move. Full reports
+retain detailed evidence, charts and inspection commands. Branch summaries compare
+the context measurement with the observed base range.
 
 Text goes to stdout by default. File toggles compose, so a single pass can emit text,
 Markdown, and JSON at once; requesting no output at all is an error. A derived, condensed
 Markdown **summary** is also available for a size-limited downstream consumer.
 
 Full Markdown ends with a **Coverage** section listing judged-series counts and unjudged
-reasons; JSON carries the same account under `census`. Text and condensed summaries include
-the judged ratio and disclose configured exclusions even beside findings. Their full
-reason breakdown appears only when there are no findings. See
+reasons; JSON carries the same account under `census`. Text and condensed summaries
+qualify coverage and keep material warnings visible. See
 [Reading a silent report](../appendix/insights.md#reading-a-silent-report) for matching
 examples and how to interpret the limits of a verdict.
 
-In branch mode each finding states the observed current-base range and the excess beyond its
-nearest edge. Each discriminant-set section also states how many comparable base commits showed at
-least as much report-wide out-of-range movement. The JSON set carries the same counts under
-`branch_comparison`; each JSON finding carries its range and excess under `branch`.
+Branch findings report **excess** outside the observed current-base range. JSON retains
+the detailed range and excess under each finding's `branch` field, and historical
+comparison counts under each set's `branch_comparison`.
 
 > **Comparison-base warnings (branch mode)**
 > On rotating CI machine pools the newest base commits may carry data only under a different

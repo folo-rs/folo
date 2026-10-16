@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 508" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="a blessing re-baselines detection; the chart still shows the whole series" style="width:100%;height:auto" viewBox="0 0 680 508" xmlns="http://www.w3.org/2000/svg"><title>a blessing re-baselines detection; the chart still shows the whole series</title><desc>Upper pane: the series as reconstructed. Values in ns against commit position, spanning 24 positions. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; X marks identify added data; crossed-out circles are excluded. Gaps are missing observations, not zero values. Lower pane: what detection judges. Values in ns against commit position, spanning 24 positions. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; X marks identify added data; crossed-out circles are excluded. Gaps are missing observations, not zero values. no longer judged: positions 0 to 7. blessing: position 8.</desc>
 <text x="340" y="5" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 a blessing re-baselines detection; the chart still shows the whole series
 </text>
@@ -212,11 +212,11 @@ commit position
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="580,462 580,467 "/>
 <rect x="74" y="302" width="197" height="159" opacity="0.15" fill="#969BA0" stroke="none"/>
-<text x="74" y="302" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
+<text x="74" y="302" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 no longer judged
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="271,461 271,302 "/>
-<text x="271" y="302" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="271" y="461" dy="-0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 blessing
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="2" points="86,439 111,434 "/>

@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 508" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="the same 6.7% move at two magnitudes" style="width:100%;height:auto" viewBox="0 0 680 508" xmlns="http://www.w3.org/2000/svg"><title>the same 6.7% move at two magnitudes</title><desc>Upper pane: at 3 ns: the move fits inside the floor. Values in ns against commit position, spanning 20 positions. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; X marks identify added data; crossed-out circles are excluded. Gaps are missing observations, not zero values. the new level: 3.2. moves smaller than 1 ns: positions 0 to 19. Lower pane: at 3000 ns: reported. Values in ns against commit position, spanning 20 positions. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; X marks identify added data; crossed-out circles are excluded. Gaps are missing observations, not zero values. the new level: 3200. moves smaller than 1 ns: positions 0 to 19.</desc>
 <text x="340" y="5" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 the same 6.7% move at two magnitudes
 </text>
@@ -89,7 +89,7 @@ commit position
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="622,222 622,227 "/>
 <rect x="74" y="81" width="593" height="122" opacity="0.15" fill="#969BA0" stroke="none"/>
-<text x="74" y="81" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
+<text x="74" y="81" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 moves smaller than 1 ns
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="74,130 91,130 "/>
@@ -112,7 +112,7 @@ moves smaller than 1 ns
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="578,130 595,130 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="607,130 625,130 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="637,130 655,130 "/>
-<text x="664" y="127" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="664" y="127" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 the new level
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="2" points="88,142 118,142 "/>
@@ -251,7 +251,7 @@ commit position
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="622,462 622,467 "/>
 <rect x="74" y="442" width="593" height="1" opacity="0.15" fill="#969BA0" stroke="none"/>
-<text x="74" y="442" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
+<text x="74" y="442" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 moves smaller than 1 ns
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="74,321 91,321 "/>
@@ -274,7 +274,7 @@ moves smaller than 1 ns
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="578,321 595,321 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="607,321 625,321 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="1" points="637,321 655,321 "/>
-<text x="664" y="318" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="664" y="318" dy="-0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 the new level
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="2" points="88,443 118,443 "/>
@@ -306,14 +306,14 @@ the new level
 <circle cx="296" cy="443" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <circle cx="326" cy="443" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <circle cx="355" cy="443" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
-<circle cx="385" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="414" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="444" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="474" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="503" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="533" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="563" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="592" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="622" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
-<circle cx="652" cy="321" r="3" opacity="1" fill="#D64541" stroke="none" stroke-width="1"/>
+<polygon opacity="1" fill="#D64541" points="385,316 381,324 390,324 "/>
+<polygon opacity="1" fill="#D64541" points="414,316 410,324 419,324 "/>
+<polygon opacity="1" fill="#D64541" points="444,316 440,324 449,324 "/>
+<polygon opacity="1" fill="#D64541" points="474,316 470,324 479,324 "/>
+<polygon opacity="1" fill="#D64541" points="503,316 499,324 508,324 "/>
+<polygon opacity="1" fill="#D64541" points="533,316 529,324 538,324 "/>
+<polygon opacity="1" fill="#D64541" points="563,316 559,324 568,324 "/>
+<polygon opacity="1" fill="#D64541" points="592,316 588,324 597,324 "/>
+<polygon opacity="1" fill="#D64541" points="622,316 618,324 627,324 "/>
+<polygon opacity="1" fill="#D64541" points="652,316 648,324 657,324 "/>
 </svg>

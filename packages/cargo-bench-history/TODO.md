@@ -1,5 +1,11 @@
 # Follow-up work
 
+## Decide metabench interoperability
+
+Defer interoperability until a product decision selects direct support or consumption
+of a suitable emitted dataset, potentially with changes to that dataset's producer.
+Neither option is committed support. Current integration guidance covers existing engines only.
+
 ## Benchmark fork-origin pull requests
 
 Fork benchmarking is not supported. A possible extension is secure federated access to the

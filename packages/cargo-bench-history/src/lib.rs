@@ -23,18 +23,16 @@
 //!
 //! # Quick start
 //!
-//! ```text
-//! cargo bench-history install   # write a starter .cargo/bench_history.toml
-//! cargo bench-history collect --local=./bench-history    # bench the current commit and store the results
-//! cargo bench-history backfill --local=./bench-history <from> <to>   # bootstrap history from past commits
-//! cargo bench-history analyze --local=./bench-history    # report regressions and drift over history
-//! ```
+//! Start with the [local quickstart](https://folo-rs.github.io/folo/cargo-bench-history/getting-started.html)
+//! to check an existing supported benchmark, collect a bounded scope and inspect its
+//! report. The [worked report gallery](https://folo-rs.github.io/folo/cargo-bench-history/appendix/reporting.html#worked-report-gallery)
+//! demonstrates step, drift and inconclusive results without requiring benchmark execution.
 //!
-//! `collect` benches the current commit and stores the results in the selected
-//! storage; `backfill` benches a range of past commits so there is a trend to
-//! analyze (a single `collect` on its own has nothing to compare against); `analyze`
-//! reads the accumulated history back and reports what changed. Run these from the
-//! repository whose benchmarks you are tracking.
+//! `collect` benchmarks the current commit and stores its results; `analyze` reads
+//! the accumulated history and reports what changed. A new history normally lacks
+//! enough comparable commits to judge a series. `backfill --max-commits N` can
+//! populate a chosen historical range in bounded passes. Neither a fixed calendar
+//! span nor a minimum point count guarantees a finding.
 //!
 //! Storage is selected at run time: `--local=<path>` (or a bare `--local`, taking
 //! the path from `CARGO_BENCH_HISTORY_STORAGE`) selects local filesystem storage,
@@ -74,8 +72,8 @@
 //! engine's machine-readable output, and stores one result set per engine. There
 //! is nothing to configure about engines: the run enables the combined
 //! environment the engines need and detects each engine from the output
-//! it produces (off Linux the Callgrind benches compile to no-ops, so only the
-//! host-runnable engines are stored). Re-running the same clean commit is refused
+//! it produces. Benchmarks and their native dependencies must support the selected
+//! platform. Re-running the same clean commit is refused
 //! as a duplicate unless `--overwrite` replaces the stored result; `--no-store`
 //! harvests and reports without writing. `--best-of N` reruns the whole suite `N`
 //! times and keeps the minimum value per metric — a noise-reduction pass for

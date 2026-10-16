@@ -22,7 +22,9 @@ flowchart TD
     F --> G["Fetch and parse only these"]
 ```
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/selection-funnel.svg}}
+</figure>
 
 {{#include generated/selection-funnel.md}}
 
@@ -91,7 +93,9 @@ side of the merge base it sits:
 | Target-side (after the merge base) | admitted | admitted |
 | The base tip itself | admitted | admitted, but only while the tree is currently dirty |
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/selection-dirty.svg}}
+</figure>
 
 *Why base-side dirty runs are rejected:* the base is the reference the analysis compares
 against. A measurement of somebody's uncommitted experiment is not a description of the base's

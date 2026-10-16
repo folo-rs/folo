@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 240" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="a step against the series&apos; typical residual and the gate threshold it must clear" style="width:100%;height:auto" viewBox="0 0 680 240" xmlns="http://www.w3.org/2000/svg"><title>a step against the series&apos; typical residual and the gate threshold it must clear</title><desc>Signed residuals around zero. Stems show each observation&apos;s distance from its fitted model. The shaded band extends to 17.38217272935335 on either side of zero. The labelled horizontal line marks the move being judged: 15.968708540898334.</desc>
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 a step against the series&apos; typical residual and the gate threshold it must clear
 </text>
@@ -106,7 +106,7 @@ commit position
 </text>
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="622,194 622,199 "/>
 <rect x="74" y="48" width="593" height="132" opacity="0.15" fill="#969BA0" stroke="none"/>
-<text x="79" y="48" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
+<text x="79" y="48" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 residual-noise gate threshold
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="88,114 88,116 "/>
@@ -150,7 +150,7 @@ residual-noise gate threshold
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="652,114 652,173 "/>
 <circle cx="652" cy="173" r="2" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="74,53 667,53 "/>
-<text x="79" y="53" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+<text x="79" y="53" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 the move being judged
 </text>
 </svg>

@@ -1,0 +1,44 @@
+{
+  "project": "textproc",
+  "tip_commit": "9f2c4a1d3b5e708aab12cd34ef5678901234567a",
+  "tip_dirty": false,
+  "mode": "history",
+  "outcome": "partial",
+  "notable": false,
+  "runs": 128,
+  "series": 6,
+  "regressions": 0,
+  "ghosts_excluded": 2,
+  "census": {
+    "total": 9,
+    "in_scope": 6,
+    "judged": 3,
+    "unjudged": 6,
+    "coverage": "partial",
+    "reasons": [
+      {
+        "reason": "ghost",
+        "count": 2
+      },
+      {
+        "reason": "ignored",
+        "count": 1
+      },
+      {
+        "reason": "too_few_points",
+        "count": 3
+      }
+    ]
+  },
+  "findings": [],
+  "sets": [
+    {
+      "engine": "criterion",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "a1b2c3d4",
+      "runs": 128,
+      "series": 6,
+      "regressions": 0
+    }
+  ]
+}

@@ -11,10 +11,9 @@
 )]
 
 //! Generates the registered figures, computed examples, configured values, and
-//! serialized excerpts embedded in the `cargo-bench-history` book's "Data pipeline"
-//! chapters.
+//! serialized excerpts and worked reports embedded in the `cargo-bench-history` book.
 //!
-//! These chapters document the tool's statistical processing end to end. Evidence that
+//! The guide documents reader journeys and statistical processing. Evidence that
 //! materially depends on executable behaviour — gate thresholds, series values,
 //! p-values, census tallies, report excerpts — is rendered from the same data the
 //! generator's tests assert against, written into

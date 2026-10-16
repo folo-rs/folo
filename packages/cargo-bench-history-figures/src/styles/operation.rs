@@ -51,7 +51,12 @@ impl Operation {
             .saturating_mul(2)
             .saturating_add(title_strip);
 
-        canvas::draw(theme::WIDTH, height, |root| {
+        let description = format!(
+            "Upper pane: {} Lower pane: {}",
+            self.before.description(),
+            self.after.description(),
+        );
+        canvas::draw(theme::WIDTH, height, &self.title, &description, |root| {
             let (header, panes) = root.split_vertically(title_strip);
             header.titled(
                 self.title.as_str(),

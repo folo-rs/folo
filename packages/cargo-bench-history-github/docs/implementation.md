@@ -22,6 +22,9 @@ step-summary append and execution-only fallback, not a duplicate verdict impleme
 Backfill completion decoding reuses the core model's typed count/range validation. Missing
 platforms and absent completion evidence retain unknown accounting rather than acquiring
 zero values. The [workflow card contract](workflow-summary.md) owns input and failure semantics.
+The same JSON-to-card entry point accepts an evidence reader for the book generator.
+Generated worked examples therefore use production validation and rendering with in-memory
+reports, without filesystem access, GitHub credentials or duplicated verdict rules.
 
 The port exposes semantic GitHub operations—title search, issue reads, comment listing, create,
 update, compare and read the pull-request head—rather than a raw HTTP passthrough. Idempotent

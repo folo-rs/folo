@@ -17,6 +17,7 @@ use plotters::coord::Shift;
 use plotters::drawing::DrawingArea;
 use plotters::element::{Rectangle, Text};
 use plotters::prelude::ChartBuilder;
+use plotters::style::text_anchor::{HPos, Pos, VPos};
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
 
 use crate::{canvas, coord, theme};
@@ -69,6 +70,17 @@ impl Cell {
             Self::Dirty => "dirty run",
             Self::Excluded => "excluded run",
             Self::Focus => "highlighted run",
+        }
+    }
+
+    /// A cell's printed symbol makes its role independent of its fill color.
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::Absent => "",
+            Self::Clean => "C",
+            Self::Dirty => "D",
+            Self::Excluded => "X",
+            Self::Focus => "+",
         }
     }
 }
@@ -134,7 +146,22 @@ impl Occupancy {
             OCCUPANCY_LEGEND_HEIGHT
         });
 
-        canvas::draw(theme::WIDTH, height, |root| {
+        let description = self
+            .rows
+            .iter()
+            .map(|row| {
+                let cells = row
+                    .cells
+                    .iter()
+                    .enumerate()
+                    .map(|(position, cell)| format!("{position}: {}", cell.label()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}: {cells}.", row.label)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        canvas::draw(theme::WIDTH, height, &self.caption, &description, |root| {
             let (grid_area, legend_area) = if legend.is_empty() {
                 (root.clone(), None)
             } else {
@@ -204,7 +231,7 @@ impl Occupancy {
 
                     chart.draw_series(std::iter::once(Rectangle::new(
                         [(left, cell_bottom), (right, cell_top)],
-                        color.mix(0.75).filled(),
+                        color.mix(theme::BAND_OPACITY).filled(),
                     )))?;
 
                     if *cell == Cell::Excluded {
@@ -213,6 +240,16 @@ impl Occupancy {
                             ShapeStyle::from(theme::REGRESSION).stroke_width(2),
                         )))?;
                     }
+                    chart.draw_series(std::iter::once(Text::new(
+                        cell.symbol(),
+                        (
+                            f64::midpoint(left, right),
+                            f64::midpoint(cell_bottom, cell_top),
+                        ),
+                        TextStyle::from((theme::FONT, theme::FONT_TICK))
+                            .color(&theme::INK)
+                            .pos(Pos::new(HPos::Center, VPos::Center)),
+                    )))?;
                 }
             }
 
@@ -277,7 +314,10 @@ fn draw_occupancy_legend(
         let swatch_bottom = OCCUPANCY_LEGEND_TOP.saturating_add(OCCUPANCY_LEGEND_SWATCH);
         let swatch = [(left, OCCUPANCY_LEGEND_TOP), (swatch_right, swatch_bottom)];
         if let Some(color) = cell.color() {
-            area.draw(&Rectangle::new(swatch, color.mix(0.75).filled()))?;
+            area.draw(&Rectangle::new(
+                swatch,
+                color.mix(theme::BAND_OPACITY).filled(),
+            ))?;
         } else {
             area.draw(&Rectangle::new(
                 swatch,
@@ -290,6 +330,16 @@ fn draw_occupancy_legend(
                 ShapeStyle::from(theme::REGRESSION).stroke_width(2),
             ))?;
         }
+        area.draw(&Text::new(
+            cell.symbol(),
+            (
+                left.midpoint(swatch_right),
+                OCCUPANCY_LEGEND_TOP.midpoint(swatch_bottom),
+            ),
+            TextStyle::from((theme::FONT, theme::FONT_TICK))
+                .color(&theme::INK)
+                .pos(Pos::new(HPos::Center, VPos::Center)),
+        ))?;
         area.draw(&Text::new(
             cell.label().to_owned(),
             (

@@ -64,73 +64,96 @@ impl Staircase {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        canvas::draw(theme::WIDTH, theme::HEIGHT, |root| {
-            let count = sorted.len();
-            let ceiling = sorted
-                .iter()
-                .flat_map(|candidate| [candidate.chance_level, candidate.threshold])
-                .fold(0.0_f64, f64::max)
-                .max(f64::MIN_POSITIVE);
-
-            let mut chart = ChartBuilder::on(root)
-                .caption(
-                    self.caption.as_str(),
-                    (theme::FONT, theme::FONT_TITLE, &theme::INK),
+        let description = sorted
+            .iter()
+            .map(|candidate| {
+                format!(
+                    "{}: chance level {}, rank threshold {}, {}.",
+                    candidate.label,
+                    candidate.chance_level,
+                    candidate.threshold,
+                    if candidate.kept {
+                        "retained circle"
+                    } else {
+                        "struck-out circle"
+                    }
                 )
-                .margin(12)
-                .x_label_area_size(34)
-                .y_label_area_size(62)
-                .build_cartesian_2d(0.5_f64..coord::of(count) + 0.5, 0.0_f64..ceiling * 1.15)?;
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        canvas::draw(
+            theme::WIDTH,
+            theme::HEIGHT,
+            &self.caption,
+            &description,
+            |root| {
+                let count = sorted.len();
+                let ceiling = sorted
+                    .iter()
+                    .flat_map(|candidate| [candidate.chance_level, candidate.threshold])
+                    .fold(0.0_f64, f64::max)
+                    .max(f64::MIN_POSITIVE);
 
-            chart
-                .configure_mesh()
-                .light_line_style(theme::INK.mix(0.0))
-                .bold_line_style(theme::INK.mix(theme::GRID_OPACITY))
-                .axis_style(theme::INK)
-                .x_desc("rank, by chance level")
-                .y_desc("chance level")
-                .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
-                .draw()?;
+                let mut chart = ChartBuilder::on(root)
+                    .caption(
+                        self.caption.as_str(),
+                        (theme::FONT, theme::FONT_TITLE, &theme::INK),
+                    )
+                    .margin(12)
+                    .x_label_area_size(34)
+                    .y_label_area_size(62)
+                    .build_cartesian_2d(0.5_f64..coord::of(count) + 0.5, 0.0_f64..ceiling * 1.15)?;
 
-            // Thresholds rise with rank, and the largest passing rank keeps the prefix
-            // before it. Drawing them as a line rather than as per-point marks is what
-            // makes the "staircase" shape — and the cut point — legible at a glance.
-            let threshold_line: Vec<(f64, f64)> = sorted
-                .iter()
-                .enumerate()
-                .map(|(index, candidate)| (coord::of(index) + 1.0, candidate.threshold))
-                .collect();
-            chart.draw_series(std::iter::once(PathElement::new(
-                threshold_line,
-                ShapeStyle::from(theme::INK).stroke_width(2),
-            )))?;
+                chart
+                    .configure_mesh()
+                    .light_line_style(theme::INK.mix(0.0))
+                    .bold_line_style(theme::INK.mix(theme::GRID_OPACITY))
+                    .axis_style(theme::INK)
+                    .x_desc("rank, by chance level")
+                    .y_desc("chance level")
+                    .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
+                    .draw()?;
 
-            for (index, candidate) in sorted.iter().enumerate() {
-                let at = (coord::of(index) + 1.0, candidate.chance_level);
-                let color = if candidate.kept {
-                    theme::REGRESSION
-                } else {
-                    theme::MUTED
-                };
-                chart.draw_series(std::iter::once(Circle::new(
-                    at,
-                    theme::POINT_RADIUS + 1,
-                    color.filled(),
+                // Thresholds rise with rank, and the largest passing rank keeps the prefix
+                // before it. Drawing them as a line rather than as per-point marks is what
+                // makes the "staircase" shape — and the cut point — legible at a glance.
+                let threshold_line: Vec<(f64, f64)> = sorted
+                    .iter()
+                    .enumerate()
+                    .map(|(index, candidate)| (coord::of(index) + 1.0, candidate.threshold))
+                    .collect();
+                chart.draw_series(std::iter::once(PathElement::new(
+                    threshold_line,
+                    ShapeStyle::from(theme::INK).stroke_width(2),
                 )))?;
 
-                if !candidate.kept {
-                    // A dropped candidate is struck through rather than merely dimmed:
-                    // the figure's whole subject is which ones the procedure discards.
-                    let tick = ceiling * 0.02;
-                    chart.draw_series(std::iter::once(PathElement::new(
-                        vec![(at.0 - 0.22, at.1 - tick), (at.0 + 0.22, at.1 + tick)],
-                        ShapeStyle::from(color).stroke_width(2),
+                for (index, candidate) in sorted.iter().enumerate() {
+                    let at = (coord::of(index) + 1.0, candidate.chance_level);
+                    let color = if candidate.kept {
+                        theme::REGRESSION
+                    } else {
+                        theme::MUTED
+                    };
+                    chart.draw_series(std::iter::once(Circle::new(
+                        at,
+                        theme::POINT_RADIUS + 1,
+                        color.filled(),
                     )))?;
-                }
-            }
 
-            Ok::<(), Box<dyn Error>>(())
-        })
+                    if !candidate.kept {
+                        // A dropped candidate is struck through rather than merely dimmed:
+                        // the figure's whole subject is which ones the procedure discards.
+                        let tick = ceiling * 0.02;
+                        chart.draw_series(std::iter::once(PathElement::new(
+                            vec![(at.0 - 0.22, at.1 - tick), (at.0 + 0.22, at.1 + tick)],
+                            ShapeStyle::from(color).stroke_width(2),
+                        )))?;
+                    }
+                }
+
+                Ok::<(), Box<dyn Error>>(())
+            },
+        )
     }
 }
 
@@ -190,7 +213,13 @@ impl Census {
             18_u32.saturating_mul(u32::try_from(self.slices.len()).unwrap_or(u32::MAX)),
         );
 
-        canvas::draw(theme::WIDTH, height, |root| {
+        let description = self
+            .slices
+            .iter()
+            .map(|slice| format!("{}: {} series.", slice.label, slice.count))
+            .collect::<Vec<_>>()
+            .join(" ");
+        canvas::draw(theme::WIDTH, height, &self.caption, &description, |root| {
             let mut chart = ChartBuilder::on(root)
                 .caption(
                     self.caption.as_str(),
@@ -213,11 +242,21 @@ impl Census {
                 .draw()?;
 
             let mut cursor = 0.0_f64;
-            for slice in &self.slices {
+            for (index, slice) in self.slices.iter().enumerate() {
                 let width = coord::of(slice.count);
                 chart.draw_series(std::iter::once(Rectangle::new(
                     [(cursor, 0.62), (cursor + width, 0.95)],
-                    slice.color.mix(0.75).filled(),
+                    slice.color.mix(theme::BAND_OPACITY).filled(),
+                )))?;
+                chart.draw_series(std::iter::once(Rectangle::new(
+                    [(cursor, 0.62), (cursor + width, 0.95)],
+                    ShapeStyle::from(theme::INK).stroke_width(1),
+                )))?;
+                // Match numbered segments to the legend without requiring color perception.
+                chart.draw_series(std::iter::once(Text::new(
+                    index.saturating_add(1).to_string(),
+                    (cursor + width * 0.5, 0.8),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
                 )))?;
                 cursor += width;
             }
@@ -229,10 +268,15 @@ impl Census {
                 let row = 0.5 - (coord::of(index) * 0.11);
                 chart.draw_series(std::iter::once(Rectangle::new(
                     [(0.0, row), (coord::of(total.max(1)) * 0.02, row + 0.06)],
-                    slice.color.mix(0.75).filled(),
+                    slice.color.mix(theme::BAND_OPACITY).filled(),
                 )))?;
                 chart.draw_series(std::iter::once(Text::new(
-                    format!("{} — {}", slice.label, slice.count),
+                    format!(
+                        "{}. {} — {}",
+                        index.saturating_add(1),
+                        slice.label,
+                        slice.count
+                    ),
                     (coord::of(total.max(1)) * 0.03, row + 0.06),
                     TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
                 )))?;

@@ -132,7 +132,9 @@ up with.
 One partition's objects for a commit sit together under that commit. There is no requirement
 that commits be measured in order, or that every commit be measured at all.
 
+<figure class="chart" tabindex="0" role="group" aria-label="Chart; scroll horizontally on small screens">
 {{#include generated/collection-occupancy.svg}}
+</figure>
 
 Read that picture carefully, because most collection problems are visible in it:
 

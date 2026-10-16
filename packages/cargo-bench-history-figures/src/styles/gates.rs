@@ -9,6 +9,7 @@
 
 use std::cmp::Ordering;
 use std::error::Error;
+use std::fmt::Write as _;
 
 use cbh_stats::MannWhitneyU;
 use plotters::backend::SVGBackend;
@@ -16,6 +17,7 @@ use plotters::coord::Shift;
 use plotters::drawing::DrawingArea;
 use plotters::element::{Circle, PathElement, Rectangle, Text};
 use plotters::prelude::ChartBuilder;
+use plotters::style::text_anchor::{HPos, Pos, VPos};
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
 
 use crate::{canvas, coord, theme};
@@ -58,7 +60,19 @@ impl Residuals {
     /// Renders the strip.
     #[must_use]
     pub fn render(&self) -> String {
-        canvas::draw(theme::WIDTH, 240, |root| {
+        let mut description = format!(
+            "Signed residuals around zero. Stems show each observation's distance from \
+             its fitted model. The shaded band extends to {} on either side of zero.",
+            self.band,
+        );
+        if let Some(size) = self.move_size {
+            write!(
+                description,
+                " The labelled horizontal line marks the move being judged: {size}."
+            )
+            .expect("writing to a String cannot fail");
+        }
+        canvas::draw(theme::WIDTH, 240, &self.caption, &description, |root| {
             let extent = self
                 .values
                 .iter()
@@ -99,7 +113,7 @@ impl Residuals {
             chart.draw_series(std::iter::once(Text::new(
                 "residual-noise gate threshold".to_owned(),
                 (-0.3, self.band),
-                TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::MUTED),
+                TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
             )))?;
 
             for (index, &residual) in self.values.iter().enumerate() {
@@ -125,7 +139,7 @@ impl Residuals {
                 chart.draw_series(std::iter::once(Text::new(
                     "the move being judged".to_owned(),
                     (-0.3, size),
-                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::REGRESSION),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
                 )))?;
             }
 
@@ -186,7 +200,13 @@ impl Agreement {
             110_u32.saturating_add(22_u32.saturating_mul(u32::try_from(rows).unwrap_or(u32::MAX)));
         let height = chart_height.saturating_add(AGREEMENT_LEGEND_HEIGHT);
 
-        canvas::draw(theme::WIDTH, height, |root| {
+        let description = format!(
+            "Pairwise comparisons of earlier columns with later rows. Plus means later \
+             is greater; minus means later is less; equal signs and half-filled cells mean ties. \
+             The agreement share, counting ties as half, is {}.",
+            self.share(),
+        );
+        canvas::draw(theme::WIDTH, height, &self.caption, &description, |root| {
             let (plot_area, legend_area) = root.split_vertically(chart_height);
             let columns_f = coord::of(columns.max(1));
             let rows_f = coord::of(rows.max(1));
@@ -238,13 +258,13 @@ impl Agreement {
                     PairClass::Greater => {
                         chart.draw_series(std::iter::once(Rectangle::new(
                             [(left, bottom), (right, top)],
-                            theme::REGRESSION.mix(0.7).filled(),
+                            theme::REGRESSION.mix(theme::BAND_OPACITY).filled(),
                         )))?;
                     }
                     PairClass::Less => {
                         chart.draw_series(std::iter::once(Rectangle::new(
                             [(left, bottom), (right, top)],
-                            theme::MUTED.mix(0.35).filled(),
+                            theme::MUTED.mix(theme::BAND_OPACITY).filled(),
                         )))?;
                     }
                     PairClass::Equal => {
@@ -253,7 +273,7 @@ impl Agreement {
                         let mid = f64::midpoint(left, right);
                         chart.draw_series(std::iter::once(Rectangle::new(
                             [(left, bottom), (mid, top)],
-                            theme::HIGHLIGHT.mix(0.7).filled(),
+                            theme::HIGHLIGHT.mix(theme::BAND_OPACITY).filled(),
                         )))?;
                         chart.draw_series(std::iter::once(Rectangle::new(
                             [(mid, bottom), (right, top)],
@@ -261,6 +281,13 @@ impl Agreement {
                         )))?;
                     }
                 }
+                chart.draw_series(std::iter::once(Text::new(
+                    class.symbol(),
+                    (f64::midpoint(left, right), f64::midpoint(bottom, top)),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK))
+                        .color(&theme::INK)
+                        .pos(Pos::new(HPos::Center, VPos::Center)),
+                )))?;
             }
 
             draw_agreement_legend(&legend_area)?;
@@ -304,10 +331,10 @@ fn draw_agreement_legend(area: &DrawingArea<SVGBackend<'_>, Shift>) -> Result<()
         let swatch_bottom = AGREEMENT_LEGEND_TOP.saturating_add(AGREEMENT_LEGEND_SWATCH);
         area.draw(&Rectangle::new(
             [(left, AGREEMENT_LEGEND_TOP), (swatch_right, swatch_bottom)],
-            class.color().mix(0.7).filled(),
+            class.color().mix(theme::BAND_OPACITY).filled(),
         ))?;
         area.draw(&Text::new(
-            class.label().to_owned(),
+            format!("{} {}", class.symbol(), class.label()),
             (
                 swatch_right.saturating_add(AGREEMENT_LEGEND_TEXT_GAP),
                 AGREEMENT_LEGEND_TOP.saturating_add(AGREEMENT_LEGEND_SWATCH),
@@ -327,6 +354,15 @@ enum PairClass {
 }
 
 impl PairClass {
+    /// Printed operators match each grid cell with its legend without relying on color.
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::Greater => "+",
+            Self::Equal => "=",
+            Self::Less => "-",
+        }
+    }
+
     fn of(earlier: f64, later: f64) -> Self {
         match later.partial_cmp(&earlier) {
             Some(Ordering::Greater) => Self::Greater,

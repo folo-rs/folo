@@ -13,6 +13,7 @@ pub mod glossary;
 pub mod pipeline;
 pub mod reporting;
 pub mod storage;
+pub mod walkthrough;
 
 /// Every asset, from every chapter.
 #[must_use]
@@ -24,5 +25,6 @@ pub fn assets() -> Vec<Asset> {
     assets.extend(gates::assets());
     assets.extend(coverage::assets());
     assets.extend(reporting::assets());
+    assets.extend(walkthrough::assets());
     assets
 }

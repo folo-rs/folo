@@ -6,18 +6,18 @@
 //! shape one implementation is what keeps fifty figures looking like one document, and
 //! it is why a style module composes a [`Plot`] rather than driving `plotters` directly.
 //!
-//! The x axis is a **commit position**, not a time and not an index into the observed
-//! values. That distinction is itself one of the book's lessons: a commit with no
-//! observation leaves an empty column, and the detectors never see how wide that gap is.
-//! Laying every figure out this way means the pictures cannot accidentally imply
-//! otherwise.
+//! The default x axis is a **commit position**, not elapsed time. A compacted sequence
+//! instead labels its observation positions explicitly. That distinction is one of
+//! the book's lessons: a commit without a measurement leaves a hole in history, while
+//! a detector receiving only observed values cannot see that gap.
 
 use std::error::Error;
+use std::fmt::Write as _;
 
 use plotters::backend::SVGBackend;
 use plotters::coord::Shift;
 use plotters::drawing::DrawingArea;
-use plotters::element::{Circle, PathElement, Rectangle, Text};
+use plotters::element::{Circle, Cross, PathElement, Rectangle, Text, TriangleMarker};
 use plotters::prelude::ChartBuilder;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
@@ -165,9 +165,6 @@ pub struct Note {
 
     /// The note's text.
     pub text: String,
-
-    /// The note's colour.
-    pub color: RGBColor,
 }
 
 /// One value-against-commit-position figure, or one pane of a stacked comparison.
@@ -178,6 +175,7 @@ pub struct Note {
 pub struct Plot {
     caption: String,
     value_label: String,
+    position_label: String,
     span: usize,
     observations: Vec<Observation>,
     connect: bool,
@@ -189,7 +187,7 @@ pub struct Plot {
 }
 
 impl Plot {
-    /// An empty plot covering `span` commit positions.
+    /// An empty plot covering `span` positions, measured in commits by default.
     ///
     /// The span is given rather than derived from the observations because the gaps at
     /// the end of a series are exactly what several figures exist to show: a series
@@ -200,6 +198,7 @@ impl Plot {
         Self {
             caption: caption.into(),
             value_label: String::new(),
+            position_label: "commit position".to_owned(),
             span,
             observations: Vec::new(),
             connect: true,
@@ -215,6 +214,13 @@ impl Plot {
     #[must_use]
     pub fn value_label(mut self, label: impl Into<String>) -> Self {
         self.value_label = label.into();
+        self
+    }
+
+    /// Labels positions when a transformation changes the horizontal index's meaning.
+    #[must_use]
+    pub fn position_label(mut self, label: impl Into<String>) -> Self {
+        self.position_label = label.into();
         self
     }
 
@@ -243,7 +249,7 @@ impl Plot {
         self
     }
 
-    /// Plots `values` at consecutive commit positions starting from zero, all in the
+    /// Plots `values` at consecutive positions starting from zero, all in the
     /// plain role — the common case for a figure about a dense series.
     #[must_use]
     pub fn values(self, values: &[f64]) -> Self {
@@ -314,18 +320,11 @@ impl Plot {
 
     /// Pins a note to a point in the plot.
     #[must_use]
-    pub fn note(
-        mut self,
-        position: usize,
-        value: f64,
-        text: impl Into<String>,
-        color: RGBColor,
-    ) -> Self {
+    pub fn note(mut self, position: usize, value: f64, text: impl Into<String>) -> Self {
         self.notes.push(Note {
             position,
             value,
             text: text.into(),
-            color,
         });
         self
     }
@@ -441,7 +440,7 @@ impl Plot {
             .light_line_style(theme::INK.mix(0.0))
             .bold_line_style(theme::INK.mix(theme::GRID_OPACITY))
             .axis_style(theme::INK)
-            .x_desc("commit position")
+            .x_desc(self.position_label.as_str())
             .y_desc(self.value_label.as_str())
             .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
             .x_label_formatter(&|position| format!("{position:.0}"))
@@ -456,10 +455,17 @@ impl Plot {
                 band.color.mix(theme::BAND_OPACITY).filled(),
             )))?;
             if !band.label.is_empty() {
+                // Anchor right-side annotations inward so they fit inside the viewBox.
+                let right_side = band.from > self.span.saturating_div(2);
                 chart.draw_series(std::iter::once(Text::new(
                     band.label.clone(),
-                    (left, top),
-                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&band.color),
+                    (if right_side { right } else { left }, top),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK))
+                        .color(&theme::INK)
+                        .pos(Pos::new(
+                            if right_side { HPos::Right } else { HPos::Left },
+                            VPos::Top,
+                        )),
                 )))?;
             }
         }
@@ -471,10 +477,18 @@ impl Plot {
                 ShapeStyle::from(theme::REGRESSION).stroke_width(2),
             )))?;
             if !label.is_empty() {
+                // Split labels sit at the bottom, separate from the top-of-band labels.
+                let anchor = if *position > self.span.saturating_div(2) {
+                    HPos::Right
+                } else {
+                    HPos::Left
+                };
                 chart.draw_series(std::iter::once(Text::new(
                     label.clone(),
-                    (x, high),
-                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::REGRESSION),
+                    (x, low),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK))
+                        .color(&theme::INK)
+                        .pos(Pos::new(anchor, VPos::Bottom)),
                 )))?;
             }
         }
@@ -517,7 +531,7 @@ impl Plot {
                     rule.label.clone(),
                     (coord::of(self.span) - 0.6, rule.value + offset),
                     TextStyle::from((theme::FONT, theme::FONT_TICK))
-                        .color(&rule.color)
+                        .color(&theme::INK)
                         .pos(Pos::new(HPos::Right, VPos::Bottom)),
                 )))?;
             }
@@ -550,11 +564,36 @@ impl Plot {
                 }
             }
 
-            chart.draw_series(std::iter::once(Circle::new(
-                at,
-                theme::POINT_RADIUS,
-                color.filled(),
-            )))?;
+            // Shape, not color alone, identifies changes and the selected observation.
+            match observation.mark {
+                Mark::Regression => {
+                    chart.draw_series(std::iter::once(TriangleMarker::new(
+                        at,
+                        theme::POINT_RADIUS.saturating_add(2),
+                        color.filled(),
+                    )))?;
+                }
+                Mark::Added => {
+                    chart.draw_series(std::iter::once(Cross::new(
+                        at,
+                        theme::POINT_RADIUS.saturating_add(2),
+                        color.stroke_width(theme::DATA_STROKE),
+                    )))?;
+                }
+                Mark::Plain | Mark::Removed | Mark::Focus => {
+                    let style = if observation.mark == Mark::Focus {
+                        color.stroke_width(theme::DATA_STROKE)
+                    } else {
+                        color.filled()
+                    };
+                    let radius = if observation.mark == Mark::Focus {
+                        theme::POINT_RADIUS.saturating_add(2)
+                    } else {
+                        theme::POINT_RADIUS
+                    };
+                    chart.draw_series(std::iter::once(Circle::new(at, radius, style)))?;
+                }
+            }
 
             if observation.mark.struck() {
                 let span = (high - low) * 0.03;
@@ -573,7 +612,7 @@ impl Plot {
             chart.draw_series(std::iter::once(Text::new(
                 note.text.clone(),
                 (coord::of(note.position), note.value),
-                TextStyle::from((theme::FONT, theme::FONT_LABEL)).color(&note.color),
+                TextStyle::from((theme::FONT, theme::FONT_LABEL)).color(&theme::INK),
             )))?;
         }
 
@@ -583,13 +622,80 @@ impl Plot {
     /// Renders the plot as a standalone figure.
     #[must_use]
     pub fn render(&self) -> String {
-        crate::canvas::draw(theme::WIDTH, theme::HEIGHT, |root| self.draw(root))
+        crate::canvas::draw(
+            theme::WIDTH,
+            theme::HEIGHT,
+            &self.caption,
+            &self.description(),
+            |root| self.draw(root),
+        )
+    }
+
+    /// Supplies a text alternative using the same axes, annotations and values as the drawing.
+    pub(crate) fn description(&self) -> String {
+        let units = if self.value_label.is_empty() {
+            "illustrative metric units"
+        } else {
+            &self.value_label
+        };
+        let mut description = format!(
+            "{}. Values in {} against {}, spanning {} positions. \
+             Filled circles are observations; hollow circles highlight focus; triangles mark \
+             regressions; X marks identify added data; crossed-out circles are excluded. \
+             Gaps are missing observations, not zero values.",
+            self.caption, units, self.position_label, self.span,
+        );
+        for rule in &self.rules {
+            write!(description, " {}: {}.", rule.label, rule.value)
+                .expect("writing to a String cannot fail");
+        }
+        for band in &self.bands {
+            write!(
+                description,
+                " {}: positions {} to {}.",
+                band.label, band.from, band.to,
+            )
+            .expect("writing to a String cannot fail");
+        }
+        for (position, label) in &self.splits {
+            write!(description, " {label}: position {position}.")
+                .expect("writing to a String cannot fail");
+        }
+        for note in &self.notes {
+            write!(
+                description,
+                " {}: position {}, value {}.",
+                note.text, note.position, note.value,
+            )
+            .expect("writing to a String cannot fail");
+        }
+        description
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics; the test checks rendered axis metadata"
+    )]
+    fn the_position_label_drives_both_axis_and_text_alternative() {
+        let label = "observation position";
+        let plot = Plot::new("compacted input", 2)
+            .position_label(label)
+            .values(&[10.0, 20.0]);
+
+        let description = plot.description();
+        let svg = plot.render();
+
+        assert!(description.contains(label));
+        assert!(svg.contains(&format!("<desc>{description}</desc>")));
+        assert_eq!(svg.matches(label).count(), 2);
+        assert!(!svg.contains("commit position"));
+    }
 
     #[test]
     fn a_flat_series_still_gets_a_usable_value_axis() {

@@ -1,0 +1,93 @@
+{
+  "project": "textproc",
+  "tip_commit": "9f2c4a1d3b5e708aab12cd34ef5678901234567a",
+  "tip_dirty": false,
+  "mode": "branch",
+  "outcome": "findings",
+  "notable": true,
+  "runs": 128,
+  "series": 2,
+  "regressions": 1,
+  "improvements": 1,
+  "ghosts_excluded": 0,
+  "census": {
+    "total": 2,
+    "in_scope": 2,
+    "judged": 2,
+    "unjudged": 0,
+    "coverage": "full",
+    "reasons": []
+  },
+  "findings": [
+    {
+      "engine": "callgrind",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "a1b2c3d4",
+      "segments": [
+        "textproc",
+        "streaming_parser",
+        "normalize_unicode_and_validate_nested_records_for_incremental_batches",
+        "large_input"
+      ],
+      "kind": "instruction_count",
+      "method": "branch_excursion",
+      "direction": "regression",
+      "baseline": 103467251.0,
+      "latest": 126072035.0,
+      "relative_delta": 0.2184728383283325,
+      "commit": "9f2c4a1d3b5e708aab12cd34ef5678901234567a",
+      "branch": {
+        "reference_count": 10,
+        "reference_min": 96927146.0,
+        "reference_max": 103467251.0,
+        "excess": 22604784.0,
+        "relative_excess": 0.2184728383283325,
+        "matches_previous_regime": false,
+        "included_in_historical_comparison": true
+      }
+    },
+    {
+      "engine": "callgrind",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "a1b2c3d4",
+      "segments": [
+        "textproc",
+        "streaming_parser",
+        "scan_and_classify_multilingual_text_with_incremental_boundary_checks",
+        "large_input"
+      ],
+      "kind": "instruction_count",
+      "method": "branch_excursion",
+      "direction": "improvement",
+      "baseline": 126072035.0,
+      "latest": 99807279.0,
+      "relative_delta": -0.2083313400945737,
+      "commit": "9f2c4a1d3b5e708aab12cd34ef5678901234567a",
+      "branch": {
+        "reference_count": 10,
+        "reference_min": 126072035.0,
+        "reference_max": 135090076.0,
+        "excess": -26264756.0,
+        "relative_excess": -0.2083313400945737,
+        "matches_previous_regime": false,
+        "included_in_historical_comparison": true
+      }
+    }
+  ],
+  "sets": [
+    {
+      "engine": "callgrind",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "a1b2c3d4",
+      "runs": 128,
+      "series": 2,
+      "regressions": 1,
+      "improvements": 1,
+      "branch_comparison": {
+        "evaluated_base_commits": 5,
+        "at_least_as_much": 0,
+        "series": 2
+      }
+    }
+  ]
+}

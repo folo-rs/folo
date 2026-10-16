@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg">
+<svg role="img" aria-label="one elevated measurement" style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg"><title>one elevated measurement</title><desc>one elevated measurement. Values in ns against commit position, spanning 20 positions. Filled circles are observations; hollow circles highlight focus; triangles mark regressions; X marks identify added data; crossed-out circles are excluded. Gaps are missing observations, not zero values.</desc>
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 one elevated measurement
 </text>
@@ -132,6 +132,6 @@ commit position
 <circle cx="533" cy="228" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <circle cx="563" cy="228" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <circle cx="592" cy="228" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
-<circle cx="622" cy="60" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
+<circle cx="622" cy="60" r="5" opacity="1" fill="none" stroke="#306EC8" stroke-width="2"/>
 <circle cx="652" cy="228" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 </svg>
