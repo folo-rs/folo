@@ -16,10 +16,9 @@ coverage-measure:
     # Pre-build the benchmark faker once and hand each per-test process its path via
     # CBH_FAKER. nextest runs every test in its own process, so this spares each
     # cargo-bench-history integration test a redundant on-demand Cargo freshness check. The
-    # faker builds into its own dedicated target directory (see `_faker-path`), so
-    # neither this pre-build nor any residual on-demand build relinks a binary out of the
-    # shared coverage tree while another test is spawning it - the transient "No such file or
-    # directory" spawn races previously seen on macOS (issue #332).
+    # faker keeps each preparation's executable separate from its shared build cache, so
+    # later builds cannot unlink a path that a coverage test is about to spawn.
+    # Ref: packages/cargo-bench-history-faker/docs/implementation.md#executable-ownership.
     $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
     if ($IsWindows) {
         $env:DURE_TEST_HELPER = just _dure-test-helper-path | Select-Object -Last 1

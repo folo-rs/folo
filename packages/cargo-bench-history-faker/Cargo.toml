@@ -4,7 +4,7 @@
 name = "cargo-bench-history-faker"
 description = "Unsupported synthetic benchmark-output generator for validating cargo-bench-history end to end; no stable API or CLI"
 publish = true
-version = "0.2.12"
+version = "0.2.13"
 
 authors.workspace = true
 edition.workspace = true
@@ -38,15 +38,21 @@ path = "src/main.rs"
 # Internal-only helper (`binary_path`) for locating the freshly built binary from
 # in-workspace tests that must spawn the real process. Never a public API; see
 # docs/impl-crate-split.md. In-workspace dev-dependencies enable it explicitly.
-private-test-util = []
+private-test-util = ["dep:tempfile"]
 
 [dependencies]
 folo_utils = { workspace = true }
 mimalloc = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 testing = { path = "../testing" }
+
+[[test]]
+name = "locate"
+required-features = ["private-test-util"]
 
 [lints]
 workspace = true

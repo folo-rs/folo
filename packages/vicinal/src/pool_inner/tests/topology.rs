@@ -1,6 +1,6 @@
 //! Exact affinity, group sharing and wake notification coverage.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
@@ -128,10 +128,8 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
 
             assert_eq!(received.recv().unwrap(), expected);
             assert_eq!(pool.inner.registry.initialized().count(), 1);
-            assert_eq!(
-                pool.inner.worker_handles.lock().unwrap().len(),
-                WORKERS as usize
-            );
+            let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+            assert_eq!(worker_count, WORKERS as usize);
         }
 
         let state = pool.inner.registry.get_or_init(GroupId::System);
@@ -433,9 +431,14 @@ fn assert_idle_workers_refresh(policy: WorkerPolicy, next_processor: u32) {
             thread::Builder::spawn,
             move |set| {
                 set.pin_current_thread_to();
-                if set.len() > 1 {
-                    refreshed.send(thread::current().id()).unwrap();
-                }
+                // Report wrong masks too: filtering on the expected size can suppress
+                // the very observation needed to reject lost membership.
+                refreshed
+                    .send((
+                        thread::current().id(),
+                        set.iter().map(Processor::id).collect::<BTreeSet<_>>(),
+                    ))
+                    .unwrap();
             },
         );
 
@@ -447,14 +450,26 @@ fn assert_idle_workers_refresh(policy: WorkerPolicy, next_processor: u32) {
         );
         assert_ne!(first_id, second_id);
 
+        // Startup pins precede these registered waits; consume them separately from refreshes.
+        let initial = [updates.recv().unwrap(), updates.recv().unwrap()];
+        assert_eq!(
+            initial.iter().map(|(id, _)| *id).collect::<HashSet<_>>(),
+            HashSet::from([first_id, second_id])
+        );
+        for (_, mask) in initial {
+            assert_eq!(mask, BTreeSet::from([0]));
+        }
+
         pin(&hardware, next_processor);
         let task = pool.scheduler().spawn(|| {});
         first_resume.send(()).unwrap();
         second_resume.send(()).unwrap();
         block_on(task).unwrap();
 
-        let first = updates.recv().unwrap();
-        let second = updates.recv().unwrap();
+        let (first, first_mask) = updates.recv().unwrap();
+        let (second, second_mask) = updates.recv().unwrap();
+        assert_eq!(first_mask, BTreeSet::from([0, next_processor]));
+        assert_eq!(second_mask, BTreeSet::from([0, next_processor]));
         assert_ne!(first, second);
         assert!([first_id, second_id].contains(&first));
         assert!([first_id, second_id].contains(&second));

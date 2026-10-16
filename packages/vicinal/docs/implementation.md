@@ -197,6 +197,31 @@ tasks and worker handles be released while preserving the original failure.
 Clean shutdown permits retained schedulers to cancel submissions normally. Poisoning
 takes precedence over shutdown, permanently rejecting every submission with a panic.
 
+### Mutation-test termination
+
+Lifecycle tests reject incorrect configured counts before starting callbacks with fixed
+participants. Actual worker-count assertions release the registration guard before comparing,
+so a failure cannot poison the mutex needed by pool cleanup. Affinity observers report every
+pin, including wrong masks, and the controller checks initial and expanded masks separately.
+Self-submission tests transfer their only
+reporting sender into the submitted task so missing submission disconnects the receiver.
+Panic fixtures raise a safely droppable terminal replacement when their destructor fails:
+missing containment must not cause unbounded recursive payload destruction.
+
+The live-group iterator shares the shutdown coordination mutation exclusion. Omitting a group
+removes both its wakeup and queued-resource release before worker joins. A registry assertion
+elsewhere cannot release those blocked workers, and detecting an absent wakeup would require
+a timeout. Direct registry assertions and normal shutdown, poisoning, queue-draining and join
+tests retain coverage without changing production behavior in test builds.
+
+The native admission forwarder and task execution wrapper share their underlying coordination
+exclusions. Removing either can omit an initializer or task-provided handshake. Cancellation
+retains task captures for recovery, including senders, so blocked receivers cannot rely on
+disconnection. Detecting cancellation alongside every lifecycle handshake would require a
+separate completion-selection protocol throughout these fixtures. Ordinary tests retain real
+thread startup, execution, cancellation recovery and cleanup coverage rather than replacing
+those scenarios solely to mutate these coordination boundaries.
+
 ## Initialization benchmarks
 
 The Criterion `vicinal/initialization` group compares lazy and eager startup separately from
