@@ -162,13 +162,17 @@ fn initializer_can_submit_to_its_pool() {
             .thread_init({
                 // A weak capture avoids retaining a scheduler through its own pool.
                 let scheduler = Arc::downgrade(&scheduler);
+                // This single worker transfers the only sender to its task, so missing
+                // submission disconnects the controller instead of retaining a silent sender.
+                let result = Mutex::new(Some(result));
                 move || {
                     INITIALIZED.set(true);
                     let scheduler = scheduler.upgrade().unwrap();
-                    scheduler.get().unwrap().spawn_and_forget({
-                        let result = result.clone();
-                        move || result.send(INITIALIZED.get()).unwrap()
-                    });
+                    let result = result.lock().unwrap().take().unwrap();
+                    scheduler
+                        .get()
+                        .unwrap()
+                        .spawn_and_forget(move || result.send(INITIALIZED.get()).unwrap());
                 }
             })
             .build();

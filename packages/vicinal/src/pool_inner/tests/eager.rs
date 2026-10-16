@@ -91,10 +91,8 @@ fn assert_ready(kind: PolicyKind) {
         masks.sort();
         assert_eq!(masks, expected);
         assert_eq!(threads.len(), expected.len());
-        assert_eq!(
-            pool.inner.worker_handles.lock().unwrap().len(),
-            expected.len()
-        );
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, expected.len());
         assert_eq!(pool.inner.registry.initialized().count(), group_count);
         assert_eq!(affinity(&hardware), BTreeSet::from([1]));
         assert!(!INITIALIZED.get());
@@ -116,10 +114,8 @@ fn assert_ready(kind: PolicyKind) {
             .unwrap();
             assert!(threads.contains(&worker));
         }
-        assert_eq!(
-            pool.inner.worker_handles.lock().unwrap().len(),
-            expected.len()
-        );
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, expected.len());
         for state in pool.inner.registry.initialized() {
             let expected_revision = usize::from(!matches!(kind, PolicyKind::Processor));
             assert_eq!(
@@ -206,10 +202,8 @@ fn assert_expansion(kind: PolicyKind) {
                 }
                 PolicyKind::System => 1,
             };
-            assert_eq!(
-                pool.inner.worker_handles.lock().unwrap().len(),
-                expected_count
-            );
+            let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+            assert_eq!(worker_count, expected_count);
             assert_eq!(initialized.load(Ordering::Relaxed), expected_count);
         }
         assert_eq!(
@@ -256,7 +250,8 @@ fn eager_setters_replace_configuration_without_starting_workers() {
         assert_eq!(initialized.load(Ordering::Relaxed), 0);
         let pool = builder.build();
         assert_eq!(initialized.load(Ordering::Relaxed), 1);
-        assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 1);
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 1);
         assert_eq!(pool.inner.registry.initialized().count(), 1);
         assert_eq!(
             pool.inner
@@ -341,7 +336,8 @@ fn eager_unused_pool_without_initializer_joins_workers() {
             .build();
         let inner = Arc::clone(&pool.inner);
         let scheduler = pool.scheduler();
-        assert_eq!(inner.worker_handles.lock().unwrap().len(), 2);
+        let worker_count = inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 2);
         let state = inner.registry.get_or_init(GroupId::System);
         assert_eq!(state.get_tasks_spawned(), 0);
         assert!(state.task_pool.lock().unwrap().is_empty());
@@ -380,7 +376,8 @@ fn eager_initializers_overlap_across_groups() {
             })
             .build();
         assert_eq!(initialized.load(Ordering::Relaxed), 2);
-        assert_eq!(pool.inner.worker_handles.lock().unwrap().len(), 2);
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 2);
     });
 }
 
