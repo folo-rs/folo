@@ -46,6 +46,9 @@ impl PoolInner {
     }
 
     /// Starts and admits work as one cold transaction; established submitters use only a queue.
+    // This native forwarder shares enqueue_with's exclusion: removing admission omits
+    // initializer/task handshakes. Ref: docs/implementation.md, "Mutation-test termination".
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn enqueue(
         self: &Arc<Self>,
         target: SubmissionTarget,

@@ -62,6 +62,11 @@ impl GroupRegistry {
             .get_or_init(WorkerGroup::new)
     }
 
+    /// Supplies every live group to shutdown notification and queue draining.
+    // An omitted group can strand a sleeping worker or a queued capture that releases one.
+    // Direct iterator assertions cannot unblock concurrent joins; keep ordinary registry and
+    // lifecycle coverage instead. Ref: docs/implementation.md, "Mutation-test termination".
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn initialized(&self) -> impl Iterator<Item = &WorkerGroup> {
         let groups = match self {
             Self::Processor(groups) | Self::MemoryRegion { groups, .. } => groups.as_ref(),

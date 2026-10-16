@@ -97,10 +97,8 @@ fn assert_concurrent_startup(kind: PolicyKind) {
                 .map(|i| format!("workers-{destination}-{i}"))
                 .collect()
         );
-        assert_eq!(
-            pool.inner.worker_handles.lock().unwrap().len(),
-            WORKERS as usize
-        );
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, WORKERS as usize);
 
         for release in releases {
             release.send(()).unwrap();
@@ -110,10 +108,8 @@ fn assert_concurrent_startup(kind: PolicyKind) {
         }
 
         block_on(scheduler.spawn(|| {})).unwrap();
-        assert_eq!(
-            pool.inner.worker_handles.lock().unwrap().len(),
-            WORKERS as usize
-        );
+        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, WORKERS as usize);
     });
 }
 
@@ -209,7 +205,8 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
         });
 
         assert_eq!(attempts, 2);
-        assert_eq!(inner.worker_handles.lock().unwrap().len(), 1);
+        let worker_count = inner.worker_handles.lock().unwrap().len();
+        assert_eq!(worker_count, 1);
         assert_eq!(state.startup.get(), Some(&Err(())));
 
         assert_panics(|| {
