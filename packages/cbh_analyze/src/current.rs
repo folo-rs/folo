@@ -520,6 +520,7 @@ mod tests {
             ..AnalyzeOptions::default()
         };
         let (reports, _) = block_on(analyze_with_current(
+            None,
             &git,
             &MemoryStorage::new(),
             "project",
@@ -573,6 +574,7 @@ mod tests {
             ..AnalyzeOptions::default()
         };
         let (reports, regressions) = block_on(analyze_with_current(
+            None,
             &git,
             &MemoryStorage::new(),
             "project",
@@ -622,6 +624,7 @@ mod tests {
                 ..AnalyzeOptions::default()
             };
             let error = block_on(analyze_with_current(
+                None,
                 &git,
                 &MemoryStorage::new(),
                 "project",
@@ -663,6 +666,7 @@ mod tests {
             ..AnalyzeOptions::default()
         };
         let (reports, _) = block_on(analyze_with_current(
+            None,
             &git,
             &storage,
             "project",
@@ -733,6 +737,7 @@ mod tests {
             ..AnalyzeOptions::default()
         };
         let (reports, actual_regressions) = block_on(analyze_with_current(
+            None,
             &git,
             &storage,
             "project",

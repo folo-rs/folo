@@ -4,7 +4,7 @@
 name = "cbh_render"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.4.4"
+version = "0.4.5"
 
 authors.workspace = true
 edition.workspace = true
@@ -28,6 +28,7 @@ allowed_external_types = [
     "cbh_detect::detect::findings::SeriesCensus",
     "cbh_detect::detect::findings::UnjudgedReason",
     "cbh_model::comparability::DiscriminantSet",
+    "cbh_model::metric::MetricKind",
     "serde_core::ser::Serialize",
 ]
 

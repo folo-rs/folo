@@ -27,7 +27,12 @@ an observed range plus report-wide historical context instead of a probability s
 
 {{#include generated/reporting-finding-annotated.md}}
 
-The chart is drawn against **topology**, not against the observations. One column per commit,
+History values describe **before and after representative levels**, not the latest single
+measurement. Quantities include their units; time and byte values use a readable scale shared
+with the finding's chart. JSON retains the metric's original numeric unit and full precision.
+
+The full report's chart is drawn against **topology**,
+not against the observations. One column per commit,
 so a gap is a gap and the trailing stretch after the last observation is visible as one. That
 matters: a chart that packed the observations together would hide exactly the sparseness that
 [detection cannot see](reconstruction.md#gaps-are-holes-not-zeroes).
@@ -69,10 +74,10 @@ The tool emits reports and their derived outputs in these forms, each requested 
 Full Markdown carries every finding and ends with a **Coverage** section containing the complete
 counts and unjudged-reason breakdown, including ghosts. **JSON always carries the complete census**
 under `census`, which makes it the machine-readable signal: each finding
-self-describing, plus every unjudged reason. Text omits that breakdown when findings exist. JSON
+self-describing, plus every unjudged reason. Text also states the unjudged reason counts. JSON
 deliberately omits the per-commit chart series — that is presentation, and
 [`examine`](../commands/examine.md) is the way to get the underlying points. The **condensed
-summary** is lossy by design — capped, and flattened so the per-set grouping is dropped — so it is
+summary** is lossy by design — capped, vertically arranged findings with range sketches — so it is
 the one output you must not automate against. The outcome file repeats only the JSON report's
 top-level `outcome` field; it carries no report details. The full table is under
 [Where output goes](#where-output-goes).
@@ -111,11 +116,10 @@ This is given the same prominence as the findings on purpose. "No notable change
 cannot tell that statement apart from "the benchmarks did not run".
 
 The final **Coverage** section in full Markdown and the JSON `census` always contain the
-**reasons** series went unjudged, including when findings exist. Text and condensed summaries
-list the full reason breakdown only when there are no findings. Configured exclusions
-also receive a compact disclosure beside findings, so an intentional reduction in
-analysis scope stays visible. When in-scope series remain unjudged, the condensed summary's
-coverage bullet points to the full report for details, without a separate GitHub warning. See
+**reasons** series went unjudged, including when findings exist. Text also states the reason counts.
+The condensed summary states whether the in-scope suite was fully judged, or shows the judged
+ratio with an incomplete-coverage warning. Exclusions and detailed comparisons remain available
+in the full report. Summary caps do not remove material coverage or comparison-lag qualifications. See
 [Reading a silent report](insights.md#reading-a-silent-report) for matching Markdown and JSON
 examples.
 
@@ -156,6 +160,34 @@ None of 10 comparable base commits showed as much out-of-range movement as this 
 When too little shared history exists, the report says the comparison could not be formed and
 still prints every factual range excursion. JSON exposes the same distinction: finding-level
 `branch` range metadata and set-level `branch_comparison` counts.
+
+## Compact findings
+
+The condensed summary gives each benchmark its own wrapping heading, followed by direction,
+metric and platform. Branch findings highlight the current measurement and percentage **excess**,
+with a full-line range sketch instead of separate numeric columns. The bracketed base range and
+current marker `*` share a linear scale anchored at `0`. Values increase from left to right,
+including for improvements. Negative measurements extend left of zero rather than being clipped.
+A very small range may occupy one cell; an all-zero comparison stays at the origin.
+The full-line strip scrolls inside its code block on narrow views.
+History findings show the before/after representative levels and percentage change.
+
+Read the full report for the range endpoints, time-series plots, detailed historical comparisons,
+machine identities and inspection commands. These details do not repeat inside the summary.
+
+## Inspecting the evidence
+
+Full finding evidence includes copyable `examine` commands when the report has the original query
+location. Choose the labelled shell syntax. The commands pin the benchmark, metric, engine,
+target, machine, context, base and resolved time window, and retain the repository,
+configuration and storage context. Branch reports include a separate clean-base command:
+the base may have advanced independently of the branch.
+
+These are raw stored-data inspections, not a rerun of detection. If the report used exact
+collection snapshots, its current measurements may differ from shared storage; the report
+states that limitation. Keep those snapshots for the original current-value evidence.
+Configuration, stored observations and dirty working-tree state can also change after reporting.
+Do not replace the explicit selectors with local defaults when inspecting a CI report.
 
 ## Where output goes
 

@@ -44,6 +44,14 @@ expose it in process or write the requested outcome file. It uses the
 [shared projection](../../cbh_render/docs/implementation.md), not an orchestration-specific
 mapping from findings and series coverage.
 
+Selection retains the resolved base commit and absolute cutoff for report inspection commands.
+Production wiring supplies the original working directory, resolved repository, explicit
+configuration and resolved local backend, including environment-selected storage. These are
+presentation inputs only: they do not change selection, detection or the JSON schema.
+Exact-current analysis discloses that raw `examine` reads stored observations rather than
+the input collection snapshots. Branch reports distinguish context-line inspection from the
+independently advancing base line.
+
 Verbose branch diagnostics consume the detector's recorded preparation decisions and blessing
 provenance rather than rerunning regime selection. Each withheld series has one explanation;
 the census supplies aggregate coverage and deduplicated conditional guidance. History diagnostics

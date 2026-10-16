@@ -33,6 +33,9 @@ use crate::{AnalyzeError, FirstParentWalkFailedError};
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
 pub(crate) struct SelectedDataSet {
+    /// Resolved anchors retained for inspection rather than re-resolving moving defaults.
+    pub(crate) base_commit: String,
+    pub(crate) since: Option<Timestamp>,
     /// The reconstructed series for the in-window runs, built with the caller's
     /// series filter and ordered by git topology. Pre-blessing: the caller applies
     /// blessings to the mode-appropriate evidence line; listings leave them unapplied.
@@ -566,6 +569,8 @@ where
         .unwrap_or_else(|| order.len().saturating_sub(1));
 
     Ok(SelectedDataSet {
+        base_commit,
+        since,
         series,
         run_index,
         candidate_count,

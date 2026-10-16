@@ -1,7 +1,9 @@
+use std::fmt::Write as _;
+
 use crate::cli::{Conclusion, PendingArgs};
 use crate::marker;
 use crate::model::{Instance, IssueKind};
-use crate::result::{Evidence, Outcome, PublicationState};
+use crate::result::{Evidence, PublicationState};
 
 const PR_HEADING: &str = "## Benchmark history";
 const WARNING_HEADING: &str = "> [!WARNING]";
@@ -26,10 +28,10 @@ pub(crate) fn regression_issue(
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
         marker::state(instance, state.marker_value()),
-        ADVISORY.to_owned(),
     ];
-    push_result_status(&mut sections, evidence);
+    push_platform_warning(&mut sections, evidence);
     sections.push(summary.to_owned());
+    sections.push(ADVISORY.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
 }
@@ -66,11 +68,11 @@ pub(crate) fn pr_result(
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
         marker::state(instance, state.marker_value()),
-        ADVISORY.to_owned(),
     ];
-    push_result_status(&mut sections, evidence);
-    sections.push(format_scope(packages));
+    push_platform_warning(&mut sections, evidence);
     sections.push(summary.to_owned());
+    sections.push(format_scope(packages));
+    sections.push(ADVISORY.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
 }
@@ -132,7 +134,7 @@ pub(crate) fn inconclusive_details(
     artifact_url: Option<&str>,
 ) -> String {
     let mut sections = vec!["Analysis could not establish recovery.".to_owned()];
-    push_result_status(&mut sections, evidence);
+    push_platform_warning(&mut sections, evidence);
     sections.push(summary.to_owned());
     push_links(&mut sections, artifact_url);
     join_sections(sections)
@@ -216,9 +218,8 @@ pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
         .any(|line| line == empty_scope || line == failed)
 }
 
-/// Adds platform qualifications and the outcome headline without replacing domain prose.
-fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
-    let outcome = evidence.report.outcome;
+/// Collection completeness qualifies the core verdict without repeating that verdict.
+fn push_platform_warning(sections: &mut Vec<String>, evidence: &Evidence) {
     if !evidence.platforms.is_complete() {
         sections.push(format!(
             "{WARNING_HEADING}\n> Partial platform coverage. Completed: {}. Missing: {}.\n\
@@ -227,29 +228,52 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
             evidence.platforms.missing().join(", ")
         ));
     }
-    let headline = match outcome {
-        Outcome::Findings => "Notable benchmark changes detected.",
-        Outcome::Clean if evidence.platforms.is_complete() => {
-            "No notable changes detected across the completed collection."
-        }
-        Outcome::Clean => "No notable changes detected on the completed platforms only.",
-        Outcome::InsufficientBaseline => "Insufficient evidence to judge the in-scope series.",
-        Outcome::NothingInScope => "No metric series was analyzed at this commit.",
-        Outcome::Partial => "No notable changes detected among the series that could be judged.",
-    };
-    sections.push(headline.to_owned());
 }
 
 /// Renders the package selection consistently across pending and completed PR comments.
 fn format_scope(packages: &str) -> String {
+    // Reserve GitHub body space for the core's bounded summary and lifecycle warnings.
+    const INVENTORY_BYTES: usize = 8_000;
     let packages = packages
         .split(',')
         .map(str::trim)
         .filter(|one| !one.is_empty())
-        .map(|one| format!("`{one}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("Packages benchmarked: {packages}")
+        .collect::<Vec<_>>();
+    let count = packages.len();
+    let noun = if count == 1 { "package" } else { "packages" };
+    let mut inventory = String::new();
+    let mut shown = 0_usize;
+    for package in &packages {
+        let entry = format!("<code>{}</code>", html_text(package));
+        if inventory
+            .len()
+            .saturating_add(entry.len())
+            .saturating_add(2)
+            > INVENTORY_BYTES
+        {
+            break;
+        }
+        if shown > 0 {
+            inventory.push_str(", ");
+        }
+        inventory.push_str(&entry);
+        shown = shown.saturating_add(1);
+    }
+    if shown < count {
+        write!(inventory, "\n\nInventory abbreviated: {shown} of {count} packages shown. Consult the collection inputs for the complete scope.")
+            .expect("writing to a String never fails");
+    }
+    format!(
+        "<details>\n<summary>Collection scope: {count} {noun}</summary>\n\nPackages benchmarked: {inventory}\n\n</details>"
+    )
+}
+
+/// Package identifiers remain text even in a collapsible HTML inventory.
+fn html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Adds the optional report artifact and the fixed reading guide to standard messages.
@@ -278,7 +302,7 @@ mod tests {
     use crate::cli::RunArgs;
     use crate::model::CommitSha;
     use crate::result::tests::evidence;
-    use crate::result::{AnalysisMode, Coverage};
+    use crate::result::{AnalysisMode, Coverage, Outcome};
 
     fn instance() -> Instance {
         "default".parse().unwrap()
@@ -475,12 +499,46 @@ mod tests {
     #[test]
     fn scope_is_trimmed_and_rendered_consistently() {
         let body = pr_in_progress(&instance(), "foo, bar", &owner());
-        assert!(body.contains("Packages benchmarked: `foo`, `bar`"));
+        assert!(body.contains("Packages benchmarked: <code>foo</code>, <code>bar</code>"));
+        assert!(body.contains("<summary>Collection scope: 2 packages</summary>"));
         assert!(is_in_progress(&body, &instance()));
         assert!(!is_in_progress(
             &pr_nothing_in_scope(&instance(), &owner()),
             &instance()
         ));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exercises GitHub's fixed body limit with a full-size summary and large inventory; smaller message cases run under Miri."
+    )]
+    fn scope_cannot_hide_results_or_overflow_a_bounded_core_summary() {
+        let packages = (0..1000)
+            .map(|index| format!("package_{index:04}_with_a_long_name"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let summary = format!("## Measured result\n{}", "x".repeat(47_000));
+        let body = pr_result(
+            &instance(),
+            &owner(),
+            &evidence(AnalysisMode::Branch, Outcome::Findings, false),
+            PublicationState::Findings,
+            &packages,
+            &summary,
+            None,
+        );
+        assert!(body.len() < 65_536);
+        assert!(body.contains("Inventory abbreviated"));
+        let inventory = body.find("<details>").unwrap();
+        assert!(body.find("## Measured result").unwrap() < inventory);
+        assert!(body.find("Partial platform coverage").unwrap() < inventory);
+        assert_eq!(
+            body.matches("<details>").count(),
+            body.matches("</details>").count()
+        );
+        let escaped = format_scope("<details>&");
+        assert!(escaped.contains("<code>&lt;details&gt;&amp;</code>"));
     }
 
     #[test]
@@ -516,14 +574,14 @@ mod tests {
             "exact tool summary",
             None,
         );
-        assert!(body.contains("Notable benchmark changes detected."));
+        assert!(!body.contains("Notable benchmark changes detected."));
         assert_eq!(body.matches(WARNING_HEADING).count(), 1);
         assert!(body.contains("Missing: windows."));
         assert!(body.contains("exact tool summary"));
     }
 
     #[test]
-    fn silent_outcomes_select_distinct_qualified_messages() {
+    fn core_verdict_is_embedded_once_and_only_platform_coverage_is_added() {
         let cases = [
             (
                 Outcome::Clean,
@@ -539,16 +597,8 @@ mod tests {
         for (outcome, expected) in cases {
             let result = evidence(AnalysisMode::Branch, outcome, true);
             let state = result.require_state(result.publication_state()).unwrap();
-            let body = pr_result(
-                &instance(),
-                &owner(),
-                &result,
-                state,
-                "foo",
-                "tool summary",
-                None,
-            );
-            assert!(body.contains(expected), "{body}");
+            let body = pr_result(&instance(), &owner(), &result, state, "foo", expected, None);
+            assert_eq!(body.matches(expected).count(), 1, "{body}");
             assert!(!body.contains("Missing:"));
         }
         let result = evidence(AnalysisMode::Branch, Outcome::Clean, false);
@@ -564,7 +614,7 @@ mod tests {
             "tool summary",
             None,
         );
-        assert!(body.contains("completed platforms only"));
+        assert!(body.contains("apply only to completed platforms."));
         assert!(!body.contains("across the completed collection"));
     }
 }

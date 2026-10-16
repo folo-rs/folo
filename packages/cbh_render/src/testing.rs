@@ -9,6 +9,7 @@ use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
 use nonempty::nonempty;
 use serde_json::{Value, from_str, json};
 
+use crate::markup::markdown_text;
 use crate::{
     DEFAULT_SUMMARY_LIMIT, ReportFormat, ReportInput, SetSummary, chart_series, render,
     render_markdown_summary,
@@ -76,6 +77,7 @@ impl ReportFixture {
             census.record(Testability::Judged);
         }
         ReportInput {
+            inspection: None,
             project: "render_benchmarks",
             tip_commit: LAST_COMMIT,
             tip_dirty: false,
@@ -198,7 +200,12 @@ pub fn assert_full_report(input: &ReportInput<'_>, format: ReportFormat) {
         return;
     }
     for summary in input.sets {
-        assert!(output.contains(summary.set.machine_key.as_str()));
+        let machine = if format == ReportFormat::Markdown {
+            markdown_text(summary.set.machine_key.as_str())
+        } else {
+            summary.set.machine_key.to_string()
+        };
+        assert!(output.contains(&machine));
         assert!(!summary.findings.is_empty());
     }
     for finding in input.findings {
@@ -235,13 +242,16 @@ pub fn assert_full_report(input: &ReportInput<'_>, format: ReportFormat) {
 pub fn assert_summary(input: &ReportInput<'_>) {
     let output = render_markdown_summary(input, DEFAULT_SUMMARY_LIMIT);
     let retained = input.findings.len().min(DEFAULT_SUMMARY_LIMIT.get());
-    assert!(output.contains(&format!("- Regressions: {}", input.findings.len())));
-    assert_eq!(output.matches("```text").count(), retained);
-    assert_eq!(output.matches("\n## ").count(), retained);
-    assert_eq!(output.matches("_Filter:_").count(), retained);
+    assert!(output.contains(&format!("{} regressions detected.", input.findings.len())));
+    assert_eq!(output.matches("\n### ").count(), retained);
+    assert!(!output.contains("```text"));
+    assert!(!output.contains("<details>"));
     assert_eq!(
-        output.contains("Showing the top"),
-        input.findings.len() > retained
+        output.contains(&format!(
+            "Showing {retained} of {} findings",
+            input.findings.len()
+        )),
+        retained < input.findings.len()
     );
     for (index, finding) in input.findings.iter().enumerate() {
         assert_eq!(output.contains(&finding.id.qualified()), index < retained);

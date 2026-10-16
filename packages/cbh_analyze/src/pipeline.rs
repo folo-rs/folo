@@ -27,8 +27,8 @@ use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BenchmarkIdPrefix, DiscriminantSet};
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
 use cbh_render::{
-    AnalysisOutcome, Coverage, DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render,
-    render_markdown_summary,
+    AnalysisOutcome, Coverage, DEFAULT_SUMMARY_LIMIT, Inspection, InspectionLocation, ReportInput,
+    SetSummary, render, render_markdown_summary,
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
@@ -107,7 +107,14 @@ pub async fn execute(
         .expect("a processor set is never empty");
     let current =
         read_current_collections(workspace_dir, &options.current_collections, &project_id)?;
+    let location = InspectionLocation {
+        directory: workspace_dir.to_path_buf(),
+        repo: resolve_repo(workspace_dir, options.repo.as_deref()),
+        config: options.config_path.as_ref().map(|_| config_path),
+        local,
+    };
     let outcome = analyze_with_current(
+        Some(&location),
         &git,
         &storage,
         &project_id,
@@ -222,6 +229,7 @@ where
     S: Storage + Clone + 'static,
 {
     analyze_with_current(
+        None,
         git,
         storage,
         project_id,
@@ -244,6 +252,7 @@ where
     reason = "the analysis ports plus optional current evidence"
 )]
 pub(crate) async fn analyze_with_current<G, S>(
+    location: Option<&InspectionLocation>,
     git: &G,
     storage: &S,
     project_id: &str,
@@ -478,7 +487,17 @@ where
         .included_dirty_base_exception
         .then(dirty_base_exception_warning);
 
+    // A branch has no default cutoff, but examining its base selects history mode.
+    // An explicit minimum instant preserves that unbounded selection on both lines.
+    let since = dataset.since.unwrap_or(Timestamp::MIN).to_string();
     let input = ReportInput {
+        inspection: location.map(|location| Inspection {
+            location,
+            base: &dataset.base_commit,
+            since: &since,
+            no_dirty: options.no_dirty,
+            exact_current: current.is_some(),
+        }),
         project: project_id,
         tip_commit: &dataset.tip_commit,
         tip_dirty: dataset.tip_dirty,
@@ -985,7 +1004,7 @@ mod tests {
         assert_eq!(regressions, 1);
         assert!(report.contains("regression"), "{report}");
         assert!(report.contains("nm/nm::observe/pull"), "{report}");
-        assert!(report.contains("instruction_count"), "{report}");
+        assert!(report.contains("instruction count"), "{report}");
     }
 
     #[test]
@@ -2119,7 +2138,7 @@ mod tests {
         assert_eq!(regressions, 1);
         assert!(
             text.contains(
-                "Warning: comparison base is 1 commit behind base (discriminant set mismatch)"
+                "Warning: comparison base is 1 commit behind base (newer data belongs to another machine)"
             ),
             "{text}"
         );
@@ -2270,6 +2289,54 @@ mod tests {
             "verbose notes should explain each exclusion: {:?}",
             reporter.notes()
         );
+    }
+
+    #[test]
+    fn condensed_report_retains_the_complete_mixed_exclusion_hint() {
+        let storage = MemoryStorage::new();
+        store(&storage, &dirty_key("c3", 3), &ir_set(3, "c3", 100.0));
+        store(
+            &storage,
+            &clean_key("outside"),
+            &ir_set(3, "outside", 100.0),
+        );
+        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        let mut opts = options();
+        opts.since = Some(ts(2).to_string());
+        opts.no_text = true;
+        opts.markdown_summary = Some(PathBuf::from("summary.md"));
+        opts.json = Some(PathBuf::from("report.json"));
+        let (reports, regressions) = analyze_reports_with_reporter(
+            &linear_git(),
+            &storage,
+            "folo",
+            &opts,
+            &RecordingReporter::quiet(),
+        );
+        assert_eq!(regressions, 0);
+        let json: Value = serde_json::from_str(reports.json.as_deref().unwrap()).unwrap();
+        assert_eq!(json["runs"], 0);
+        let hint = json["hint"].as_str().unwrap();
+        let mut lines = hint.lines();
+        assert!(lines.next().unwrap().contains("3 stored runs"));
+        let dirty = lines.next().unwrap();
+        assert!(dirty.contains("1 dirty (uncommitted-tree) snapshot"));
+        assert!(dirty.contains("--context"));
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .contains("1 run on commits outside HEAD")
+        );
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .contains("1 run older than the --since cutoff")
+        );
+        assert!(lines.next().unwrap().contains("--verbose"));
+        assert!(lines.next().is_none());
+        assert!(reports.markdown_summary.as_deref().unwrap().contains(hint));
     }
 
     #[test]

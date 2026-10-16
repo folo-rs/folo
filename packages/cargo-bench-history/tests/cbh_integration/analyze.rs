@@ -113,6 +113,49 @@ async fn analyze_detects_regression_in_seeded_history() {
     assert!(report.contains("instruction_count"), "{report}");
 }
 
+/// Production report commands preserve effective paths, fixed refs and an absolute cutoff.
+#[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "Native configuration loading, Git history and local storage."
+)]
+async fn finding_inspection_preserves_the_effective_query() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+    let config = workspace.root().join("reader's configuration.toml");
+    fs::write(&config, storage_only_config()).unwrap();
+    let args = [
+        "analyze",
+        "--config",
+        config.to_str().unwrap(),
+        "--since",
+        "6 months",
+        "--no-dirty",
+    ];
+    let json: serde_json::Value = serde_json::from_str(&workspace.drive_json(&args).await).unwrap();
+    let summary = workspace.drive_markdown(&args).await;
+    let commit = json["tip_commit"].as_str().unwrap();
+    assert!(summary.contains(&format!("--context='{commit}'")));
+    assert!(summary.contains(&format!("--base='{commit}'")));
+    assert!(summary.contains("--since='2023-12-01T00:00:00Z'"));
+    assert!(summary.contains("--no-dirty"));
+    assert!(summary.contains("--engine='callgrind'"));
+    assert!(summary.contains("--target-triple='x86_64-unknown-linux-gnu'"));
+    assert!(summary.contains("--benchmark='nm/nm::observe/pull'"));
+    assert!(summary.contains("--metric='instruction_count'"));
+    assert!(summary.contains(&format!(
+        "--config='{}'",
+        config.to_str().unwrap().replace('\'', "''")
+    )));
+    assert!(summary.contains(&format!(
+        "--local='{}'", workspace.root().join("store").to_str().unwrap().replace('\'', "''")
+    )));
+    assert!(summary.contains(&format!(
+        "Set-Location -LiteralPath '{}'",
+        workspace.root().to_str().unwrap().replace('\'', "''")
+    )));
+}
+
 /// History written by an older tool can carry metric kinds since dropped (the
 /// build-layout-volatile Callgrind events). `analyze` must skip those kinds and keep
 /// folding the retained ones rather than aborting the whole run on an unknown-variant
@@ -242,10 +285,7 @@ async fn analyze_reports_a_series_it_could_not_judge_rather_than_omitting_it() {
     let RunOutcome::Analyzed { report, .. } = text else {
         panic!("expected an analyzed outcome, got {text:?}");
     };
-    assert!(
-        report.contains("in-scope series judged: 0 of 1"),
-        "{report}"
-    );
+    assert!(report.contains("Judged 0 of 1 in-scope series"), "{report}");
     assert!(
         report.contains("this silence is not evidence that nothing moved"),
         "{report}"
@@ -346,7 +386,7 @@ async fn analyze_markdown_output_renders_blocks() {
     // Each finding leads with its benchmark id as a `###` chapter title (nested under
     // the set `##`), then a bold percentage headline naming the metric.
     assert!(report.contains("\n### `"), "{report}");
-    assert!(report.contains("** `"), "{report}");
+    assert!(report.contains("**regression:"), "{report}");
     assert!(report.contains("via change point"), "{report}");
 }
 
@@ -397,9 +437,7 @@ async fn analyze_writes_reports_and_outcome_from_one_suppressed_text_pass() {
     assert_eq!(parsed["outcome"], "findings");
 }
 
-/// `--markdown-summary <path>` renders a flat, ungrouped condensed report that omits
-/// the per-set headings the full Markdown report carries. With few findings there is
-/// no truncation note.
+/// The condensed report exposes decisions in rows and investigation in expandable evidence.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_markdown_summary_renders_a_flat_report() {
@@ -409,34 +447,18 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
     let summary = workspace.drive_markdown_summary(&["analyze"]).await;
 
     assert!(
-        summary.contains("# Benchmark history analysis: testproj"),
+        summary.contains("## Benchmark history: testproj"),
         "{summary}"
     );
-    // Each finding leads with its benchmark id as a `##` chapter title, then a bold
-    // percentage headline naming the metric — the same block the full report
-    // uses, one heading level up.
-    assert!(summary.contains("\n## `"), "{summary}");
-    assert!(summary.contains("** `"), "{summary}");
-    // A single seeded regression is well within the top-20 cap, so no truncation note
-    // is added.
-    assert!(
-        !summary.contains("Showing the top"),
-        "an untruncated summary must not claim it is partial: {summary}"
-    );
-    // The per-set `## engine/triple/machine` grouping is deliberately dropped from the
-    // summary, unlike the full Markdown report; only the flat finding headings remain.
+    assert_eq!(summary.matches("\n### ").count(), 1);
+    assert!(!summary.contains("<details>"));
+    assert!(!summary.contains("Showing "));
     assert!(
         !summary.contains("## callgrind"),
         "the summary must be flat, without per-set headings: {summary}"
     );
-    // Each flat finding instead carries the discriminant flags of its partition as a footer,
-    // so a reader who loses the per-set grouping still knows how to query the exact set.
-    assert!(
-        summary.contains(
-            "_Filter:_ `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key harness-auto-machine`"
-        ),
-        "{summary}"
-    );
+    assert!(!summary.contains("--machine-key"));
+    assert!(summary.contains("Linux x86\\_64"));
 }
 
 /// When an analysis produces more findings than the summary cap, `--markdown-summary`
@@ -473,22 +495,19 @@ async fn analyze_markdown_summary_caps_findings_and_names_the_total() {
         .expect("the full Markdown report should be written");
 
     // The header carries the *true* total (all 25), not the retained subset.
-    assert!(summary.contains("- Regressions: 25"), "{summary}");
+    assert!(summary.contains("25 regressions detected."), "{summary}");
     // The truncation note names how many of the total are shown.
     assert!(
-        summary.contains("Showing the top 10 of 25 findings by magnitude."),
+        summary.contains("Showing 10 of 25 findings by magnitude;"),
         "{summary}"
     );
-    // Exactly the cap of finding headlines survives in the summary. Each finding
-    // headline carries a bold metric name (`** ` before the backtick), which appears
-    // nowhere else, so it counts blocks.
-    let summary_blocks = summary.matches("** `").count();
+    let summary_blocks = summary.matches("\n### ").count();
     assert_eq!(
         summary_blocks, 10,
         "summary should keep only the cap: {summary}"
     );
     // The full report from the same run still lists every finding.
-    let full_blocks = full.matches("** `").count();
+    let full_blocks = full.matches("**regression:").count();
     assert_eq!(
         full_blocks, 25,
         "full report should keep every finding: {full}"

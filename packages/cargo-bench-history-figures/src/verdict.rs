@@ -9,7 +9,7 @@
 //! and the surrounding prose is what makes it mean something.
 
 use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod};
-use cbh_render::format_value;
+use cbh_render::format_quantity;
 
 /// The fragment describing a finding the detector reported.
 #[must_use]
@@ -47,12 +47,12 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
             format!("observed at context commit `{commit}`")
         }
     };
-    let baseline = format_value(finding.baseline);
-    let latest = format_value(finding.latest);
+    let baseline = format_quantity(finding.kind, finding.baseline);
+    let latest = format_quantity(finding.kind, finding.latest);
 
     format!(
         "> **Reported.** A {direction} of {:+.2}% via {method}, {attribution}.\n>\n\
-         > The level moved from {baseline} to {latest}.\n>\n\
+         > The before and after representative levels are {baseline} and {latest}.\n>\n\
          > {reading}.\n",
         finding.relative_delta * 100.0,
     )
@@ -69,7 +69,7 @@ fn branch_reported(finding: &Finding, reading: &str) -> String {
         Direction::Regression => "A regression",
         Direction::Improvement => "An improvement",
     };
-    let latest = format_value(finding.latest);
+    let latest = format_quantity(finding.kind, finding.latest);
     let Some(branch) = finding.branch.as_ref() else {
         return format!(
             "> **Reported.** {movement} at the context commit.\n>\n\
@@ -77,14 +77,14 @@ fn branch_reported(finding: &Finding, reading: &str) -> String {
              > {reading}.\n"
         );
     };
-    let minimum = format_value(branch.reference_min);
-    let maximum = format_value(branch.reference_max);
-    let excess = format_value(branch.excess.abs());
+    let minimum = format_quantity(finding.kind, branch.reference_min);
+    let maximum = format_quantity(finding.kind, branch.reference_max);
+    let excess = format_quantity(finding.kind, branch.excess.abs());
 
     format!(
         "> **Reported.** {movement} at the context commit, outside every observed \
          current-base value.\n>\n\
-         > The context run is {latest}; the observed range is {minimum}-{maximum}, and the \
+         > The context run is {latest}; the observed range is {minimum} to {maximum}, and the \
          excess beyond its nearest edge is {excess}.\n>\n\
          > {reading}.\n",
     )

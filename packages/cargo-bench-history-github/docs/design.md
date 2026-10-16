@@ -79,11 +79,15 @@ findings or re-derives analysis vocabulary.
 
 Reports use a shared message catalogue, including advisory wording and the public
 [report-reading guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
-Completed reports use the embedded summary's heading and commit attribution without repeating
-them in the GitHub envelope. Unjudged in-scope series are routine coverage information, not a
-top-level warning: the summary's judged-series bullet points readers to the full report for
-details. Counts and reasons remain in the full Markdown report's final Coverage section and the
-JSON report's `census`. Missing collection platforms and stale results retain their warnings.
+Completed reports use the embedded summary's verdict, heading and commit attribution without
+repeating them in the GitHub envelope. Advisory wording follows the findings rather than
+displacing the decision. The core summary owns judged-series coverage and keeps incomplete
+coverage visible even beside findings. Missing collection platforms and stale results retain
+their independent warnings. Completed comments place the decision and summary before the
+expandable package inventory; pending comments also keep the inventory expandable. Exceptionally
+large inventories retain their total and disclose omitted entries rather than exceeding GitHub's
+body limit; collection inputs remain the complete scope record.
+Package scope is collection evidence, not an analysis verdict.
 Regression issues use `Benchmark history findings for <project> (updated YYYY-MM-DD)`.
 The project-qualified prefix identifies the rolling issue; the suffix is the UTC date of
 the companion's last body update, not the last measurement. For example, repeating an identical

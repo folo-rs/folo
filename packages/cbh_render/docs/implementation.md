@@ -18,7 +18,39 @@ or file outcome use these projections rather than maintaining independent verdic
 Collection-platform completeness belongs to workflow evidence, outside analyzer-series coverage.
 Full Markdown appends its complete coverage account after findings and report warnings, including
 on the silent-result path. The same coverage projection supplies its totals and reason rows and
-the JSON census; condensed summaries retain the compact presentation.
+the JSON census. Every human report starts with a decision and coverage overview; missing
+in-scope coverage remains explicit beside findings. Condensed summaries retain the overview
+and full-analysis qualifications independently of their top-finding selection.
+
+Quantity formatting reads `MetricKind::as_unit`. One scale per finding governs its comparison
+values, signed deltas and plotted observations; JSON serialization bypasses display conversion.
+Topology binning and branch comparison columns remain independent of unit scaling.
+Time-series plots contain no prose, while retaining every topology column and gap.
+Multiline diagnostics preserve their paragraph and bullet layout;
+single-line identity escaping does not flatten those messages.
+
+The analysis boundary supplies resolved inspection context separately from findings. The
+renderer quotes complete argument values for each supported shell, fences embedded content
+safely and refuses lossy or control-bearing command text. It does not read environment
+variables, discover repository remotes or acquire data. Exact-current provenance qualifies
+stored inspection rather than silently claiming the two sources are interchangeable.
+
+Condensed output budgets whole vertical finding blocks, reserving space for the GitHub envelope.
+Its range sketch includes actual zero in the shared linear span and normalizes finite quantities
+before mapping them to a full-line grid. Nonnegative observations start at zero; finite negatives
+extend to its left rather than being clipped. The zero label, bracketed base range and current
+marker remain visible even when they share a display cell. An all-zero comparison has no span
+to draw. Narrow readers scroll the code block rather than the page.
+Rounding can collapse a visually tiny range to one cell. Per-finding numeric highlights stay
+limited to current value/excess or before/after representatives/change.
+
+Aggregate material qualifications cover every group before truncation. Detailed comparison
+counts, inspection commands, exact machine identity and time-series evidence remain in full reports;
+machine identity only enters a summary when needed to disambiguate otherwise matching findings.
+The same coverage projection controls concise summary coverage and the complete full-report account.
+Selection diagnostics have their own escaped-byte budget, separate from short identity labels.
+Ordinary explanations retain every exclusion and remedy. Oversized diagnostics omit whole lines
+with an explicit notice, continuing past long identity lines to retain later instructions.
 
 Ghosts and configured ignores remain in the census total but sit outside the in-scope
 denominator. Ignored-series disclosure is derived from that same census, including beside
@@ -46,6 +78,5 @@ mutation testing covers the benchmark support without running benchmark targets.
 
 `cbh_render_reports_cg` pairs the full-report and quiet-text scenarios with identical fixtures.
 It counts formatting, charting, serialization and allocator instructions, not operating-system
-allocation latency. The summary intentionally has no Callgrind counterpart: its production
-`HashSet` uses randomized hashing, so probe counts can vary independently of source changes.
-Criterion still measures that real production path without changing its hasher for benchmarks.
+allocation latency. Criterion additionally measures the compact summary blocks under the
+production size budget.
