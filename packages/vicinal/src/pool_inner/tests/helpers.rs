@@ -140,14 +140,15 @@ impl Drop for CountOnDrop {
     }
 }
 
-/// Exercises recursive destructor failure without leaking an allocation under Miri.
+/// Exercises payload destructor failure without recursively unwinding the test harness.
 ///
-/// Zero-sized payloads still run `Drop`, but retaining their replacement needs no heap storage.
+/// The terminal replacement is safely droppable if a mutation bypasses containment.
+/// Both payloads are zero-sized, so retaining the replacement needs no heap storage under Miri.
 pub(crate) struct PanickingPayload;
 
 impl Drop for PanickingPayload {
     fn drop(&mut self) {
         // Only unwind containment is under test, not panic-hook output or backtrace collection.
-        panic::resume_unwind(Box::new(Self));
+        panic::resume_unwind(Box::new(()));
     }
 }

@@ -91,13 +91,16 @@ fn assert_partial_affinity_failure(policy: WorkerPolicy) {
 fn eager_initializer_failures_preserve_the_original_panic() {
     struct InitializationFailure;
 
+    // Sibling workers supply the primary failure and a secondary failure to dispose of.
+    const WORKERS: u32 = 2;
+
     with_watchdog(|| {
         // Both workers reach initialization before either fails, exercising completion reporting
         // separately from affinity readiness and ensuring secondary cleanup has a panic to discard.
-        let rendezvous = Barrier::new(2);
+        let rendezvous = Barrier::new(WORKERS as usize);
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_system(nz!(2)))
+            .worker_policy(WorkerPolicy::per_system(nz!(WORKERS)))
             .thread_init(move || {
                 rendezvous.wait();
                 if thread::current().name().unwrap().ends_with("-0") {
@@ -106,9 +109,11 @@ fn eager_initializer_failures_preserve_the_original_panic() {
                 panic::panic_any(PanickingPayload);
             })
             .build();
+        // Reject count mutations before starting callbacks with fixed participants.
+        assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let payload = failed_construction(
             pool,
-            2,
+            WORKERS as usize,
             thread::Builder::spawn,
             ProcessorSet::pin_current_thread_to,
         );
