@@ -32,6 +32,11 @@ unique engines, benchmark IDs and metric kinds, and finite measurements. Unlike 
 `Run` decoding, unknown metric kinds are errors: silently dropping them would change the
 claimed current roster. Snapshot values come from collection finalization, never a store read.
 
+Backfill completion is a separate collection-only handoff. Its checked decoder binds final
+counts to full frozen endpoints and validates that mutually exclusive commit classifications
+cover the range and agree with the stopping condition. It carries neither analysis outcomes
+nor GitHub execution identity; the workflow caller binds platform and attempt provenance.
+
 Domain validation and reduction operations expose aggregates where the model owns semantic
 context. JSON conversion returns `serde_json::Error` directly because the model cannot identify
 the caller's storage or command operation. That caller adds semantic context while preserving the

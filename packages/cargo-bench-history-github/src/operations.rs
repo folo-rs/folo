@@ -9,7 +9,7 @@ use crate::github::{GitHub, RestGitHub};
 use crate::lifecycle::{self, Inconclusive, Report};
 use crate::model::{CommitSha, Instance, Repository};
 use crate::result::{AnalysisReport, Evidence, PlatformCoverage, PublicationState};
-use crate::{action, workflow};
+use crate::{action, summary, workflow};
 
 /// Namespace and diagnostics shared by lifecycle and workflow operations.
 ///
@@ -35,6 +35,7 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     let instance = cli.instance();
     let verbose = cli.verbose();
     let command = match cli.into_command() {
+        Command::WorkflowSummary(args) => return summary::workflow_summary(&args),
         Command::Action(args) => return action::run(args).await,
         Command::PrepareWorkflow(args) => return action::prepare_workflow(args).await,
         Command::WorkflowMatrix(args) => {
@@ -77,8 +78,10 @@ pub(crate) async fn dispatch(
     clock: &Clock,
 ) -> Result<(), AppError> {
     match command {
+        Command::BackfillJobs(args) => workflow::backfill_jobs(github, context, args).await,
         Command::PrepareAnalysis(args) => workflow::prepare_analysis(github, context, args).await,
         Command::Action(_)
+        | Command::WorkflowSummary(_)
         | Command::PrepareWorkflow(_)
         | Command::WorkflowMatrix(_)
         | Command::InspectReport(_)

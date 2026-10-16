@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use ohno::AppError;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::CommitSha;
 
@@ -85,6 +85,8 @@ pub(crate) struct AnalysisReport {
     pub(crate) mode: AnalysisMode,
     pub(crate) outcome: Outcome,
     pub(crate) coverage: Coverage,
+    pub(crate) judged: usize,
+    pub(crate) in_scope: usize,
 }
 
 impl AnalysisReport {
@@ -131,6 +133,8 @@ impl AnalysisReport {
             mode: raw.mode,
             outcome: raw.outcome,
             coverage: census.coverage,
+            judged: census.judged,
+            in_scope: census.in_scope,
         })
     }
 
@@ -162,6 +166,27 @@ impl Outcome {
             Self::InsufficientBaseline => "insufficient_baseline",
             Self::NothingInScope => "nothing_in_scope",
             Self::Partial => "partial",
+        }
+    }
+}
+
+/// Execution status remains independent of analysis and publication outcomes.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Execution {
+    Success,
+    Failure,
+    Cancelled,
+    Skipped,
+}
+
+impl Execution {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Success => "Completed",
+            Self::Failure => "Failed",
+            Self::Cancelled => "Cancelled",
+            Self::Skipped => "Skipped",
         }
     }
 }

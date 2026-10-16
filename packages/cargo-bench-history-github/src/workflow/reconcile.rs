@@ -6,6 +6,7 @@ use ohno::AppError;
 
 use crate::github::WorkflowJob;
 use crate::model::{CommitSha, Instance, Repository};
+use crate::result::Execution;
 use crate::workflow::receipt::{Receipt, validate_platform};
 
 /// Successful receipts in platform order, with platform coverage independent of report coverage.
@@ -40,29 +41,8 @@ pub(crate) fn reconcile(
     jobs: &[WorkflowJob],
     receipts: &[Receipt],
 ) -> Result<Selection, AppError> {
-    let mut attempts = BTreeMap::new();
-    let mut ids = BTreeSet::new();
     let prefix = format!("{}:", collection_job_prefix(instance));
-    for job in jobs {
-        if job.run_id != run_id || !ids.insert(job.id) {
-            return Err(InvalidCollectionJobs::new("mismatched run or duplicate job ID").into());
-        }
-        // Reusable workflow callers prefix job names; the collection identity is the final
-        // component. Ref: docs/design.md, Workflow evidence.
-        let marker = job.name.rsplit(" / ").next().unwrap_or(&job.name);
-        let Some(platform) = marker.strip_prefix(&prefix) else {
-            continue;
-        };
-        validate_platform(platform)?;
-        if !expected.contains(platform) {
-            return Err(InvalidCollectionJobs::new("unexpected collection platform").into());
-        }
-        if attempts.insert((platform, job.run_attempt), job).is_some() {
-            return Err(
-                InvalidCollectionJobs::new("duplicate platform jobs in one attempt").into(),
-            );
-        }
-    }
+    let attempts = job_attempts(run_id, &prefix, expected, jobs)?;
 
     let mut by_attempt = BTreeMap::new();
     for (index, receipt) in receipts.iter().enumerate() {
@@ -85,15 +65,9 @@ pub(crate) fn reconcile(
 
     let mut receipt_indices = Vec::new();
     for platform in expected {
-        // Unique attempts are ordered by platform then attempt, so the last entry
-        // in this platform's range is its latest job without a separate latest-job index.
-        let (_, job) = attempts
-            .range(
-                (platform.as_str(), NonZero::<u64>::MIN)..=(platform.as_str(), NonZero::<u64>::MAX),
-            )
-            .next_back()
+        let job = latest_job(&attempts, platform)
             .ok_or_else(|| InvalidCollectionJobs::new("expected platform has no collection job"))?;
-        if !successful(job)? {
+        if terminal_execution(job)? != Execution::Success {
             // A failed retry invalidates older success. A platform not rerun still selects
             // its own latest successful attempt. Ref: docs/design.md, Workflow evidence.
             continue;
@@ -112,16 +86,64 @@ pub(crate) fn reconcile(
     })
 }
 
-/// Distinguishes a completed success from known failures without accepting unfinished evidence.
-fn successful(job: &WorkflowJob) -> Result<bool, AppError> {
+/// A platform/attempt index shared by single-commit collection and backfill projections.
+pub(crate) type JobAttempts<'a> = BTreeMap<(&'a str, NonZero<u64>), &'a WorkflowJob>;
+
+/// Rejects ambiguous identities before either workflow selects the latest execution.
+pub(crate) fn job_attempts<'a>(
+    run_id: NonZero<u64>,
+    prefix: &str,
+    expected: &BTreeSet<String>,
+    jobs: &'a [WorkflowJob],
+) -> Result<JobAttempts<'a>, AppError> {
+    let mut attempts = BTreeMap::new();
+    let mut ids = BTreeSet::new();
+    for job in jobs {
+        if job.run_id != run_id || !ids.insert(job.id) {
+            return Err(InvalidCollectionJobs::new("mismatched run or duplicate job ID").into());
+        }
+        // Reusable callers add outer names; only the final job component is a platform marker.
+        // Ref: docs/implementation.md, "Workflow job history".
+        let marker = job.name.rsplit(" / ").next().unwrap_or(&job.name);
+        let Some(platform) = marker.strip_prefix(prefix) else {
+            continue;
+        };
+        validate_platform(platform)?;
+        if !expected.contains(platform) {
+            return Err(InvalidCollectionJobs::new("unexpected collection platform").into());
+        }
+        if attempts.insert((platform, job.run_attempt), job).is_some() {
+            return Err(
+                InvalidCollectionJobs::new("duplicate platform jobs in one attempt").into(),
+            );
+        }
+    }
+    Ok(attempts)
+}
+
+/// Uses the newest normalized execution, including skips and unsuccessful retries.
+pub(crate) fn latest_job<'a>(
+    attempts: &JobAttempts<'a>,
+    platform: &str,
+) -> Option<&'a WorkflowJob> {
+    attempts
+        .range((platform, NonZero::<u64>::MIN)..=(platform, NonZero::<u64>::MAX))
+        .next_back()
+        .map(|(_, job)| *job)
+}
+
+/// Shares terminal-state validation without treating any non-success as successful collection.
+pub(crate) fn terminal_execution(job: &WorkflowJob) -> Result<Execution, AppError> {
     if job.status != "completed" {
         return Err(InvalidCollectionJobs::new("latest collection job is not completed").into());
     }
     match job.conclusion.as_deref() {
-        Some("success") => Ok(true),
-        Some("failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required") => {
-            Ok(false)
-        }
+        Some("success") => Ok(Execution::Success),
+        Some("cancelled") => Ok(Execution::Cancelled),
+        Some("skipped") => Ok(Execution::Skipped),
+        // These terminal outcomes cannot establish successful collection. Retain the raw
+        // conclusion in the backfill projection so its diagnostic distinction is not lost.
+        Some("failure" | "neutral" | "timed_out" | "action_required") => Ok(Execution::Failure),
         _ => Err(InvalidCollectionJobs::new("latest collection conclusion is unknown").into()),
     }
 }

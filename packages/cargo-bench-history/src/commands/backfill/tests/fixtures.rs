@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::future::{Future, ready};
 
-use cbh_diag::RecordingReporter;
+use cbh_diag::{RecordingReporter, Reporter};
 use cbh_git::{FakeGitHistory, GitHistory};
 use cbh_storage::{MemoryStorage, StorageError, TestStorageError};
 use futures::executor::block_on;
@@ -10,6 +10,19 @@ use futures::executor::block_on;
 use super::*;
 use crate::EngineFailedError;
 use crate::model::{MachineKey, TargetTriple};
+
+/// Exercises the production replay and final exit policy without an output-file adapter.
+pub(crate) async fn execute_backfill(
+    options: &BackfillOptions,
+    git: &impl BackfillGit,
+    runner: &impl CommitRunner,
+    worktree: &Path,
+    reporter: &dyn Reporter,
+) -> Result<RunOutcome, AppError> {
+    execute_range(options, git, runner, worktree, reporter)
+        .await?
+        .into_outcome()
+}
 
 /// A canned per-commit result the fake [`CommitRunner`] returns.
 #[derive(Clone)]

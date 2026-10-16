@@ -43,12 +43,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cbh_config::{
-    load_config, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
+    load_config, rebase, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
 };
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_engines::FsBenchOutputSource;
 use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
+use cbh_model::{BackfillCompletion, BackfillCounts, BackfillStop};
 use cbh_probe::SystemProbe;
 use cbh_storage::{Storage, build_storage};
 use ohno::AppError;
@@ -58,6 +59,7 @@ use crate::commands::collect::{
     CollectDeps, CollectSummary, Partition, default_bench_command, partition_selection_summary,
     probe_partition, run_engines,
 };
+use crate::config_writer::{ConfigWriter, TokioConfigWriter};
 use crate::errors::{
     AddWorktreeFailedError, BenchFailure, FirstParentWalkFailedError, MissingProjectDirectoryError,
     RemoveWorktreeFailedError, ResetWorktreeFailedError, ResolveRefFailedError,
@@ -151,6 +153,13 @@ pub(crate) async fn execute(
     // base directory itself.
     let base = resolve_repo(workspace_dir, options.repo.as_deref());
     let base = base.as_path();
+    let completion_output = options
+        .completion_output
+        .as_ref()
+        .map(|path| rebase(workspace_dir, path.clone()));
+    if let Some(path) = &completion_output {
+        preflight_completion(&TokioConfigWriter, path).await?;
+    }
 
     let config_path = resolve_config_path(base, options.config_path.as_deref());
     let config = load_config(&config_path, options.config_path.is_some()).await?;
@@ -175,7 +184,7 @@ pub(crate) async fn execute(
         reporter: &reporter,
     };
 
-    let result = execute_backfill(options, &git, &runner, &worktree, &reporter).await;
+    let result = execute_range(options, &git, &runner, &worktree, &reporter).await;
     // Flush the cache-invalidation marker once for the whole range: where a
     // `backfill --overwrite` replaces an already-stored object it arms the shared
     // backend, and a single coalesced bump invalidates other machines' caches.
@@ -184,22 +193,26 @@ pub(crate) async fn execute(
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
-    finish_with_flush(result, flush)
+    let completed = finish_with_flush(result, flush)?;
+    if let Some(path) = &completion_output {
+        write_completion(&TokioConfigWriter, path, &completed, options.overwrite).await?;
+    }
+    completed.into_outcome()
 }
 
 /// Plans and runs the backfill against injected ports.
 ///
 /// Validation precedes any worktree work, so a precondition failure leaves the
 /// repository untouched. The worktree is always torn down — on success and on
-/// failure — and a stop after a per-commit failure surfaces as
-/// a [`BackfillError`] (a non-zero exit) carrying the partial summary.
-pub(crate) async fn execute_backfill<G, C>(
+/// failure. A stopping benchmark failure remains in the returned accounting until
+/// completion output and the existing nonzero exit policy have both been applied.
+pub(crate) async fn execute_range<G, C>(
     options: &BackfillOptions,
     git: &G,
     runner: &C,
     worktree: &Path,
     reporter: &dyn Reporter,
-) -> Result<RunOutcome, AppError>
+) -> Result<CompletedBackfill, AppError>
 where
     G: BackfillGit,
     C: CommitRunner,
@@ -218,15 +231,91 @@ where
     let result = run_commits(options, git, runner, worktree, &commits, reporter).await;
     let teardown = git.remove_worktree(worktree).await;
 
-    let mut report = result?;
+    let report = result?;
     teardown.map_err(|error| RemoveWorktreeFailedError::caused_by(worktree, error))?;
 
-    let message = report.render(commits.len());
-    if let Some(error) = report.take_stopping_error() {
-        Err(BackfillError::caused_by(message, error).into())
-    } else {
-        Ok(RunOutcome::Completed { message })
+    Ok(CompletedBackfill { commits, report })
+}
+
+/// Final replay accounting survives a stopping benchmark failure until output is written.
+#[derive(Debug)]
+pub(crate) struct CompletedBackfill {
+    pub(crate) commits: Vec<String>,
+    pub(crate) report: BackfillReport,
+}
+
+impl CompletedBackfill {
+    /// Shares typed completion with the companion without parsing the log summary.
+    pub(crate) fn completion(&self, overwrite: bool) -> Result<BackfillCompletion, AppError> {
+        let report = &self.report;
+        BackfillCompletion::new(
+            self.commits
+                .last()
+                .expect("the inclusive range is nonempty")
+                .clone(),
+            self.commits
+                .first()
+                .expect("the inclusive range is nonempty")
+                .clone(),
+            self.commits.len(),
+            BackfillCounts {
+                stored: report.stored.len(),
+                skipped: report.skipped_existing.len(),
+                empty: report.skipped_empty.len(),
+                failed: report.failures.len(),
+                deferred: report.deferred,
+            },
+            report.stop_reason(),
+            overwrite,
+        )
+        .map_err(|error| BackfillError::caused_by("encoding completion evidence", error).into())
     }
+
+    /// Preserves the command's existing nonzero exit for a stopping benchmark failure.
+    pub(crate) fn into_outcome(mut self) -> Result<RunOutcome, AppError> {
+        let message = self.report.render(self.commits.len());
+        if let Some(error) = self.report.take_stopping_error() {
+            Err(BackfillError::caused_by(message, error).into())
+        } else {
+            Ok(RunOutcome::Completed { message })
+        }
+    }
+}
+
+/// Writes only final replay accounting, after teardown and storage invalidation succeed.
+pub(crate) async fn write_completion(
+    writer: &impl ConfigWriter,
+    path: &Path,
+    completed: &CompletedBackfill,
+    overwrite: bool,
+) -> Result<(), AppError> {
+    let json = completed
+        .completion(overwrite)?
+        .to_json()
+        .map_err(|error| BackfillError::caused_by("serializing completion evidence", error))?;
+    if !writer
+        .write_new(path, &json)
+        .await
+        .map_err(|error| BackfillError::caused_by("writing completion evidence", error))?
+    {
+        return Err(BackfillError::new("completion output already exists").into());
+    }
+    Ok(())
+}
+
+/// Rejects occupied destinations before replay can write shared benchmark history.
+pub(crate) async fn preflight_completion(
+    writer: &impl ConfigWriter,
+    path: &Path,
+) -> Result<(), AppError> {
+    if writer
+        .exists(path)
+        .await
+        .map_err(|error| BackfillError::caused_by("inspecting completion destination", error))?
+    {
+        return Err(BackfillError::new("completion output already exists").into());
+    }
+    Ok(())
 }
 
 /// Validates the request and resolves the inclusive commit range, **newest commit
@@ -434,14 +523,23 @@ pub(crate) struct FailedCommit {
 }
 
 impl BackfillReport {
+    /// Identifies the stopping condition independently of whether failures were ignored.
+    pub(crate) fn stop_reason(&self) -> BackfillStop {
+        if self.stopped_failure.is_some() {
+            BackfillStop::BenchmarkFailure
+        } else if self.deferred > 0 {
+            BackfillStop::CommitLimit
+        } else {
+            BackfillStop::RangeExhausted
+        }
+    }
+
     /// Renders the multi-line summary for a range of `total` commits.
     pub(crate) fn render(&self, total: usize) -> String {
-        let reason = if self.stopped_failure.is_some() {
-            "Stopped on benchmark failure."
-        } else if self.deferred > 0 {
-            "Commit limit reached."
-        } else {
-            "Range exhausted."
+        let reason = match self.stop_reason() {
+            BackfillStop::BenchmarkFailure => "Stopped on benchmark failure.",
+            BackfillStop::CommitLimit => "Commit limit reached.",
+            BackfillStop::RangeExhausted => "Range exhausted.",
         };
         let mut lines = vec![format!(
             "Backfill range of {}: {} stored, {} skipped (existing), \
