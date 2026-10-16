@@ -4,6 +4,15 @@ Tracking notes for follow-up work that is intentionally deferred. Each entry
 should describe the task, the trigger condition that makes it actionable, and
 links to the relevant code.
 
+## Restore a resolvable zip minimum
+
+Fresh minimum-dependency resolution in
+[`check-frozen`](justfiles/just_basics.just) fails because the workspace
+[`zip` minimum](Cargo.toml) names yanked version `9.0.0`. Update that minimum to
+an available compatible release and account for the release-tooling package
+effects in a dependency-maintenance change. An existing minimum lockfile still
+allows compilation against the promised API, but does not repair fresh resolution.
+
 ## Give dure-test-helper preparations stable executable ownership
 
 The [helper locator](packages/dure-test-helper/src/locate.rs) returns a shared
