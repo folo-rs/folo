@@ -48,6 +48,10 @@ contract. It is published only so sibling repositories can run the binary (via
 
 ## Building and testing
 
-`cargo test -p cargo-bench-history-faker` builds and runs both the `writers` unit
-tests and the `locate` tests (the `test` cfg activates the gated locator). No
-feature flag is needed for the crate's own tests.
+`cargo test -p cargo-bench-history-faker --all-features` runs the pure unit tests
+and the locator integration tests. Keep real filesystem and child-process coverage
+in `tests/locate.rs`; library unit tests must remain in-process and Miri-compatible.
+
+Preserve the executable lifetime and cache/output separation described in
+[`docs/implementation.md`](docs/implementation.md#executable-ownership), including
+the matching `_faker-path` recipe.

@@ -185,11 +185,10 @@ test-scripts DOMAINS='':
 # a test runner can call this once up front and pass the path via CBH_FAKER so each per-test
 # process skips a redundant Cargo freshness check.
 #
-# The build targets a dedicated `<target>/faker` directory rather than the shared
-# workspace `target/` tree (matching the Rust-side `engine_target_dir`). Cargo relinks a
-# binary by unlinking it and hard-linking the replacement, so on the shared tree a
-# concurrent build could momentarily leave the binary absent under a test that is spawning
-# it; its own tree means only builds aimed here touch the file, closing that race (#332).
+# Each preparation owns its final artifact directory; only intermediate build files are
+# shared. Later builds cannot unlink a path already handed to consumers. Retain outputs
+# until target-tree cleanup because this recipe exits before its consumers start.
+# Ref: packages/cargo-bench-history-faker/docs/implementation.md#executable-ownership.
 [group('testing')]
 [script]
 _faker-path:
@@ -199,12 +198,11 @@ _faker-path:
 
     Import-Module "{{ justfile_directory() }}/scripts/build/CargoExecutable.psm1" -Force
 
-    # Nest under the ambient CARGO_TARGET_DIR (e.g. a coverage run's tree) when set, else the
-    # workspace `target/`, so the isolated tree stays git-ignored and cached like everything
-    # else. The Rust resolver derives the same path, so a pre-built CBH_FAKER and an
-    # on-demand build resolve to the very same isolated binary.
+    # Match the Rust locator's cache without reusing a previous preparation's artifact path.
     $fakerTargetDir = Join-Path ($env:CARGO_TARGET_DIR ?? "target") "faker"
-    $messages = cargo +$env:RUST_MSRV build -p cargo-bench-history-faker --target-dir $fakerTargetDir --message-format=json-render-diagnostics --locked
+    $env:CARGO_BUILD_BUILD_DIR = [IO.Path]::GetFullPath((Join-Path $fakerTargetDir "build"))
+    $outputDir = Join-Path $fakerTargetDir ("run-" + [guid]::NewGuid().ToString("N"))
+    $messages = cargo +$env:RUST_MSRV build -p cargo-bench-history-faker --bin cargo-bench-history-faker --target-dir $outputDir --message-format=json-render-diagnostics --locked
     Write-Output (Resolve-CargoExecutable -CargoMessage $messages -TargetName "cargo-bench-history-faker")
 
 # Build the Windows integration-test helper before the test runner starts and
