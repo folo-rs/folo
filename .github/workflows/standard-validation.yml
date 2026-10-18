@@ -15,7 +15,7 @@ on:
 
 concurrency:
   # PR/push runs share ref-specific groups with the PR-close companion. Scheduled/manual callers
-  # use their run ID so neither a main push nor another nightly run cancels their coverage.
+  # use their run ID so neither a main push nor another scheduled run cancels their coverage.
   # Ref: .github/workflows/design.md#concurrency.
   group: standard-validation-${{ github.event_name == 'pull_request' && github.head_ref || github.event_name == 'push' && github.ref || github.run_id }}
   cancel-in-progress: true

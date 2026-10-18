@@ -12,7 +12,9 @@ check execution, failure triage and repair. Each handoff is an ordinary GitHub i
 that a human or Local Copilot App agent can understand and act on.
 
 The **Deep validation** workflow runs the full standard and deep suites against merged `main`
-daily at 18:00 UTC to avoid contention with morning work, or when started manually on `main`.
+approximately every five days at 18:00 UTC to reduce Actions usage and avoid contention with
+morning work, or when started manually on `main`. The cron day-of-month step restarts each
+month, so the interval can be shorter at month boundaries.
 It is not triggered by PRs or forks.
 Its failure-reporting job files a readable **Scheduled validation failed on &lt;date&gt;**
 issue when planning or checks fail. A triager investigates all reported
@@ -49,7 +51,7 @@ example execution (`run-examples`),
 dependency default-feature policy checks (`default-features-check`), feature-powerset
 compilation (`hack`), unused-dependency checks (`machete`) and ARM64 tests and benchmark
 smoke checks (`test-arm`). These lower-yield checks run
-nightly or on manual dispatch rather than on every push.
+on the scheduled cadence or on manual dispatch rather than on every push.
 Release-profile Clippy rarely diverges from dev-profile Clippy, release builds add little
 beyond it, examples rarely change or break,
 and dependency default-feature policy mistakes have limited impact and can be repaired
@@ -72,7 +74,7 @@ does not need extra horizontal scaling solely to shorten already-small jobs.
 Mutation testing favors runner availability over maximum parallelism. Each platform
 uses two shards, with a longer job budget to accommodate their work.
 
-Nightly runs execute the entire standard and deep suites even on unchanged source. Build caches
+Scheduled runs execute the entire standard and deep suites even on unchanged source. Build caches
 remain ordinary performance aids, not receipts used to skip validation. Hosted
 execution and reporting do not depend on the availability of a Local App.
 

@@ -3,8 +3,9 @@
 ## Purpose
 
 Keep ordinary PR and merge-queue validation fast while running complete standard and deep
-validation nightly. GitHub Actions runs the checks and reports failures. A human or personally funded Local
-Copilot App session triages each report into independently actionable issues and
+validation approximately every five days. GitHub Actions runs the checks and reports failures.
+A human or personally funded Local Copilot App session triages each report into
+independently actionable issues and
 repairs them through ordinary pull requests.
 
 Every open finding has a path to resolution: an owner with a next action, admission
@@ -13,7 +14,7 @@ decision. Completion of a repair attempt and resolution of the current issue are
 separate facts when a finding recurs.
 
 ```text
-Nightly or manual standard + deep checks
+Scheduled or manual standard + deep checks
               |
               v
 Readable failed-run issue
@@ -48,10 +49,12 @@ workflow, including its full package, tooling and platform scope, and runs the c
 Miri platform matrix, many-seed Miri cases, mutation shards, careful checks,
 release-profile Clippy, release builds, example execution, dependency default-feature policy checks,
 feature-powerset compilation, unused-dependency checks and ARM64 tests with benchmark
-smoke checks nightly on main. Standard coverage includes native tests and coverage,
+smoke checks on main approximately every five days at 18:00 UTC, or on manual dispatch.
+The day-of-month cron step restarts each month, so gaps can be shorter at month boundaries.
+Standard coverage includes native tests and coverage,
 documentation and doctests, minimum-dependency compilation, external-type checks, tooling checks,
-release validation and Azure backend tests. Every nightly run executes the checks; previous
-success does not skip a night. Ordinary dependency/build caches remain available.
+release validation and Azure backend tests. Every scheduled run executes the checks; previous
+success does not skip a run. Ordinary dependency/build caches remain available.
 
 The scheduled matrix invokes the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes available to developers, with the relevant package and
