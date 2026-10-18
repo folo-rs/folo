@@ -107,6 +107,32 @@ the freshness-unverified warning used when the live PR head itself cannot be rea
 
 ## Publication states
 
+### Workflow results
+
+An offline results card keeps execution, analysis and GitHub publication separate.
+Disabling publication does not disable collection or storage, and a successful publication
+request does not promise a newly created post. Successful analysis uses the same checked
+outcome and coverage as publication. A compact card shows context, available partition and
+scope evidence, judged coverage, missing platforms, established freshness, links and a useful
+next action without reproducing the full report.
+
+Explicit no-analysis reasons explain empty scope, policy skips, unavailable reports and
+collection-only work. A missing artifact or successful process never supplies a clean verdict.
+Insufficient-history guidance requires distinct comparable commits without promising a finding.
+Empty output names no speculative engine or invocation cause.
+
+Backfill completion cards show the frozen range and per-platform accounting. Failure,
+cancellation and missing legs remain visible alongside completed work; unknown counts remain
+unknown. Collection-only passes have no benchmark verdict or automatic analysis/publication.
+Authenticated job discovery establishes which platform attempt owns a completion artifact.
+Newer skipped or unsuccessful executions supersede older success; only verified reused work
+retains its original execution identity. Missing jobs cannot supply successful counts.
+The separately versioned action owns always-run summary delivery and the minimal execution-only
+fallback needed before the companion can run. The [card contract](workflow-summary.md) defines
+the boundary.
+
+### Report publication
+
 Commands use `publish-<sink>-<state>`, with `comment` or `issue` as the sink and `findings`,
 `clean`, `preflight`, `inconclusive` or `failed` as the state. The action uses the same names.
 The successful report and its platform evidence select findings, clean or inconclusive.

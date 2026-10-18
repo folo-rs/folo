@@ -85,8 +85,9 @@ which owns first-parent range validation and traversal.
 Execution checks out the resolved range end, while configuration and source-built tools remain
 from the invocation checkout.
 
-Backfill emits no head/base, package CSV, empty-scope flag or collection-job prefix. Its fork
-skip starts no Git/Cargo/detector work. It produces neither collection receipts nor analysis reports.
+Backfill preparation emits no head/base, package CSV, empty-scope flag or collection-job prefix.
+Its fork skip starts no Git/Cargo/detector work. Backfill produces neither collection receipts
+nor analysis reports; optional completion evidence describes collection accounting only.
 
 There is no detector executable argument or installation role for this helper: the companion
 uses the detector's read-only in-workspace library query. Existing receipt and analysis
@@ -127,7 +128,7 @@ there is no success default.
 | Command | Inputs |
 | --- | --- |
 | `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features`, `rustflags`, `collection-snapshot` |
-| `backfill` | Collection inputs except `collection-snapshot`, plus required `from`, `to`, and optional `ignore-errors`, `max-commits` |
+| `backfill` | Collection inputs except `collection-snapshot`, plus required `from`, `to`, and optional `ignore-errors`, `max-commits`, `completion-output` |
 | `analyze-history` | `local-path`, `cache`, exactly one of `current-collections` or `machine-keys`, `context`, `since`, required `expected-platforms`, `completed-platforms` |
 | `analyze-pr` | The history inputs except `since`, plus optional `base` |
 | `publish-comment-findings`, `publish-comment-clean` | Report inputs, run ownership, `pr-number`, required `packages` |
@@ -143,6 +144,12 @@ there is no success default.
 `max-commits` is a backfill-only positive integer within the executing platform's `usize`
 range. It is forwarded as `--max-commits` only when supplied; empty or absent input leaves
 replay unlimited. The core counts attempts after its partition skip check, not range endpoints.
+
+`completion-output` selects a new collection-only completion JSON file. It is optional and
+backfill-only, resolves against the measured directory, and leaves all command exit policies
+unchanged. The caller knows the destination before execution and can retain completion evidence
+after a stopping benchmark failure without depending on successful action outputs.
+See the [workflow card and completion contract](workflow-summary.md).
 
 Collection defaults to workspace scope, including any exclusions. Explicit `packages`
 conflicts with `exclude`. `bench`, packages, exclusions and features become repeated core

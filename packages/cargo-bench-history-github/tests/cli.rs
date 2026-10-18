@@ -33,8 +33,10 @@ fn every_subcommand_is_present_in_help() {
         "publish-comment-failed",
         "collection-receipt",
         "prepare-analysis",
+        "backfill-jobs",
         "inspect-report",
         "workflow-matrix",
+        "workflow-summary",
     ] {
         assert!(help.contains(name));
     }

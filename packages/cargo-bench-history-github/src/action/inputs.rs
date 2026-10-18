@@ -251,7 +251,10 @@ impl ActionCommand {
                     || (self == Self::Collect && key == "collection-snapshot")
                     || key == "local-path"
                     || (self == Self::Backfill
-                        && matches!(key, "from" | "to" | "ignore-errors" | "max-commits"))
+                        && matches!(
+                            key,
+                            "from" | "to" | "ignore-errors" | "max-commits" | "completion-output"
+                        ))
             }
             Self::AnalyzeHistory | Self::AnalyzePr => {
                 matches!(
@@ -370,6 +373,7 @@ const REPORT_INPUTS: &[&str] = &[
     "completed-platforms",
 ];
 const ALL_INPUTS: &[&str] = &[
+    "completion-output",
     "collection-snapshot",
     "current-collections",
     "command",

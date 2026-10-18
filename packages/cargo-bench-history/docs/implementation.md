@@ -125,6 +125,12 @@ so a limit never interrupts repetitions or engine storage. Recorded skips and un
 eligible commits remain distinct in the report, including when failure stops replay early.
 Bounded completion uses the ordinary worktree teardown and storage-invalidation flush paths.
 
+Final replay accounting remains typed until the shell has applied cleanup, invalidation and
+optional write-once completion output. The shared model owns the independent completion
+schema; the companion consumes it rather than parsing log strings. Only after output does the
+shell convert a stopping benchmark failure into its existing nonzero command outcome.
+Infrastructure failures never produce final accounting, and output errors remain errors.
+
 #### Backfill project-directory handling
 
 Backfill asks Git for the selected project's repository-relative prefix instead of comparing

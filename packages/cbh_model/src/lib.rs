@@ -24,6 +24,7 @@
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 mod aggregate;
+mod backfill;
 mod benchmark_id;
 mod bless;
 mod blessing_scope;
@@ -37,6 +38,7 @@ mod run;
 mod scoped_blessing;
 
 pub use aggregate::{AggregateError, Combined, Selection, min_per_metric};
+pub use backfill::*;
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
 pub use blessing_scope::*;

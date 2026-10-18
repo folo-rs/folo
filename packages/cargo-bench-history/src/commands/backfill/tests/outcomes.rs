@@ -1,4 +1,56 @@
+use cbh_model::{BackfillCompletion, BackfillStop};
+
 use super::*;
+use crate::config_writer::MemoryConfigWriter;
+
+#[test]
+fn typed_completion_precedes_the_nonzero_benchmark_failure_outcome() {
+    let writer = MemoryConfigWriter::default();
+    let path = Path::new("completion.json");
+    let completed = CompletedBackfill {
+        commits: vec!["b".repeat(40), "a".repeat(40)],
+        report: BackfillReport {
+            failures: vec![FailedCommit {
+                commit: "b".repeat(40),
+                error: EngineFailedError::new("cargo bench", 1).into(),
+            }],
+            stopped_failure: Some(0),
+            deferred: 1,
+            ..BackfillReport::default()
+        },
+    };
+    block_on(preflight_completion(&writer, path)).unwrap();
+    block_on(write_completion(&writer, path, &completed, false)).unwrap();
+    let completion =
+        BackfillCompletion::from_slice(writer.written(path).unwrap().as_bytes()).unwrap();
+    assert_eq!(completion.from(), "a".repeat(40));
+    assert_eq!(completion.to(), "b".repeat(40));
+    assert_eq!(completion.counts().failed, 1);
+    assert_eq!(completion.counts().deferred, 1);
+    assert_eq!(completion.stop_reason(), BackfillStop::BenchmarkFailure);
+    let error = completed.into_outcome().unwrap_err();
+    assert!(error.find_source::<EngineFailedError>().is_some());
+    assert!(error.find_source::<BackfillError>().is_some());
+}
+
+#[test]
+fn completion_output_never_overwrites_or_hides_write_errors() {
+    let path = Path::new("completion.json");
+    let completed = CompletedBackfill {
+        commits: vec!["a".repeat(40)],
+        report: BackfillReport {
+            skipped_existing: vec!["a".repeat(40)],
+            ..BackfillReport::default()
+        },
+    };
+    let occupied = MemoryConfigWriter::with_existing(path, "original");
+    let failing = MemoryConfigWriter::failing();
+    for writer in [&occupied, &failing] {
+        assert!(block_on(preflight_completion(writer, path)).is_err());
+        assert!(block_on(write_completion(writer, path, &completed, false)).is_err());
+    }
+    assert_eq!(occupied.written(path).unwrap(), "original");
+}
 
 #[test]
 fn missing_historical_directories_are_per_commit_failures() {

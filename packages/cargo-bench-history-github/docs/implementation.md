@@ -6,6 +6,16 @@ network or real-time delay. The production `RestGitHub` adapter is the only HTTP
 Repository identities are validated as literal owner/name path segments before REST URL
 construction, rejecting dot components as well as separators and escape syntax.
 
+Workflow card composition is an offline, synchronous projection over explicit orchestration
+facts and checked evidence. It shares the report parser and publication-state gate with posts.
+The card supplies a readable headline without embedding or modifying the core report.
+The core JSON and existing post composition retain their contracts. The filesystem adapter
+reads caller-selected artifacts and creates a new Markdown file. The action owns a single final
+step-summary append and execution-only fallback, not a duplicate verdict implementation.
+Backfill completion decoding reuses the core model's typed count/range validation. Missing
+platforms and absent completion evidence retain unknown accounting rather than acquiring
+zero values. The [workflow card contract](workflow-summary.md) owns input and failure semantics.
+
 The port exposes semantic GitHub operations—title search, issue reads, comment listing, create,
 update, compare and read the pull-request head—rather than a raw HTTP passthrough. Idempotent
 operations retry transient failures in the adapter. Creates never retry blindly: orchestration
@@ -47,6 +57,12 @@ Unfinished and unsuccessful snapshots remain authoritative, so a failed retry st
 invalidates older success. Skipped jobs can have synthetic timing fields; those fields do
 not establish successful collection. The receipt format and the semantic job/receipt
 reconciliation rules are unchanged.
+
+Backfill execution discovery uses the same normalized job history and shared platform/attempt
+index as single-commit collection. It exports the latest terminal job and original executed
+attempt so the action can bind immutable completion envelopes without implementing timestamp
+or retry policy. Skips remain authoritative; missing jobs stay absent. Final count/range
+validation remains in the separate offline card renderer.
 
 ## Root action boundary
 

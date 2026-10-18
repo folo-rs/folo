@@ -72,6 +72,7 @@ pub async fn run_commands(
         if matches!(
             command,
             Command::Action(_)
+                | Command::WorkflowSummary(_)
                 | Command::PrepareWorkflow(_)
                 | Command::WorkflowMatrix(_)
                 | Command::CollectionReceipt(_)
