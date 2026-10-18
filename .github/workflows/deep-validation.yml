@@ -2,8 +2,8 @@ name: Deep validation
 
 on:
   schedule:
-    # Avoid contention with morning work; see design.md#scheduled-validation.
-    - cron: 0 18 * * *
+    # Reduce Actions usage and avoid morning contention; see design.md#scheduled-validation.
+    - cron: 0 18 */5 * *
   workflow_dispatch:
 
 permissions:
@@ -50,7 +50,7 @@ jobs:
   checks:
     needs: plan
     name: ${{ matrix.id }}
-    # Independent checks continue after a failure, preserving the full nightly scope.
+    # Independent checks continue after a failure, preserving the full scheduled scope.
     # Ref: .github/workflows/design.md#failure-diagnostics.
     strategy:
       fail-fast: false

@@ -7,7 +7,7 @@ description: Triage only actual scheduled validation run failures from the repos
 
 Use only for failures from the repository's
 [Deep validation workflow](../../workflows/deep-validation.yml) on `main`, whether
-triggered by its nightly schedule or by manual dispatch of that same workflow.
+triggered by its schedule or by manual dispatch of that same workflow.
 Standard checks invoked within Deep validation are included; standalone PR/push
 validation, benchmark history, releases and local failures are not. Another
 workflow running on a schedule does not make it scheduled validation.

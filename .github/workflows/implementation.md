@@ -11,7 +11,7 @@ the installed App's scheduling controls.
 
 | Workflow | What starts it | Responsibility |
 |---|---|---|
-| `deep-validation.yml` / **Deep validation** | Daily at 18:00 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
+| `deep-validation.yml` / **Deep validation** | Approximately every five days at 18:00 UTC (day-of-month cron step), or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
 | `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
 | `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
 | `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Production-backed PR collection and combined analysis/publication for same-repository PRs. |
@@ -632,7 +632,7 @@ machine connecting these components; their handoffs are GitHub reports and issue
 
 The `standard` job calls `standard-validation.yml` after the main-only plan gate. Reusing
 the workflow includes its complete check graph and platform matrices instead of maintaining
-a nightly copy. GitHub preserves the caller's `schedule` or `workflow_dispatch` event in
+a scheduled copy. GitHub preserves the caller's `schedule` or `workflow_dispatch` event in
 the reusable workflow. Both scope planners select full-workspace/full-tooling outputs for
 these events. The standard platform matrices are shared with PR and main-push validation.
 All jobs check out the same event commit. The main-only plan gate establishes that
@@ -646,7 +646,7 @@ publish a second issue during a scheduled run. The parent `report` depends on `s
 alongside every deep job and collects failed nested jobs from the same Actions run.
 
 Standard validation's scheduled/manual concurrency group includes the run ID, so frequent
-main pushes cannot cancel nightly standard checks. The scheduled suite does not reuse
+main pushes cannot cancel scheduled standard checks. The scheduled suite does not reuse
 previous successful results or skip unchanged packages.
 
 ### Deep execution
