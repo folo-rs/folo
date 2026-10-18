@@ -1,6 +1,8 @@
 use std::fs;
 use std::process::Command as ProcessCommand;
 
+use cbh_model::{BackfillCompletion, BackfillStop};
+
 use crate::harness::*;
 
 #[test]
@@ -12,9 +14,12 @@ fn backfill_rejects_unavailable_git() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     let head_before = workspace.head();
     let worktrees_before = workspace.git(&["worktree", "list", "--porcelain"]).stdout;
+    let completion = workspace.root().join("completion.json");
 
     let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
         .args(["backfill", "HEAD", "HEAD", "--ignore-errors"])
+        .arg("--completion-output")
+        .arg(&completion)
         .arg(format!(
             "--local={}",
             workspace.root().join("store").display()
@@ -28,6 +33,7 @@ fn backfill_rejects_unavailable_git() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(!output.stderr.is_empty());
+    assert!(!completion.exists());
     assert!(workspace.stored_objects().is_empty());
     assert_eq!(workspace.head(), head_before);
     assert_eq!(
@@ -150,9 +156,19 @@ async fn bounded_backfill_completes_each_commit_and_resumes_in_the_same_partitio
         "2",
     ];
 
-    let RunOutcome::Completed { message } = workspace.drive(&args).await.unwrap() else {
+    let completion_path = workspace.root().join("completion.json");
+    let mut first_args = args.to_vec();
+    first_args.extend(["--completion-output", completion_path.to_str().unwrap()]);
+    let RunOutcome::Completed { message } = workspace.drive(&first_args).await.unwrap() else {
         panic!("expected a completed outcome");
     };
+    let completion = BackfillCompletion::from_slice(&fs::read(&completion_path).unwrap()).unwrap();
+    assert_eq!(completion.from(), older);
+    assert_eq!(completion.to(), newer);
+    assert_eq!(completion.counts().stored, 1);
+    assert_eq!(completion.counts().deferred, 1);
+    assert_eq!(completion.stop_reason(), BackfillStop::CommitLimit);
+    workspace.drive(&first_args).await.unwrap_err();
     assert!(message.contains("1 stored, 0 skipped (existing)"));
     assert!(message.contains("1 deferred. Commit limit reached."));
     let first = workspace.stored_objects();
@@ -428,7 +444,22 @@ async fn backfill_stops_on_a_failing_commit_by_default() {
     workspace.commit_with_file("c2 introduces a broken build", "BROKEN", "boom\n");
     let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
 
-    workspace.drive(&["backfill", &c1, &c3]).await.unwrap_err();
+    let completion = workspace.root().join("completion.json");
+    workspace
+        .drive(&[
+            "backfill",
+            &c1,
+            &c3,
+            "--completion-output",
+            completion.to_str().unwrap(),
+        ])
+        .await
+        .unwrap_err();
+    let completion = BackfillCompletion::from_slice(&fs::read(completion).unwrap()).unwrap();
+    assert_eq!(completion.counts().stored, 1);
+    assert_eq!(completion.counts().failed, 1);
+    assert_eq!(completion.counts().deferred, 1);
+    assert_eq!(completion.stop_reason(), BackfillStop::BenchmarkFailure);
 
     // The walk is newest-first, so only c3 (healthy) was stored before the stop at
     // c2; c1 never ran.

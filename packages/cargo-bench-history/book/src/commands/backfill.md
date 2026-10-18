@@ -66,6 +66,21 @@ benchmarking. With `--overwrite`, each invocation instead starts at the newest c
 again, so the limit is not a resumable cursor. This bounds work, not elapsed time: allow
 enough time for every selected attempt to complete.
 
+## Completion output
+
+Pass `--completion-output PATH` to write collection-only completion JSON to a new file.
+The document contains a format `version`, frozen full `from` and `to` commit IDs, `total`
+commits, `counts` (`stored`, `skipped`, `empty`, `failed`, `deferred`), `stop_reason`
+(`range_exhausted`, `commit_limit`, `benchmark_failure`) and the `overwrite` selection.
+Counts describe commits, not benchmark findings. An ignored build or benchmark failure remains
+in `failed` even if replay reaches its bound or exhausts the range.
+
+The tool preserves existing destination files. Final evidence follows worktree cleanup and
+storage-invalidation flushing. A stopping benchmark failure can produce final accounting while
+still returning a nonzero exit. Infrastructure failure or interrupted execution has no final
+accounting; do not infer zero counts or successful completion from a missing file.
+Previously stored results remain subject to the normal resumption rules.
+
 ## Toolchain and measurement configuration
 
 Each commit is built with **the toolchain its own checkout selects**: the worktree is a

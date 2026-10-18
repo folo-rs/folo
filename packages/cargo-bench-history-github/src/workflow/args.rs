@@ -66,6 +66,18 @@ pub(crate) struct InspectArgs {
     pub(crate) github_output: PathBuf,
 }
 
+/// Authenticated execution evidence used to bind backfill completion artifacts.
+#[derive(Args, Debug)]
+pub(crate) struct BackfillJobsArgs {
+    #[arg(long)]
+    pub(crate) run_id: NonZero<u64>,
+    #[arg(long)]
+    pub(crate) expected_platforms: String,
+    /// New JSON destination; no completion artifacts are read by this command.
+    #[arg(long)]
+    pub(crate) output_file: PathBuf,
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {

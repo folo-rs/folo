@@ -889,6 +889,9 @@ impl PruneCommand {
 /// the most recent — and most comparison-relevant — gaps.
 #[derive(Args, Debug)]
 struct BackfillCommand {
+    /// Write collection-only completion JSON to a new file; not an analysis report.
+    #[arg(long, value_name = "PATH", help_heading = HEADING_ENV)]
+    completion_output: Option<PathBuf>,
     /// Oldest commit of the range to backfill, inclusive; a commit ID, tag, or ref such
     /// as `HEAD~20`.
     #[arg(value_name = "FROM")]
@@ -967,6 +970,7 @@ struct BackfillCommand {
 impl BackfillCommand {
     fn into_options(self) -> BackfillOptions {
         BackfillOptions {
+            completion_output: self.completion_output,
             config_path: self.env.config,
             repo: self.env.repo,
             local: local_selection(self.env.local),
