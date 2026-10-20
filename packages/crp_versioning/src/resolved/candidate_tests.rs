@@ -15,6 +15,7 @@ fn inputs() -> Inputs {
         index: "100644 blob 0\tCargo.toml\0".to_owned(),
         paths: BTreeSet::from([PathBuf::from("Cargo.toml"), PathBuf::from("src/lib.rs")]),
         symlink_inputs: BTreeSet::new(),
+        directory_inputs: BTreeSet::new(),
         digest: "initial".to_owned(),
     }
 }
@@ -54,6 +55,16 @@ fn history_verification_uses_original_repository_refs_and_preserves_failures() {
             result.unwrap();
         }
     }
+}
+
+#[test]
+fn final_fingerprint_modes_keep_only_admitted_links() {
+    let mut inputs = inputs();
+    inputs.index = "120000 blob 0\ttests/link\0".to_owned();
+    assert!(!inputs.fingerprint_modes().unwrap().is_symlink("tests/link"));
+
+    inputs.symlink_inputs.insert("tests/link".into());
+    assert!(inputs.fingerprint_modes().unwrap().is_symlink("tests/link"));
 }
 
 #[test]

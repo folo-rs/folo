@@ -99,6 +99,7 @@ impl Prospective {
                 &destination,
                 &metadata,
                 inputs.symlink_inputs.contains(path),
+                inputs.directory_inputs.contains(path),
             )?;
         }
         Ok(prospective)
@@ -139,6 +140,7 @@ impl Prospective {
         destination: &Path,
         metadata: &fs::Metadata,
         allow_symlink: bool,
+        allow_directory: bool,
     ) -> Result<(), AppError> {
         if metadata.file_type().is_symlink() {
             if !allow_symlink {
@@ -147,6 +149,12 @@ impl Prospective {
             let target =
                 fs::read_link(source).map_err(|error| ReadFileError::caused_by(source, error))?;
             Self::create_symlink(source, &target, destination)
+                .map_err(|error| WriteFileError::caused_by(destination, error))?;
+        } else if metadata.is_dir() {
+            if !allow_directory {
+                return Err(UnsupportedInput::new(source).into());
+            }
+            fs::create_dir_all(destination)
                 .map_err(|error| WriteFileError::caused_by(destination, error))?;
         } else {
             _ = fs::copy(source, destination)

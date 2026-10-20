@@ -22,7 +22,8 @@ use crate::InvalidPackagingPatternError;
 /// query many paths without rebuilding gitignore state per file.
 #[derive(Clone, Debug, Default)]
 pub struct PackagingRules {
-    pub selection: Selection,
+    selection: Selection,
+    patterns: Vec<String>,
 }
 
 /// The build directory Cargo never packs, relative to the package root.
@@ -40,7 +41,14 @@ impl PackagingRules {
             (None, Some(exclude)) => Selection::DenyList(compile_gitignore(exclude)?),
             (None, None) => Selection::Everything,
         };
-        Ok(Self { selection })
+        let patterns = include
+            .or(exclude)
+            .map(<[String]>::to_vec)
+            .unwrap_or_default();
+        Ok(Self {
+            selection,
+            patterns,
+        })
     }
 
     /// Applies package-local include/exclude and reserved-path selection.
@@ -86,6 +94,120 @@ impl PackagingRules {
             Selection::Everything => true,
         }
     }
+
+    /// Whether the path itself or any possible descendant can pass package rules.
+    ///
+    /// This is conservative around complex glob and negation syntax. It is used
+    /// only to avoid resolving a link whose complete archive subtree is
+    /// definitively outside an allow-list or excluded by a directory rule.
+    #[must_use]
+    pub fn may_release_path_or_descendant(&self, package_relative_path: &str) -> bool {
+        let path = package_relative_path
+            .trim_start_matches("./")
+            .trim_end_matches('/');
+        if path == "Cargo.lock"
+            || path == BUILD_DIR
+            || path
+                .strip_prefix(BUILD_DIR)
+                .is_some_and(|rest| rest.starts_with('/'))
+        {
+            return false;
+        }
+        if self.is_released(path) {
+            return true;
+        }
+        match &self.selection {
+            Selection::AllowList(_) => self
+                .patterns
+                .iter()
+                .any(|pattern| pattern_may_match_at_or_below(pattern, path)),
+            Selection::DenyList(_) => {
+                // A negation can re-include a descendant, so no positive pattern
+                // alone proves that the complete subtree is safe to discard.
+                self.patterns.iter().any(|pattern| pattern.starts_with('!'))
+                    || !self
+                        .patterns
+                        .iter()
+                        .any(|pattern| pattern_excludes_subtree(pattern, path))
+            }
+            Selection::Everything => true,
+        }
+    }
+}
+
+/// Returns true unless an allow-list pattern is provably irrelevant at and below `path`.
+///
+/// Ambiguous syntax intentionally keeps traversal possible; final membership
+/// remains the compiled matcher's responsibility. Ref: cargo-release-plan
+/// implementation guide, "Content identity and file modes".
+fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
+    let pattern = pattern.strip_prefix('!').unwrap_or(pattern);
+    let anchored = pattern.starts_with('/');
+    let pattern = pattern.trim_start_matches('/');
+    if !anchored && pattern.ends_with('/') {
+        let directory = pattern.trim_end_matches('/');
+        if !directory.contains('/') {
+            // An unanchored directory basename can first appear anywhere below
+            // the current alias root.
+            return true;
+        }
+    }
+    if !anchored && !pattern.contains('/') {
+        return true;
+    }
+
+    let prefix = pattern
+        .split(['*', '?', '[', '{', '\\'])
+        .next()
+        .unwrap_or_default();
+    let prefix = if prefix == pattern || prefix.ends_with('/') {
+        prefix.trim_end_matches('/')
+    } else {
+        // A partial literal component such as `alias*` does not prove that a
+        // differently suffixed component can be pruned.
+        prefix.rsplit_once('/').map_or("", |(parent, _)| parent)
+    };
+    prefix.is_empty()
+        || prefix == path
+        || prefix
+            .strip_prefix(path)
+            .is_some_and(|rest| rest.starts_with('/'))
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Returns true only when one positive deny pattern excludes the complete subtree.
+///
+/// The caller separately disables this proof when any negation exists. Final
+/// archive membership remains the compiled matcher's responsibility.
+fn pattern_excludes_subtree(pattern: &str, path: &str) -> bool {
+    if pattern.starts_with('!') {
+        return false;
+    }
+    let anchored = pattern.starts_with('/');
+    let pattern = pattern.trim_start_matches('/');
+    let directory_pattern = pattern.ends_with('/');
+    let pattern = pattern.trim_end_matches('/');
+    let has_glob = pattern.contains('*')
+        || pattern.contains('?')
+        || pattern.contains('[')
+        || pattern.contains('{')
+        || pattern.contains('\\');
+    if !anchored && !pattern.contains('/') && !has_glob {
+        return path.split('/').any(|component| component == pattern);
+    }
+    let base = pattern
+        .strip_suffix("/**")
+        .or_else(|| directory_pattern.then_some(pattern))
+        .or_else(|| (!has_glob).then_some(pattern));
+    base.is_some_and(|base| {
+        let base = base.trim_end_matches('/');
+        path == base
+            || path
+                .strip_prefix(base)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 
 /// The one file-selection mode a manifest's packaging keys resolve to.
@@ -95,7 +217,7 @@ impl PackagingRules {
 /// resolved mode rather than both inputs keeps that precedence in one place and
 /// leaves no inactive matcher for a later consumer to apply by mistake.
 #[derive(Clone, Debug, Default)]
-pub enum Selection {
+enum Selection {
     /// `include` is present: only what it matches is released.
     AllowList(Gitignore),
     /// Only `exclude` is present: everything it does not match is released.
@@ -200,6 +322,40 @@ mod tests {
         // A lockfile below the package root belongs to something the package
         // ships, such as a test fixture workspace, so it is ordinary source.
         assert!(rules.is_released("fixtures/Cargo.lock"));
+    }
+
+    #[test]
+    fn descendant_selection_prunes_only_definitively_excluded_subtrees() {
+        let include = rules(Some(&["src/**", "alias/**/*.json"]), None).unwrap();
+        assert!(include.may_release_path_or_descendant("src/generated"));
+        assert!(include.may_release_path_or_descendant("alias"));
+        let partial = rules(Some(&["tests/alias*/*.json"]), None).unwrap();
+        assert!(partial.may_release_path_or_descendant("tests/alias_to_new"));
+        let braces = rules(Some(&["tests/{alias,other}/**"]), None).unwrap();
+        assert!(braces.may_release_path_or_descendant("tests/alias"));
+        let nested_directory = rules(Some(&["src/**", "fixtures/"]), None).unwrap();
+        assert!(nested_directory.may_release_path_or_descendant("tests/fixtures"));
+        assert!(nested_directory.may_release_path_or_descendant("alias"));
+        let anchored_file = rules(Some(&["/src/", "/README.md"]), None).unwrap();
+        assert!(!anchored_file.may_release_path_or_descendant("tests/broken"));
+        assert!(!include.may_release_path_or_descendant("tests/broken"));
+
+        let exclude = rules(None, Some(&["tests/excluded/**", "alias/ignored.txt"])).unwrap();
+        assert!(exclude.may_release_path_or_descendant("tests/excluded"));
+        let exact_exclude = rules(None, Some(&["tests/excluded"])).unwrap();
+        assert!(!exact_exclude.may_release_path_or_descendant("tests/excluded"));
+        assert!(exclude.may_release_path_or_descendant("alias"));
+        let negated = rules(None, Some(&["alias", "!alias/keep.json"])).unwrap();
+        assert!(negated.may_release_path_or_descendant("alias"));
+        assert!(negated.is_released("alias/keep.json"));
+        let slashless = rules(None, Some(&["fixtures"])).unwrap();
+        assert!(!slashless.may_release_path_or_descendant("tests/fixtures"));
+        let slashless_directory = rules(None, Some(&["fixtures/"])).unwrap();
+        assert!(slashless_directory.may_release_path_or_descendant("tests/fixtures"));
+        assert!(!slashless_directory.may_release_path_or_descendant("tests/fixtures/loop"));
+        let mandatory = rules(None, Some(&["Cargo.toml", "data/**"])).unwrap();
+        assert!(mandatory.may_release_path_or_descendant("Cargo.toml"));
+        assert!(mandatory.may_release_path_or_descendant("data"));
     }
 
     #[test]

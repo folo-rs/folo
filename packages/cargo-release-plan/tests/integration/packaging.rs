@@ -75,6 +75,244 @@ fn prepare_accepts_a_tracked_symlink_fixture_in_a_placeholder_checkout() {
     assert_eq!(fs::read_to_string(retained).unwrap(), "target");
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "runs preparation against a tracked directory-link fixture"
+)]
+#[test]
+fn prepare_accepts_a_tracked_directory_link_fixture_in_a_placeholder_checkout() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/benchmark.json",
+        "benchmark\n",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/estimates.json",
+        "estimates\n",
+    );
+    fixture.write("packages/demo/tests/fixtures/cycle/alias_to_new", "new");
+    fixture.git(&["add", "-A"]);
+    let path = "packages/demo/tests/fixtures/cycle/alias_to_new";
+    let id = fixture.git(&["rev-parse", &format!(":{path}")]);
+    fixture.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},{}", id.trim(), path),
+    ]);
+    fixture.git(&["config", "core.symlinks", "false"]);
+    fixture.git(&["commit", "-m", "tracked directory-link fixture"]);
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+
+    fixture.write("proposal.json", r#"{"schema_version":8,"increments":[]}"#);
+    let preview = fixture.path().join("preview");
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared,
+        output: preview.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    assert!(preview.join("plan.json").is_file());
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "runs preparation after deleting a directory-link target file"
+)]
+#[test]
+fn prepare_retains_an_empty_directory_link_as_a_valid_captured_input() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/benchmark.json",
+        "benchmark\n",
+    );
+    fixture.write("packages/demo/tests/fixtures/cycle/alias_to_new", "new");
+    stage_placeholder_link(&fixture, "packages/demo/tests/fixtures/cycle/alias_to_new");
+    fixture.commit("tracked directory-link fixture");
+    fs::remove_file(
+        fixture
+            .path()
+            .join("packages/demo/tests/fixtures/cycle/new/benchmark.json"),
+    )
+    .unwrap();
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"needs-increment\""));
+
+    fixture.write(
+        "proposal.json",
+        r#"{"schema_version":8,"increments":[{"name":"demo","bump":"patch"}]}"#,
+    );
+    let preview = fixture.path().join("preview");
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared,
+        output: preview.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    assert!(preview.join("plan.json").is_file());
+    let report = fs::read_to_string(preview.join("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"pending-release\""));
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "prepares a package with excluded broken symbolic links"
+)]
+#[test]
+fn prepare_ignores_definitively_excluded_broken_and_cyclic_links() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "include = [\"src/**\"]");
+    fixture.write("packages/demo/tests/broken", "missing");
+    stage_placeholder_link(&fixture, "packages/demo/tests/broken");
+    fixture.write("packages/demo/tests/loop", "loop");
+    stage_placeholder_link(&fixture, "packages/demo/tests/loop");
+    fixture.commit("excluded symbolic-link fixtures");
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+}
+
+#[cfg_attr(miri, ignore = "prepares an anchored allow-list beside excluded links")]
+#[test]
+fn prepare_ignores_broken_links_outside_anchored_allow_list() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"/src/\", \"/README.md\"]",
+    );
+    fixture.write("packages/demo/README.md", "readme\n");
+    fixture.write("packages/demo/tests/broken", "missing");
+    stage_placeholder_link(&fixture, "packages/demo/tests/broken");
+    fixture.write("packages/demo/tests/loop", "loop");
+    stage_placeholder_link(&fixture, "packages/demo/tests/loop");
+    fixture.commit("excluded links beside anchored allow-list");
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "cross-checks Cargo packaging with native directory-link include rules"
+)]
+#[test]
+fn verify_packaging_applies_include_rules_to_directory_link_descendants() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/cycle/alias*/*.json\"]",
+    );
+    fixture.write("packages/demo/tests/cycle/real/keep.json", "keep\n");
+    fixture.write("packages/demo/tests/cycle/real/ignored.txt", "ignored\n");
+    symlink(
+        "real",
+        fixture.path().join("packages/demo/tests/cycle/alias"),
+    )
+    .unwrap();
+    fixture.commit("directory-link include fixture");
+
+    let (passed, message) = check_verifying_packaging(&fixture, "HEAD");
+
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "cross-checks Cargo packaging with native directory-link exclude rules"
+)]
+#[test]
+fn verify_packaging_applies_exclude_rules_to_directory_link_descendants() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "exclude = [\"tests/cycle/alias/ignored.txt\", \"tests/cycle/real/**\"]",
+    );
+    fixture.write("packages/demo/tests/cycle/real/keep.json", "keep\n");
+    fixture.write("packages/demo/tests/cycle/real/ignored.txt", "ignored\n");
+    symlink(
+        "real",
+        fixture.path().join("packages/demo/tests/cycle/alias"),
+    )
+    .unwrap();
+    fixture.commit("directory-link exclude fixture");
+
+    let (passed, message) = check_verifying_packaging(&fixture, "HEAD");
+
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "cross-checks nested-package boundaries through a native directory link"
+)]
+#[test]
+fn verify_packaging_preserves_nested_boundaries_through_directory_links() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write("packages/demo/tests/real/outer.json", "outer\n");
+    fixture.write(
+        "packages/demo/tests/real/Cargo.toml",
+        "[package]\nname='nested'\nversion='0.1.0'\nedition='2024'\n",
+    );
+    fixture.write(
+        "packages/demo/tests/real/src/lib.rs",
+        "pub fn nested() {}\n",
+    );
+    symlink("real", fixture.path().join("packages/demo/tests/alias")).unwrap();
+    fixture.commit("nested directory-link fixture");
+
+    let (_, message) = check_verifying_packaging(&fixture, "HEAD");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+
+    fs::remove_file(fixture.path().join("packages/demo/tests/real/Cargo.toml")).unwrap();
+    let (_, message) = check_verifying_packaging(&fixture, "HEAD");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
 #[cfg(unix)]
 #[cfg_attr(
     miri,
@@ -102,6 +340,84 @@ fn prepare_accepts_a_tracked_symlink_fixture_in_a_native_checkout() {
     assert!(prepared.is_file());
     let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
     assert!(report.contains("\"status\": \"unchanged\""));
+}
+
+#[cfg(unix)]
+#[cfg_attr(miri, ignore = "runs preparation against a real native directory link")]
+#[test]
+fn prepare_accepts_a_tracked_directory_link_fixture_in_a_native_checkout() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/benchmark.json",
+        "benchmark\n",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/estimates.json",
+        "estimates\n",
+    );
+    symlink(
+        "new",
+        fixture
+            .path()
+            .join("packages/demo/tests/fixtures/cycle/alias_to_new"),
+    )
+    .unwrap();
+    fixture.commit("tracked native directory-link fixture");
+
+    let (passed, message) = check_verifying_packaging(&fixture, "HEAD");
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "replaces a tracked native link with an unstaged regular file"
+)]
+#[test]
+fn preview_preserves_an_admitted_link_to_regular_replacement() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write("packages/demo/tests/target", "target\n");
+    symlink("target", fixture.path().join("packages/demo/tests/link")).unwrap();
+    fixture.commit("tracked native link");
+    fs::remove_file(fixture.path().join("packages/demo/tests/link")).unwrap();
+    fixture.write("packages/demo/tests/link", "regular replacement\n");
+
+    let prepared = prepare(&fixture);
+    fixture.write(
+        "proposal.json",
+        r#"{"schema_version":8,"increments":[{"name":"demo","bump":"patch"}]}"#,
+    );
+    let preview = fixture.path().join("preview");
+
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared,
+        output: preview.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+
+    assert!(preview.join("plan.json").is_file());
 }
 
 #[cfg(unix)]
@@ -151,6 +467,17 @@ fn prepare_rejects_a_placeholder_reached_through_a_symlinked_parent() {
 
     assert!(!output.join("prepared.json").exists());
     assert!(!output.join("report.json").exists());
+}
+
+fn stage_placeholder_link(fixture: &Fixture, path: &str) {
+    fixture.git(&["add", "-A"]);
+    let id = fixture.git(&["rev-parse", &format!(":{path}")]);
+    fixture.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},{}", id.trim(), path),
+    ]);
+    fixture.git(&["config", "core.symlinks", "false"]);
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

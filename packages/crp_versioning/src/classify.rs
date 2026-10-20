@@ -743,16 +743,31 @@ fn classify_one(
             git.tracked_paths(&resource_paths, side.case)
         })?;
         let tracked_resources = tracked_resources(&side, &tracked_paths);
-        let content = released_in_work_tree(git, &side, &tracked_resources, Some(observations))?;
+        let mut content =
+            released_in_work_tree(git, &side, &tracked_resources, Some(observations))?;
+        let rule_exceptions = packaging_rule_exceptions(&content.released, side.rules);
         let work_modes =
             observed_work_tree_modes(git, &side, &tracked_resources, Some(observations))?;
+        add_symlink_roots(
+            &mut content.released,
+            &content.present_tracked,
+            &content.present_tracked,
+            &side,
+            |path| work_modes.is_symlink(path),
+        );
+        let boundary_paths = present_tracked_manifests(git, observations.all_tracked(), side.case)?;
         _ = resolved_work_files(
             git,
             name,
             &content.released,
+            observations.all_tracked(),
+            &boundary_paths,
+            side.rules,
+            &rule_exceptions,
             &work_modes,
             Some(observations),
             side.case,
+            false,
         )?;
         let untracked = observed_untracked_released(
             git,
@@ -1075,17 +1090,40 @@ fn diff_package_with_tree(
     };
     let tracked_resources = tracked_resources(work_side, &tracked_paths);
 
-    let anchor_files = released_at_commit(anchor_tree, anchor);
-    let work = released_in_work_tree(git, work_side, &tracked_resources, observations)?;
-    let work_files = &work.released;
-
+    let mut anchor_files = released_at_commit(anchor_tree, anchor);
+    let anchor_exceptions = packaging_rule_exceptions(&anchor_files, anchor.rules);
+    add_symlink_roots(
+        &mut anchor_files,
+        anchor_tree.paths(),
+        anchor_tree.paths(),
+        anchor,
+        |path| anchor_tree.entry(path).is_some_and(TreeEntry::is_symlink),
+    );
+    let mut work = released_in_work_tree(git, work_side, &tracked_resources, observations)?;
+    let work_exceptions = packaging_rule_exceptions(&work.released, work_side.rules);
     let work_modes = observed_work_tree_modes(git, work_side, &tracked_resources, observations)?;
-    let anchor_identities =
-        historical_released_identities(git, name, anchor_tree, &anchor_files, anchor.case)?;
+    add_symlink_roots(
+        &mut work.released,
+        &work.present_tracked,
+        &work.present_tracked,
+        work_side,
+        |path| work_modes.is_symlink(path),
+    );
+    let anchor_identities = historical_released_identities(
+        git,
+        name,
+        anchor_tree,
+        &anchor_files,
+        anchor.rules,
+        &anchor_exceptions,
+        anchor.case,
+    )?;
     let work_identities = work_released_identities(
         git,
         name,
-        work_files,
+        &work.released,
+        work_side.rules,
+        &work_exceptions,
         &work_modes,
         observations,
         work_side.case,
@@ -1310,7 +1348,23 @@ struct ReleasedFileIdentity {
 struct ResolvedWorkFile {
     path: String,
     executable: bool,
-    inputs: BTreeSet<String>,
+}
+
+/// Selected archive entries plus physical inputs needed to reproduce their expansion.
+///
+/// `files` is keyed by consumer-visible archive path. The link and directory sets
+/// name work-tree inputs that preparation must fingerprint and prospective preview
+/// must reconstruct even when no selected terminal file survives.
+struct ResolvedWorkContent {
+    files: BTreeMap<String, ResolvedWorkFile>,
+    link_inputs: BTreeSet<String>,
+    directory_inputs: BTreeSet<String>,
+}
+
+/// Historical terminal object or directory reached before archive-path selection.
+enum HistoricalResolvedNode {
+    File(ReleasedFileIdentity),
+    Directory(String),
 }
 
 /// Historical identities after safely dereferencing released symbolic links.
@@ -1319,29 +1373,102 @@ fn historical_released_identities(
     name: &str,
     tree: &HistoricalTree,
     released: &HashMap<String, String>,
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     case: PathCase,
 ) -> Result<HashMap<String, ReleasedFileIdentity>, AppError> {
     let mut selected: Vec<_> = released.iter().collect();
     selected.sort_unstable_by(|left, right| left.0.cmp(right.0));
     let mut identities = HashMap::with_capacity(selected.len());
     for (archive_path, source_path) in selected {
-        let identity =
-            historical_released_identity(git, name, source_path, tree, git.prefix(), case)?;
-        identities.insert(archive_path.clone(), identity);
+        expand_historical_released_path(
+            git,
+            name,
+            archive_path,
+            source_path,
+            tree,
+            git.prefix(),
+            rules,
+            rule_exceptions,
+            case,
+            &mut BTreeSet::new(),
+            &mut identities,
+        )?;
     }
     Ok(identities)
 }
 
-fn historical_released_identity(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "historical directory-link expansion carries archive/source paths, endpoint policy and active-cycle state"
+)]
+/// Recursively maps historical physical paths into consumer-visible archive identities.
+///
+/// This layer owns archive selection and the active-directory cycle set; node
+/// validation and link following remain in `resolve_historical_node`.
+fn expand_historical_released_path(
+    git: &GitRepo,
+    name: &str,
+    archive_path: &str,
+    source_path: &str,
+    tree: &HistoricalTree,
+    workspace_dir: &str,
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
+    case: PathCase,
+    active_directories: &mut BTreeSet<String>,
+    identities: &mut HashMap<String, ReleasedFileIdentity>,
+) -> Result<(), AppError> {
+    if !archive_subtree_selected(rules, rule_exceptions, archive_path) {
+        return Ok(());
+    }
+    match resolve_historical_node(git, name, source_path, tree, workspace_dir, case)? {
+        HistoricalResolvedNode::File(identity) => {
+            if rules.is_released(archive_path) || rule_exceptions.contains(archive_path) {
+                identities
+                    .entry(archive_path.to_string())
+                    .or_insert(identity);
+            }
+        }
+        HistoricalResolvedNode::Directory(directory) => {
+            if is_package_directory(tree.paths(), &directory, case) {
+                return Ok(());
+            }
+            if !active_directories.insert(directory.clone()) {
+                return Err(SymlinkCycleError::new(name, source_path, &directory).into());
+            }
+            for child in direct_tracked_children(tree.paths(), &directory, tree.paths(), case) {
+                let archive_child = archive_child(archive_path, &child, &directory, case);
+                expand_historical_released_path(
+                    git,
+                    name,
+                    &archive_child,
+                    &child,
+                    tree,
+                    workspace_dir,
+                    rules,
+                    rule_exceptions,
+                    case,
+                    active_directories,
+                    identities,
+                )?;
+            }
+            active_directories.remove(&directory);
+        }
+    }
+    Ok(())
+}
+
+/// Resolves one historical path to a terminal blob or tracked directory identity.
+fn resolve_historical_node(
     git: &GitRepo,
     name: &str,
     released_path: &str,
     tree: &HistoricalTree,
     workspace_dir: &str,
     case: PathCase,
-) -> Result<ReleasedFileIdentity, AppError> {
+) -> Result<HistoricalResolvedNode, AppError> {
     let mut current = released_path.to_string();
-    let mut followed_link = false;
     let mut visited = HashSet::new();
     loop {
         let recorded = tree
@@ -1352,19 +1479,15 @@ fn historical_released_identity(
                 PathCase::Insensitive => case.recorded_path(tree.paths(), &current),
             });
         let Some(recorded) = recorded else {
-            return Err(missing_or_nonregular_link_target(
-                name,
-                released_path,
-                &current,
-                tree.paths(),
-                case,
-            ));
+            if let Some(directory) = recorded_directory(tree.paths(), &current, case) {
+                return Ok(HistoricalResolvedNode::Directory(directory));
+            }
+            return Err(MissingSymlinkTargetError::new(name, released_path, &current).into());
         };
         let entry = tree
             .entry(recorded)
             .expect("a recorded historical path has a tree entry");
         if entry.is_symlink() {
-            followed_link = true;
             if !visited.insert(recorded.to_string()) {
                 return Err(SymlinkCycleError::new(name, released_path, recorded).into());
             }
@@ -1376,13 +1499,13 @@ fn historical_released_identity(
                 resolve_symlink_target(name, released_path, recorded, target, workspace_dir, case)?;
             continue;
         }
-        if followed_link && !tree_entry_is_regular(entry) {
+        if !tree_entry_is_regular(entry) {
             return Err(NonRegularSymlinkTargetError::new(name, released_path, recorded).into());
         }
-        return Ok(ReleasedFileIdentity {
+        return Ok(HistoricalResolvedNode::File(ReleasedFileIdentity {
             id: entry.id.clone(),
             executable: entry.is_executable(),
-        });
+        }));
     }
 }
 
@@ -1391,18 +1514,50 @@ fn historical_released_identity(
 /// Git still hashes terminal regular files so clean filters and line-ending
 /// conversion retain the same identity model as ordinary released files.
 #[cfg_attr(test, mutants::skip)] // Native file and Git hashing adapters.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "work-tree identity acquisition combines expanded selection policy with endpoint observations"
+)]
 fn work_released_identities(
     git: &GitRepo,
     name: &str,
     released: &HashMap<String, String>,
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
     observations: Option<&LiveObservations>,
     case: PathCase,
 ) -> Result<HashMap<String, ReleasedFileIdentity>, AppError> {
-    let resolved = resolved_work_files(git, name, released, initial_modes, observations, case)?;
-    let paths: Vec<&str> = resolved.values().map(|file| file.path.as_str()).collect();
+    let owned_tracked;
+    let tracked = match observations {
+        Some(observations) => observations.all_tracked(),
+        None => {
+            owned_tracked = git.ls_files("")?;
+            &owned_tracked
+        }
+    };
+    let boundary_paths = present_tracked_manifests(git, tracked, case)?;
+    let resolved = resolved_work_files(
+        git,
+        name,
+        released,
+        tracked,
+        &boundary_paths,
+        rules,
+        rule_exceptions,
+        initial_modes,
+        observations,
+        case,
+        false,
+    )?;
+    let paths: Vec<&str> = resolved
+        .files
+        .values()
+        .map(|file| file.path.as_str())
+        .collect();
     let ids = git.hash_objects(&paths)?;
     Ok(resolved
+        .files
         .into_iter()
         .zip(ids)
         .map(|((archive_path, file), id)| {
@@ -1417,57 +1572,193 @@ fn work_released_identities(
         .collect())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "released-file expansion needs full tracked identity, effective modes and operation-local observations"
+)]
+/// Expands every selected work-tree root and collects archive files plus capture dependencies.
 fn resolved_work_files(
     git: &GitRepo,
     name: &str,
     released: &HashMap<String, String>,
+    tracked: &[String],
+    boundary_paths: &[String],
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
     observations: Option<&LiveObservations>,
     case: PathCase,
-) -> Result<BTreeMap<String, ResolvedWorkFile>, AppError> {
+    modes_complete: bool,
+) -> Result<ResolvedWorkContent, AppError> {
     let mut selected: Vec<_> = released.iter().collect();
     selected.sort_unstable_by(|left, right| left.0.cmp(right.0));
     let mut resolved = BTreeMap::new();
+    let mut link_inputs = BTreeSet::new();
+    let mut directory_inputs = BTreeSet::new();
     let mut ancestors = WorkTreeAncestors::default();
     for (archive_path, source_path) in selected {
-        if let Some(file) = resolve_work_file(
+        expand_work_released_path(
             git,
             name,
+            archive_path,
             source_path,
+            tracked,
+            boundary_paths,
+            rules,
+            rule_exceptions,
             initial_modes,
             observations,
             case,
             &mut ancestors,
+            modes_complete,
+            true,
             false,
-        )? {
-            resolved.insert(archive_path.clone(), file);
-        }
+            &mut BTreeSet::new(),
+            &mut link_inputs,
+            &mut directory_inputs,
+            &mut resolved,
+        )?;
     }
-    Ok(resolved)
+    Ok(ResolvedWorkContent {
+        files: resolved,
+        link_inputs,
+        directory_inputs,
+    })
 }
 
+/// Recursively maps one physical source node into selected archive entries.
+///
+/// This layer owns archive-rule selection, nested-package boundaries, cycle
+/// state and accumulation of physical link/directory dependencies.
 #[expect(
     clippy::too_many_arguments,
-    reason = "released-link resolution needs endpoint observations, path policy, ancestor state and capture-mode reuse together"
+    reason = "work-tree directory-link expansion carries archive/source paths, endpoint observations and active-cycle state"
 )]
-fn resolve_work_file(
+fn expand_work_released_path(
     git: &GitRepo,
     name: &str,
-    released_path: &str,
+    archive_path: &str,
+    source_path: &str,
+    tracked: &[String],
+    boundary_paths: &[String],
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
     observations: Option<&LiveObservations>,
     case: PathCase,
     ancestors: &mut WorkTreeAncestors,
     modes_complete: bool,
-) -> Result<Option<ResolvedWorkFile>, AppError> {
+    use_initial_modes: bool,
+    directory_required: bool,
+    active_directories: &mut BTreeSet<String>,
+    validated_links: &mut BTreeSet<String>,
+    validated_directories: &mut BTreeSet<String>,
+    resolved: &mut BTreeMap<String, ResolvedWorkFile>,
+) -> Result<(), AppError> {
+    if !archive_subtree_selected(rules, rule_exceptions, archive_path) {
+        return Ok(());
+    }
+    match resolve_work_node(
+        git,
+        name,
+        source_path,
+        tracked,
+        initial_modes,
+        observations,
+        case,
+        ancestors,
+        modes_complete,
+        use_initial_modes,
+        directory_required,
+    )? {
+        None => {}
+        Some(ResolvedWorkNode::File { file, link_inputs }) => {
+            validated_links.extend(link_inputs);
+            if rules.is_released(archive_path) || rule_exceptions.contains(archive_path) {
+                resolved.entry(archive_path.to_string()).or_insert(file);
+            }
+        }
+        Some(ResolvedWorkNode::Directory { path, link_inputs }) => {
+            validated_links.extend(link_inputs);
+            validated_directories.insert(path.clone());
+            if is_package_directory(boundary_paths, &path, case) {
+                return Ok(());
+            }
+            if !active_directories.insert(path.clone()) {
+                return Err(SymlinkCycleError::new(name, source_path, &path).into());
+            }
+            for child in direct_tracked_children(tracked, &path, boundary_paths, case) {
+                let archive_child = archive_child(archive_path, &child, &path, case);
+                let child_directory_required = case.recorded_path(tracked, &child).is_none();
+                expand_work_released_path(
+                    git,
+                    name,
+                    &archive_child,
+                    &child,
+                    tracked,
+                    boundary_paths,
+                    rules,
+                    rule_exceptions,
+                    initial_modes,
+                    observations,
+                    case,
+                    ancestors,
+                    modes_complete,
+                    false,
+                    child_directory_required,
+                    active_directories,
+                    validated_links,
+                    validated_directories,
+                    resolved,
+                )?;
+            }
+            active_directories.remove(&path);
+        }
+    }
+    Ok(())
+}
+
+/// Work-tree terminal node plus the physical links traversed to reach it.
+enum ResolvedWorkNode {
+    File {
+        file: ResolvedWorkFile,
+        link_inputs: BTreeSet<String>,
+    },
+    Directory {
+        path: String,
+        link_inputs: BTreeSet<String>,
+    },
+}
+
+/// Observes and validates one work-tree node without selecting its archive path.
+///
+/// This layer owns effective modes, ancestor safety, unfollowed link reads and
+/// target-chain validation. The returned link set records the physical hops
+/// traversed to reach the terminal file or directory.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "released-link resolution needs endpoint observations, path policy, ancestor state and capture-mode reuse together"
+)]
+fn resolve_work_node(
+    git: &GitRepo,
+    name: &str,
+    released_path: &str,
+    tracked: &[String],
+    initial_modes: &WorkTreeModes,
+    observations: Option<&LiveObservations>,
+    case: PathCase,
+    ancestors: &mut WorkTreeAncestors,
+    modes_complete: bool,
+    use_initial_modes: bool,
+    mut directory_required: bool,
+) -> Result<Option<ResolvedWorkNode>, AppError> {
     let mut current = released_path.to_string();
     let mut first = true;
     let mut followed_link = false;
     let mut visited = HashSet::new();
-    let mut inputs = BTreeSet::new();
+    let mut link_inputs = BTreeSet::new();
     loop {
-        inputs.insert(current.clone());
-        let modes = if first || modes_complete {
+        let modes = if (first && use_initial_modes) || modes_complete {
             None
         } else {
             Some(observed_path_modes(git, &current, observations, case)?)
@@ -1478,25 +1769,40 @@ fn resolve_work_file(
                 to_git_separators(&ancestor.to_string_lossy(), MAIN_SEPARATOR).into_owned();
             return Err(SymlinkedAncestorError::new(name, released_path, ancestor).into());
         }
-        match git.work_tree_path(&current, modes.is_symlink(&current))? {
+        let path = git.work_tree_path(&current, modes.is_symlink(&current))?;
+        if directory_required && !matches!(path, WorkTreePath::Directory | WorkTreePath::Missing) {
+            return Err(NonRegularSymlinkTargetError::new(name, released_path, &current).into());
+        }
+        match path {
             WorkTreePath::Missing if followed_link => {
                 return Err(MissingSymlinkTargetError::new(name, released_path, &current).into());
             }
             WorkTreePath::Missing => return Ok(None),
-            WorkTreePath::Other if followed_link => {
+            WorkTreePath::Other => {
                 return Err(
                     NonRegularSymlinkTargetError::new(name, released_path, &current).into(),
                 );
             }
-            WorkTreePath::Other | WorkTreePath::Regular => {
-                return Ok(Some(ResolvedWorkFile {
-                    executable: modes.is_executable(&current),
-                    inputs,
-                    path: current,
+            WorkTreePath::Regular => {
+                return Ok(Some(ResolvedWorkNode::File {
+                    file: ResolvedWorkFile {
+                        executable: modes.is_executable(&current),
+                        path: current,
+                    },
+                    link_inputs,
+                }));
+            }
+            WorkTreePath::Directory => {
+                let directory =
+                    recorded_directory(tracked, &current, case).unwrap_or_else(|| current.clone());
+                return Ok(Some(ResolvedWorkNode::Directory {
+                    path: directory,
+                    link_inputs,
                 }));
             }
             WorkTreePath::Symlink(target) => {
                 followed_link = true;
+                link_inputs.insert(current.clone());
                 if !visited.insert(current.clone()) {
                     return Err(SymlinkCycleError::new(name, released_path, &current).into());
                 }
@@ -1509,8 +1815,9 @@ fn resolve_work_file(
                     git.prefix(),
                     case,
                 )?;
-                current =
-                    recorded_work_target(git, name, released_path, &requested, observations, case)?;
+                let target = recorded_work_target(name, released_path, &requested, tracked, case)?;
+                current = target.path;
+                directory_required = target.directory_only;
                 first = false;
             }
         }
@@ -1518,15 +1825,21 @@ fn resolve_work_file(
 }
 
 /// Validated package-link paths and terminal dependencies required by captured preparation.
+pub(crate) struct CapturedPackageLinkInputs {
+    pub links: BTreeSet<PathBuf>,
+    pub directories: BTreeSet<PathBuf>,
+}
+
 pub(crate) fn captured_package_link_inputs(
     git: &GitRepo,
     packages: &[WorkPackage],
     tracked: &[String],
     modes: &WorkTreeModes,
     case: PathCase,
-) -> Result<BTreeSet<PathBuf>, AppError> {
-    let mut captured = BTreeSet::new();
-    let mut ancestors = WorkTreeAncestors::default();
+) -> Result<CapturedPackageLinkInputs, AppError> {
+    let mut links = BTreeSet::new();
+    let mut directories = BTreeSet::new();
+    let boundary_paths = present_tracked_manifests(git, tracked, case)?;
     for package in packages {
         let directory = join_git_rel(git.prefix(), &package.manifest.directory);
         let resources = resolve_resources(&package.manifest, &directory, git.prefix());
@@ -1552,41 +1865,27 @@ pub(crate) fn captured_package_link_inputs(
         let present = present_in_work_tree(git, &selected)?;
         let mut released = released_from_paths(&selected, &present, &side);
         add_resources(&mut released, tracked_resources.iter());
-        let mut seen = BTreeSet::new();
-        for source in released.values() {
-            if !seen.insert(source) {
-                continue;
-            }
-            if let Some(ancestor) = ancestors.first_symlink(git.root(), Path::new(source))? {
-                let ancestor =
-                    to_git_separators(&ancestor.to_string_lossy(), MAIN_SEPARATOR).into_owned();
-                return Err(
-                    SymlinkedAncestorError::new(&package.manifest.name, source, ancestor).into(),
-                );
-            }
-            if !matches!(
-                git.work_tree_path(source, modes.is_symlink(source))?,
-                WorkTreePath::Symlink(_)
-            ) {
-                continue;
-            }
-            let Some(resolved) = resolve_work_file(
-                git,
-                &package.manifest.name,
-                source,
-                modes,
-                None,
-                case,
-                &mut ancestors,
-                true,
-            )?
-            else {
-                continue;
-            };
-            captured.extend(resolved.inputs.into_iter().map(PathBuf::from));
-        }
+        let rule_exceptions = packaging_rule_exceptions(&released, side.rules);
+        add_symlink_roots(&mut released, &selected, &present, &side, |path| {
+            modes.is_symlink(path)
+        });
+        let resolved = resolved_work_files(
+            git,
+            &package.manifest.name,
+            &released,
+            tracked,
+            &boundary_paths,
+            side.rules,
+            &rule_exceptions,
+            modes,
+            None,
+            case,
+            true,
+        )?;
+        links.extend(resolved.link_inputs.into_iter().map(PathBuf::from));
+        directories.extend(resolved.directory_inputs.into_iter().map(PathBuf::from));
     }
-    Ok(captured)
+    Ok(CapturedPackageLinkInputs { links, directories })
 }
 
 fn observed_path_modes(
@@ -1603,45 +1902,103 @@ fn observed_path_modes(
 }
 
 fn recorded_work_target(
-    git: &GitRepo,
     name: &str,
     released_path: &str,
     requested: &str,
-    observations: Option<&LiveObservations>,
+    tracked: &[String],
     case: PathCase,
-) -> Result<String, AppError> {
-    let narrow = || git.tracked_paths(&[requested], case);
-    let paths = match observations {
-        Some(observations) => observations.tracked_paths(&[requested], narrow)?,
-        None => narrow()?,
-    };
-    match case.recorded_path(&paths, requested) {
-        Some(path) => Ok(path.to_string()),
-        None => Err(missing_or_nonregular_link_target(
-            name,
-            released_path,
-            requested,
-            &paths,
-            case,
-        )),
+) -> Result<RecordedWorkTarget, AppError> {
+    match case.recorded_path(tracked, requested) {
+        Some(path) => Ok(RecordedWorkTarget {
+            path: path.to_string(),
+            directory_only: false,
+        }),
+        None => recorded_directory(tracked, requested, case)
+            .map(|path| RecordedWorkTarget {
+                path,
+                directory_only: true,
+            })
+            .ok_or_else(|| MissingSymlinkTargetError::new(name, released_path, requested).into()),
     }
 }
 
-fn missing_or_nonregular_link_target(
-    name: &str,
-    released_path: &str,
-    target: &str,
+/// A target found only through tracked descendants must remain a directory.
+struct RecordedWorkTarget {
+    path: String,
+    directory_only: bool,
+}
+
+fn recorded_directory(paths: &[String], requested: &str, case: PathCase) -> Option<String> {
+    paths.iter().find_map(|path| {
+        let relative = case.relativize(path, requested)?;
+        let prefix = path.get(..path.len().checked_sub(relative.len())?)?;
+        Some(prefix.trim_end_matches('/').to_string())
+    })
+}
+
+fn direct_tracked_children(
     paths: &[String],
+    directory: &str,
+    boundary_paths: &[String],
     case: PathCase,
-) -> AppError {
-    if paths
+) -> BTreeSet<String> {
+    let nested = nested_package_dirs(boundary_paths, directory, case);
+    paths
         .iter()
-        .any(|path| case.relativize(path, target).is_some())
-    {
-        NonRegularSymlinkTargetError::new(name, released_path, target).into()
-    } else {
-        MissingSymlinkTargetError::new(name, released_path, target).into()
-    }
+        .filter(|path| !is_inside_any(path, &nested, case))
+        .filter_map(|path| {
+            let relative = case.relativize(path, directory)?;
+            let child = relative.split('/').next()?;
+            if child.is_empty() {
+                return None;
+            }
+            if relative == child {
+                return Some(path.clone());
+            }
+            let prefix = path.get(..path.len().checked_sub(relative.len())?)?;
+            Some(format!("{prefix}{child}"))
+        })
+        .collect()
+}
+
+fn present_tracked_manifests(
+    git: &GitRepo,
+    tracked: &[String],
+    case: PathCase,
+) -> Result<Vec<String>, AppError> {
+    let manifests: Vec<String> = tracked
+        .iter()
+        .filter(|path| case.is_manifest(path))
+        .cloned()
+        .collect();
+    present_in_work_tree(git, &manifests)
+}
+
+fn archive_child(archive: &str, child: &str, directory: &str, case: PathCase) -> String {
+    let relative = case
+        .relativize(child, directory)
+        .expect("a direct tracked child is inside its selected directory");
+    join_git_rel(archive, relative)
+}
+
+fn archive_subtree_selected(
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
+    archive_path: &str,
+) -> bool {
+    rules.may_release_path_or_descendant(archive_path)
+        || rule_exceptions.iter().any(|exception| {
+            exception == archive_path
+                || exception
+                    .strip_prefix(archive_path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+}
+
+fn is_package_directory(paths: &[String], directory: &str, case: PathCase) -> bool {
+    join_relative(directory, MANIFEST_FILE_NAME)
+        .and_then(|manifest| case.recorded_path(paths, &manifest))
+        .is_some()
 }
 
 fn work_tree_link_text(
@@ -1676,6 +2033,9 @@ fn resolve_symlink_target(
     if symlink_target_is_absolute(target) {
         return Err(AbsoluteSymlinkTargetError::new(name, released_path, target).into());
     }
+    // Named-component cancellation and trailing directory syntax require
+    // filesystem traversal semantics this bounded resolver deliberately does
+    // not reconstruct. Ref: cargo-release-plan design, "Where Cargo adds content".
     if target == "." || target.ends_with('/') || target.ends_with("/.") {
         return Err(NonCanonicalSymlinkTargetError::new(name, released_path, target).into());
     }
@@ -1921,8 +2281,39 @@ fn observed_released_work_tree_paths(
         None => narrow()?,
     };
     let tracked_resources = tracked_resources(&side, &tracked_paths);
-    let content = released_in_work_tree(git, &side, &tracked_resources, observations)?;
-    Ok(content.released.into_keys().collect())
+    let mut content = released_in_work_tree(git, &side, &tracked_resources, observations)?;
+    let rule_exceptions = packaging_rule_exceptions(&content.released, side.rules);
+    let modes = observed_work_tree_modes(git, &side, &tracked_resources, observations)?;
+    add_symlink_roots(
+        &mut content.released,
+        &content.present_tracked,
+        &content.present_tracked,
+        &side,
+        |path| modes.is_symlink(path),
+    );
+    let owned_tracked;
+    let tracked = match observations {
+        Some(observations) => observations.all_tracked(),
+        None => {
+            owned_tracked = git.ls_files("")?;
+            &owned_tracked
+        }
+    };
+    let boundary_paths = present_tracked_manifests(git, tracked, case)?;
+    let resolved = resolved_work_files(
+        git,
+        &package.manifest.name,
+        &content.released,
+        tracked,
+        &boundary_paths,
+        side.rules,
+        &rule_exceptions,
+        &modes,
+        observations,
+        case,
+        false,
+    )?;
+    Ok(resolved.files.into_keys().collect())
 }
 
 /// The work-tree end of `package`'s released-content comparison.
@@ -2050,6 +2441,45 @@ fn released_from_paths(
         }
     }
     map
+}
+
+fn packaging_rule_exceptions(
+    released: &HashMap<String, String>,
+    rules: &PackagingRules,
+) -> BTreeSet<String> {
+    released
+        .keys()
+        .filter(|path| !rules.is_released(path))
+        .cloned()
+        .collect()
+}
+
+fn add_symlink_roots(
+    released: &mut HashMap<String, String>,
+    tracked: &[String],
+    present: &[String],
+    side: &PackageSide<'_>,
+    mut is_symlink: impl FnMut(&str) -> bool,
+) {
+    let nested = nested_package_dirs(present, side.dir, side.case);
+    let present: HashSet<&str> = present.iter().map(String::as_str).collect();
+    for full in tracked {
+        if !present.contains(full.as_str())
+            || !is_symlink(full)
+            || is_inside_any(full, &nested, side.case)
+        {
+            continue;
+        }
+        let Some(relative) = side.case.relativize(full, side.dir) else {
+            continue;
+        };
+        if !side.rules.may_release_path_or_descendant(relative) {
+            continue;
+        }
+        released
+            .entry(relative.to_string())
+            .or_insert_with(|| full.clone());
+    }
 }
 
 fn released_by_rules(

@@ -16,7 +16,7 @@ use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use crp_diag::Verbose;
 use crp_workspace::artifact_path;
 use crp_workspace::command::{hash_bytes, run_capture_bytes};
-use crp_workspace::git::{GitRepo, WorkTreeAncestors, WorkTreeModes};
+use crp_workspace::git::{GitRepo, WorkTreeAncestors, WorkTreeModes, WorkTreePath};
 use crp_workspace::manifest::{PathCase, parse_document, to_git_separators};
 use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
@@ -24,7 +24,9 @@ use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
 use self::paths::PathIdentity;
-use crate::classify::{AcquiredWorkspace, Snapshots, captured_package_link_inputs};
+use crate::classify::{
+    AcquiredWorkspace, CapturedPackageLinkInputs, Snapshots, captured_package_link_inputs,
+};
 use crate::groups::Groups;
 use crate::history::AssessmentHistory;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
@@ -58,6 +60,8 @@ pub struct Inputs {
     pub paths: BTreeSet<PathBuf>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub symlink_inputs: BTreeSet<PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub directory_inputs: BTreeSet<PathBuf>,
     pub digest: String,
 }
 
@@ -123,26 +127,55 @@ impl Inputs {
                 })
             },
         )?;
-        capture_sources(&root, &sources, &mut paths)?;
+        let mut source_paths = BTreeSet::new();
+        capture_sources(&root, &sources, &mut source_paths)?;
+        paths.extend(source_paths.iter().cloned());
         let case = PathCase::probe(&work_tree.workspace_root);
         let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root())?;
         let index_modes = WorkTreeModes::from_index(&index)?;
         let effective_modes = git.work_tree_modes_from_index(index_modes.clone(), &["."], case)?;
-        let mut symlink_inputs = captured_package_link_inputs(
+        let CapturedPackageLinkInputs {
+            mut links,
+            directories,
+        } = captured_package_link_inputs(
             git,
             &work_tree.packages,
             &work_tree.tracked_paths,
             &effective_modes,
             case,
         )?;
-        symlink_inputs.retain(|path| !resolver_control_input(path));
-        paths.extend(symlink_inputs.iter().cloned());
+        links.retain(|path| !resolver_control_input(path));
+        // Excluded links are intentionally absent from prospective files while
+        // their index entries remain. Consult both staged and effective kinds so
+        // recapture omits a missing/native/placeholder link consistently, but
+        // retains real regular-file replacements and independent source/control inputs.
+        let possible_links: BTreeSet<&String> = index_modes
+            .symlinks
+            .iter()
+            .chain(&effective_modes.symlinks)
+            .collect();
+        for link in possible_links {
+            let path = PathBuf::from(link);
+            if !links.contains(&path)
+                && !source_paths.contains(&path)
+                && !resolver_control_input(&path)
+                && matches!(
+                    git.work_tree_path(link, effective_modes.is_symlink(link))?,
+                    WorkTreePath::Missing | WorkTreePath::Symlink(_)
+                )
+            {
+                paths.remove(&path);
+            }
+        }
+        paths.extend(links.iter().cloned());
+        paths.extend(directories.iter().cloned());
         let digest = fingerprint_with_modes(
             &root,
             &paths,
             &BTreeMap::new(),
             &effective_modes,
-            &symlink_inputs,
+            &links,
+            &directories,
         )?;
         acquired.index_modes = Some(index_modes);
         let index = String::from_utf8(index)
@@ -157,7 +190,8 @@ impl Inputs {
             merge_target_revision: history.merge_target_revision.clone(),
             index,
             paths,
-            symlink_inputs,
+            symlink_inputs: links,
+            directory_inputs: directories,
             digest,
         };
         Ok((inputs, acquired))
@@ -261,7 +295,7 @@ impl Inputs {
     // Native path-identity and fingerprint acquisition; the comparison protocol has pure tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
-        let modes = current.index_modes()?;
+        let modes = current.fingerprint_modes()?;
         self.compare_candidate_with(
             current,
             final_digest,
@@ -273,6 +307,7 @@ impl Inputs {
                     &BTreeMap::new(),
                     &modes,
                     &current.symlink_inputs,
+                    &current.directory_inputs,
                 )
             },
         )
@@ -289,6 +324,7 @@ impl Inputs {
             || !self.same_history(current)
             || current.index != self.index
             || current.symlink_inputs != self.symlink_inputs
+            || current.directory_inputs != self.directory_inputs
         {
             return Err(StaleInputs::new().into());
         }
@@ -364,6 +400,7 @@ impl Inputs {
             || current.index != self.index
             || current.paths != self.paths
             || current.symlink_inputs != self.symlink_inputs
+            || current.directory_inputs != self.directory_inputs
         {
             return Err(StaleInputs::new().into());
         }
@@ -391,7 +428,7 @@ impl Inputs {
     #[cfg_attr(test, mutants::skip)]
     pub fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let identity = PathIdentity::new(&self.root, &PathCase::probe);
-        let modes = self.index_modes()?;
+        let modes = self.fingerprint_modes()?;
         self.final_digest_with(files, &identity, |replacements| {
             fingerprint_with_modes(
                 &self.root,
@@ -399,12 +436,21 @@ impl Inputs {
                 replacements,
                 &modes,
                 &self.symlink_inputs,
+                &self.directory_inputs,
             )
         })
     }
 
     fn index_modes(&self) -> Result<WorkTreeModes, AppError> {
         WorkTreeModes::from_index(self.index.as_bytes())
+    }
+
+    fn fingerprint_modes(&self) -> Result<WorkTreeModes, AppError> {
+        let mut modes = self.index_modes()?;
+        modes
+            .symlinks
+            .retain(|path| self.symlink_inputs.contains(Path::new(path)));
+        Ok(modes)
     }
 
     fn final_digest_with(
@@ -920,6 +966,7 @@ pub fn fingerprint(
         replacements,
         &WorkTreeModes::default(),
         &BTreeSet::new(),
+        &BTreeSet::new(),
     )
 }
 
@@ -929,6 +976,7 @@ fn fingerprint_with_modes(
     replacements: &BTreeMap<PathBuf, Vec<u8>>,
     modes: &WorkTreeModes,
     symlink_inputs: &BTreeSet<PathBuf>,
+    directory_inputs: &BTreeSet<PathBuf>,
 ) -> Result<String, AppError> {
     let identity = PathIdentity::new(root, &PathCase::probe);
     let mut ancestors = WorkTreeAncestors::default();
@@ -944,10 +992,12 @@ fn fingerprint_with_modes(
         &identity,
         modes,
         symlink_inputs,
+        directory_inputs,
         |path| {
             fs::symlink_metadata(path).map(|metadata| InputMetadata {
                 regular: metadata.is_file(),
                 symlink: metadata.file_type().is_symlink(),
+                directory: metadata.is_dir(),
                 #[cfg(unix)]
                 executable: executable_mode(metadata.permissions().mode()),
             })
@@ -970,6 +1020,7 @@ fn fingerprint_with_modes(
 struct InputMetadata {
     regular: bool,
     symlink: bool,
+    directory: bool,
     #[cfg(unix)]
     executable: bool,
 }
@@ -992,6 +1043,7 @@ fn fingerprint_bytes(
     identity: &PathIdentity<'_>,
     _modes: &WorkTreeModes,
     symlink_inputs: &BTreeSet<PathBuf>,
+    directory_inputs: &BTreeSet<PathBuf>,
     mut metadata: impl FnMut(&Path) -> io::Result<InputMetadata>,
     mut read: impl FnMut(&Path) -> io::Result<Vec<u8>>,
     mut read_link: impl FnMut(&Path) -> io::Result<Vec<u8>>,
@@ -1006,10 +1058,11 @@ fn fingerprint_bytes(
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(error) => return Err(ReadFileError::caused_by(&path, error).into()),
         };
-        if metadata
-            .as_ref()
-            .is_some_and(|metadata| !metadata.regular && !metadata.symlink)
-        {
+        if metadata.as_ref().is_some_and(|metadata| {
+            !metadata.regular
+                && !metadata.symlink
+                && !(metadata.directory && directory_inputs.contains(relative))
+        }) {
             return Err(UnsupportedInput::new(&path).into());
         }
         let observed_symlink = metadata.as_ref().is_some_and(|metadata| metadata.symlink)
@@ -1017,10 +1070,12 @@ fn fingerprint_bytes(
         if observed_symlink && !symlink_inputs.contains(relative) {
             return Err(UnsupportedInput::new(&path).into());
         }
+        let observed_directory = metadata.as_ref().is_some_and(|metadata| metadata.directory);
         let replacement = identity.replacement(relative, replacements);
         bytes.push(match (&metadata, replacement) {
             (None, None) => 0,
             (Some(_), None) if observed_symlink => 2,
+            (Some(_), None) if observed_directory => 3,
             (_, Some(_)) | (Some(_), None) => 1,
         });
         #[cfg(unix)]
@@ -1033,7 +1088,7 @@ fn fingerprint_bytes(
         }
         let contents = if let Some(replacement) = replacement {
             Some(replacement.to_owned())
-        } else if metadata.is_some() {
+        } else if metadata.is_some() && !observed_directory {
             let contents = if metadata.as_ref().is_some_and(|metadata| metadata.symlink) {
                 read_link(&path)
             } else {
@@ -1223,6 +1278,7 @@ mod tests {
                 .map(PathBuf::from)
                 .collect(),
             symlink_inputs: BTreeSet::new(),
+            directory_inputs: BTreeSet::new(),
             digest: "initial".to_owned(),
         }
     }
@@ -1419,6 +1475,7 @@ mod tests {
                 .map(PathBuf::from)
                 .collect(),
             symlink_inputs: BTreeSet::new(),
+            directory_inputs: BTreeSet::new(),
             digest: String::new(),
         };
         for paths in [

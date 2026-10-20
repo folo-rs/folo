@@ -715,7 +715,18 @@ tracked links within the workspace. A visited-path set detects cycles without a
 depth threshold. Historical targets come from tree modes and link blobs;
 work-tree targets combine effective Git modes with native-link or placeholder
 observations. The terminal regular file then supplies the blob identity and
-executable mode while the original link retains its archive path.
+executable mode while the original link retains its archive path. A terminal
+directory enumerates its direct tracked children and recursively maps every
+terminal file beneath the link's archive prefix. The active directory set rejects
+links back into a directory already being expanded.
+
+Each recursive level filters physical descendants at the endpoint's present
+nested-package boundaries, then applies package rules to the resulting archive
+path. Before resolving a symlink root, the compiled packaging policy conservatively
+decides whether any descendant can be selected; definitively excluded subtrees
+are skipped without inspecting a broken or cyclic target. Allow-list pruning uses
+only complete literal path components before glob syntax, and deny-list pruning
+is disabled when negations are present, keeping ambiguous patterns conservative.
 
 This resolution happens before work-tree hashing. `git hash-object` receives only
 terminal regular files, so filters and line endings preserve the ordinary
@@ -981,7 +992,10 @@ after the bounded resolver validates their complete tracked chain. Resolver
 control files (`Cargo.toml`, `Cargo.lock` and Cargo configuration) and untracked
 source inputs retain the ordinary-file requirement. Validated intermediate links
 and terminal files join the captured path set so later target changes cannot
-reuse stale evidence.
+reuse stale evidence. Validated target directories have their own fingerprint
+kind and are recreated in the prospective workspace even when no terminal file
+survives, preserving empty directory-link expansions across preparation and
+preview.
 
 Preview uses a disposable prospective workspace so version and requirement
 rewrites never become original planning inputs. Each iteration derives its
