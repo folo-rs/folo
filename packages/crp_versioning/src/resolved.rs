@@ -127,7 +127,9 @@ impl Inputs {
                 })
             },
         )?;
-        capture_sources(&root, &sources, &mut paths)?;
+        let mut source_paths = BTreeSet::new();
+        capture_sources(&root, &sources, &mut source_paths)?;
+        paths.extend(source_paths.iter().cloned());
         let case = PathCase::probe(&work_tree.workspace_root);
         let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root())?;
         let index_modes = WorkTreeModes::from_index(&index)?;
@@ -143,6 +145,15 @@ impl Inputs {
             case,
         )?;
         links.retain(|path| !resolver_control_input(path));
+        for link in &effective_modes.symlinks {
+            let link = PathBuf::from(link);
+            if !links.contains(&link)
+                && !source_paths.contains(&link)
+                && !resolver_control_input(&link)
+            {
+                paths.remove(&link);
+            }
+        }
         paths.extend(links.iter().cloned());
         paths.extend(directories.iter().cloned());
         let digest = fingerprint_with_modes(

@@ -166,6 +166,27 @@ fn prepare_retains_an_empty_directory_link_as_a_valid_captured_input() {
     assert!(report.contains("\"status\": \"pending-release\""));
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "prepares a package with excluded broken symbolic links"
+)]
+#[test]
+fn prepare_ignores_definitively_excluded_broken_and_cyclic_links() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "include = [\"src/**\"]");
+    fixture.write("packages/demo/tests/broken", "missing");
+    stage_placeholder_link(&fixture, "packages/demo/tests/broken");
+    fixture.write("packages/demo/tests/loop", "loop");
+    stage_placeholder_link(&fixture, "packages/demo/tests/loop");
+    fixture.commit("excluded symbolic-link fixtures");
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+}
+
 #[cfg(unix)]
 #[cfg_attr(
     miri,
@@ -178,7 +199,7 @@ fn verify_packaging_applies_include_rules_to_directory_link_descendants() {
         &fixture,
         "demo",
         "0.1.0",
-        "include = [\"src/**\", \"tests/cycle/alias/**/*.json\"]",
+        "include = [\"src/**\", \"tests/cycle/alias*/*.json\"]",
     );
     fixture.write("packages/demo/tests/cycle/real/keep.json", "keep\n");
     fixture.write("packages/demo/tests/cycle/real/ignored.txt", "ignored\n");
@@ -240,11 +261,11 @@ fn verify_packaging_preserves_nested_boundaries_through_directory_links() {
     );
     fixture.write("packages/demo/tests/real/outer.json", "outer\n");
     fixture.write(
-        "packages/demo/tests/real/nested/Cargo.toml",
+        "packages/demo/tests/real/Cargo.toml",
         "[package]\nname='nested'\nversion='0.1.0'\nedition='2024'\n",
     );
     fixture.write(
-        "packages/demo/tests/real/nested/src/lib.rs",
+        "packages/demo/tests/real/src/lib.rs",
         "pub fn nested() {}\n",
     );
     symlink("real", fixture.path().join("packages/demo/tests/alias")).unwrap();
@@ -253,12 +274,7 @@ fn verify_packaging_preserves_nested_boundaries_through_directory_links() {
     let (_, message) = check_verifying_packaging(&fixture, "HEAD");
     assert!(!message.contains("packaging rule mismatch"), "{message}");
 
-    fs::remove_file(
-        fixture
-            .path()
-            .join("packages/demo/tests/real/nested/Cargo.toml"),
-    )
-    .unwrap();
+    fs::remove_file(fixture.path().join("packages/demo/tests/real/Cargo.toml")).unwrap();
     let (_, message) = check_verifying_packaging(&fixture, "HEAD");
     assert!(!message.contains("packaging rule mismatch"), "{message}");
 }

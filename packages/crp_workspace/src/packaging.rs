@@ -121,10 +121,13 @@ impl PackagingRules {
                         .iter()
                         .any(|pattern| pattern_may_match_at_or_below(pattern, path))
             }
-            Selection::DenyList(_) => !self
-                .patterns
-                .iter()
-                .any(|pattern| pattern_excludes_subtree(pattern, path)),
+            Selection::DenyList(_) => {
+                self.patterns.iter().any(|pattern| pattern.starts_with('!'))
+                    || !self
+                        .patterns
+                        .iter()
+                        .any(|pattern| pattern_excludes_subtree(pattern, path))
+            }
             Selection::Everything => true,
         }
     }
@@ -139,11 +142,12 @@ fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
         return true;
     }
 
-    let prefix = pattern
-        .split(['*', '?', '['])
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches('/');
+    let raw_prefix = pattern.split(['*', '?', '[']).next().unwrap_or_default();
+    let prefix = if raw_prefix == pattern || raw_prefix.ends_with('/') {
+        raw_prefix.trim_end_matches('/')
+    } else {
+        raw_prefix.rsplit_once('/').map_or("", |(parent, _)| parent)
+    };
     prefix.is_empty()
         || prefix == path
         || prefix
@@ -294,11 +298,16 @@ mod tests {
         let include = rules(Some(&["src/**", "alias/**/*.json"]), None).unwrap();
         assert!(include.may_release_path_or_descendant("src/generated"));
         assert!(include.may_release_path_or_descendant("alias"));
+        let partial = rules(Some(&["tests/alias*/*.json"]), None).unwrap();
+        assert!(partial.may_release_path_or_descendant("tests/alias_to_new"));
         assert!(!include.may_release_path_or_descendant("tests/broken"));
 
         let exclude = rules(None, Some(&["tests/excluded/**", "alias/ignored.txt"])).unwrap();
         assert!(!exclude.may_release_path_or_descendant("tests/excluded"));
         assert!(exclude.may_release_path_or_descendant("alias"));
+        let negated = rules(None, Some(&["alias", "!alias/keep.json"])).unwrap();
+        assert!(negated.may_release_path_or_descendant("alias"));
+        assert!(negated.is_released("alias/keep.json"));
     }
 
     #[test]

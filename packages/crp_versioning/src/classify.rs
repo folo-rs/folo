@@ -1409,6 +1409,9 @@ fn expand_historical_released_path(
     active_directories: &mut BTreeSet<String>,
     identities: &mut HashMap<String, ReleasedFileIdentity>,
 ) -> Result<(), AppError> {
+    if !archive_subtree_selected(rules, rule_exceptions, archive_path) {
+        return Ok(());
+    }
     match resolve_historical_node(git, name, source_path, tree, workspace_dir, case)? {
         HistoricalResolvedNode::File(identity) => {
             if rules.is_released(archive_path) || rule_exceptions.contains(archive_path) {
@@ -1418,6 +1421,9 @@ fn expand_historical_released_path(
             }
         }
         HistoricalResolvedNode::Directory(directory) => {
+            if is_package_directory(tree.paths(), &directory, case) {
+                return Ok(());
+            }
             if !active_directories.insert(directory.clone()) {
                 return Err(SymlinkCycleError::new(name, source_path, &directory).into());
             }
@@ -1627,6 +1633,9 @@ fn expand_work_released_path(
     validated_directories: &mut BTreeSet<String>,
     resolved: &mut BTreeMap<String, ResolvedWorkFile>,
 ) -> Result<(), AppError> {
+    if !archive_subtree_selected(rules, rule_exceptions, archive_path) {
+        return Ok(());
+    }
     match resolve_work_node(
         git,
         name,
@@ -1649,6 +1658,9 @@ fn expand_work_released_path(
         Some(ResolvedWorkNode::Directory { path, link_inputs }) => {
             validated_links.extend(link_inputs);
             validated_directories.insert(path.clone());
+            if is_package_directory(boundary_paths, &path, case) {
+                return Ok(());
+            }
             if !active_directories.insert(path.clone()) {
                 return Err(SymlinkCycleError::new(name, source_path, &path).into());
             }
@@ -1909,6 +1921,26 @@ fn archive_child(archive: &str, child: &str, directory: &str, case: PathCase) ->
         .relativize(child, directory)
         .expect("a direct tracked child is inside its selected directory");
     join_git_rel(archive, relative)
+}
+
+fn archive_subtree_selected(
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
+    archive_path: &str,
+) -> bool {
+    rules.may_release_path_or_descendant(archive_path)
+        || rule_exceptions.iter().any(|exception| {
+            exception == archive_path
+                || exception
+                    .strip_prefix(archive_path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+}
+
+fn is_package_directory(paths: &[String], directory: &str, case: PathCase) -> bool {
+    join_relative(directory, MANIFEST_FILE_NAME)
+        .and_then(|manifest| case.recorded_path(paths, &manifest))
+        .is_some()
 }
 
 fn work_tree_link_text(

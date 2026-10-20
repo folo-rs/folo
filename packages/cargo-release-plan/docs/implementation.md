@@ -724,7 +724,9 @@ Each recursive level filters physical descendants at the endpoint's present
 nested-package boundaries, then applies package rules to the resulting archive
 path. Before resolving a symlink root, the compiled packaging policy conservatively
 decides whether any descendant can be selected; definitively excluded subtrees
-are skipped without inspecting a broken or cyclic target.
+are skipped without inspecting a broken or cyclic target. Allow-list pruning uses
+only complete literal path components before glob syntax, and deny-list pruning
+is disabled when negations are present, keeping ambiguous patterns conservative.
 
 This resolution happens before work-tree hashing. `git hash-object` receives only
 terminal regular files, so filters and line endings preserve the ordinary

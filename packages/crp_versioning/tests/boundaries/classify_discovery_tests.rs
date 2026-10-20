@@ -364,6 +364,42 @@ fn definitively_excluded_broken_and_cyclic_links_are_not_resolved() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "compares excluded recursive symbolic links")]
+fn excluded_recursive_broken_and_cyclic_links_are_pruned_before_resolution() {
+    let fixture = Repository::new();
+    fixture.write("pkg/real/keep.json", b"keep\n");
+    fixture.command(&["add", "pkg/real/keep.json"]);
+    stage_placeholder_symlink(&fixture, "pkg/real/broken", "missing");
+    stage_placeholder_symlink(&fixture, "pkg/real/loop", "loop");
+    stage_placeholder_symlink(&fixture, "pkg/alias", "real");
+    fixture.command(&["commit", "--quiet", "-m", "recursive excluded links"]);
+
+    let rules = PackagingRules::new(
+        None,
+        Some(&[
+            "real/**".to_string(),
+            "alias/broken".to_string(),
+            "alias/loop".to_string(),
+        ]),
+    )
+    .unwrap();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, patch, stat, _) =
+        diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+
+    assert!(changed.is_empty());
+    assert!(patch.is_empty());
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (0, 0, 0));
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "compares modes and nested links in a tracked directory outside the package"
