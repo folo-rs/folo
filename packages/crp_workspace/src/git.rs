@@ -396,7 +396,7 @@ impl GitRepo {
     ///
     /// The index, configuration and work-tree inputs must remain unchanged since admission.
     #[cfg_attr(test, mutants::skip)] // Native overlay; parsing and precedence have pure tests.
-    fn work_tree_modes_from_index(
+    pub fn work_tree_modes_from_index(
         &self,
         mut modes: WorkTreeModes,
         pathspecs: &[&str],

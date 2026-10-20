@@ -1438,6 +1438,7 @@ fn resolved_work_files(
             observations,
             case,
             &mut ancestors,
+            false,
         )? {
             resolved.insert(archive_path.clone(), file);
         }
@@ -1445,6 +1446,10 @@ fn resolved_work_files(
     Ok(resolved)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "released-link resolution needs endpoint observations, path policy, ancestor state and capture-mode reuse together"
+)]
 fn resolve_work_file(
     git: &GitRepo,
     name: &str,
@@ -1453,6 +1458,7 @@ fn resolve_work_file(
     observations: Option<&LiveObservations>,
     case: PathCase,
     ancestors: &mut WorkTreeAncestors,
+    modes_complete: bool,
 ) -> Result<Option<ResolvedWorkFile>, AppError> {
     let mut current = released_path.to_string();
     let mut first = true;
@@ -1461,7 +1467,7 @@ fn resolve_work_file(
     let mut inputs = BTreeSet::new();
     loop {
         inputs.insert(current.clone());
-        let modes = if first {
+        let modes = if first || modes_complete {
             None
         } else {
             Some(observed_path_modes(git, &current, observations, case)?)
@@ -1515,6 +1521,8 @@ fn resolve_work_file(
 pub(crate) fn captured_package_link_inputs(
     git: &GitRepo,
     packages: &[WorkPackage],
+    tracked: &[String],
+    modes: &WorkTreeModes,
     case: PathCase,
 ) -> Result<BTreeSet<PathBuf>, AppError> {
     let mut captured = BTreeSet::new();
@@ -1530,12 +1538,22 @@ pub(crate) fn captured_package_link_inputs(
             case,
         };
         let resource_paths: Vec<&str> = resources.values().map(String::as_str).collect();
-        let tracked = git.tracked_paths(&resource_paths, case)?;
-        let tracked_resources = tracked_resources(&side, &tracked);
-        let content = released_in_work_tree(git, &side, &tracked_resources, None)?;
-        let modes = observed_work_tree_modes(git, &side, &tracked_resources, None)?;
+        let tracked_resources = tracked_resources(&side, tracked);
+        let selected: Vec<String> = tracked
+            .iter()
+            .filter(|path| {
+                case.relativize(path, side.dir).is_some()
+                    || resource_paths
+                        .iter()
+                        .any(|resource| case.same_path(path, resource))
+            })
+            .cloned()
+            .collect();
+        let present = present_in_work_tree(git, &selected)?;
+        let mut released = released_from_paths(&selected, &present, &side);
+        add_resources(&mut released, tracked_resources.iter());
         let mut seen = BTreeSet::new();
-        for source in content.released.values() {
+        for source in released.values() {
             if !seen.insert(source) {
                 continue;
             }
@@ -1549,10 +1567,11 @@ pub(crate) fn captured_package_link_inputs(
                 git,
                 &package.manifest.name,
                 source,
-                &modes,
+                modes,
                 None,
                 case,
                 &mut ancestors,
+                true,
             )?
             else {
                 continue;

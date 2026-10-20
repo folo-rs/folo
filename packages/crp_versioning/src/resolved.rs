@@ -125,16 +125,23 @@ impl Inputs {
         )?;
         capture_sources(&root, &sources, &mut paths)?;
         let case = PathCase::probe(&work_tree.workspace_root);
-        let mut symlink_inputs = captured_package_link_inputs(git, &work_tree.packages, case)?;
-        symlink_inputs.retain(|path| !resolver_control_input(path));
-        paths.extend(symlink_inputs.iter().cloned());
         let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root())?;
         let index_modes = WorkTreeModes::from_index(&index)?;
+        let effective_modes = git.work_tree_modes_from_index(index_modes.clone(), &["."], case)?;
+        let mut symlink_inputs = captured_package_link_inputs(
+            git,
+            &work_tree.packages,
+            &work_tree.tracked_paths,
+            &effective_modes,
+            case,
+        )?;
+        symlink_inputs.retain(|path| !resolver_control_input(path));
+        paths.extend(symlink_inputs.iter().cloned());
         let digest = fingerprint_with_modes(
             &root,
             &paths,
             &BTreeMap::new(),
-            &index_modes,
+            &effective_modes,
             &symlink_inputs,
         )?;
         acquired.index_modes = Some(index_modes);

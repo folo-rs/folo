@@ -219,12 +219,14 @@ fn workflow_reuses_admission_and_reacquires_after_resolution_and_relocation() {
             .count(),
         0
     );
+    // Preparation separately observes effective modes while admitting validated
+    // package-link inputs; subsequent classification still owns its unchanged interval.
     assert_eq!(
         prepare_trace
             .lines()
             .filter(|line| line.contains("git diff-files --raw"))
             .count(),
-        1
+        3
     );
     let plan = evidence.path().join("proposal.json");
     fs::write(
