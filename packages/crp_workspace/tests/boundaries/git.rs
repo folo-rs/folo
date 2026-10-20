@@ -3,7 +3,7 @@
 use std::fs;
 use std::num::NonZero;
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::Path;
 
 use crp_workspace::command::run_capture;
@@ -134,6 +134,49 @@ fn work_tree_modes_include_the_index() {
     assert_eq!(
         repo.work_tree_modes(&[], PathCase::Sensitive).unwrap(),
         WorkTreeModes::default()
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "reads real Git index and filesystem state")]
+fn indexed_symlink_placeholders_expose_target_bytes_without_following_them() {
+    let fixture = testing::Repository::new();
+    fixture.write("target", b"target contents");
+    fixture.write("link", b"target");
+    fixture.command(&["add", "target", "link"]);
+    let id = fixture.command(&["rev-parse", ":link"]);
+    fixture.command(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},link", id.trim()),
+    ]);
+
+    let git = fixture.repo();
+    assert_eq!(
+        git.work_tree_path("link", true).unwrap(),
+        WorkTreePath::Symlink(WorkTreeSymlinkTarget::Placeholder(b"target".to_vec()))
+    );
+    assert_eq!(
+        git.work_tree_path("target", false).unwrap(),
+        WorkTreePath::Regular
+    );
+    assert_eq!(
+        git.work_tree_path("missing", true).unwrap(),
+        WorkTreePath::Missing
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(miri, ignore = "creates and reads a real symbolic link")]
+fn native_symlinks_expose_the_unfollowed_target_path() {
+    let fixture = testing::Repository::new();
+    fixture.write("target", b"target contents");
+    symlink("target", fixture.path().join("link")).unwrap();
+
+    assert_eq!(
+        fixture.repo().work_tree_path("link", false).unwrap(),
+        WorkTreePath::Symlink(WorkTreeSymlinkTarget::Native("target".into()))
     );
 }
 

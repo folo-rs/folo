@@ -10,16 +10,16 @@
 )]
 
 use std::collections::HashSet;
-use std::mem;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Output;
+use std::{fs, io, mem};
 
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes, spawn};
 use crate::manifest::{PathCase, to_git_separators};
 use crate::{
-    CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError,
+    CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, ReadFileError,
     UnresolvedRevisionError,
 };
 
@@ -544,6 +544,45 @@ impl GitRepo {
         Ok(ids)
     }
 
+    /// Reads a work-tree symbolic link without following its target.
+    ///
+    /// A checkout with `core.symlinks=false` materializes an indexed link as a
+    /// regular file containing the target text. The recorded mode tells this
+    /// observation to read those bytes as a link instead of relying only on
+    /// filesystem metadata.
+    #[cfg_attr(test, mutants::skip)] // Native filesystem observation; boundary-tested.
+    pub fn work_tree_path(
+        &self,
+        rel_path: &str,
+        recorded_symlink: bool,
+    ) -> Result<WorkTreePath, AppError> {
+        let path = self.root.join(rel_path);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(WorkTreePath::Missing);
+            }
+            Err(error) => return Err(ReadFileError::caused_by(&path, error).into()),
+        };
+        if metadata.file_type().is_symlink() {
+            return fs::read_link(&path)
+                .map(WorkTreeSymlinkTarget::Native)
+                .map(WorkTreePath::Symlink)
+                .map_err(|error| ReadFileError::caused_by(path, error).into());
+        }
+        if recorded_symlink {
+            return fs::read(&path)
+                .map(WorkTreeSymlinkTarget::Placeholder)
+                .map(WorkTreePath::Symlink)
+                .map_err(|error| ReadFileError::caused_by(path, error).into());
+        }
+        if metadata.is_file() {
+            Ok(WorkTreePath::Regular)
+        } else {
+            Ok(WorkTreePath::Other)
+        }
+    }
+
     /// Bytes of a blob already present in Git's object database.
     // Trivial native command forwarder; binary blob boundary tests verify lossless output.
     #[cfg_attr(test, mutants::skip)]
@@ -776,6 +815,24 @@ impl TreeEntry {
     pub fn is_executable(&self) -> bool {
         self.mode == EXECUTABLE_TREE_MODE
     }
+}
+
+/// A symbolic-link target observed from the work tree without dereferencing it.
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorkTreeSymlinkTarget {
+    /// Target spelling returned by the native filesystem.
+    Native(PathBuf),
+    /// Target bytes stored in a regular placeholder checkout.
+    Placeholder(Vec<u8>),
+}
+
+/// Effective kind of one tracked work-tree path.
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorkTreePath {
+    Missing,
+    Regular,
+    Symlink(WorkTreeSymlinkTarget),
+    Other,
 }
 
 /// Interprets Git's ancestry predicate without confusing a query failure with non-ancestry.

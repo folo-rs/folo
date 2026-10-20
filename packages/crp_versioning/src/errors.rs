@@ -287,28 +287,137 @@ impl PlanVersionRegressionError {
     }
 }
 
-/// Released content contains a symbolic link.
-///
-/// Cargo dereferences a link when it builds a package archive, so the released bytes are
-/// the target's content, while Git stores the link as a blob holding the target
-/// path. Comparing the blobs would call a package unchanged after an edit to the
-/// file it points at, and reconstructing the target's historical content is only
-/// possible when the link stays inside the repository at both ends. A refusal is
-/// preferred over a release verdict that can be silently wrong. Ref:
-/// packages/cargo-release-plan/docs/design.md, "Released content".
+/// A non-package input that must be read directly is a symbolic link.
 #[ohno::error]
 #[display(
-    "Package '{}' releases '{}'; symbolic links are unsupported",
+    "Package '{}' requires '{}' as an ordinary file; symbolic links are unsupported for this input",
     package.quoted(),
     path.quoted()
 )]
-pub(crate) struct SymlinkReleasedError {
+pub(crate) struct SymlinkInputError {
     package: String,
     path: String,
 }
 
-impl UnwindSafe for SymlinkReleasedError {}
-impl RefUnwindSafe for SymlinkReleasedError {}
+impl UnwindSafe for SymlinkInputError {}
+impl RefUnwindSafe for SymlinkInputError {}
+
+/// A released symbolic link has a target that is not valid UTF-8.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' whose target is not valid UTF-8; use a UTF-8 relative target inside the workspace",
+    package.quoted(),
+    path.quoted()
+)]
+pub(crate) struct SymlinkTargetEncodingError {
+    package: String,
+    path: String,
+}
+
+impl UnwindSafe for SymlinkTargetEncodingError {}
+impl RefUnwindSafe for SymlinkTargetEncodingError {}
+
+/// A released symbolic link has an absolute target.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' with absolute target '{}'; use a relative target to a tracked file inside the workspace",
+    package.quoted(),
+    path.quoted(),
+    target.quoted()
+)]
+pub(crate) struct AbsoluteSymlinkTargetError {
+    package: String,
+    path: String,
+    target: String,
+}
+
+impl UnwindSafe for AbsoluteSymlinkTargetError {}
+impl RefUnwindSafe for AbsoluteSymlinkTargetError {}
+
+/// A released symbolic link uses platform-dependent separator syntax.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' with non-portable target '{}'; use '/' separators in a relative workspace path",
+    package.quoted(),
+    path.quoted(),
+    target.quoted()
+)]
+pub(crate) struct NonPortableSymlinkTargetError {
+    package: String,
+    path: String,
+    target: String,
+}
+
+impl UnwindSafe for NonPortableSymlinkTargetError {}
+impl RefUnwindSafe for NonPortableSymlinkTargetError {}
+
+/// A released symbolic link resolves outside the selected workspace.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' whose target '{}' resolves outside the workspace; point it to a tracked file inside the workspace",
+    package.quoted(),
+    path.quoted(),
+    target.quoted()
+)]
+pub(crate) struct EscapingSymlinkTargetError {
+    package: String,
+    path: String,
+    target: String,
+}
+
+impl UnwindSafe for EscapingSymlinkTargetError {}
+impl RefUnwindSafe for EscapingSymlinkTargetError {}
+
+/// A released symbolic-link chain contains a cycle.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' whose chain cycles at '{}'; break the cycle or exclude the link from the package",
+    package.quoted(),
+    path.quoted(),
+    target.quoted()
+)]
+pub(crate) struct SymlinkCycleError {
+    package: String,
+    path: String,
+    target: String,
+}
+
+impl UnwindSafe for SymlinkCycleError {}
+impl RefUnwindSafe for SymlinkCycleError {}
+
+/// A released symbolic link does not resolve to a tracked present path.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' whose target '{}' is not a tracked present file; track and restore the target or exclude the link from the package",
+    package.quoted(),
+    path.quoted(),
+    target.quoted()
+)]
+pub(crate) struct MissingSymlinkTargetError {
+    package: String,
+    path: String,
+    target: String,
+}
+
+impl UnwindSafe for MissingSymlinkTargetError {}
+impl RefUnwindSafe for MissingSymlinkTargetError {}
+
+/// A released symbolic link terminates at a non-regular path.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' whose target '{}' is not a regular file; end the chain at a tracked regular file",
+    package.quoted(),
+    path.quoted(),
+    target.quoted()
+)]
+pub(crate) struct NonRegularSymlinkTargetError {
+    package: String,
+    path: String,
+    target: String,
+}
+
+impl UnwindSafe for NonRegularSymlinkTargetError {}
+impl RefUnwindSafe for NonRegularSymlinkTargetError {}
 
 /// A version string is not valid `SemVer`.
 #[ohno::error]
@@ -383,7 +492,14 @@ mod tests {
     assert_impl_all!(VersionOverflowError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(VersionRegressionError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PlanVersionRegressionError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(SymlinkReleasedError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(SymlinkInputError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(SymlinkTargetEncodingError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(AbsoluteSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(NonPortableSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(EscapingSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(SymlinkCycleError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(MissingSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(NonRegularSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn shallow_history_error_names_package() {

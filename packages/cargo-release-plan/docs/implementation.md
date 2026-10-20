@@ -704,11 +704,23 @@ index and overlay `git diff-files --raw`: on a checkout with `core.fileMode`
 enabled, an unstaged executable-bit change is observed; when it is disabled, the
 index remains the stable fallback. Indexed symlink modes are retained as well
 because `core.symlinks = false` can materialize a link as an ordinary work-tree
-file; released symlinks are rejected before content hashing.
+file containing its target text.
 
 File bytes are loaded only after object identity differs, because mode-only
 changes render directly and bytes are needed for presentation rather than the
-verdict. Symbolic links are rejected before hashing or reading their targets.
+verdict. Each released path first resolves to a terminal identity. Ordinary files
+retain their own blob and mode. A symbolic link reads target text without
+following the filesystem, normalizes the relative Git path, and follows only
+tracked links within the workspace. A visited-path set detects cycles without a
+depth threshold. Historical targets come from tree modes and link blobs;
+work-tree targets combine effective Git modes with native-link or placeholder
+observations. The terminal regular file then supplies the blob identity and
+executable mode while the original link retains its archive path.
+
+This resolution happens before work-tree hashing. `git hash-object` receives only
+terminal regular files, so filters and line endings preserve the ordinary
+content-identity model without allowing Git or the filesystem to dereference an
+unvalidated link.
 
 ### Package boundaries and resources
 

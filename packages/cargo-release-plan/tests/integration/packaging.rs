@@ -7,7 +7,7 @@ use std::fs;
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{
-    check, check_verbose, check_verifying_packaging, report_json, seeded_package,
+    check, check_verbose, check_verifying_packaging, prepare, report_json, seeded_package,
 };
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -20,6 +20,39 @@ fn verify_packaging_agrees_with_cargo_on_a_clean_tree() {
 
     assert!(passed, "{message}");
     assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "runs preparation against a real Git and Cargo workspace"
+)]
+#[test]
+fn prepare_accepts_a_tracked_symlink_fixture_in_a_placeholder_checkout() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write("packages/demo/tests/fixtures/target", "fixture contents\n");
+    fixture.write("packages/demo/tests/fixtures/link", "target");
+    fixture.git(&["add", "-A"]);
+    let path = "packages/demo/tests/fixtures/link";
+    let id = fixture.git(&["rev-parse", &format!(":{path}")]);
+    fixture.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},{}", id.trim(), path),
+    ]);
+    fixture.git(&["config", "core.symlinks", "false"]);
+    fixture.git(&["commit", "-m", "tracked symlink fixture"]);
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
