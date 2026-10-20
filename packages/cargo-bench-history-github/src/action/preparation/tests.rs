@@ -767,26 +767,148 @@ fn empty_affected_scope_is_explicit_instead_of_a_workspace_fallback() {
 
 #[test]
 fn workspace_file_changes_select_every_benchmark_package() {
+    for path in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+        ".cargo/config",
+        ".cargo/config.toml",
+    ] {
+        for exclude in ["", "unrelated"] {
+            let mut host = FakeHost::new(&json!({"platforms":"linux", "exclude":exclude}));
+            host.event("pull_request", &event());
+            prepare_responses(&host, Flow::Pr);
+            host.reply(host.root.to_str().unwrap());
+            host.reply(&format!("{path}\0"));
+            block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
+            let packages = if exclude.is_empty() {
+                "benchmark,unrelated"
+            } else {
+                "benchmark"
+            };
+            assert!(output(&host).contains(&format!("packages={packages}\nskip-all=false\n")));
+            assert!(host.package_queries.borrow().is_empty());
+        }
+    }
+}
+
+#[test]
+fn unowned_paths_do_not_widen_pr_scope() {
+    for path in [
+        ".github/fixture/Cargo.toml",
+        ".github/workflows/validation.yml",
+        "docs/guide.md",
+        "README.md",
+        "unknown",
+        "removed-member/src/lib.rs",
+        ".cargo/unrelated.toml",
+        "nested/Cargo.lock",
+    ] {
+        // Both orders catch an unrelated path either replacing or short-circuiting real scope.
+        for changes in [
+            format!("{path}\0"),
+            format!("{path}\0library/deleted.rs\0"),
+            format!("library/deleted.rs\0{path}\0"),
+        ] {
+            let mut host = FakeHost::new(&json!({"platforms":"linux"}));
+            host.event("pull_request", &event());
+            prepare_responses(&host, Flow::Pr);
+            host.reply(host.root.to_str().unwrap());
+            host.reply(&changes);
+            host.packages
+                .insert(host.root.join("library"), Some("library".to_owned()));
+            block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
+            if changes.contains("library/") {
+                assert!(output(&host).contains("packages=benchmark\nskip-all=false\n"));
+                assert_eq!(host.package_queries.borrow().len(), 1);
+            } else {
+                assert!(output(&host).contains("packages=\nskip-all=true\nskipped=false\n"));
+                assert!(host.package_queries.borrow().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn paths_outside_the_measured_workspace_do_not_widen_pr_scope() {
+    for changes in [
+        "docs/guide.md\0",
+        "docs/guide.md\0measured/library/src/lib.rs\0",
+    ] {
+        let mut host = FakeHost::new(&json!({"platforms":"linux"}));
+        let repository = host.root.clone();
+        host.root = repository.join("measured");
+        host.files.insert(
+            host.root.join("inputs.json"),
+            br#"{"platforms":"linux"}"#.to_vec(),
+        );
+        host.event("pull_request", &event());
+        prepare_responses(&host, Flow::Pr);
+        host.reply(repository.to_str().unwrap());
+        host.reply(changes);
+        host.packages
+            .insert(host.root.join("library"), Some("library".to_owned()));
+        block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
+        if changes.contains("measured/") {
+            assert!(output(&host).contains("packages=benchmark\nskip-all=false\n"));
+        } else {
+            assert!(output(&host).contains("packages=\nskip-all=true\nskipped=false\n"));
+            assert!(host.package_queries.borrow().is_empty());
+        }
+    }
+}
+
+#[test]
+fn missing_detected_owner_does_not_widen_pr_scope() {
     let mut host = FakeHost::new(&json!({"platforms":"linux"}));
     host.event("pull_request", &event());
     prepare_responses(&host, Flow::Pr);
     host.reply(host.root.to_str().unwrap());
-    host.reply("Cargo.toml\0");
-    host.packages.insert(host.root.join("Cargo.toml"), None);
+    host.reply("unrelated/deleted.rs\0library/src/lib.rs\0");
+    host.packages.insert(host.root.join("unrelated"), None);
+    host.packages
+        .insert(host.root.join("library"), Some("library".to_owned()));
     block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
-    assert!(output(&host).contains("packages=benchmark,unrelated\n"));
+    assert!(output(&host).contains("packages=benchmark\nskip-all=false\n"));
+    assert_eq!(host.package_queries.borrow().len(), 2);
 }
 
 #[test]
-fn independent_fixture_workspaces_outside_members_select_the_workspace() {
-    let mut host = FakeHost::new(&json!({"platforms":"linux"}));
-    host.event("pull_request", &event());
-    prepare_single_member_responses(&host);
-    host.reply(host.root.to_str().unwrap());
-    host.reply(".github/fixture/Cargo.toml\0");
-    block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
-    assert!(output(&host).contains("packages=owner\n"));
-    assert!(host.package_queries.borrow().is_empty());
+fn root_member_uses_metadata_identity_without_losing_dependents_or_nested_owners() {
+    for (path, expected) in [
+        ("src/lib.rs", "benchmark,root"),
+        ("benches/probe.rs", "benchmark,root"),
+        ("library/src/lib.rs", "benchmark"),
+    ] {
+        let mut host = FakeHost::new(&json!({"platforms":"linux"}));
+        host.event("pull_request", &event());
+        let mut metadata = metadata(&host);
+        metadata["workspace_members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("root"));
+        metadata["packages"].as_array_mut().unwrap().push(json!({
+            "id":"root", "name":"root", "manifest_path":host.root.join("Cargo.toml"),
+            "targets":[{"kind":["bench"]}], "dependencies":[],
+        }));
+        metadata["packages"][2]["dependencies"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":host.root}));
+        host.reply("false");
+        host.reply(SHA);
+        host.reply(BASE);
+        host.reply(&metadata.to_string());
+        host.reply(host.root.to_str().unwrap());
+        host.reply(&format!("{path}\0"));
+        // The native detector reports workspace scope for a root member.
+        host.packages.insert(host.root.clone(), None);
+        host.packages
+            .insert(host.root.join("library"), Some("library".to_owned()));
+        block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
+        assert!(output(&host).contains(&format!("packages={expected}\nskip-all=false\n")));
+    }
 }
 
 #[test]
@@ -820,11 +942,11 @@ fn declared_member_boundaries_choose_the_deepest_member_without_prefix_collision
     }));
     let workspace = Workspace::parse(&metadata.to_string(), &host).unwrap();
     assert_eq!(
-        workspace.package_directory(&nested.join("src").join("lib.rs")),
-        Some(nested.as_path())
+        workspace.package_owner(&nested.join("src").join("lib.rs")),
+        Some((nested.as_path(), "nested"))
     );
     assert_eq!(
-        workspace.package_directory(&host.root.join("library-other").join("lib.rs")),
+        workspace.package_owner(&host.root.join("library-other").join("lib.rs")),
         None
     );
 }

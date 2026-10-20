@@ -288,7 +288,12 @@ History selects workspace collection. PR preparation freezes the event's real he
 checks the checkout head and computes the merge-base diff. Cargo metadata supplies the member
 directory boundaries. The detector's read-only query resolves the nearest declared member,
 not an independent fixture manifest below it. Deleted files retain their surviving member;
-paths outside all declared members and removed members select workspace scope.
+unowned paths and paths outside the measured workspace add no scope.
+The detector reports workspace scope for the root directory, so Cargo metadata supplies
+the root member's package identity when one exists. Other missing detector owners add no scope.
+An explicit list of shared workspace-root build inputs selects workspace scope before
+ownership lookup; see the design's workflow preparation policy. No unknown-path fallback
+widens a partial or empty selection.
 The companion expands reverse path dependents across dependency kinds
 and conditions, then filters explicit benchmark targets and exclusions. Visited membership
 bounds cyclic dependency traversal. The native adapters and in-memory action host execute the

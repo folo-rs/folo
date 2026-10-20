@@ -81,12 +81,12 @@ impl Workspace {
     }
 
     /// Keeps ownership within Cargo's declared members rather than nested fixture workspaces.
-    pub(crate) fn package_directory(&self, path: &Path) -> Option<&Path> {
+    pub(crate) fn package_owner(&self, path: &Path) -> Option<(&Path, &str)> {
         self.directories
-            .keys()
-            .filter(|directory| path.starts_with(directory))
-            .max_by_key(|directory| directory.components().count())
-            .map(PathBuf::as_path)
+            .iter()
+            .filter(|(directory, _)| path.starts_with(directory))
+            .max_by_key(|(directory, _)| directory.components().count())
+            .map(|(directory, name)| (directory.as_path(), name.as_str()))
     }
 
     /// Expands optional affected owners before benchmark filtering and final exclusions.

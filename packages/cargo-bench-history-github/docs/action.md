@@ -43,7 +43,11 @@ History and PR exclusions are exact workspace package names. Those flows select 
 explicit benchmark targets. PR affected selection expands changed ownership through
 workspace path dependents before filtering benchmarks and exclusions. Ownership is bounded
 by Cargo's declared members: nested fixture workspaces do not become foreign package owners,
-and paths outside those members select workspace scope.
+and unowned paths contribute no scope. Unrelated documentation, workflows and paths outside
+the measured workspace do not trigger PR benchmarks or widen a selected package set.
+Shared build inputs at the measured workspace root select all members: `Cargo.toml`,
+`Cargo.lock`, `rust-toolchain`, `rust-toolchain.toml`, `.cargo/config` and `.cargo/config.toml`.
+History retains workspace-wide collection independently of PR relevance.
 
 History and PR preparation append `instance`, `matrix`, `expected-platforms`, `collection-job-prefix`,
 `head`, `base`, `packages`, `skip-all` and `skipped`. Package CSV and platform identifiers are

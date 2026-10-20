@@ -250,12 +250,17 @@ package-name exclusions. Excluded or non-benchmark packages still participate in
 Unknown exclusions or owners are errors, not silently ignored names.
 
 Independent fixture workspaces do not add candidates to the selected Cargo workspace.
-Changes outside its declared members select workspace scope; a fixture nested within a member
-belongs to that member for impact selection.
+Unowned paths, including unrelated documentation, workflow files, removed members and paths
+outside the measured workspace, contribute no PR benchmark scope. A fixture nested within a
+member belongs to that member for impact selection. PR relevance favors avoiding unnecessary
+collection; workspace-wide history supplies broad performance coverage over many commits.
 
-Root-workspace and repository-wide changes select the whole workspace conservatively.
-Deleted and renamed paths remain part of ownership discovery; removed package manifests can
-therefore select the whole workspace. Empty affected scope is an explicit skip-all result,
+Known shared build inputs at the measured workspace root select the whole workspace:
+`Cargo.toml`, `Cargo.lock`, `rust-toolchain`, `rust-toolchain.toml`, `.cargo/config` and
+`.cargo/config.toml`. These inputs control dependencies, compiler selection or build settings
+across members. Other unowned paths do not widen scope.
+Deleted and renamed paths remain part of ownership discovery when their owner survives.
+Empty affected scope is an explicit skip-all result,
 never an empty package argument accidentally interpreted as workspace collection.
 Fork skips remain distinct from empty benchmark scope and do not authorize publication.
 

@@ -301,6 +301,7 @@ fn native_backfill_does_not_require_cargo_metadata_at_the_invocation_head() {
 fn native_independent_virtual_workspaces_do_not_become_foreign_scope_owners() {
     for location in [".github/fixture", "library/tests/fixture"] {
         let mut fixture = Fixture::new();
+        fixture.base.clone_from(&fixture.head);
         let nested = fixture.checkout.join(location);
         fs::create_dir_all(nested.join("foreign").join("src")).unwrap();
         fs::write(
@@ -319,10 +320,106 @@ fn native_independent_virtual_workspaces_do_not_become_foreign_scope_owners() {
         fixture.head = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
         let outputs = fixture.prepare("pr", &json!({"platforms":"linux"}));
         let expected = if location.starts_with(".github") {
-            "benchmark,unrelated"
+            ""
         } else {
             "benchmark"
         };
+        assert_eq!(outputs.get("packages").unwrap(), expected);
+        assert_eq!(
+            outputs.get("skip-all").unwrap(),
+            if expected.is_empty() { "true" } else { "false" }
+        );
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Native Git, Cargo metadata and filesystem boundaries.")]
+fn native_unowned_changes_skip_pr_benchmarks_but_preserve_history_and_mixed_scope() {
+    let mut fixture = Fixture::new();
+    let original_base = fixture.base.clone();
+    fixture.base.clone_from(&fixture.head);
+    fs::create_dir_all(fixture.checkout.join(".github").join("workflows")).unwrap();
+    fs::create_dir_all(fixture.checkout.join("docs")).unwrap();
+    fs::write(fixture.checkout.join("docs").join("guide.md"), "Guide\n").unwrap();
+    fs::write(
+        fixture
+            .checkout
+            .join(".github")
+            .join("workflows")
+            .join("check.yml"),
+        "name: Check\n",
+    )
+    .unwrap();
+    fixture.git(&["add", "."]);
+    fixture.commit();
+    fixture.head = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let input = json!({"platforms":"linux"});
+    let outputs = fixture.prepare("pr", &input);
+    assert_eq!(outputs.get("packages").unwrap(), "");
+    assert_eq!(outputs.get("skip-all").unwrap(), "true");
+    assert_eq!(outputs.get("skipped").unwrap(), "false");
+    let outputs = fixture.prepare("history", &input);
+    assert_eq!(outputs.get("packages").unwrap(), "benchmark,unrelated");
+    assert_eq!(outputs.get("skip-all").unwrap(), "false");
+    fixture.base = original_base;
+    let outputs = fixture.prepare("pr", &input);
+    assert_eq!(outputs.get("packages").unwrap(), "benchmark");
+    assert_eq!(outputs.get("skip-all").unwrap(), "false");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Native Git, Cargo metadata and package detector boundaries."
+)]
+fn native_root_members_preserve_benchmarks_and_dependents() {
+    // Cover standalone packages, benchmarked workspace roots and library-only roots.
+    for (workspace, root_benchmark, expected) in [
+        (false, true, "root"),
+        (true, true, "benchmark,root"),
+        (true, false, "benchmark"),
+    ] {
+        let mut fixture = Fixture::new();
+        let mut manifest = "[package]\nname='root'\nversion='0.0.0'\nedition='2024'\n".to_owned();
+        if workspace {
+            manifest.push_str(
+                "[workspace]\nresolver='3'\nmembers=['library','benchmark','unrelated']\n",
+            );
+            let dependent_manifest = fixture.checkout.join("benchmark").join("Cargo.toml");
+            let mut dependent = fs::read_to_string(&dependent_manifest).unwrap();
+            dependent.push_str("root={path='..'}\n");
+            fs::write(dependent_manifest, dependent).unwrap();
+        }
+        fs::create_dir_all(fixture.checkout.join("src")).unwrap();
+        fs::write(fixture.checkout.join("src").join("lib.rs"), "").unwrap();
+        if root_benchmark {
+            manifest.push_str("[[bench]]\nname='root_probe'\nharness=false\n");
+            fs::create_dir_all(fixture.checkout.join("benches")).unwrap();
+            fs::write(
+                fixture.checkout.join("benches").join("root_probe.rs"),
+                "fn main() {}\n",
+            )
+            .unwrap();
+        }
+        fs::write(fixture.checkout.join("Cargo.toml"), manifest).unwrap();
+        let output = Command::new("cargo")
+            .current_dir(&fixture.checkout)
+            .args(["generate-lockfile", "--offline"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        fixture.git(&["add", "."]);
+        fixture.commit();
+        fixture.base = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        fs::write(
+            fixture.checkout.join("src").join("lib.rs"),
+            "pub fn operation() {}\n",
+        )
+        .unwrap();
+        fixture.git(&["add", "."]);
+        fixture.commit();
+        fixture.head = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let outputs = fixture.prepare("pr", &json!({"platforms":"linux"}));
         assert_eq!(outputs.get("packages").unwrap(), expected);
         assert_eq!(outputs.get("skip-all").unwrap(), "false");
     }

@@ -190,7 +190,7 @@ pub(crate) async fn resolve(
     .parse()
 }
 
-/// Maps both sides of renames/deletions through the detector; workspace files select all members.
+/// Maps changed paths to owners, widening only for known shared build inputs.
 async fn affected_packages(
     host: &impl Host,
     cwd: &Path,
@@ -228,21 +228,37 @@ async fn affected_packages(
             return Err(InvalidOutput::new("invalid repository-relative Git path").into());
         }
         let path = root.join(path);
-        // Repository-wide inputs outside a nested Cargo workspace can affect all of it.
+        // PR relevance favors avoiding unrelated work; history supplies broad coverage.
         // Ref: docs/design.md, Workflow preparation.
         if !path.starts_with(&workspace.root) {
+            continue;
+        }
+        // These workspace-root inputs control dependencies, compiler or build configuration
+        // across members. Other unowned paths must not implicitly select every benchmark.
+        if [
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain",
+            "rust-toolchain.toml",
+            ".cargo/config",
+            ".cargo/config.toml",
+        ]
+        .iter()
+        .any(|input| path == workspace.root.join(input))
+        {
             return Ok(None);
         }
         // A separate nested workspace is not part of this Cargo inventory. Resolve the
         // declared owner boundary so its test fixtures cannot become foreign package names.
-        let Some(directory) = workspace.package_directory(&path) else {
-            return Ok(None);
+        let Some((directory, name)) = workspace.package_owner(&path) else {
+            continue;
         };
-        match host.package(&workspace.root, directory)? {
-            Some(name) => {
-                owners.insert(name);
-            }
-            None => return Ok(None),
+        if let Some(name) = host.package(&workspace.root, directory)? {
+            owners.insert(name);
+        } else if directory == workspace.root {
+            // The detector treats the workspace root as workspace scope even when Cargo
+            // declares a root member. Its metadata identity preserves package/dependent scope.
+            owners.insert(name.to_owned());
         }
     }
     Ok(Some(owners))
