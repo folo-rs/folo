@@ -1,3 +1,8 @@
+---
+name: increment-versions
+description: Assess released changes, choose semantic version impacts, preview dependency effects, and apply the resulting cargo-release-plan version plan for a pull request. Use in configured repositories or for an explicitly requested standalone version-increment PR; does not authorize merge or publication.
+---
+
 # Scope
 
 Prepare the version changes for one pull request. Use configured mode in a
