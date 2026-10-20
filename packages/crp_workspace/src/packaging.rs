@@ -139,7 +139,7 @@ fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
     let pattern = pattern.trim_start_matches('/');
     if !anchored && pattern.ends_with('/') {
         let directory = pattern.trim_end_matches('/');
-        if !directory.contains('/') && path.split('/').any(|component| component == directory) {
+        if !directory.contains('/') {
             return true;
         }
     }
@@ -172,6 +172,8 @@ fn pattern_excludes_subtree(pattern: &str, path: &str) -> bool {
     }
     let anchored = pattern.starts_with('/');
     let pattern = pattern.trim_start_matches('/');
+    let directory_pattern = pattern.ends_with('/');
+    let pattern = pattern.trim_end_matches('/');
     let has_glob = pattern.contains('*')
         || pattern.contains('?')
         || pattern.contains('[')
@@ -182,7 +184,7 @@ fn pattern_excludes_subtree(pattern: &str, path: &str) -> bool {
     }
     let base = pattern
         .strip_suffix("/**")
-        .or_else(|| pattern.strip_suffix('/'))
+        .or_else(|| directory_pattern.then_some(pattern))
         .or_else(|| (!has_glob).then_some(pattern));
     base.is_some_and(|base| {
         let base = base.trim_end_matches('/');
@@ -318,6 +320,7 @@ mod tests {
         assert!(braces.may_release_path_or_descendant("tests/alias"));
         let nested_directory = rules(Some(&["src/**", "fixtures/"]), None).unwrap();
         assert!(nested_directory.may_release_path_or_descendant("tests/fixtures"));
+        assert!(nested_directory.may_release_path_or_descendant("alias"));
         assert!(!include.may_release_path_or_descendant("tests/broken"));
 
         let exclude = rules(None, Some(&["tests/excluded/**", "alias/ignored.txt"])).unwrap();
@@ -330,6 +333,8 @@ mod tests {
         assert!(negated.is_released("alias/keep.json"));
         let slashless = rules(None, Some(&["fixtures"])).unwrap();
         assert!(!slashless.may_release_path_or_descendant("tests/fixtures"));
+        let slashless_directory = rules(None, Some(&["fixtures/"])).unwrap();
+        assert!(!slashless_directory.may_release_path_or_descendant("tests/fixtures"));
         let mandatory = rules(None, Some(&["Cargo.toml", "data/**"])).unwrap();
         assert!(mandatory.may_release_path_or_descendant("Cargo.toml"));
         assert!(mandatory.may_release_path_or_descendant("data"));

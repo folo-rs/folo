@@ -474,17 +474,19 @@ fn slashless_excludes_prune_matching_nested_link_components() {
     stage_placeholder_symlink(&fixture, "pkg/tests/fixtures/loop", "loop");
     fixture.command(&["commit", "--quiet", "-m", "nested excluded link"]);
 
-    let rules = PackagingRules::new(None, Some(&["fixtures".to_string()])).unwrap();
-    let resources = BTreeMap::new();
-    let side = PackageSide {
-        dir: "pkg",
-        rules: &rules,
-        resources: &resources,
-        auto_readme: false,
-        case: PathCase::Sensitive,
-    };
+    for pattern in ["fixtures", "fixtures/"] {
+        let rules = PackagingRules::new(None, Some(&[pattern.to_string()])).unwrap();
+        let resources = BTreeMap::new();
+        let side = PackageSide {
+            dir: "pkg",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: false,
+            case: PathCase::Sensitive,
+        };
 
-    _ = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+        _ = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+    }
 }
 
 #[test]
@@ -597,6 +599,37 @@ fn unanchored_directory_includes_keep_nested_link_roots() {
     assert!(matches!(
         changed.as_slice(),
         [ChangedItem::Package { path, .. }] if path == "tests/fixtures/data.json"
+    ));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "compares an unanchored directory include below an alias root"
+)]
+fn unanchored_directory_includes_can_match_only_below_the_alias() {
+    let fixture = Repository::new();
+    fixture.write("shared/fixtures/data.json", b"before\n");
+    fixture.command(&["add", "shared/fixtures/data.json"]);
+    stage_placeholder_symlink(&fixture, "pkg/alias", "../shared");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fixture.write("shared/fixtures/data.json", b"after\n");
+
+    let rules =
+        PackagingRules::new(Some(&["src/**".to_string(), "fixtures/".to_string()]), None).unwrap();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, _, _, _) = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+
+    assert!(matches!(
+        changed.as_slice(),
+        [ChangedItem::Package { path, .. }] if path == "alias/fixtures/data.json"
     ));
 }
 

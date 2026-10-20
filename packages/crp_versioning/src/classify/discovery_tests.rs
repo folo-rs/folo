@@ -24,6 +24,23 @@ fn declared_resources_keep_the_first_archive_path_claim() {
 }
 
 #[test]
+fn expanded_children_preserve_recorded_case() {
+    let paths = [
+        "shared/Real/a.txt".to_string(),
+        "shared/real/link".to_string(),
+        "shared/REAL/nested/file".to_string(),
+    ];
+    assert_eq!(
+        direct_tracked_children(&paths, "shared/Real", &[], PathCase::Insensitive),
+        BTreeSet::from([
+            "shared/Real/a.txt".to_string(),
+            "shared/real/link".to_string(),
+            "shared/REAL/nested".to_string(),
+        ])
+    );
+}
+
+#[test]
 fn relative_symlink_targets_are_normalized_inside_the_workspace() {
     assert_eq!(
         resolve_symlink_target(

@@ -1922,7 +1922,14 @@ fn direct_tracked_children(
         .filter_map(|path| {
             let relative = case.relativize(path, directory)?;
             let child = relative.split('/').next()?;
-            (!child.is_empty()).then(|| join_git_rel(directory, child))
+            if child.is_empty() {
+                return None;
+            }
+            if relative == child {
+                return Some(path.clone());
+            }
+            let prefix = path.get(..path.len().checked_sub(relative.len())?)?;
+            Some(format!("{prefix}{child}"))
         })
         .collect()
 }
