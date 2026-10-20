@@ -75,6 +75,46 @@ fn prepare_accepts_a_tracked_symlink_fixture_in_a_placeholder_checkout() {
     assert_eq!(fs::read_to_string(retained).unwrap(), "target");
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "runs preparation against a tracked directory-link fixture"
+)]
+#[test]
+fn prepare_accepts_a_tracked_directory_link_fixture_in_a_placeholder_checkout() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/benchmark.json",
+        "benchmark\n",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/estimates.json",
+        "estimates\n",
+    );
+    fixture.write("packages/demo/tests/fixtures/cycle/alias_to_new", "new");
+    fixture.git(&["add", "-A"]);
+    let path = "packages/demo/tests/fixtures/cycle/alias_to_new";
+    let id = fixture.git(&["rev-parse", &format!(":{path}")]);
+    fixture.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},{}", id.trim(), path),
+    ]);
+    fixture.git(&["config", "core.symlinks", "false"]);
+    fixture.git(&["commit", "-m", "tracked directory-link fixture"]);
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+}
+
 #[cfg(unix)]
 #[cfg_attr(
     miri,
@@ -96,6 +136,41 @@ fn prepare_accepts_a_tracked_symlink_fixture_in_a_native_checkout() {
     )
     .unwrap();
     fixture.commit("tracked native symlink fixture");
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+}
+
+#[cfg(unix)]
+#[cfg_attr(miri, ignore = "runs preparation against a real native directory link")]
+#[test]
+fn prepare_accepts_a_tracked_directory_link_fixture_in_a_native_checkout() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/benchmark.json",
+        "benchmark\n",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/estimates.json",
+        "estimates\n",
+    );
+    symlink(
+        "new",
+        fixture
+            .path()
+            .join("packages/demo/tests/fixtures/cycle/alias_to_new"),
+    )
+    .unwrap();
+    fixture.commit("tracked native directory-link fixture");
 
     let prepared = prepare(&fixture);
 

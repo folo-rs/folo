@@ -273,6 +273,70 @@ fn placeholder_symlink_chains_use_terminal_content_and_mode() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "compares a tracked directory-link fixture")]
+fn directory_links_duplicate_terminal_files_under_the_archive_alias() {
+    let fixture = Repository::new();
+    fixture.write("pkg/cycle/new/benchmark.json", b"before\n");
+    fixture.write("pkg/cycle/new/estimates.json", b"estimates\n");
+    fixture.command(&["add", "pkg/cycle/new"]);
+    stage_placeholder_symlink(&fixture, "pkg/cycle/alias_to_new", "new");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fixture.write("pkg/cycle/new/benchmark.json", b"after\n");
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, patch, stat, _) =
+        diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+    let changed: BTreeSet<_> = changed
+        .into_iter()
+        .map(|change| match change {
+            ChangedItem::Package { path, .. } => path,
+            _ => panic!("file comparison only produces package changes"),
+        })
+        .collect();
+
+    assert_eq!(
+        changed,
+        BTreeSet::from([
+            "cycle/alias_to_new/benchmark.json".to_string(),
+            "cycle/new/benchmark.json".to_string(),
+        ])
+    );
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (2, 2, 2));
+    assert_eq!(patch.matches("-before\n+after\n").count(), 2);
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares a tracked cyclic directory-link fixture")]
+fn directory_link_cycles_are_rejected_without_recursive_traversal() {
+    let fixture = Repository::new();
+    fixture.write("pkg/cycle/new/benchmark.json", b"benchmark\n");
+    fixture.command(&["add", "pkg/cycle/new/benchmark.json"]);
+    stage_placeholder_symlink(&fixture, "pkg/cycle/alias_to_new", "new");
+    stage_placeholder_symlink(&fixture, "pkg/cycle/new/back_to_cycle", "..");
+    fixture.command(&["commit", "--quiet", "-m", "directory cycle"]);
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+
+    _ = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "compares real Git symlink modes and work-tree files")]
 fn changing_a_link_pointer_without_changing_its_payload_is_unchanged() {
     let fixture = Repository::new();
@@ -323,29 +387,19 @@ fn symlink_cycles_are_rejected_without_traversal() {
 #[test]
 #[cfg_attr(miri, ignore = "compares real Git symlink modes and filesystem state")]
 fn symlink_targets_must_be_present_tracked_regular_files() {
-    for (target, expected) in [
-        ("../shared/missing", "not a tracked present file"),
-        ("../shared/dir", "not a regular file"),
-    ] {
-        let fixture = Repository::new();
-        if target.ends_with("/dir") {
-            fixture.write("shared/dir/file", b"tracked\n");
-            fixture.command(&["add", "shared/dir/file"]);
-        }
-        stage_placeholder_symlink(&fixture, "pkg/link", target);
-        fixture.command(&["commit", "--quiet", "-m", "invalid target"]);
-        let rules = PackagingRules::default();
-        let resources = BTreeMap::new();
-        let side = PackageSide {
-            dir: "pkg",
-            rules: &rules,
-            resources: &resources,
-            auto_readme: false,
-            case: PathCase::Sensitive,
-        };
-        let error = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
-        assert!(error.to_string().contains(expected));
-    }
+    let fixture = Repository::new();
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/missing");
+    fixture.command(&["commit", "--quiet", "-m", "invalid target"]);
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    _ = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
 
     let fixture = Repository::new();
     fixture.write("shared/target", b"tracked\n");

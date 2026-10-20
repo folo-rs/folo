@@ -715,7 +715,10 @@ tracked links within the workspace. A visited-path set detects cycles without a
 depth threshold. Historical targets come from tree modes and link blobs;
 work-tree targets combine effective Git modes with native-link or placeholder
 observations. The terminal regular file then supplies the blob identity and
-executable mode while the original link retains its archive path.
+executable mode while the original link retains its archive path. A terminal
+directory enumerates its direct tracked children and recursively maps every
+terminal file beneath the link's archive prefix. The active directory set rejects
+links back into a directory already being expanded.
 
 This resolution happens before work-tree hashing. `git hash-object` receives only
 terminal regular files, so filters and line endings preserve the ordinary

@@ -23,13 +23,17 @@ executable permissions.
 
 Git-tracked symbolic links are assessed by their package payload rather than by
 the bytes Git stores for the link itself. The link keeps its path in the package,
-while the terminal target supplies the content and executable mode. The same
-result is used when a Unix checkout has a native link and when a Windows checkout
-materializes the link as a regular target-text placeholder.
+while a terminal file supplies content and executable mode. A terminal directory
+duplicates its tracked descendants beneath the link path, matching Cargo's
+archive layout. The same result is used when a Unix checkout has a native link
+and when a Windows checkout materializes the link as a regular target-text
+placeholder.
 
-Supported links use UTF-8 relative targets, remain inside the selected workspace
-at every hop, and terminate at a Git-tracked regular file. A cycle, absolute or
-escaping target, missing or untracked target, directory, or non-portable target
+Supported links use UTF-8 relative targets and remain inside the selected
+workspace at every hop. They terminate at a Git-tracked regular file or expand a
+directory's tracked descendants recursively. Active-directory tracking rejects
+cycles without relying on a depth threshold. An absolute or escaping target,
+missing or untracked target, unsupported filesystem object, or non-portable target
 syntax is an assessment error with remediation in the diagnostic. Targets must
 also be canonical relative spellings: a trailing separator or parent traversal
 after a named component is rejected rather than guessed. The tool rejects
@@ -39,7 +43,7 @@ filesystem state.
 The exception is specifically for released package paths. Workspace manifests,
 the lockfile, Cargo configuration and untracked source inputs must remain ordinary
 files. Preparation fingerprints the validated link kind, each intermediate link
-and the terminal tracked file, so changing a target or replacing a regular file
+and all terminal tracked files, so changing a target or replacing a regular file
 with a link invalidates previously prepared evidence.
 
 `Cargo.toml` is packaged content. Even a formatting-only change to a package

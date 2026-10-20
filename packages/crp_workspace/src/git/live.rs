@@ -43,6 +43,11 @@ impl Default for LiveObservations {
 }
 
 impl LiveObservations {
+    #[must_use]
+    pub fn all_tracked(&self) -> &[String] {
+        &self.tracked
+    }
+
     #[cfg_attr(test, mutants::skip)] // Native acquisition; acquire_with and selection are pure.
     pub fn acquire(
         git: &GitRepo,

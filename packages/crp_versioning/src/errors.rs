@@ -405,7 +405,7 @@ impl RefUnwindSafe for MissingSymlinkTargetError {}
 /// A released symbolic link terminates at a non-regular path.
 #[ohno::error]
 #[display(
-    "Package '{}' releases symbolic link '{}' whose target '{}' is not a regular file; end the chain at a tracked regular file",
+    "Package '{}' releases symbolic link '{}' whose target '{}' is neither a regular file nor a tracked directory; use a tracked file or directory inside the workspace",
     package.quoted(),
     path.quoted(),
     target.quoted()

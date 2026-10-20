@@ -578,6 +578,8 @@ impl GitRepo {
         }
         if metadata.is_file() {
             Ok(WorkTreePath::Regular)
+        } else if metadata.is_dir() {
+            Ok(WorkTreePath::Directory)
         } else {
             Ok(WorkTreePath::Other)
         }
@@ -831,6 +833,7 @@ pub enum WorkTreeSymlinkTarget {
 pub enum WorkTreePath {
     Missing,
     Regular,
+    Directory,
     Symlink(WorkTreeSymlinkTarget),
     Other,
 }
