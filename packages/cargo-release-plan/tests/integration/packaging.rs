@@ -199,6 +199,28 @@ fn prepare_ignores_definitively_excluded_broken_and_cyclic_links() {
     assert!(report.contains("\"status\": \"unchanged\""));
 }
 
+#[cfg_attr(miri, ignore = "prepares an anchored allow-list beside excluded links")]
+#[test]
+fn prepare_ignores_broken_links_outside_anchored_allow_list() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"/src/\", \"/README.md\"]",
+    );
+    fixture.write("packages/demo/README.md", "readme\n");
+    fixture.write("packages/demo/tests/broken", "missing");
+    stage_placeholder_link(&fixture, "packages/demo/tests/broken");
+    fixture.write("packages/demo/tests/loop", "loop");
+    stage_placeholder_link(&fixture, "packages/demo/tests/loop");
+    fixture.commit("excluded links beside anchored allow-list");
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+}
+
 #[cfg(unix)]
 #[cfg_attr(
     miri,

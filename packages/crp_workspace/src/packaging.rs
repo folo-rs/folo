@@ -152,7 +152,7 @@ fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
             return true;
         }
     }
-    if !pattern.contains('/') {
+    if !anchored && !pattern.contains('/') {
         return true;
     }
 
@@ -336,6 +336,8 @@ mod tests {
         let nested_directory = rules(Some(&["src/**", "fixtures/"]), None).unwrap();
         assert!(nested_directory.may_release_path_or_descendant("tests/fixtures"));
         assert!(nested_directory.may_release_path_or_descendant("alias"));
+        let anchored_file = rules(Some(&["/src/", "/README.md"]), None).unwrap();
+        assert!(!anchored_file.may_release_path_or_descendant("tests/broken"));
         assert!(!include.may_release_path_or_descendant("tests/broken"));
 
         let exclude = rules(None, Some(&["tests/excluded/**", "alias/ignored.txt"])).unwrap();
