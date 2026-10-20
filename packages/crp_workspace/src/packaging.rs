@@ -113,14 +113,14 @@ impl PackagingRules {
         {
             return false;
         }
+        if self.is_released(path) {
+            return true;
+        }
         match &self.selection {
-            Selection::AllowList(_) => {
-                self.is_released(path)
-                    || self
-                        .patterns
-                        .iter()
-                        .any(|pattern| pattern_may_match_at_or_below(pattern, path))
-            }
+            Selection::AllowList(_) => self
+                .patterns
+                .iter()
+                .any(|pattern| pattern_may_match_at_or_below(pattern, path)),
             Selection::DenyList(_) => {
                 self.patterns.iter().any(|pattern| pattern.starts_with('!'))
                     || !self
@@ -142,7 +142,10 @@ fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
         return true;
     }
 
-    let raw_prefix = pattern.split(['*', '?', '[']).next().unwrap_or_default();
+    let raw_prefix = pattern
+        .split(['*', '?', '[', '{', '\\'])
+        .next()
+        .unwrap_or_default();
     let prefix = if raw_prefix == pattern || raw_prefix.ends_with('/') {
         raw_prefix.trim_end_matches('/')
     } else {
@@ -162,14 +165,20 @@ fn pattern_excludes_subtree(pattern: &str, path: &str) -> bool {
     if pattern.starts_with('!') {
         return false;
     }
+    let anchored = pattern.starts_with('/');
     let pattern = pattern.trim_start_matches('/');
+    let has_glob = pattern.contains('*')
+        || pattern.contains('?')
+        || pattern.contains('[')
+        || pattern.contains('{')
+        || pattern.contains('\\');
+    if !anchored && !pattern.contains('/') && !has_glob {
+        return path.split('/').any(|component| component == pattern);
+    }
     let base = pattern
         .strip_suffix("/**")
         .or_else(|| pattern.strip_suffix('/'))
-        .or_else(|| {
-            (!pattern.contains('*') && !pattern.contains('?') && !pattern.contains('['))
-                .then_some(pattern)
-        });
+        .or_else(|| (!has_glob).then_some(pattern));
     base.is_some_and(|base| {
         let base = base.trim_end_matches('/');
         path == base
@@ -300,14 +309,23 @@ mod tests {
         assert!(include.may_release_path_or_descendant("alias"));
         let partial = rules(Some(&["tests/alias*/*.json"]), None).unwrap();
         assert!(partial.may_release_path_or_descendant("tests/alias_to_new"));
+        let braces = rules(Some(&["tests/{alias,other}/**"]), None).unwrap();
+        assert!(braces.may_release_path_or_descendant("tests/alias"));
         assert!(!include.may_release_path_or_descendant("tests/broken"));
 
         let exclude = rules(None, Some(&["tests/excluded/**", "alias/ignored.txt"])).unwrap();
-        assert!(!exclude.may_release_path_or_descendant("tests/excluded"));
+        assert!(exclude.may_release_path_or_descendant("tests/excluded"));
+        let exact_exclude = rules(None, Some(&["tests/excluded"])).unwrap();
+        assert!(!exact_exclude.may_release_path_or_descendant("tests/excluded"));
         assert!(exclude.may_release_path_or_descendant("alias"));
         let negated = rules(None, Some(&["alias", "!alias/keep.json"])).unwrap();
         assert!(negated.may_release_path_or_descendant("alias"));
         assert!(negated.is_released("alias/keep.json"));
+        let slashless = rules(None, Some(&["fixtures"])).unwrap();
+        assert!(!slashless.may_release_path_or_descendant("tests/fixtures"));
+        let mandatory = rules(None, Some(&["Cargo.toml", "data/**"])).unwrap();
+        assert!(mandatory.may_release_path_or_descendant("Cargo.toml"));
+        assert!(mandatory.may_release_path_or_descendant("data"));
     }
 
     #[test]

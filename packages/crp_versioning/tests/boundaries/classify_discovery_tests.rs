@@ -400,6 +400,94 @@ fn excluded_recursive_broken_and_cyclic_links_are_pruned_before_resolution() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "compares mandatory and regular paths under deny rules")]
+fn subtree_pruning_preserves_mandatory_and_explicitly_released_files() {
+    let fixture = Repository::new();
+    fixture.write("pkg/Cargo.toml", b"before manifest\n");
+    fixture.write("pkg/data", b"before data\n");
+    fixture.command(&["add", "pkg"]);
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fixture.write("pkg/Cargo.toml", b"after manifest\n");
+    fixture.write("pkg/data", b"after data\n");
+
+    let rules = PackagingRules::new(
+        None,
+        Some(&["Cargo.toml".to_string(), "data/**".to_string()]),
+    )
+    .unwrap();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, _, _, _) = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+    let changed: BTreeSet<_> = changed
+        .into_iter()
+        .map(|change| match change {
+            ChangedItem::Package { path, .. } => path,
+            _ => panic!("file comparison only produces package changes"),
+        })
+        .collect();
+
+    assert_eq!(
+        changed,
+        BTreeSet::from(["Cargo.toml".to_string(), "data".to_string()])
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares a directory link selected by brace syntax")]
+fn brace_include_patterns_keep_possible_directory_link_roots() {
+    let fixture = Repository::new();
+    fixture.write("pkg/tests/real/file.json", b"before\n");
+    fixture.command(&["add", "pkg/tests/real/file.json"]);
+    stage_placeholder_symlink(&fixture, "pkg/tests/alias", "real");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fixture.write("pkg/tests/real/file.json", b"after\n");
+
+    let rules = PackagingRules::new(Some(&["tests/{alias,other}/**".to_string()]), None).unwrap();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, _, _, _) = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+
+    assert!(matches!(
+        changed.as_slice(),
+        [ChangedItem::Package { path, .. }] if path == "tests/alias/file.json"
+    ));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares a nested slashless-excluded cyclic link")]
+fn slashless_excludes_prune_matching_nested_link_components() {
+    let fixture = Repository::new();
+    fixture.write("pkg/src/lib.rs", b"pub fn value() {}\n");
+    fixture.command(&["add", "pkg/src/lib.rs"]);
+    stage_placeholder_symlink(&fixture, "pkg/tests/fixtures/loop", "loop");
+    fixture.command(&["commit", "--quiet", "-m", "nested excluded link"]);
+
+    let rules = PackagingRules::new(None, Some(&["fixtures".to_string()])).unwrap();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+
+    _ = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "compares modes and nested links in a tracked directory outside the package"
@@ -428,6 +516,33 @@ fn outside_directory_targets_acquire_child_modes_and_links() {
     assert!(changed.is_empty());
     assert!(patch.is_empty());
     assert_eq!((stat.files, stat.insertions, stat.deletions), (0, 0, 0));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "replaces a tracked directory with an untracked regular file"
+)]
+fn inferred_directory_targets_reject_untracked_file_replacements() {
+    let fixture = Repository::new();
+    fixture.write("shared/dir/old.txt", b"old\n");
+    fixture.command(&["add", "shared/dir/old.txt"]);
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/dir");
+    fixture.command(&["commit", "--quiet", "-m", "directory target"]);
+    fs::remove_dir_all(fixture.path().join("shared/dir")).unwrap();
+    fixture.write("shared/dir", b"untracked replacement\n");
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+
+    _ = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
 }
 
 #[test]

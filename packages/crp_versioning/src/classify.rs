@@ -1725,6 +1725,7 @@ fn resolve_work_node(
     let mut followed_link = false;
     let mut visited = HashSet::new();
     let mut link_inputs = BTreeSet::new();
+    let mut directory_required = false;
     loop {
         let modes = if (first && use_initial_modes) || modes_complete {
             None
@@ -1737,7 +1738,11 @@ fn resolve_work_node(
                 to_git_separators(&ancestor.to_string_lossy(), MAIN_SEPARATOR).into_owned();
             return Err(SymlinkedAncestorError::new(name, released_path, ancestor).into());
         }
-        match git.work_tree_path(&current, modes.is_symlink(&current))? {
+        let path = git.work_tree_path(&current, modes.is_symlink(&current))?;
+        if directory_required && !matches!(path, WorkTreePath::Directory) {
+            return Err(NonRegularSymlinkTargetError::new(name, released_path, &current).into());
+        }
+        match path {
             WorkTreePath::Missing if followed_link => {
                 return Err(MissingSymlinkTargetError::new(name, released_path, &current).into());
             }
@@ -1779,7 +1784,9 @@ fn resolve_work_node(
                     git.prefix(),
                     case,
                 )?;
-                current = recorded_work_target(name, released_path, &requested, tracked, case)?;
+                let target = recorded_work_target(name, released_path, &requested, tracked, case)?;
+                current = target.path;
+                directory_required = target.directory_only;
                 first = false;
             }
         }
@@ -1869,12 +1876,24 @@ fn recorded_work_target(
     requested: &str,
     tracked: &[String],
     case: PathCase,
-) -> Result<String, AppError> {
+) -> Result<RecordedWorkTarget, AppError> {
     match case.recorded_path(tracked, requested) {
-        Some(path) => Ok(path.to_string()),
+        Some(path) => Ok(RecordedWorkTarget {
+            path: path.to_string(),
+            directory_only: false,
+        }),
         None => recorded_directory(tracked, requested, case)
+            .map(|path| RecordedWorkTarget {
+                path,
+                directory_only: true,
+            })
             .ok_or_else(|| MissingSymlinkTargetError::new(name, released_path, requested).into()),
     }
+}
+
+struct RecordedWorkTarget {
+    path: String,
+    directory_only: bool,
 }
 
 fn recorded_directory(paths: &[String], requested: &str, case: PathCase) -> Option<String> {
