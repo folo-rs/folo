@@ -808,6 +808,11 @@ non-canonical traversal such as `name/../target`, and platform-dependent target
 syntax stop assessment with a condition-specific diagnostic. This reconstructs
 the intended package payload without traversing arbitrary filesystem state.
 
+This support applies only to links selected as package content. Workspace
+manifests, lockfiles, Cargo configuration and untracked build inputs remain
+ordinary files; they cannot use package-link handling to influence preparation
+or compatibility from outside the captured workspace.
+
 ### Relevant lockfile closures
 
 Cargo includes a generated lockfile in every package artifact. The lockfile does

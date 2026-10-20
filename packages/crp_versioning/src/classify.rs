@@ -1310,6 +1310,7 @@ struct ReleasedFileIdentity {
 struct ResolvedWorkFile {
     path: String,
     executable: bool,
+    inputs: BTreeSet<String>,
 }
 
 /// Historical identities after safely dereferencing released symbolic links.
@@ -1457,7 +1458,9 @@ fn resolve_work_file(
     let mut first = true;
     let mut followed_link = false;
     let mut visited = HashSet::new();
+    let mut inputs = BTreeSet::new();
     loop {
+        inputs.insert(current.clone());
         let modes = if first {
             None
         } else {
@@ -1482,6 +1485,7 @@ fn resolve_work_file(
             WorkTreePath::Other | WorkTreePath::Regular => {
                 return Ok(Some(ResolvedWorkFile {
                     executable: modes.is_executable(&current),
+                    inputs,
                     path: current,
                 }));
             }
@@ -1505,6 +1509,58 @@ fn resolve_work_file(
             }
         }
     }
+}
+
+/// Validated package-link paths and terminal dependencies required by captured preparation.
+pub(crate) fn captured_package_link_inputs(
+    git: &GitRepo,
+    packages: &[WorkPackage],
+    case: PathCase,
+) -> Result<BTreeSet<PathBuf>, AppError> {
+    let mut captured = BTreeSet::new();
+    let mut ancestors = WorkTreeAncestors::default();
+    for package in packages {
+        let directory = join_git_rel(git.prefix(), &package.manifest.directory);
+        let resources = resolve_resources(&package.manifest, &directory, git.prefix());
+        let side = PackageSide {
+            dir: &directory,
+            rules: &package.manifest.packaging,
+            resources: &resources,
+            auto_readme: package.manifest.auto_readme,
+            case,
+        };
+        let resource_paths: Vec<&str> = resources.values().map(String::as_str).collect();
+        let tracked = git.tracked_paths(&resource_paths, case)?;
+        let tracked_resources = tracked_resources(&side, &tracked);
+        let content = released_in_work_tree(git, &side, &tracked_resources, None)?;
+        let modes = observed_work_tree_modes(git, &side, &tracked_resources, None)?;
+        let mut seen = BTreeSet::new();
+        for source in content.released.values() {
+            if !seen.insert(source) {
+                continue;
+            }
+            if !matches!(
+                git.work_tree_path(source, modes.is_symlink(source))?,
+                WorkTreePath::Symlink(_)
+            ) {
+                continue;
+            }
+            let Some(resolved) = resolve_work_file(
+                git,
+                &package.manifest.name,
+                source,
+                &modes,
+                None,
+                case,
+                &mut ancestors,
+            )?
+            else {
+                continue;
+            };
+            captured.extend(resolved.inputs.into_iter().map(PathBuf::from));
+        }
+    }
+    Ok(captured)
 }
 
 fn observed_path_modes(
@@ -1594,7 +1650,7 @@ fn resolve_symlink_target(
     if symlink_target_is_absolute(target) {
         return Err(AbsoluteSymlinkTargetError::new(name, released_path, target).into());
     }
-    if target.ends_with('/') {
+    if target == "." || target.ends_with('/') || target.ends_with("/.") {
         return Err(NonCanonicalSymlinkTargetError::new(name, released_path, target).into());
     }
     let mut components: Vec<&str> = link_path

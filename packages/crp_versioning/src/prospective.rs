@@ -14,7 +14,7 @@ use crp_workspace::command::{run_capture, run_capture_input, run_capture_ok, run
 use crp_workspace::metadata::{cargo_manifest_path, load_tracked_work_tree};
 use ohno::AppError;
 
-use crate::resolved::{Artifact, Inputs, canonical, relative};
+use crate::resolved::{Artifact, Inputs, UnsupportedInput, canonical, relative};
 use crate::{ReadFileError, WriteFileError, quote_path};
 
 /// Owns a clone until it is discarded or retained for final compatibility evidence.
@@ -94,7 +94,12 @@ impl Prospective {
                 fs::create_dir_all(parent)
                     .map_err(|error| WriteFileError::caused_by(parent, error))?;
             }
-            Self::copy_input(&source, &destination, &metadata)?;
+            Self::copy_input(
+                &source,
+                &destination,
+                &metadata,
+                inputs.symlink_inputs.contains(path),
+            )?;
         }
         Ok(prospective)
     }
@@ -133,8 +138,12 @@ impl Prospective {
         source: &Path,
         destination: &Path,
         metadata: &fs::Metadata,
+        allow_symlink: bool,
     ) -> Result<(), AppError> {
         if metadata.file_type().is_symlink() {
+            if !allow_symlink {
+                return Err(UnsupportedInput::new(source).into());
+            }
             let target =
                 fs::read_link(source).map_err(|error| ReadFileError::caused_by(source, error))?;
             Self::create_symlink(source, &target, destination)

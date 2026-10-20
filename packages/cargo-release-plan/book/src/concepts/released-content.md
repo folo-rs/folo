@@ -36,6 +36,12 @@ after a named component is rejected rather than guessed. The tool rejects
 symlinked parent directories and never follows a released link into arbitrary
 filesystem state.
 
+The exception is specifically for released package paths. Workspace manifests,
+the lockfile, Cargo configuration and untracked source inputs must remain ordinary
+files. Preparation fingerprints the validated link kind, each intermediate link
+and the terminal tracked file, so changing a target or replacing a regular file
+with a link invalidates previously prepared evidence.
+
 `Cargo.toml` is packaged content. Even a formatting-only change to a package
 manifest requires assessment; the tool does not maintain a second policy that
 decides which lines of that file are important.

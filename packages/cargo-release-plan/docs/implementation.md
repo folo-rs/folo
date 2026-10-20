@@ -972,7 +972,16 @@ carry an alternative file overlay: both semantic grading and prospective cloning
 must start from the live state that preparation captured. Fingerprints encode a
 tracked link's unfollowed target text, not its dereferenced bytes, and reject
 symlinked parent directories. Native links and `core.symlinks=false` placeholders
-therefore have one captured identity.
+therefore have one captured identity. The encoded file kind distinguishes that
+identity from a regular file containing the same text, so an unstaged type change
+invalidates evidence.
+
+Only links selected by a package's released-content rules receive this treatment,
+after the bounded resolver validates their complete tracked chain. Resolver
+control files (`Cargo.toml`, `Cargo.lock` and Cargo configuration) and untracked
+source inputs retain the ordinary-file requirement. Validated intermediate links
+and terminal files join the captured path set so later target changes cannot
+reuse stale evidence.
 
 Preview uses a disposable prospective workspace so version and requirement
 rewrites never become original planning inputs. Each iteration derives its

@@ -1,6 +1,8 @@
 //! External acquisition for resolved.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -109,6 +111,54 @@ fn capture_includes_local_sources_without_turning_them_into_release_reasons() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "creates real symbolic links in a captured Cargo workspace"
+)]
+fn capture_rejects_unvalidated_source_links() {
+    let directory = capture_fixture("Cargo.toml");
+    fs::write(
+        directory.path().join("generated.rs"),
+        "pub fn generated() {}\n",
+    )
+    .unwrap();
+    symlink("../generated.rs", directory.path().join("src/generated.rs")).unwrap();
+
+    let error = Inputs::capture(&directory.path().join("Cargo.toml"), Some("HEAD")).unwrap_err();
+
+    assert!(error.find_source::<UnsupportedInput>().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "changes a tracked regular file into a real symbolic link"
+)]
+fn capture_fingerprint_distinguishes_regular_files_from_package_links() {
+    let directory = capture_fixture("Cargo.toml");
+    fs::create_dir_all(directory.path().join("tests")).unwrap();
+    fs::write(directory.path().join("tests/target"), "target payload\n").unwrap();
+    fs::write(directory.path().join("tests/link"), "target").unwrap();
+    git(directory.path(), &["add", "tests"]);
+    git(
+        directory.path(),
+        &["commit", "--quiet", "-m", "tracked fixture"],
+    );
+    let manifest = directory.path().join("Cargo.toml");
+    let regular = Inputs::capture(&manifest, Some("HEAD")).unwrap();
+    fs::remove_file(directory.path().join("tests/link")).unwrap();
+    symlink("target", directory.path().join("tests/link")).unwrap();
+
+    let linked = Inputs::capture(&manifest, Some("HEAD")).unwrap();
+
+    assert_eq!(regular.index, linked.index);
+    assert_ne!(regular.digest, linked.digest);
+    assert!(linked.symlink_inputs.contains(Path::new("tests/link")));
+}
+
 #[test]
 #[cfg_attr(
     miri,
@@ -143,6 +193,7 @@ fn inputs() -> Inputs {
             .into_iter()
             .map(PathBuf::from)
             .collect(),
+        symlink_inputs: BTreeSet::new(),
         digest: "initial".to_owned(),
     }
 }
