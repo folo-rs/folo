@@ -484,6 +484,7 @@ mod tests {
             index: String::new(),
             paths: BTreeSet::new(),
             symlink_inputs: BTreeSet::new(),
+            directory_inputs: BTreeSet::new(),
             digest: "digest".into(),
         };
         for stage in [PlanStage::Proposed, PlanStage::Expanded] {

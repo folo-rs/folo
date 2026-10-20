@@ -1351,6 +1351,7 @@ struct ResolvedWorkFile {
 struct ResolvedWorkContent {
     files: BTreeMap<String, ResolvedWorkFile>,
     link_inputs: BTreeSet<String>,
+    directory_inputs: BTreeSet<String>,
 }
 
 enum HistoricalResolvedNode {
@@ -1566,6 +1567,7 @@ fn resolved_work_files(
     selected.sort_unstable_by(|left, right| left.0.cmp(right.0));
     let mut resolved = BTreeMap::new();
     let mut link_inputs = BTreeSet::new();
+    let mut directory_inputs = BTreeSet::new();
     let mut ancestors = WorkTreeAncestors::default();
     for (archive_path, source_path) in selected {
         expand_work_released_path(
@@ -1584,12 +1586,14 @@ fn resolved_work_files(
             true,
             &mut BTreeSet::new(),
             &mut link_inputs,
+            &mut directory_inputs,
             &mut resolved,
         )?;
     }
     Ok(ResolvedWorkContent {
         files: resolved,
         link_inputs,
+        directory_inputs,
     })
 }
 
@@ -1613,6 +1617,7 @@ fn expand_work_released_path(
     use_initial_modes: bool,
     active_directories: &mut BTreeSet<String>,
     validated_links: &mut BTreeSet<String>,
+    validated_directories: &mut BTreeSet<String>,
     resolved: &mut BTreeMap<String, ResolvedWorkFile>,
 ) -> Result<(), AppError> {
     match resolve_work_node(
@@ -1636,6 +1641,7 @@ fn expand_work_released_path(
         }
         Some(ResolvedWorkNode::Directory { path, link_inputs }) => {
             validated_links.extend(link_inputs);
+            validated_directories.insert(path.clone());
             if !active_directories.insert(path.clone()) {
                 return Err(SymlinkCycleError::new(name, source_path, &path).into());
             }
@@ -1657,6 +1663,7 @@ fn expand_work_released_path(
                     false,
                     active_directories,
                     validated_links,
+                    validated_directories,
                     resolved,
                 )?;
             }
@@ -1760,14 +1767,20 @@ fn resolve_work_node(
 }
 
 /// Validated package-link paths and terminal dependencies required by captured preparation.
+pub(crate) struct CapturedPackageLinkInputs {
+    pub links: BTreeSet<PathBuf>,
+    pub directories: BTreeSet<PathBuf>,
+}
+
 pub(crate) fn captured_package_link_inputs(
     git: &GitRepo,
     packages: &[WorkPackage],
     tracked: &[String],
     modes: &WorkTreeModes,
     case: PathCase,
-) -> Result<BTreeSet<PathBuf>, AppError> {
-    let mut captured = BTreeSet::new();
+) -> Result<CapturedPackageLinkInputs, AppError> {
+    let mut links = BTreeSet::new();
+    let mut directories = BTreeSet::new();
     for package in packages {
         let directory = join_git_rel(git.prefix(), &package.manifest.directory);
         let resources = resolve_resources(&package.manifest, &directory, git.prefix());
@@ -1809,9 +1822,10 @@ pub(crate) fn captured_package_link_inputs(
             case,
             true,
         )?;
-        captured.extend(resolved.link_inputs.into_iter().map(PathBuf::from));
+        links.extend(resolved.link_inputs.into_iter().map(PathBuf::from));
+        directories.extend(resolved.directory_inputs.into_iter().map(PathBuf::from));
     }
-    Ok(captured)
+    Ok(CapturedPackageLinkInputs { links, directories })
 }
 
 fn observed_path_modes(

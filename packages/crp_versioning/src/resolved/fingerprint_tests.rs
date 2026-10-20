@@ -6,6 +6,7 @@ fn regular() -> InputMetadata {
     InputMetadata {
         regular: true,
         symlink: false,
+        directory: false,
         #[cfg(unix)]
         executable: false,
     }
@@ -22,6 +23,7 @@ fn encode(
         replacement,
         &WorkTreeModes::default(),
         false,
+        false,
     )
 }
 
@@ -31,12 +33,18 @@ fn encode_with_modes(
     replacement: Option<Vec<u8>>,
     modes: &WorkTreeModes,
     allow_symlink: bool,
+    allow_directory: bool,
 ) -> Result<Vec<u8>, AppError> {
     let root = Path::new("root");
     let path = PathBuf::from("input");
     let mut metadata = Some(metadata);
     let contents = RefCell::new(Some(contents));
     let symlink_inputs = if allow_symlink {
+        BTreeSet::from([path.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    let directory_inputs = if allow_directory {
         BTreeSet::from([path.clone()])
     } else {
         BTreeSet::new()
@@ -50,6 +58,7 @@ fn encode_with_modes(
         &PathIdentity::new(root, &|_| panic!("exact names require no probe")),
         modes,
         &symlink_inputs,
+        &directory_inputs,
         |path| {
             assert_eq!(path, root.join("input"));
             metadata.take().unwrap()
@@ -94,6 +103,7 @@ fn replacements_do_not_admit_directories() {
     let metadata = InputMetadata {
         regular: false,
         symlink: false,
+        directory: true,
         #[cfg(unix)]
         executable: false,
     };
@@ -106,6 +116,7 @@ fn native_and_placeholder_symlinks_encode_the_same_target_bytes() {
     let native = InputMetadata {
         regular: false,
         symlink: true,
+        directory: false,
         #[cfg(unix)]
         executable: false,
     };
@@ -119,10 +130,18 @@ fn native_and_placeholder_symlinks_encode_the_same_target_bytes() {
         None,
         &WorkTreeModes::default(),
         true,
+        false,
     )
     .unwrap();
-    let placeholder =
-        encode_with_modes(Ok(placeholder), Ok(b"target".to_vec()), None, &modes, true).unwrap();
+    let placeholder = encode_with_modes(
+        Ok(placeholder),
+        Ok(b"target".to_vec()),
+        None,
+        &modes,
+        true,
+        false,
+    )
+    .unwrap();
     assert_eq!(native, placeholder);
     assert_ne!(
         native,
@@ -135,11 +154,32 @@ fn unvalidated_symlinks_remain_unsupported_inputs() {
     let native = InputMetadata {
         regular: false,
         symlink: true,
+        directory: false,
         #[cfg(unix)]
         executable: false,
     };
     let error = encode(Ok(native), Ok(b"target".to_vec()), None).unwrap_err();
     assert!(error.find_source::<UnsupportedInput>().is_some());
+}
+
+#[test]
+fn validated_directories_encode_presence_without_contents() {
+    let directory = InputMetadata {
+        regular: false,
+        symlink: false,
+        directory: true,
+        #[cfg(unix)]
+        executable: false,
+    };
+    encode_with_modes(
+        Ok(directory),
+        Err(ErrorKind::Other.into()),
+        None,
+        &WorkTreeModes::default(),
+        false,
+        true,
+    )
+    .unwrap();
 }
 
 #[test]

@@ -192,6 +192,7 @@ fn inputs() -> Inputs {
             .map(PathBuf::from)
             .collect(),
         symlink_inputs: BTreeSet::new(),
+        directory_inputs: BTreeSet::new(),
         digest: "initial".to_owned(),
     }
 }

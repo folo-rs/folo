@@ -984,7 +984,10 @@ after the bounded resolver validates their complete tracked chain. Resolver
 control files (`Cargo.toml`, `Cargo.lock` and Cargo configuration) and untracked
 source inputs retain the ordinary-file requirement. Validated intermediate links
 and terminal files join the captured path set so later target changes cannot
-reuse stale evidence.
+reuse stale evidence. Validated target directories have their own fingerprint
+kind and are recreated in the prospective workspace even when no terminal file
+survives, preserving empty directory-link expansions across preparation and
+preview.
 
 Preview uses a disposable prospective workspace so version and requirement
 rewrites never become original planning inputs. Each iteration derives its

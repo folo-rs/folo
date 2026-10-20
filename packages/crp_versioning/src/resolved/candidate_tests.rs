@@ -15,6 +15,7 @@ fn inputs() -> Inputs {
         index: "100644 blob 0\tCargo.toml\0".to_owned(),
         paths: BTreeSet::from([PathBuf::from("Cargo.toml"), PathBuf::from("src/lib.rs")]),
         symlink_inputs: BTreeSet::new(),
+        directory_inputs: BTreeSet::new(),
         digest: "initial".to_owned(),
     }
 }

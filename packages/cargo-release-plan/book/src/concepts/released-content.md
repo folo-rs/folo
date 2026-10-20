@@ -43,8 +43,9 @@ filesystem state.
 The exception is specifically for released package paths. Workspace manifests,
 the lockfile, Cargo configuration and untracked source inputs must remain ordinary
 files. Preparation fingerprints the validated link kind, each intermediate link
-and all terminal tracked files, so changing a target or replacing a regular file
-with a link invalidates previously prepared evidence.
+and all terminal tracked files. It also records validated target directories so
+an empty expansion can be recreated during preview. Changing a target or replacing
+a regular file with a link invalidates previously prepared evidence.
 
 `Cargo.toml` is packaged content. Even a formatting-only change to a package
 manifest requires assessment; the tool does not maintain a second policy that
