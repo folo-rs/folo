@@ -104,6 +104,55 @@ fn prepare_accepts_a_tracked_symlink_fixture_in_a_native_checkout() {
     assert!(report.contains("\"status\": \"unchanged\""));
 }
 
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "replaces a tracked fixture directory with a real symbolic link"
+)]
+#[test]
+fn prepare_rejects_a_placeholder_reached_through_a_symlinked_parent() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write("packages/demo/tests/fixtures/target", "fixture contents\n");
+    fixture.write("packages/demo/tests/fixtures/link", "target");
+    fixture.git(&["add", "-A"]);
+    let path = "packages/demo/tests/fixtures/link";
+    let id = fixture.git(&["rev-parse", &format!(":{path}")]);
+    fixture.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},{}", id.trim(), path),
+    ]);
+    fixture.git(&["config", "core.symlinks", "false"]);
+    fixture.git(&["commit", "-m", "tracked placeholder fixture"]);
+    fs::remove_dir_all(fixture.path().join("packages/demo/tests/fixtures")).unwrap();
+    fixture.write("outside/target", "external contents\n");
+    fixture.write("outside/link", "target");
+    symlink(
+        "../../../outside",
+        fixture.path().join("packages/demo/tests/fixtures"),
+    )
+    .unwrap();
+
+    let output = fixture.path().join("prepared");
+    _ = run(&RunInput::Prepare {
+        merge_target: None,
+        output: output.clone(),
+        release_history: Some("HEAD".to_owned()),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap_err();
+
+    assert!(!output.join("prepared.json").exists());
+    assert!(!output.join("report.json").exists());
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn verify_packaging_warns_without_failing_when_cargo_would_pack_an_untracked_file() {

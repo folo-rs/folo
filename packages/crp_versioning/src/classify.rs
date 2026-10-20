@@ -1557,6 +1557,13 @@ pub(crate) fn captured_package_link_inputs(
             if !seen.insert(source) {
                 continue;
             }
+            if let Some(ancestor) = ancestors.first_symlink(git.root(), Path::new(source))? {
+                let ancestor =
+                    to_git_separators(&ancestor.to_string_lossy(), MAIN_SEPARATOR).into_owned();
+                return Err(
+                    SymlinkedAncestorError::new(&package.manifest.name, source, ancestor).into(),
+                );
+            }
             if !matches!(
                 git.work_tree_path(source, modes.is_symlink(source))?,
                 WorkTreePath::Symlink(_)
