@@ -1596,6 +1596,7 @@ fn resolved_work_files(
             &mut ancestors,
             modes_complete,
             true,
+            false,
             &mut BTreeSet::new(),
             &mut link_inputs,
             &mut directory_inputs,
@@ -1628,6 +1629,7 @@ fn expand_work_released_path(
     ancestors: &mut WorkTreeAncestors,
     modes_complete: bool,
     use_initial_modes: bool,
+    directory_required: bool,
     active_directories: &mut BTreeSet<String>,
     validated_links: &mut BTreeSet<String>,
     validated_directories: &mut BTreeSet<String>,
@@ -1647,6 +1649,7 @@ fn expand_work_released_path(
         ancestors,
         modes_complete,
         use_initial_modes,
+        directory_required,
     )? {
         None => {}
         Some(ResolvedWorkNode::File { file, link_inputs }) => {
@@ -1666,6 +1669,7 @@ fn expand_work_released_path(
             }
             for child in direct_tracked_children(tracked, &path, boundary_paths, case) {
                 let archive_child = archive_child(archive_path, &child, &path, case);
+                let child_directory_required = case.recorded_path(tracked, &child).is_none();
                 expand_work_released_path(
                     git,
                     name,
@@ -1681,6 +1685,7 @@ fn expand_work_released_path(
                     ancestors,
                     modes_complete,
                     false,
+                    child_directory_required,
                     active_directories,
                     validated_links,
                     validated_directories,
@@ -1719,13 +1724,13 @@ fn resolve_work_node(
     ancestors: &mut WorkTreeAncestors,
     modes_complete: bool,
     use_initial_modes: bool,
+    mut directory_required: bool,
 ) -> Result<Option<ResolvedWorkNode>, AppError> {
     let mut current = released_path.to_string();
     let mut first = true;
     let mut followed_link = false;
     let mut visited = HashSet::new();
     let mut link_inputs = BTreeSet::new();
-    let mut directory_required = false;
     loop {
         let modes = if (first && use_initial_modes) || modes_complete {
             None
@@ -1739,7 +1744,7 @@ fn resolve_work_node(
             return Err(SymlinkedAncestorError::new(name, released_path, ancestor).into());
         }
         let path = git.work_tree_path(&current, modes.is_symlink(&current))?;
-        if directory_required && !matches!(path, WorkTreePath::Directory) {
+        if directory_required && !matches!(path, WorkTreePath::Directory | WorkTreePath::Missing) {
             return Err(NonRegularSymlinkTargetError::new(name, released_path, &current).into());
         }
         match path {

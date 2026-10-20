@@ -546,6 +546,61 @@ fn inferred_directory_targets_reject_untracked_file_replacements() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "replaces a recursively inferred directory with an untracked regular file"
+)]
+fn recursive_inferred_directories_reject_untracked_file_replacements() {
+    let fixture = Repository::new();
+    fixture.write("shared/nested/old.txt", b"old\n");
+    fixture.command(&["add", "shared/nested/old.txt"]);
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared");
+    fixture.command(&["commit", "--quiet", "-m", "recursive directory target"]);
+    fs::remove_dir_all(fixture.path().join("shared/nested")).unwrap();
+    fixture.write("shared/nested", b"untracked replacement\n");
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+
+    _ = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares an unanchored nested directory include")]
+fn unanchored_directory_includes_keep_nested_link_roots() {
+    let fixture = Repository::new();
+    fixture.write("pkg/tests/real/data.json", b"before\n");
+    fixture.command(&["add", "pkg/tests/real/data.json"]);
+    stage_placeholder_symlink(&fixture, "pkg/tests/fixtures", "real");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fixture.write("pkg/tests/real/data.json", b"after\n");
+
+    let rules =
+        PackagingRules::new(Some(&["src/**".to_string(), "fixtures/".to_string()]), None).unwrap();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, _, _, _) = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+
+    assert!(matches!(
+        changed.as_slice(),
+        [ChangedItem::Package { path, .. }] if path == "tests/fixtures/data.json"
+    ));
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "compares real Git symlink modes and work-tree files")]
 fn changing_a_link_pointer_without_changing_its_payload_is_unchanged() {
     let fixture = Repository::new();

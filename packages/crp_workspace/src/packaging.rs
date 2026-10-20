@@ -134,10 +134,15 @@ impl PackagingRules {
 }
 
 fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
-    let pattern = pattern
-        .strip_prefix('!')
-        .unwrap_or(pattern)
-        .trim_start_matches('/');
+    let pattern = pattern.strip_prefix('!').unwrap_or(pattern);
+    let anchored = pattern.starts_with('/');
+    let pattern = pattern.trim_start_matches('/');
+    if !anchored && pattern.ends_with('/') {
+        let directory = pattern.trim_end_matches('/');
+        if !directory.contains('/') && path.split('/').any(|component| component == directory) {
+            return true;
+        }
+    }
     if !pattern.contains('/') {
         return true;
     }
@@ -311,6 +316,8 @@ mod tests {
         assert!(partial.may_release_path_or_descendant("tests/alias_to_new"));
         let braces = rules(Some(&["tests/{alias,other}/**"]), None).unwrap();
         assert!(braces.may_release_path_or_descendant("tests/alias"));
+        let nested_directory = rules(Some(&["src/**", "fixtures/"]), None).unwrap();
+        assert!(nested_directory.may_release_path_or_descendant("tests/fixtures"));
         assert!(!include.may_release_path_or_descendant("tests/broken"));
 
         let exclude = rules(None, Some(&["tests/excluded/**", "alias/ignored.txt"])).unwrap();
