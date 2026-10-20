@@ -337,6 +337,37 @@ fn directory_link_cycles_are_rejected_without_recursive_traversal() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "compares modes and nested links in a tracked directory outside the package"
+)]
+fn outside_directory_targets_acquire_child_modes_and_links() {
+    let fixture = Repository::new();
+    fixture.write("shared/tool", b"tool\n");
+    fixture.command(&["add", "shared/tool"]);
+    fixture.command(&["update-index", "--chmod=+x", "shared/tool"]);
+    stage_placeholder_symlink(&fixture, "shared/alias", "tool");
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared");
+    fixture.command(&["commit", "--quiet", "-m", "outside directory target"]);
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, patch, stat, _) =
+        diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+
+    assert!(changed.is_empty());
+    assert!(patch.is_empty());
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (0, 0, 0));
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "compares real Git symlink modes and work-tree files")]
 fn changing_a_link_pointer_without_changing_its_payload_is_unchanged() {
     let fixture = Repository::new();

@@ -115,6 +115,98 @@ fn prepare_accepts_a_tracked_directory_link_fixture_in_a_placeholder_checkout() 
     assert!(report.contains("\"status\": \"unchanged\""));
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "runs preparation after deleting a directory-link target file"
+)]
+#[test]
+fn prepare_retains_an_empty_directory_link_as_a_valid_captured_input() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write(
+        "packages/demo/tests/fixtures/cycle/new/benchmark.json",
+        "benchmark\n",
+    );
+    fixture.write("packages/demo/tests/fixtures/cycle/alias_to_new", "new");
+    stage_placeholder_link(&fixture, "packages/demo/tests/fixtures/cycle/alias_to_new");
+    fixture.commit("tracked directory-link fixture");
+    fs::remove_file(
+        fixture
+            .path()
+            .join("packages/demo/tests/fixtures/cycle/new/benchmark.json"),
+    )
+    .unwrap();
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"needs-increment\""));
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "cross-checks Cargo packaging with native directory-link include rules"
+)]
+#[test]
+fn verify_packaging_applies_include_rules_to_directory_link_descendants() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/cycle/alias/**/*.json\"]",
+    );
+    fixture.write("packages/demo/tests/cycle/real/keep.json", "keep\n");
+    fixture.write("packages/demo/tests/cycle/real/ignored.txt", "ignored\n");
+    symlink(
+        "real",
+        fixture.path().join("packages/demo/tests/cycle/alias"),
+    )
+    .unwrap();
+    fixture.commit("directory-link include fixture");
+
+    let (passed, message) = check_verifying_packaging(&fixture, "HEAD");
+
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "cross-checks Cargo packaging with native directory-link exclude rules"
+)]
+#[test]
+fn verify_packaging_applies_exclude_rules_to_directory_link_descendants() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "exclude = [\"tests/cycle/alias/ignored.txt\", \"tests/cycle/real/**\"]",
+    );
+    fixture.write("packages/demo/tests/cycle/real/keep.json", "keep\n");
+    fixture.write("packages/demo/tests/cycle/real/ignored.txt", "ignored\n");
+    symlink(
+        "real",
+        fixture.path().join("packages/demo/tests/cycle/alias"),
+    )
+    .unwrap();
+    fixture.commit("directory-link exclude fixture");
+
+    let (passed, message) = check_verifying_packaging(&fixture, "HEAD");
+
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
 #[cfg(unix)]
 #[cfg_attr(
     miri,
@@ -172,6 +264,10 @@ fn prepare_accepts_a_tracked_directory_link_fixture_in_a_native_checkout() {
     .unwrap();
     fixture.commit("tracked native directory-link fixture");
 
+    let (passed, message) = check_verifying_packaging(&fixture, "HEAD");
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+
     let prepared = prepare(&fixture);
 
     assert!(prepared.is_file());
@@ -226,6 +322,17 @@ fn prepare_rejects_a_placeholder_reached_through_a_symlinked_parent() {
 
     assert!(!output.join("prepared.json").exists());
     assert!(!output.join("report.json").exists());
+}
+
+fn stage_placeholder_link(fixture: &Fixture, path: &str) {
+    fixture.git(&["add", "-A"]);
+    let id = fixture.git(&["rev-parse", &format!(":{path}")]);
+    fixture.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},{}", id.trim(), path),
+    ]);
+    fixture.git(&["config", "core.symlinks", "false"]);
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

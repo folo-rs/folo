@@ -743,14 +743,25 @@ fn classify_one(
             git.tracked_paths(&resource_paths, side.case)
         })?;
         let tracked_resources = tracked_resources(&side, &tracked_paths);
-        let content = released_in_work_tree(git, &side, &tracked_resources, Some(observations))?;
+        let mut content =
+            released_in_work_tree(git, &side, &tracked_resources, Some(observations))?;
+        let rule_exceptions = packaging_rule_exceptions(&content.released, side.rules);
         let work_modes =
             observed_work_tree_modes(git, &side, &tracked_resources, Some(observations))?;
+        add_symlink_roots(
+            &mut content.released,
+            &content.present_tracked,
+            &content.present_tracked,
+            &side,
+            |path| work_modes.is_symlink(path),
+        );
         _ = resolved_work_files(
             git,
             name,
             &content.released,
             observations.all_tracked(),
+            side.rules,
+            &rule_exceptions,
             &work_modes,
             Some(observations),
             side.case,
@@ -1077,17 +1088,40 @@ fn diff_package_with_tree(
     };
     let tracked_resources = tracked_resources(work_side, &tracked_paths);
 
-    let anchor_files = released_at_commit(anchor_tree, anchor);
-    let work = released_in_work_tree(git, work_side, &tracked_resources, observations)?;
-    let work_files = &work.released;
-
+    let mut anchor_files = released_at_commit(anchor_tree, anchor);
+    let anchor_exceptions = packaging_rule_exceptions(&anchor_files, anchor.rules);
+    add_symlink_roots(
+        &mut anchor_files,
+        anchor_tree.paths(),
+        anchor_tree.paths(),
+        anchor,
+        |path| anchor_tree.entry(path).is_some_and(TreeEntry::is_symlink),
+    );
+    let mut work = released_in_work_tree(git, work_side, &tracked_resources, observations)?;
+    let work_exceptions = packaging_rule_exceptions(&work.released, work_side.rules);
     let work_modes = observed_work_tree_modes(git, work_side, &tracked_resources, observations)?;
-    let anchor_identities =
-        historical_released_identities(git, name, anchor_tree, &anchor_files, anchor.case)?;
+    add_symlink_roots(
+        &mut work.released,
+        &work.present_tracked,
+        &work.present_tracked,
+        work_side,
+        |path| work_modes.is_symlink(path),
+    );
+    let anchor_identities = historical_released_identities(
+        git,
+        name,
+        anchor_tree,
+        &anchor_files,
+        anchor.rules,
+        &anchor_exceptions,
+        anchor.case,
+    )?;
     let work_identities = work_released_identities(
         git,
         name,
-        work_files,
+        &work.released,
+        work_side.rules,
+        &work_exceptions,
         &work_modes,
         observations,
         work_side.case,
@@ -1312,6 +1346,10 @@ struct ReleasedFileIdentity {
 struct ResolvedWorkFile {
     path: String,
     executable: bool,
+}
+
+struct ResolvedWorkContent {
+    files: BTreeMap<String, ResolvedWorkFile>,
     link_inputs: BTreeSet<String>,
 }
 
@@ -1326,6 +1364,8 @@ fn historical_released_identities(
     name: &str,
     tree: &HistoricalTree,
     released: &HashMap<String, String>,
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     case: PathCase,
 ) -> Result<HashMap<String, ReleasedFileIdentity>, AppError> {
     let mut selected: Vec<_> = released.iter().collect();
@@ -1339,6 +1379,8 @@ fn historical_released_identities(
             source_path,
             tree,
             git.prefix(),
+            rules,
+            rule_exceptions,
             case,
             &mut BTreeSet::new(),
             &mut identities,
@@ -1358,15 +1400,19 @@ fn expand_historical_released_path(
     source_path: &str,
     tree: &HistoricalTree,
     workspace_dir: &str,
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     case: PathCase,
     active_directories: &mut BTreeSet<String>,
     identities: &mut HashMap<String, ReleasedFileIdentity>,
 ) -> Result<(), AppError> {
     match resolve_historical_node(git, name, source_path, tree, workspace_dir, case)? {
         HistoricalResolvedNode::File(identity) => {
-            identities
-                .entry(archive_path.to_string())
-                .or_insert(identity);
+            if rules.is_released(archive_path) || rule_exceptions.contains(archive_path) {
+                identities
+                    .entry(archive_path.to_string())
+                    .or_insert(identity);
+            }
         }
         HistoricalResolvedNode::Directory(directory) => {
             if !active_directories.insert(directory.clone()) {
@@ -1381,6 +1427,8 @@ fn expand_historical_released_path(
                     &child,
                     tree,
                     workspace_dir,
+                    rules,
+                    rule_exceptions,
                     case,
                     active_directories,
                     identities,
@@ -1446,10 +1494,16 @@ fn resolve_historical_node(
 /// Git still hashes terminal regular files so clean filters and line-ending
 /// conversion retain the same identity model as ordinary released files.
 #[cfg_attr(test, mutants::skip)] // Native file and Git hashing adapters.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "work-tree identity acquisition combines expanded selection policy with endpoint observations"
+)]
 fn work_released_identities(
     git: &GitRepo,
     name: &str,
     released: &HashMap<String, String>,
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
     observations: Option<&LiveObservations>,
     case: PathCase,
@@ -1463,14 +1517,21 @@ fn work_released_identities(
         name,
         released,
         &tracked,
+        rules,
+        rule_exceptions,
         initial_modes,
         observations,
         case,
         false,
     )?;
-    let paths: Vec<&str> = resolved.values().map(|file| file.path.as_str()).collect();
+    let paths: Vec<&str> = resolved
+        .files
+        .values()
+        .map(|file| file.path.as_str())
+        .collect();
     let ids = git.hash_objects(&paths)?;
     Ok(resolved
+        .files
         .into_iter()
         .zip(ids)
         .map(|((archive_path, file), id)| {
@@ -1494,14 +1555,17 @@ fn resolved_work_files(
     name: &str,
     released: &HashMap<String, String>,
     tracked: &[String],
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
     observations: Option<&LiveObservations>,
     case: PathCase,
     modes_complete: bool,
-) -> Result<BTreeMap<String, ResolvedWorkFile>, AppError> {
+) -> Result<ResolvedWorkContent, AppError> {
     let mut selected: Vec<_> = released.iter().collect();
     selected.sort_unstable_by(|left, right| left.0.cmp(right.0));
     let mut resolved = BTreeMap::new();
+    let mut link_inputs = BTreeSet::new();
     let mut ancestors = WorkTreeAncestors::default();
     for (archive_path, source_path) in selected {
         expand_work_released_path(
@@ -1510,17 +1574,23 @@ fn resolved_work_files(
             archive_path,
             source_path,
             tracked,
+            rules,
+            rule_exceptions,
             initial_modes,
             observations,
             case,
             &mut ancestors,
             modes_complete,
+            true,
             &mut BTreeSet::new(),
-            &BTreeSet::new(),
+            &mut link_inputs,
             &mut resolved,
         )?;
     }
-    Ok(resolved)
+    Ok(ResolvedWorkContent {
+        files: resolved,
+        link_inputs,
+    })
 }
 
 #[expect(
@@ -1533,13 +1603,16 @@ fn expand_work_released_path(
     archive_path: &str,
     source_path: &str,
     tracked: &[String],
+    rules: &PackagingRules,
+    rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
     observations: Option<&LiveObservations>,
     case: PathCase,
     ancestors: &mut WorkTreeAncestors,
     modes_complete: bool,
+    use_initial_modes: bool,
     active_directories: &mut BTreeSet<String>,
-    inherited_links: &BTreeSet<String>,
+    validated_links: &mut BTreeSet<String>,
     resolved: &mut BTreeMap<String, ResolvedWorkFile>,
 ) -> Result<(), AppError> {
     match resolve_work_node(
@@ -1552,17 +1625,17 @@ fn expand_work_released_path(
         case,
         ancestors,
         modes_complete,
+        use_initial_modes,
     )? {
         None => {}
-        Some(ResolvedWorkNode::File(mut file)) => {
-            file.link_inputs.extend(inherited_links.iter().cloned());
-            resolved.entry(archive_path.to_string()).or_insert(file);
+        Some(ResolvedWorkNode::File { file, link_inputs }) => {
+            validated_links.extend(link_inputs);
+            if rules.is_released(archive_path) || rule_exceptions.contains(archive_path) {
+                resolved.entry(archive_path.to_string()).or_insert(file);
+            }
         }
-        Some(ResolvedWorkNode::Directory {
-            path,
-            mut link_inputs,
-        }) => {
-            link_inputs.extend(inherited_links.iter().cloned());
+        Some(ResolvedWorkNode::Directory { path, link_inputs }) => {
+            validated_links.extend(link_inputs);
             if !active_directories.insert(path.clone()) {
                 return Err(SymlinkCycleError::new(name, source_path, &path).into());
             }
@@ -1574,13 +1647,16 @@ fn expand_work_released_path(
                     &archive_child,
                     &child,
                     tracked,
+                    rules,
+                    rule_exceptions,
                     initial_modes,
                     observations,
                     case,
                     ancestors,
                     modes_complete,
+                    false,
                     active_directories,
-                    &link_inputs,
+                    validated_links,
                     resolved,
                 )?;
             }
@@ -1591,7 +1667,10 @@ fn expand_work_released_path(
 }
 
 enum ResolvedWorkNode {
-    File(ResolvedWorkFile),
+    File {
+        file: ResolvedWorkFile,
+        link_inputs: BTreeSet<String>,
+    },
     Directory {
         path: String,
         link_inputs: BTreeSet<String>,
@@ -1612,6 +1691,7 @@ fn resolve_work_node(
     case: PathCase,
     ancestors: &mut WorkTreeAncestors,
     modes_complete: bool,
+    use_initial_modes: bool,
 ) -> Result<Option<ResolvedWorkNode>, AppError> {
     let mut current = released_path.to_string();
     let mut first = true;
@@ -1619,7 +1699,7 @@ fn resolve_work_node(
     let mut visited = HashSet::new();
     let mut link_inputs = BTreeSet::new();
     loop {
-        let modes = if first || modes_complete {
+        let modes = if (first && use_initial_modes) || modes_complete {
             None
         } else {
             Some(observed_path_modes(git, &current, observations, case)?)
@@ -1641,11 +1721,13 @@ fn resolve_work_node(
                 );
             }
             WorkTreePath::Regular => {
-                return Ok(Some(ResolvedWorkNode::File(ResolvedWorkFile {
-                    executable: modes.is_executable(&current),
+                return Ok(Some(ResolvedWorkNode::File {
+                    file: ResolvedWorkFile {
+                        executable: modes.is_executable(&current),
+                        path: current,
+                    },
                     link_inputs,
-                    path: current,
-                })));
+                }));
             }
             WorkTreePath::Directory => {
                 let directory =
@@ -1711,19 +1793,23 @@ pub(crate) fn captured_package_link_inputs(
         let present = present_in_work_tree(git, &selected)?;
         let mut released = released_from_paths(&selected, &present, &side);
         add_resources(&mut released, tracked_resources.iter());
+        let rule_exceptions = packaging_rule_exceptions(&released, side.rules);
+        add_symlink_roots(&mut released, &selected, &present, &side, |path| {
+            modes.is_symlink(path)
+        });
         let resolved = resolved_work_files(
             git,
             &package.manifest.name,
             &released,
             tracked,
+            side.rules,
+            &rule_exceptions,
             modes,
             None,
             case,
             true,
         )?;
-        for file in resolved.into_values() {
-            captured.extend(file.link_inputs.into_iter().map(PathBuf::from));
-        }
+        captured.extend(resolved.link_inputs.into_iter().map(PathBuf::from));
     }
     Ok(captured)
 }
@@ -2058,8 +2144,33 @@ fn observed_released_work_tree_paths(
         None => narrow()?,
     };
     let tracked_resources = tracked_resources(&side, &tracked_paths);
-    let content = released_in_work_tree(git, &side, &tracked_resources, observations)?;
-    Ok(content.released.into_keys().collect())
+    let mut content = released_in_work_tree(git, &side, &tracked_resources, observations)?;
+    let rule_exceptions = packaging_rule_exceptions(&content.released, side.rules);
+    let modes = observed_work_tree_modes(git, &side, &tracked_resources, observations)?;
+    add_symlink_roots(
+        &mut content.released,
+        &content.present_tracked,
+        &content.present_tracked,
+        &side,
+        |path| modes.is_symlink(path),
+    );
+    let tracked = match observations {
+        Some(observations) => observations.all_tracked().to_vec(),
+        None => git.ls_files("")?,
+    };
+    let resolved = resolved_work_files(
+        git,
+        &package.manifest.name,
+        &content.released,
+        &tracked,
+        side.rules,
+        &rule_exceptions,
+        &modes,
+        observations,
+        case,
+        false,
+    )?;
+    Ok(resolved.files.into_keys().collect())
 }
 
 /// The work-tree end of `package`'s released-content comparison.
@@ -2187,6 +2298,42 @@ fn released_from_paths(
         }
     }
     map
+}
+
+fn packaging_rule_exceptions(
+    released: &HashMap<String, String>,
+    rules: &PackagingRules,
+) -> BTreeSet<String> {
+    released
+        .keys()
+        .filter(|path| !rules.is_released(path))
+        .cloned()
+        .collect()
+}
+
+fn add_symlink_roots(
+    released: &mut HashMap<String, String>,
+    tracked: &[String],
+    present: &[String],
+    side: &PackageSide<'_>,
+    mut is_symlink: impl FnMut(&str) -> bool,
+) {
+    let nested = nested_package_dirs(present, side.dir, side.case);
+    let present: HashSet<&str> = present.iter().map(String::as_str).collect();
+    for full in tracked {
+        if !present.contains(full.as_str())
+            || !is_symlink(full)
+            || is_inside_any(full, &nested, side.case)
+        {
+            continue;
+        }
+        let Some(relative) = side.case.relativize(full, side.dir) else {
+            continue;
+        };
+        released
+            .entry(relative.to_string())
+            .or_insert_with(|| full.clone());
+    }
 }
 
 fn released_by_rules(
