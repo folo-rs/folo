@@ -334,7 +334,8 @@ mod tests {
         let slashless = rules(None, Some(&["fixtures"])).unwrap();
         assert!(!slashless.may_release_path_or_descendant("tests/fixtures"));
         let slashless_directory = rules(None, Some(&["fixtures/"])).unwrap();
-        assert!(!slashless_directory.may_release_path_or_descendant("tests/fixtures"));
+        assert!(slashless_directory.may_release_path_or_descendant("tests/fixtures"));
+        assert!(!slashless_directory.may_release_path_or_descendant("tests/fixtures/loop"));
         let mandatory = rules(None, Some(&["Cargo.toml", "data/**"])).unwrap();
         assert!(mandatory.may_release_path_or_descendant("Cargo.toml"));
         assert!(mandatory.may_release_path_or_descendant("data"));
