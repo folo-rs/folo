@@ -1,6 +1,8 @@
+#Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Protects the complete nightly check scope without executing expensive tools.
+# Checks that generated matrix entries have unique identities and independent state without
+# duplicating the configured check catalog. Deep validation consumes this plan before setup.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -8,37 +10,25 @@ $PSNativeCommandUseErrorActionPreference = $true
 BeforeAll { Import-Module (Join-Path $PSScriptRoot 'ScheduledPlan.psm1') -Force }
 
 Describe 'Fresh deep check catalog' {
-    It 'preserves every platform, mutation shard and many-seed family' {
+    It 'provides nonempty unique matrix identities' {
         $checks = @(Get-ScheduledCheck)
-        $checks.Count | Should -Be 15
+        $checks.Count | Should -BeGreaterThan 0
         @($checks.id | Sort-Object -Unique).Count | Should -Be $checks.Count
-        @($checks.recipe | Sort-Object -Unique) | Should -Be @('careful', 'miri', 'miri-harder', 'mutants')
-        @($checks | Where-Object recipe -EQ 'miri').platform | Should -Be @(
-            'ubuntu-latest', 'windows-latest', 'ubuntu-24.04-arm', 'windows-11-arm')
-        foreach ($platform in @('ubuntu-latest', 'windows-latest')) {
-            @($checks | Where-Object { $_.recipe -eq 'mutants' -and $_.platform -eq $platform }).shard |
-                Should -Be @('1/2', '2/2')
-            @($checks | Where-Object { $_.recipe -eq 'careful' -and $_.platform -eq $platform }).Count | Should -Be 1
-        }
-        foreach ($package in @('events_once', 'events', 'awaiter_set', 'nm_impl', 'vicinal')) {
-            $selected = @($checks | Where-Object { $_.recipe -eq 'miri-harder' -and $_.packages -contains $package })
-            $selected.Count | Should -Be 1
-            $selected.shard | Should -Be '1/1'
-            $selected.id | Should -Be "miri-harder-$package-1"
-            $selected.platform | Should -Be 'ubuntu-latest'
+        foreach ($check in $checks) {
+            $check.id | Should -Not -BeNullOrEmpty
+            $check.recipe | Should -Not -BeNullOrEmpty
+            $check.platform | Should -Not -BeNullOrEmpty
         }
     }
 
-    It 'uses workspace scope except for the declared many-seed families' {
-        $checks = @(Get-ScheduledCheck | Where-Object recipe -NE 'miri-harder')
-        foreach ($check in $checks) { $check.packages | Should -BeNullOrEmpty }
-    }
-
-    It 'returns independent plain declarations without coordination metadata' {
-        $check = @(Get-ScheduledCheck | Where-Object id -EQ 'miri-harder-events-1')[0]
-        @($check.Keys | Sort-Object) | Should -Be @('id', 'packages', 'platform', 'recipe', 'shard')
-        $check.recipe | Should -Be 'miri-harder'
+    It 'returns independent declarations on each invocation' {
+        $check = @(Get-ScheduledCheck)[0]
+        $recipe = $check.recipe
+        $packages = $check.packages
+        $check.recipe = 'fixture'
         $check.packages = @('fixture')
-        @(Get-ScheduledCheck | Where-Object id -EQ 'miri-harder-events-1')[0].packages | Should -Be @('events')
+        $fresh = @(Get-ScheduledCheck)[0]
+        $fresh.recipe | Should -Be $recipe
+        $fresh.packages | Should -Be $packages
     }
 }

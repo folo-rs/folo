@@ -143,6 +143,17 @@ native helpers. Domain selection includes fixtures, configuration and shared con
 just the file containing a test. Shared validation machinery changes exercise every tooling
 check. Ordinary Rust source changes do not by themselves select unrelated tooling checks.
 
+Workflow edits select actionlint and a dedicated script suite for repository-specific
+relationships, such as required-check fan-in and reusable-workflow bindings. They do not
+select all tests for the helpers called by those workflows. Explicit integration inputs still
+select their owning checks, including the benchmark canary and release-packaging smoke.
+Tests exercise behavior and relationships rather than repeat configured catalogs or
+generic YAML checks already covered by actionlint.
+
+Internal maintenance documentation and agent guidance do not select script tests. CI does
+not check their links or execute their example snippets. Public book builds and Rust API
+documentation checks retain their own validation scope.
+
 Selection covers the complete pull request, including deleted and renamed inputs.
 An unavailable change set is an error, not an empty selection. Pushes to `main` and
 scheduled/manual main runs use the full set as a backstop. The workflow itself always starts,

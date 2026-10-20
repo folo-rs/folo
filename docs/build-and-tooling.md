@@ -553,3 +553,8 @@ domains from changed inputs and native-helper dependency impact; script analysis
 lint have independent selections. Main pushes retain full validation. See
 [non-Cargo change planning](../.github/workflows/implementation.md#non-cargo-change-planning)
 for ownership, shared-input rules and the lightweight workflow-lint environment.
+
+`just test-scripts workflow` runs the repository-specific workflow relationship checks without
+the build or scheduled helper suites. Workflow YAML changes select this domain alongside
+actionlint and any explicitly relevant integration checks. Internal maintenance documentation
+and agent guidance do not select script tests or receive link checks.

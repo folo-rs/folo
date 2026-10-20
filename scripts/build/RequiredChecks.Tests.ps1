@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for RequiredChecks.psm1. The allowed-result policy (must-succeed vs may-skip)
@@ -172,10 +173,10 @@ Describe 'Planned tooling results' {
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
-    It 'requires path-selected script tests and rejects lost domains' {
-        $plan.script_domains = @('book')
+    It 'requires path-selected <_> tests and rejects lost domains' -ForEach @('book', 'workflow') {
+        $plan.script_domains = @($_)
         { Assert-PlannedResult } | Should -Throw
-        $needs.prepare.outputs.script_domains = '["book"]'
+        $needs.prepare.outputs.script_domains = ConvertTo-Json -InputObject @($_) -Compress
         { Assert-PlannedResult } | Should -Throw
         $needs['test-scripts'].result = 'success'
         { Assert-PlannedResult } | Should -Not -Throw

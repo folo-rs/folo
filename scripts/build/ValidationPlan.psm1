@@ -9,7 +9,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 # Directories are test domains, not independent dependency islands. Shared consumers below
 # supplement the owning directory; unknown script/recipe locations select the full suite.
-$script:ScriptDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility')
+$script:ScriptDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility', 'workflow')
 $script:RecipeDomains = @{
     'just_basics.just' = @('build', 'scheduled')
     'just_bench_history.just' = @('bench-history')
@@ -71,14 +71,10 @@ function Get-ValidationPlan {
             $path -cmatch '^\.github/actions/.+\.ya?ml$' -or
             $path -cin @('.github/actionlint.yaml', '.github/actionlint.yml')) {
             $workflows = $true
-            # Pester checks job dependency relationships and the helpers invoked by workflows.
-            $domains.UnionWith([string[]] @('build', 'scheduled'))
-            Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint, dependency checks and helper tests."
-        }
-        if ($path -cmatch '^\.github/skills/scheduled-(intake|triage|repair)/' -or
-            $path -cin @('.github/prompts/setup-scheduled-remediation.prompt.md', 'docs/scheduled-validation.md')) {
-            $null = $domains.Add('scheduled')
-            Write-Verbose "'$path' is an input to documentation-link tests; selecting the scheduled test domain."
+            # Repository-specific relationships supplement actionlint without running unrelated
+            # helper implementations. Ref: .github/workflows/implementation.md#non-cargo-change-planning.
+            $null = $domains.Add('workflow')
+            Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint and relationship tests."
         }
         if ($path -cmatch '^infra/azure-bench-history-(prod|test)/' -or
             $path -cmatch '^packages/cargo-bench-history/src/azure_bundle/' -or
@@ -155,11 +151,11 @@ function Get-ValidationPlan {
         }
     }
 
-    # Scheduled execution imports build helpers. Other cross-domain sharing goes through
-    # setup/utility and selects all above.
+    # Scheduled execution and workflow relationship tests import build helpers. Other
+    # cross-domain sharing goes through setup/utility and selects all above.
     if ($domains.Contains('build')) {
-        $null = $domains.Add('scheduled')
-        Write-Verbose 'Scheduled tests consume build helpers; including that dependent domain.'
+        $domains.UnionWith([string[]] @('scheduled', 'workflow'))
+        Write-Verbose 'Scheduled and workflow tests consume build helpers; including those dependent domains.'
     }
     Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, Bicep=$bicep, release binary smoke=$releaseBinarySmoke, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
     return @{

@@ -465,8 +465,23 @@ the full suite without reading change-set revisions.
 Script directories are coarse test domains. The module declares recipe ownership and
 cross-domain consumers, and defaults unfamiliar script/recipe locations to the full suite.
 Setup, shared utility, planner and fan-in changes select every tooling check. Fixtures select
-their owning tests; workflow changes also select Pester dependency-relationship and helper tests. Analyzer
-configuration and script files select static analysis independently of the Pester scope.
+their owning tests. Analyzer configuration and script files select static analysis independently
+of the Pester scope.
+
+Workflow/action YAML and actionlint configuration select workflow lint and the `workflow`
+domain, whose `scripts/workflow/ValidationWorkflow.Tests.ps1` checks repository-specific
+relationships. They do not select the `build` or `scheduled` domains merely because a workflow
+calls those helpers. Separate rules still select benchmark helper tests, the hosted benchmark
+canary and release-packaging smoke for their explicit inputs. Changes to build helpers select
+the dependent `scheduled` and `workflow` domains; the relationship suite imports the build
+fan-in helper.
+
+Internal documentation and agent guidance, including `docs/scheduled-validation.md`,
+`.github/skills/scheduled-*/SKILL.md` and
+`.github/prompts/setup-scheduled-remediation.prompt.md`, do not select script tests.
+There is no internal-document link test or test executing copied skill examples. The
+scheduled catalog tests check generated entry identities and independent results without
+duplicating the configured platform, shard or package lists.
 
 After Cargo delta, the same job combines the path-selected domains with affected native helpers used by
 script integration tests. Dependency impact comes from Cargo delta rather than treating

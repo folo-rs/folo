@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Protects Standard validation's change domains, whole-candidate Git comparisons and explicit
@@ -8,7 +9,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'ValidationPlan.psm1') -Force
-    $script:allDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility')
+    $script:allDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility', 'workflow')
     function ConvertTo-PlanJson($Plan) { ConvertTo-Json -InputObject $Plan -Compress }
 }
 
@@ -27,41 +28,73 @@ Describe 'Non-Cargo change domains' {
         @{ Path = 'scripts/book/BookSite.psm1'; Domains = @('book'); Analysis = $true; Workflows = $false },
         @{ Path = 'scripts/book/BookSite.Tests.ps1'; Domains = @('book'); Analysis = $true; Workflows = $false },
         @{ Path = 'scripts/bench-history/fixtures/result.json'; Domains = @('bench-history'); Analysis = $false; Workflows = $false },
-        @{ Path = 'scripts/build/Miri.psm1'; Domains = @('build', 'scheduled'); Analysis = $true; Workflows = $false },
-        @{ Path = 'scripts/build/CargoExecutable.psm1'; Domains = @('build', 'release', 'scheduled'); Analysis = $true; Workflows = $false },
+        @{ Path = 'scripts/build/Miri.psm1'; Domains = @('build', 'scheduled', 'workflow'); Analysis = $true; Workflows = $false },
+        @{ Path = 'scripts/build/CargoExecutable.psm1'; Domains = @('build', 'release', 'scheduled', 'workflow'); Analysis = $true; Workflows = $false },
+        @{ Path = 'scripts/workflow/ValidationWorkflow.Tests.ps1'; Domains = @('workflow'); Analysis = $true; Workflows = $false },
         @{ Path = 'scripts/release/ReleasePlan.psm1'; Domains = @('release'); Analysis = $true; Workflows = $false },
         @{ Path = 'PSScriptAnalyzerSettings.psd1'; Domains = @('analyzer'); Analysis = $true; Workflows = $false },
-        @{ Path = '.github/workflows/release.yml'; Domains = @('build', 'release', 'scheduled'); Analysis = $false; Workflows = $true },
-        @{ Path = '.github/actionlint.yaml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $true },
-        @{ Path = '.github/actions/setup-workflow-lint/action.yml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/release.yml'; Domains = @('release', 'workflow'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/book.yml'; Domains = @('workflow'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/actionlint.yaml'; Domains = @('workflow'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/actions/setup-workflow-lint/action.yml'; Domains = @('workflow'); Analysis = $false; Workflows = $true },
         @{ Path = 'justfiles/just_bench_history.just'; Domains = @('bench-history'); Analysis = $false; Workflows = $false },
-        @{ Path = 'infra/azure-bench-history-prod/main.bicep'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = 'infra/azure-bench-history-prod/main.bicep'; Domains = @('bench-history', 'build', 'scheduled', 'workflow'); Analysis = $false; Workflows = $false },
         @{ Path = 'infra/azure-bench-history-prod/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = 'infra/azure-bench-history-test/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
-        @{ Path = 'infra/azure-bench-history-test/main.bicepparam'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = 'packages/cargo-bench-history/src/azure_bundle/main.bicep'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = 'infra/azure-bench-history-test/main.bicepparam'; Domains = @('bench-history', 'build', 'scheduled', 'workflow'); Analysis = $false; Workflows = $false },
+        @{ Path = 'packages/cargo-bench-history/src/azure_bundle/main.bicep'; Domains = @('bench-history', 'build', 'scheduled', 'workflow'); Analysis = $false; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/src/azure_bundle/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/src/azure_bundle/AzureDeployment.psm1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/tests/fixtures/setup-azure.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
-        @{ Path = '.github/actions/bench-history-setup/action.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
-        @{ Path = '.github/workflows/bench-history.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
-        @{ Path = '.github/workflows/pr-bench-history.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
-        @{ Path = '.github/workflows/bench-history-backfill.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/actions/bench-history-setup/action.yml'; Domains = @('bench-history', 'workflow'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/bench-history.yml'; Domains = @('bench-history', 'workflow'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/pr-bench-history.yml'; Domains = @('bench-history', 'workflow'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/bench-history-backfill.yml'; Domains = @('bench-history', 'workflow'); Analysis = $false; Workflows = $true },
         @{ Path = 'justfiles/just_release.just'; Domains = @('release'); Analysis = $false; Workflows = $false },
-        @{ Path = 'justfiles/just_quality.just'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $true; Workflows = $true },
-        @{ Path = '.cargo/mutants.toml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = 'justfiles/just_quality.just'; Domains = @('bench-history', 'build', 'scheduled', 'workflow'); Analysis = $true; Workflows = $true },
+        @{ Path = '.cargo/mutants.toml'; Domains = @('build', 'scheduled', 'workflow'); Analysis = $false; Workflows = $false },
         @{ Path = 'Cargo.toml'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = 'packages/cpulist/Cargo.toml'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = '.github/skills/scheduled-triage/SKILL.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = '.github/skills/scheduled-intake/SKILL.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = '.github/skills/scheduled-repair/SKILL.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = '.github/prompts/setup-scheduled-remediation.prompt.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = 'docs/scheduled-validation.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false }
+        @{ Path = 'packages/cpulist/Cargo.toml'; Domains = @('scheduled'); Analysis = $false; Workflows = $false }
     ) {
         $plan = Get-ValidationPlan -ChangedPath @($Path)
         $plan.script_domains | Should -Be $Domains
         $plan.script_analysis | Should -Be $Analysis
         $plan.workflows | Should -Be $Workflows
+    }
+
+    It 'does not select tooling for internal guidance <_>' -ForEach @(
+        'docs/scheduled-validation.md',
+        '.github/prompts/setup-scheduled-remediation.prompt.md',
+        '.github/skills/scheduled-intake/SKILL.md',
+        '.github/skills/scheduled-triage/SKILL.md',
+        '.github/skills/scheduled-repair/SKILL.md'
+    ) {
+        $plan = Get-ValidationPlan -ChangedPath @($_) -CanaryTrusted $true
+        $plan.workflows | Should -BeFalse
+        $plan.script_analysis | Should -BeFalse
+        $plan.bicep | Should -BeFalse
+        $plan.release_binary_smoke | Should -BeFalse
+        $json = ConvertTo-PlanJson $plan
+        @(Get-ValidationScriptDomain -PlanJson $json -AffectedPackageJson '[]') | Should -BeNullOrEmpty
+        $canary = Get-ValidationCanarySelection -PlanJson $json -AffectedPackageJson '[]'
+        $canary.check_fixture | Should -BeFalse
+        $canary.run_hosted | Should -BeFalse
+    }
+
+    It 'keeps workflow integration selections without unrelated build or scheduled suites' -ForEach @(
+        @{ Path = '.github/workflows/standard-validation.yml'; Smoke = $true },
+        @{ Path = '.github/workflows/deep-validation.yml'; Smoke = $false }
+    ) {
+        $plan = Get-ValidationPlan -ChangedPath @($Path, 'docs/scheduled-validation.md',
+            '.github/skills/scheduled-triage/SKILL.md') -CanaryTrusted $true
+        $json = ConvertTo-PlanJson $plan
+        @(Get-ValidationScriptDomain -PlanJson $json -AffectedPackageJson '[]') |
+            Should -Be @('bench-history', 'workflow')
+        $plan.workflows | Should -BeTrue
+        $plan.script_analysis | Should -BeFalse
+        $plan.bicep | Should -BeFalse
+        Test-ReleaseBinarySmokeSelected -PlanJson $json -AffectedPackageJson '[]' | Should -Be $Smoke
+        (Get-ValidationCanarySelection -PlanJson $json -AffectedPackageJson '[]').run_hosted | Should -BeTrue
     }
 
     It 'selects every tooling check for shared input <_>' -ForEach @(
@@ -105,7 +138,7 @@ Describe 'Non-Cargo change domains' {
     It 'unions and deduplicates domains' {
         $plan = Get-ValidationPlan -ChangedPath @('scripts/book/BookSite.psm1',
             'scripts/book/BookSite.Tests.ps1', 'scripts/build/Miri.psm1')
-        $plan.script_domains | Should -Be @('book', 'build', 'scheduled')
+        $plan.script_domains | Should -Be @('book', 'build', 'scheduled', 'workflow')
     }
 
     It 'runs all tooling for <_> on main without needing a comparison' -ForEach @(
@@ -263,6 +296,16 @@ Describe 'Explicit Pester scope' {
         Get-ScriptTestPath -Root $TestDrive | Should -Be $TestDrive
     }
 
+    It 'resolves workflow-only selection without discovering build or scheduled suites' {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('.github/actionlint.yaml'))
+        $domains = @(Get-ValidationScriptDomain -PlanJson $plan -AffectedPackageJson '[]')
+        $paths = @(Get-ScriptTestPath -Domains ($domains -join ' '))
+        @($paths | ForEach-Object { [System.IO.Path]::GetFullPath($_) }) |
+            Should -Be @((Join-Path (Split-Path $PSScriptRoot -Parent) 'workflow'))
+        $tests = @(Get-ChildItem -LiteralPath $paths -Filter '*.Tests.ps1' -Recurse -File)
+        $tests.Name | Should -Be @('ValidationWorkflow.Tests.ps1')
+    }
+
     It 'resolves and deduplicates selected suites and rejects unknown or empty domains' {
         $path = Join-Path $TestDrive 'book'
         $null = New-Item -ItemType Directory -Path $path -Force
@@ -335,7 +378,7 @@ Describe 'Complete Git change sets' {
         $null = Save-FixtureCommit
         Add-Content -LiteralPath 'README.md' -Value 'later change'
         $head = Save-FixtureCommit
-        (Get-FixturePlan $base $head).script_domains | Should -Be @('book', 'build', 'scheduled')
+        (Get-FixturePlan $base $head).script_domains | Should -Be @('book', 'build', 'scheduled', 'workflow')
     }
 
     It 'retains deletions and emits an explicit empty plan for identical commits' {
