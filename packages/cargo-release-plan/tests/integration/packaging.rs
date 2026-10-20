@@ -4,6 +4,10 @@
 //! directory.
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+
+use cargo_release_plan::{RunInput, run};
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{
@@ -47,6 +51,51 @@ fn prepare_accepts_a_tracked_symlink_fixture_in_a_placeholder_checkout() {
     ]);
     fixture.git(&["config", "core.symlinks", "false"]);
     fixture.git(&["commit", "-m", "tracked symlink fixture"]);
+
+    let prepared = prepare(&fixture);
+
+    assert!(prepared.is_file());
+    let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+
+    fixture.write("proposal.json", r#"{"schema_version":8,"increments":[]}"#);
+    let preview = fixture.path().join("preview");
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared,
+        output: preview.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let report = fs::read_to_string(preview.join("report.json")).unwrap();
+    assert!(report.contains("\"status\": \"unchanged\""));
+    let retained = preview.join("workspace/packages/demo/tests/fixtures/link");
+    assert!(fs::symlink_metadata(&retained).unwrap().is_file());
+    assert_eq!(fs::read_to_string(retained).unwrap(), "target");
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "runs preparation against a real native symlink checkout"
+)]
+#[test]
+fn prepare_accepts_a_tracked_symlink_fixture_in_a_native_checkout() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write("packages/demo/tests/fixtures/target", "fixture contents\n");
+    symlink(
+        "target",
+        fixture.path().join("packages/demo/tests/fixtures/link"),
+    )
+    .unwrap();
+    fixture.commit("tracked native symlink fixture");
 
     let prepared = prepare(&fixture);
 

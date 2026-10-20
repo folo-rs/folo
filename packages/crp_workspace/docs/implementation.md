@@ -39,6 +39,9 @@ Git modes and direct file metadata identify released symbolic links consistently
 The work-tree observation returns either a native link's unfollowed path or the
 target bytes from a `core.symlinks=false` placeholder. Versioning owns target
 syntax, workspace containment, chain resolution and package-release policy.
+Workspace also supplies a cached component-by-component parent observation so
+callers can reject a symlinked ancestor before any final-path metadata or hashing
+follows it.
 General filesystem identity resolution still protects case and short-name aliases
 and artifact write locations; it is not a broader symlink traversal protocol.
 Repository-controlled display strings use the diagnostic component's presentation helpers.

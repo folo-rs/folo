@@ -2,6 +2,10 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+#[cfg(windows)]
+use std::os::windows::fs::{symlink_dir, symlink_file};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -58,6 +62,7 @@ impl Prospective {
             "core.eol",
             "core.filemode",
             "core.ignorecase",
+            "core.symlinks",
         ] {
             if let Some(value) = run_capture_ok("git", &["config", "--get", key], inputs.root())? {
                 _ = run_capture("git", &["config", key, value.trim()], &prospective.root)?;
@@ -79,16 +84,17 @@ impl Prospective {
         )?;
         for path in &inputs.paths {
             let source = inputs.root().join(path);
-            if !source.exists() {
-                continue;
-            }
+            let metadata = match fs::symlink_metadata(&source) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(ReadFileError::caused_by(&source, error).into()),
+            };
             let destination = prospective.root.join(path);
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|error| WriteFileError::caused_by(parent, error))?;
             }
-            fs::copy(&source, &destination)
-                .map_err(|error| WriteFileError::caused_by(&destination, error))?;
+            Self::copy_input(&source, &destination, &metadata)?;
         }
         Ok(prospective)
     }
@@ -121,6 +127,36 @@ impl Prospective {
         )?;
         self.retained = true;
         Ok(manifest)
+    }
+
+    fn copy_input(
+        source: &Path,
+        destination: &Path,
+        metadata: &fs::Metadata,
+    ) -> Result<(), AppError> {
+        if metadata.file_type().is_symlink() {
+            let target =
+                fs::read_link(source).map_err(|error| ReadFileError::caused_by(source, error))?;
+            Self::create_symlink(source, &target, destination)
+                .map_err(|error| WriteFileError::caused_by(destination, error))?;
+        } else {
+            _ = fs::copy(source, destination)
+                .map_err(|error| WriteFileError::caused_by(destination, error))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn create_symlink(_source: &Path, target: &Path, destination: &Path) -> io::Result<()> {
+        symlink(target, destination)
+    }
+
+    #[cfg(windows)]
+    fn create_symlink(source: &Path, target: &Path, destination: &Path) -> io::Result<()> {
+        match fs::metadata(source) {
+            Ok(metadata) if metadata.is_dir() => symlink_dir(target, destination),
+            _ => symlink_file(target, destination),
+        }
     }
 
     fn retain_workspace(

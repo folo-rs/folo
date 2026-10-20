@@ -803,9 +803,10 @@ Released symbolic links use a deliberately bounded subset of Cargo's dereference
 behavior. Every target is a UTF-8 relative path, every hop is Git-tracked, the
 chain remains inside the selected workspace, and the terminal target is a regular
 file. Cycles, absolute or escaping targets, missing or untracked targets,
-directories, and platform-dependent target syntax stop assessment with a
-condition-specific diagnostic. This reconstructs the intended package payload
-without traversing arbitrary filesystem state.
+directories, symlinked work-tree ancestors, trailing directory syntax,
+non-canonical traversal such as `name/../target`, and platform-dependent target
+syntax stop assessment with a condition-specific diagnostic. This reconstructs
+the intended package payload without traversing arbitrary filesystem state.
 
 ### Relevant lockfile closures
 

@@ -208,6 +208,35 @@ fn native_symlinks_are_dereferenced_for_package_comparison() {
     assert!(patch.contains("-before\n+after\n"));
 }
 
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "replaces a tracked directory with a real symbolic link"
+)]
+fn symlinked_target_ancestors_are_rejected_before_hashing() {
+    let fixture = Repository::new();
+    fixture.write("shared/target", b"before\n");
+    fixture.command(&["add", "shared/target"]);
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/target");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fs::remove_dir_all(fixture.path().join("shared")).unwrap();
+    fixture.write("outside/target", b"outside\n");
+    symlink("../outside", fixture.path().join("shared")).unwrap();
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let error = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
+    assert!(error.to_string().contains("symbolic-link directory"));
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "compares real Git symlink modes and work-tree files")]
 fn placeholder_symlink_chains_use_terminal_content_and_mode() {

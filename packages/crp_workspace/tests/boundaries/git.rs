@@ -180,6 +180,29 @@ fn native_symlinks_expose_the_unfollowed_target_path() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+#[cfg_attr(miri, ignore = "creates and inspects a real symbolic-link directory")]
+fn work_tree_ancestors_detect_directory_links_without_following_them() {
+    let fixture = testing::Repository::new();
+    fs::create_dir_all(fixture.path().join("outside")).unwrap();
+    symlink("outside", fixture.path().join("linked")).unwrap();
+    let mut ancestors = WorkTreeAncestors::default();
+
+    assert_eq!(
+        ancestors
+            .first_symlink(fixture.path(), Path::new("linked/file"))
+            .unwrap(),
+        Some("linked".into())
+    );
+    assert_eq!(
+        ancestors
+            .first_symlink(fixture.path(), Path::new("ordinary/file"))
+            .unwrap(),
+        None
+    );
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
 #[test]
 fn an_option_like_revision_resolves_only_as_a_ref() {

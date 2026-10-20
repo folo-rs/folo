@@ -30,8 +30,11 @@ materializes the link as a regular target-text placeholder.
 Supported links use UTF-8 relative targets, remain inside the selected workspace
 at every hop, and terminate at a Git-tracked regular file. A cycle, absolute or
 escaping target, missing or untracked target, directory, or non-portable target
-syntax is an assessment error with remediation in the diagnostic. The tool never
-follows a released link into arbitrary filesystem state.
+syntax is an assessment error with remediation in the diagnostic. Targets must
+also be canonical relative spellings: a trailing separator or parent traversal
+after a named component is rejected rather than guessed. The tool rejects
+symlinked parent directories and never follows a released link into arbitrary
+filesystem state.
 
 `Cargo.toml` is packaged content. Even a formatting-only change to a package
 manifest requires assessment; the tool does not maintain a second policy that

@@ -10,7 +10,7 @@
 )]
 
 use std::collections::HashSet;
-use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Output;
 use std::{fs, io, mem};
 
@@ -835,6 +835,49 @@ pub enum WorkTreePath {
     Other,
 }
 
+/// Cached observation of work-tree parent directories.
+#[derive(Debug, Default)]
+pub struct WorkTreeAncestors {
+    safe: HashSet<PathBuf>,
+}
+
+impl WorkTreeAncestors {
+    /// Returns the first symbolic-link ancestor without following it.
+    pub fn first_symlink(
+        &mut self,
+        root: &Path,
+        relative: &Path,
+    ) -> Result<Option<PathBuf>, AppError> {
+        let Some(parent) = relative.parent() else {
+            return Ok(None);
+        };
+        let mut current = PathBuf::new();
+        for component in parent.components() {
+            let Component::Normal(component) = component else {
+                continue;
+            };
+            current.push(component);
+            if self.safe.contains(&current) {
+                continue;
+            }
+            let path = root.join(&current);
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(ReadFileError::caused_by(path, error).into()),
+            };
+            if metadata.file_type().is_symlink() {
+                return Ok(Some(current));
+            }
+            if !metadata.is_dir() {
+                return Ok(None);
+            }
+            self.safe.insert(current.clone());
+        }
+        Ok(None)
+    }
+}
+
 /// Interprets Git's ancestry predicate without confusing a query failure with non-ancestry.
 fn ancestry_outcome(output: &Output) -> Result<bool, AppError> {
     match output.status.code() {
@@ -855,7 +898,7 @@ fn ancestry_outcome(output: &Output) -> Result<bool, AppError> {
 /// paths must be rejected before hashing because `core.symlinks=false` can
 /// materialize an indexed link as an ordinary work-tree file.
 /// Ref: packages/cargo-release-plan/docs/implementation.md, "Content identity and file modes".
-#[derive(Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorkTreeModes {
     pub executable: HashSet<String>,
     pub symlinks: HashSet<String>,

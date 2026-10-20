@@ -720,7 +720,9 @@ executable mode while the original link retains its archive path.
 This resolution happens before work-tree hashing. `git hash-object` receives only
 terminal regular files, so filters and line endings preserve the ordinary
 content-identity model without allowing Git or the filesystem to dereference an
-unvalidated link.
+unvalidated link. Each work-tree component leading to the terminal file is
+inspected without following links; a symlinked ancestor stops assessment before
+the path can escape the workspace.
 
 ### Package boundaries and resources
 
@@ -967,13 +969,19 @@ limited to replacing workspace package identities.
 
 The prepared artifact contains only the post-refresh input snapshot. It cannot
 carry an alternative file overlay: both semantic grading and prospective cloning
-must start from the live state that preparation captured.
+must start from the live state that preparation captured. Fingerprints encode a
+tracked link's unfollowed target text, not its dereferenced bytes, and reject
+symlinked parent directories. Native links and `core.symlinks=false` placeholders
+therefore have one captured identity.
 
 Preview uses a disposable prospective workspace so version and requirement
 rewrites never become original planning inputs. Each iteration derives its
 candidate from the prepared input rather than incrementing the preceding
 candidate again. Classification uses the same release-history and merge-target
-commits throughout.
+commits throughout. The prospective checkout copies the original
+`core.symlinks` setting and preserves native links instead of flattening them
+through ordinary file copying, so preparation and preview interpret the same
+index entries consistently.
 New binary closure effects and their dependent/group consequences expand the
 candidate until it is stable. Existing sufficient versions are retained.
 

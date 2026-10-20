@@ -16,8 +16,8 @@ use std::{fs, io, mem, str};
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
 use crp_workspace::git::{
     BLOB_BATCH_BYTES, BlobReader, CommitHeaders, GitObjectContext, GitRepo, HistoricalTree,
-    LiveObservations, TreeEntry, WorkTreeModes, WorkTreePath, WorkTreeSymlinkTarget, decode_file,
-    join_git_rel, tree_mode,
+    LiveObservations, TreeEntry, WorkTreeAncestors, WorkTreeModes, WorkTreePath,
+    WorkTreeSymlinkTarget, decode_file, join_git_rel, tree_mode,
 };
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
@@ -49,9 +49,9 @@ use crate::history::AssessmentHistory;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::{
     AbsoluteSymlinkTargetError, EscapingSymlinkTargetError, LockfileClosureUnavailableError,
-    MalformedLockfileError, MissingSymlinkTargetError, NonPortableSymlinkTargetError,
-    NonRegularSymlinkTargetError, ReadFileError, SymlinkCycleError, SymlinkInputError,
-    SymlinkTargetEncodingError, VersionRegressionError,
+    MalformedLockfileError, MissingSymlinkTargetError, NonCanonicalSymlinkTargetError,
+    NonPortableSymlinkTargetError, NonRegularSymlinkTargetError, ReadFileError, SymlinkCycleError,
+    SymlinkInputError, SymlinkTargetEncodingError, SymlinkedAncestorError, VersionRegressionError,
 };
 
 #[cfg(test)]
@@ -1343,7 +1343,14 @@ fn historical_released_identity(
     let mut followed_link = false;
     let mut visited = HashSet::new();
     loop {
-        let Some(recorded) = case.recorded_path(tree.paths(), &current) else {
+        let recorded = tree
+            .entry(&current)
+            .map(|entry| entry.path.as_str())
+            .or_else(|| match case {
+                PathCase::Sensitive => None,
+                PathCase::Insensitive => case.recorded_path(tree.paths(), &current),
+            });
+        let Some(recorded) = recorded else {
             return Err(missing_or_nonregular_link_target(
                 name,
                 released_path,
@@ -1420,10 +1427,17 @@ fn resolved_work_files(
     let mut selected: Vec<_> = released.iter().collect();
     selected.sort_unstable_by(|left, right| left.0.cmp(right.0));
     let mut resolved = BTreeMap::new();
+    let mut ancestors = WorkTreeAncestors::default();
     for (archive_path, source_path) in selected {
-        if let Some(file) =
-            resolve_work_file(git, name, source_path, initial_modes, observations, case)?
-        {
+        if let Some(file) = resolve_work_file(
+            git,
+            name,
+            source_path,
+            initial_modes,
+            observations,
+            case,
+            &mut ancestors,
+        )? {
             resolved.insert(archive_path.clone(), file);
         }
     }
@@ -1437,6 +1451,7 @@ fn resolve_work_file(
     initial_modes: &WorkTreeModes,
     observations: Option<&LiveObservations>,
     case: PathCase,
+    ancestors: &mut WorkTreeAncestors,
 ) -> Result<Option<ResolvedWorkFile>, AppError> {
     let mut current = released_path.to_string();
     let mut first = true;
@@ -1449,6 +1464,11 @@ fn resolve_work_file(
             Some(observed_path_modes(git, &current, observations, case)?)
         };
         let modes = modes.as_ref().unwrap_or(initial_modes);
+        if let Some(ancestor) = ancestors.first_symlink(git.root(), Path::new(&current))? {
+            let ancestor =
+                to_git_separators(&ancestor.to_string_lossy(), MAIN_SEPARATOR).into_owned();
+            return Err(SymlinkedAncestorError::new(name, released_path, ancestor).into());
+        }
         match git.work_tree_path(&current, modes.is_symlink(&current))? {
             WorkTreePath::Missing if followed_link => {
                 return Err(MissingSymlinkTargetError::new(name, released_path, &current).into());
@@ -1574,21 +1594,33 @@ fn resolve_symlink_target(
     if symlink_target_is_absolute(target) {
         return Err(AbsoluteSymlinkTargetError::new(name, released_path, target).into());
     }
+    if target.ends_with('/') {
+        return Err(NonCanonicalSymlinkTargetError::new(name, released_path, target).into());
+    }
     let mut components: Vec<&str> = link_path
         .rsplit_once('/')
         .map_or("", |(parent, _)| parent)
         .split('/')
         .filter(|component| !component.is_empty())
         .collect();
+    let mut saw_named_component = false;
     for component in target.split('/') {
         match component {
             "" | "." => {}
             ".." => {
+                if saw_named_component {
+                    return Err(
+                        NonCanonicalSymlinkTargetError::new(name, released_path, target).into(),
+                    );
+                }
                 if components.pop().is_none() {
                     return Err(EscapingSymlinkTargetError::new(name, released_path, target).into());
                 }
             }
-            component => components.push(component),
+            component => {
+                saw_named_component = true;
+                components.push(component);
+            }
         }
     }
     let resolved = components.join("/");

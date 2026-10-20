@@ -419,6 +419,40 @@ pub(crate) struct NonRegularSymlinkTargetError {
 impl UnwindSafe for NonRegularSymlinkTargetError {}
 impl RefUnwindSafe for NonRegularSymlinkTargetError {}
 
+/// A released path crosses a work-tree directory symbolic link.
+#[ohno::error]
+#[display(
+    "Package '{}' releases '{}' through symbolic-link directory '{}'; restore an ordinary workspace directory before assessment",
+    package.quoted(),
+    path.quoted(),
+    ancestor.quoted()
+)]
+pub(crate) struct SymlinkedAncestorError {
+    package: String,
+    path: String,
+    ancestor: String,
+}
+
+impl UnwindSafe for SymlinkedAncestorError {}
+impl RefUnwindSafe for SymlinkedAncestorError {}
+
+/// A released symbolic link uses a target spelling whose traversal cannot be reconstructed safely.
+#[ohno::error]
+#[display(
+    "Package '{}' releases symbolic link '{}' with non-canonical target '{}'; use a normalized relative target without a trailing separator or parent traversal after a named component",
+    package.quoted(),
+    path.quoted(),
+    target.quoted()
+)]
+pub(crate) struct NonCanonicalSymlinkTargetError {
+    package: String,
+    path: String,
+    target: String,
+}
+
+impl UnwindSafe for NonCanonicalSymlinkTargetError {}
+impl RefUnwindSafe for NonCanonicalSymlinkTargetError {}
+
 /// A version string is not valid `SemVer`.
 #[ohno::error]
 #[display(
@@ -500,6 +534,8 @@ mod tests {
     assert_impl_all!(SymlinkCycleError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(MissingSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(NonRegularSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(SymlinkedAncestorError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(NonCanonicalSymlinkTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn shallow_history_error_names_package() {

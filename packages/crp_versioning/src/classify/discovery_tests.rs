@@ -95,6 +95,22 @@ fn unsafe_symlink_target_shapes_have_distinct_conditions() {
             .find_source::<NonPortableSymlinkTargetError>()
             .is_some()
     );
+    for target in ["missing/../target", "target/"] {
+        let noncanonical = resolve_symlink_target(
+            "pkg",
+            "workspace/pkg/link",
+            "workspace/pkg/link",
+            target,
+            "workspace",
+            PathCase::Sensitive,
+        )
+        .unwrap_err();
+        assert!(
+            noncanonical
+                .find_source::<NonCanonicalSymlinkTargetError>()
+                .is_some()
+        );
+    }
 }
 
 #[test]

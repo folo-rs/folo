@@ -11,13 +11,13 @@ use std::fs;
 use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 
 use crp_diag::Verbose;
 use crp_workspace::artifact_path;
 use crp_workspace::command::{hash_bytes, run_capture_bytes};
-use crp_workspace::git::{GitRepo, WorkTreeModes};
-use crp_workspace::manifest::{PathCase, parse_document};
+use crp_workspace::git::{GitRepo, WorkTreeAncestors, WorkTreeModes};
+use crp_workspace::manifest::{PathCase, parse_document, to_git_separators};
 use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
@@ -122,9 +122,10 @@ impl Inputs {
             },
         )?;
         capture_sources(&root, &sources, &mut paths)?;
-        let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
         let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root())?;
-        acquired.index_modes = Some(WorkTreeModes::from_index(&index)?);
+        let index_modes = WorkTreeModes::from_index(&index)?;
+        let digest = fingerprint_with_modes(&root, &paths, &BTreeMap::new(), &index_modes)?;
+        acquired.index_modes = Some(index_modes);
         let index = String::from_utf8(index)
             .expect("index mode interpretation strictly decoded every NUL-delimited record");
         let inputs = Self {
@@ -240,11 +241,12 @@ impl Inputs {
     // Native path-identity and fingerprint acquisition; the comparison protocol has pure tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
+        let modes = current.index_modes()?;
         self.compare_candidate_with(
             current,
             final_digest,
             &PathIdentity::new(&current.root, &PathCase::probe),
-            || fingerprint(&current.root, &self.paths, &BTreeMap::new()),
+            || fingerprint_with_modes(&current.root, &self.paths, &BTreeMap::new(), &modes),
         )
     }
 
@@ -356,9 +358,14 @@ impl Inputs {
     #[cfg_attr(test, mutants::skip)]
     pub fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let identity = PathIdentity::new(&self.root, &PathCase::probe);
+        let modes = self.index_modes()?;
         self.final_digest_with(files, &identity, |replacements| {
-            fingerprint(&self.root, &self.paths, replacements)
+            fingerprint_with_modes(&self.root, &self.paths, replacements, &modes)
         })
+    }
+
+    fn index_modes(&self) -> Result<WorkTreeModes, AppError> {
+        WorkTreeModes::from_index(self.index.as_bytes())
     }
 
     fn final_digest_with(
@@ -854,12 +861,28 @@ pub fn fingerprint(
     paths: &BTreeSet<PathBuf>,
     replacements: &BTreeMap<PathBuf, Vec<u8>>,
 ) -> Result<String, AppError> {
+    fingerprint_with_modes(root, paths, replacements, &WorkTreeModes::default())
+}
+
+fn fingerprint_with_modes(
+    root: &Path,
+    paths: &BTreeSet<PathBuf>,
+    replacements: &BTreeMap<PathBuf, Vec<u8>>,
+    modes: &WorkTreeModes,
+) -> Result<String, AppError> {
     let identity = PathIdentity::new(root, &PathCase::probe);
+    let mut ancestors = WorkTreeAncestors::default();
+    for path in paths {
+        if let Some(ancestor) = ancestors.first_symlink(root, path)? {
+            return Err(UnsupportedInput::new(root.join(ancestor)).into());
+        }
+    }
     let bytes = fingerprint_bytes(
         root,
         paths,
         replacements,
         &identity,
+        modes,
         |path| {
             fs::symlink_metadata(path).map(|metadata| InputMetadata {
                 regular: metadata.is_file(),
@@ -869,6 +892,15 @@ pub fn fingerprint(
             })
         },
         |path| fs::read(path),
+        |path| {
+            let target = fs::read_link(path)?;
+            let target = target.to_str().ok_or_else(|| {
+                io::Error::new(ErrorKind::InvalidData, "symbolic-link target is not UTF-8")
+            })?;
+            Ok(to_git_separators(target, MAIN_SEPARATOR)
+                .as_bytes()
+                .to_vec())
+        },
     )?;
     hash_bytes(&bytes, root)
 }
@@ -888,13 +920,19 @@ fn executable_mode(mode: u32) -> bool {
     mode & 0o111 != 0
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fingerprinting keeps metadata, regular-file reads and unfollowed link reads as separate injected observations"
+)]
 fn fingerprint_bytes(
     root: &Path,
     paths: &BTreeSet<PathBuf>,
     replacements: &BTreeMap<PathBuf, Vec<u8>>,
     identity: &PathIdentity<'_>,
+    _modes: &WorkTreeModes,
     mut metadata: impl FnMut(&Path) -> io::Result<InputMetadata>,
     mut read: impl FnMut(&Path) -> io::Result<Vec<u8>>,
+    mut read_link: impl FnMut(&Path) -> io::Result<Vec<u8>>,
 ) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
     for relative in paths {
@@ -908,20 +946,30 @@ fn fingerprint_bytes(
         };
         if metadata
             .as_ref()
-            .is_some_and(|metadata| !metadata.regular || metadata.symlink)
+            .is_some_and(|metadata| !metadata.regular && !metadata.symlink)
         {
             return Err(UnsupportedInput::new(&path).into());
         }
         #[cfg(unix)]
-        bytes.push(u8::from(
-            metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.executable),
-        ));
+        {
+            let git_path = to_git_separators(&name, MAIN_SEPARATOR);
+            let symlink = metadata.as_ref().is_some_and(|metadata| metadata.symlink)
+                || _modes.is_symlink(&git_path);
+            bytes.push(u8::from(
+                metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.executable && !symlink),
+            ));
+        }
         let contents = if let Some(replacement) = identity.replacement(relative, replacements) {
             Some(replacement.to_owned())
         } else if metadata.is_some() {
-            Some(read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?)
+            let contents = if metadata.as_ref().is_some_and(|metadata| metadata.symlink) {
+                read_link(&path)
+            } else {
+                read(&path)
+            };
+            Some(contents.map_err(|error| ReadFileError::caused_by(&path, error))?)
         } else {
             None
         };

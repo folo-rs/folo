@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use super::*;
 
 fn regular() -> InputMetadata {
@@ -14,10 +16,19 @@ fn encode(
     contents: io::Result<Vec<u8>>,
     replacement: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, AppError> {
+    encode_with_modes(metadata, contents, replacement, &WorkTreeModes::default())
+}
+
+fn encode_with_modes(
+    metadata: io::Result<InputMetadata>,
+    contents: io::Result<Vec<u8>>,
+    replacement: Option<Vec<u8>>,
+    modes: &WorkTreeModes,
+) -> Result<Vec<u8>, AppError> {
     let root = Path::new("root");
     let path = PathBuf::from("input");
     let mut metadata = Some(metadata);
-    let mut contents = Some(contents);
+    let contents = RefCell::new(Some(contents));
     fingerprint_bytes(
         root,
         &BTreeSet::from([path.clone()]),
@@ -25,13 +36,18 @@ fn encode(
             .map(|bytes| BTreeMap::from([(path, bytes)]))
             .unwrap_or_default(),
         &PathIdentity::new(root, &|_| panic!("exact names require no probe")),
+        modes,
         |path| {
             assert_eq!(path, root.join("input"));
             metadata.take().unwrap()
         },
         |path| {
             assert_eq!(path, root.join("input"));
-            contents.take().unwrap()
+            contents.borrow_mut().take().unwrap()
+        },
+        |path| {
+            assert_eq!(path, root.join("input"));
+            contents.borrow_mut().take().unwrap()
         },
     )
 }
@@ -61,17 +77,33 @@ fn byte_read_errors_propagate_including_disappearance_after_metadata() {
 }
 
 #[test]
-fn replacements_do_not_admit_directories_or_symlinks() {
-    for (regular, symlink) in [(false, false), (false, true), (true, true)] {
-        let metadata = InputMetadata {
-            regular,
-            symlink,
-            #[cfg(unix)]
-            executable: false,
-        };
-        let error = encode(Ok(metadata), Ok(Vec::new()), Some(Vec::new())).unwrap_err();
-        assert!(error.find_source::<UnsupportedInput>().is_some());
-    }
+fn replacements_do_not_admit_directories() {
+    let metadata = InputMetadata {
+        regular: false,
+        symlink: false,
+        #[cfg(unix)]
+        executable: false,
+    };
+    let error = encode(Ok(metadata), Ok(Vec::new()), Some(Vec::new())).unwrap_err();
+    assert!(error.find_source::<UnsupportedInput>().is_some());
+}
+
+#[test]
+fn native_and_placeholder_symlinks_encode_the_same_target_bytes() {
+    let native = InputMetadata {
+        regular: false,
+        symlink: true,
+        #[cfg(unix)]
+        executable: false,
+    };
+    let mut modes = WorkTreeModes::default();
+    modes.set("input", "120000");
+    let placeholder = regular();
+
+    assert_eq!(
+        encode(Ok(native), Ok(b"target".to_vec()), None).unwrap(),
+        encode_with_modes(Ok(placeholder), Ok(b"target".to_vec()), None, &modes,).unwrap()
+    );
 }
 
 #[test]
