@@ -1361,8 +1361,9 @@ fn historical_released_identity(
                 return Err(SymlinkCycleError::new(name, released_path, recorded).into());
             }
             let target = git.show_blob_bytes(&entry.id)?;
-            let target = str::from_utf8(&target)
-                .map_err(|_| SymlinkTargetEncodingError::new(name, released_path))?;
+            let target = str::from_utf8(&target).map_err(|error| {
+                SymlinkTargetEncodingError::caused_by(name, released_path, error)
+            })?;
             current =
                 resolve_symlink_target(name, released_path, recorded, target, workspace_dir, case)?;
             continue;
@@ -1551,9 +1552,11 @@ fn work_tree_link_text(
             .to_str()
             .map(|path| to_git_separators(path, MAIN_SEPARATOR).into_owned())
             .ok_or_else(|| SymlinkTargetEncodingError::new(name, released_path).into()),
-        WorkTreeSymlinkTarget::Placeholder(bytes) => str::from_utf8(&bytes)
-            .map(str::to_owned)
-            .map_err(|_| SymlinkTargetEncodingError::new(name, released_path).into()),
+        WorkTreeSymlinkTarget::Placeholder(bytes) => {
+            str::from_utf8(&bytes).map(str::to_owned).map_err(|error| {
+                SymlinkTargetEncodingError::caused_by(name, released_path, error).into()
+            })
+        }
     }
 }
 
@@ -1597,10 +1600,10 @@ fn resolve_symlink_target(
 
 fn symlink_target_is_absolute(target: &str) -> bool {
     target.starts_with('/')
-        || target
-            .as_bytes()
-            .get(0..2)
-            .is_some_and(|prefix| prefix[0].is_ascii_alphabetic() && prefix[1] == b':')
+        || matches!(
+            target.as_bytes(),
+            [drive, b':', ..] if drive.is_ascii_alphabetic()
+        )
 }
 
 fn within_workspace(path: &str, workspace_dir: &str, case: PathCase) -> bool {
