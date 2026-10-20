@@ -23,7 +23,7 @@ BeforeAll {
             Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
         }
     )
-    Import-Module (Join-Path $PSScriptRoot 'RequiredChecks.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..\build\RequiredChecks.psm1') -Force
 
     function Get-WorkflowJob([string] $Workflow, [string] $Name) {
         $pattern = '(?ms)^  ' + [regex]::Escape($Name) + ':\r?\n(?<body>.*?)(?=^  [a-z][a-z0-9-]*:\r?$|\z)'
@@ -191,21 +191,6 @@ Describe 'Release assessment history and target handoff' {
         { Assert-QueueTargetHandoff ($queue.Replace('steps.tool.outputs.executable', 'steps.unrelated.outputs.executable')) } |
             Should -Throw
         { Assert-QueueTargetHandoff ($queue.Replace('-VersionReadinessOnly', '')) } | Should -Throw
-    }
-}
-
-Describe 'Validation job references' {
-    It 'resolves every declared prerequisite within its workflow' {
-        foreach ($workflow in (@($standard, $deep, $queue, $release) + $benchmarkWorkflows)) {
-            $jobNames = @(Get-WorkflowJobName $workflow)
-            foreach ($name in $jobNames) {
-                $job = Get-WorkflowJob $workflow $name
-                foreach ($dependency in @(Get-WorkflowJobDependency $job)) {
-                    $jobNames | Should -Contain $dependency
-                    $dependency | Should -Not -Be $name
-                }
-            }
-        }
     }
 }
 

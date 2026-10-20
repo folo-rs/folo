@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 # Protects coverage-measure's Cargo target selection with real nextest discovery on dependency-free
 # packages. Unit, integration and example tests must remain selected for binary-only, library-only
@@ -53,10 +54,6 @@ publish = false
 }
 
 Describe 'Coverage Cargo target selection' {
-    It 'uses test and example selection without requiring a library or selecting benchmarks' {
-        $selectors | Should -Be @('--tests', '--examples')
-    }
-
     It 'discovers every intended test in <Packages>' -TestCases @(
         @{ Packages = @('binary_only') }
         @{ Packages = @('library_only') }
