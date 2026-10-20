@@ -811,6 +811,11 @@ non-canonical traversal such as `name/../target`, and platform-dependent target
 syntax stop assessment with a condition-specific diagnostic. This reconstructs
 the intended package payload without traversing arbitrary filesystem state.
 
+Expanded archive paths pass through the same include/exclude rules and
+nested-package boundaries as ordinary package paths. A link whose complete
+archive subtree is definitively excluded is not resolved, so an excluded broken
+or cyclic fixture cannot abort an otherwise unrelated assessment.
+
 This support applies only to links selected as package content. Workspace
 manifests, lockfiles, Cargo configuration and untracked build inputs remain
 ordinary files; they cannot use package-link handling to influence preparation

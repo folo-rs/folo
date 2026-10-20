@@ -337,6 +337,33 @@ fn directory_link_cycles_are_rejected_without_recursive_traversal() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "compares excluded tracked symbolic links")]
+fn definitively_excluded_broken_and_cyclic_links_are_not_resolved() {
+    let fixture = Repository::new();
+    fixture.write("pkg/src/lib.rs", b"pub fn value() {}\n");
+    fixture.command(&["add", "pkg/src/lib.rs"]);
+    stage_placeholder_symlink(&fixture, "pkg/tests/broken", "missing");
+    stage_placeholder_symlink(&fixture, "pkg/tests/loop", "loop");
+    fixture.command(&["commit", "--quiet", "-m", "excluded links"]);
+
+    let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, patch, stat, _) =
+        diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+
+    assert!(changed.is_empty());
+    assert!(patch.is_empty());
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (0, 0, 0));
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "compares modes and nested links in a tracked directory outside the package"

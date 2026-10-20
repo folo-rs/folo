@@ -755,11 +755,13 @@ fn classify_one(
             &side,
             |path| work_modes.is_symlink(path),
         );
+        let boundary_paths = present_tracked_manifests(git, observations.all_tracked(), side.case)?;
         _ = resolved_work_files(
             git,
             name,
             &content.released,
             observations.all_tracked(),
+            &boundary_paths,
             side.rules,
             &rule_exceptions,
             &work_modes,
@@ -1419,7 +1421,7 @@ fn expand_historical_released_path(
             if !active_directories.insert(directory.clone()) {
                 return Err(SymlinkCycleError::new(name, source_path, &directory).into());
             }
-            for child in direct_tracked_children(tree.paths(), &directory, case) {
+            for child in direct_tracked_children(tree.paths(), &directory, tree.paths(), case) {
                 let archive_child = archive_child(archive_path, &child, &directory, case);
                 expand_historical_released_path(
                     git,
@@ -1513,11 +1515,13 @@ fn work_released_identities(
         Some(observations) => observations.all_tracked().to_vec(),
         None => git.ls_files("")?,
     };
+    let boundary_paths = present_tracked_manifests(git, &tracked, case)?;
     let resolved = resolved_work_files(
         git,
         name,
         released,
         &tracked,
+        &boundary_paths,
         rules,
         rule_exceptions,
         initial_modes,
@@ -1556,6 +1560,7 @@ fn resolved_work_files(
     name: &str,
     released: &HashMap<String, String>,
     tracked: &[String],
+    boundary_paths: &[String],
     rules: &PackagingRules,
     rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
@@ -1576,6 +1581,7 @@ fn resolved_work_files(
             archive_path,
             source_path,
             tracked,
+            boundary_paths,
             rules,
             rule_exceptions,
             initial_modes,
@@ -1607,6 +1613,7 @@ fn expand_work_released_path(
     archive_path: &str,
     source_path: &str,
     tracked: &[String],
+    boundary_paths: &[String],
     rules: &PackagingRules,
     rule_exceptions: &BTreeSet<String>,
     initial_modes: &WorkTreeModes,
@@ -1645,7 +1652,7 @@ fn expand_work_released_path(
             if !active_directories.insert(path.clone()) {
                 return Err(SymlinkCycleError::new(name, source_path, &path).into());
             }
-            for child in direct_tracked_children(tracked, &path, case) {
+            for child in direct_tracked_children(tracked, &path, boundary_paths, case) {
                 let archive_child = archive_child(archive_path, &child, &path, case);
                 expand_work_released_path(
                     git,
@@ -1653,6 +1660,7 @@ fn expand_work_released_path(
                     &archive_child,
                     &child,
                     tracked,
+                    boundary_paths,
                     rules,
                     rule_exceptions,
                     initial_modes,
@@ -1781,6 +1789,7 @@ pub(crate) fn captured_package_link_inputs(
 ) -> Result<CapturedPackageLinkInputs, AppError> {
     let mut links = BTreeSet::new();
     let mut directories = BTreeSet::new();
+    let boundary_paths = present_tracked_manifests(git, tracked, case)?;
     for package in packages {
         let directory = join_git_rel(git.prefix(), &package.manifest.directory);
         let resources = resolve_resources(&package.manifest, &directory, git.prefix());
@@ -1815,6 +1824,7 @@ pub(crate) fn captured_package_link_inputs(
             &package.manifest.name,
             &released,
             tracked,
+            &boundary_paths,
             side.rules,
             &rule_exceptions,
             modes,
@@ -1863,15 +1873,35 @@ fn recorded_directory(paths: &[String], requested: &str, case: PathCase) -> Opti
     })
 }
 
-fn direct_tracked_children(paths: &[String], directory: &str, case: PathCase) -> BTreeSet<String> {
+fn direct_tracked_children(
+    paths: &[String],
+    directory: &str,
+    boundary_paths: &[String],
+    case: PathCase,
+) -> BTreeSet<String> {
+    let nested = nested_package_dirs(boundary_paths, directory, case);
     paths
         .iter()
+        .filter(|path| !is_inside_any(path, &nested, case))
         .filter_map(|path| {
             let relative = case.relativize(path, directory)?;
             let child = relative.split('/').next()?;
             (!child.is_empty()).then(|| join_git_rel(directory, child))
         })
         .collect()
+}
+
+fn present_tracked_manifests(
+    git: &GitRepo,
+    tracked: &[String],
+    case: PathCase,
+) -> Result<Vec<String>, AppError> {
+    let manifests: Vec<String> = tracked
+        .iter()
+        .filter(|path| case.is_manifest(path))
+        .cloned()
+        .collect();
+    present_in_work_tree(git, &manifests)
 }
 
 fn archive_child(archive: &str, child: &str, directory: &str, case: PathCase) -> String {
@@ -2172,11 +2202,13 @@ fn observed_released_work_tree_paths(
         Some(observations) => observations.all_tracked().to_vec(),
         None => git.ls_files("")?,
     };
+    let boundary_paths = present_tracked_manifests(git, &tracked, case)?;
     let resolved = resolved_work_files(
         git,
         &package.manifest.name,
         &content.released,
         &tracked,
+        &boundary_paths,
         side.rules,
         &rule_exceptions,
         &modes,
@@ -2344,6 +2376,9 @@ fn add_symlink_roots(
         let Some(relative) = side.case.relativize(full, side.dir) else {
             continue;
         };
+        if !side.rules.may_release_path_or_descendant(relative) {
+            continue;
+        }
         released
             .entry(relative.to_string())
             .or_insert_with(|| full.clone());

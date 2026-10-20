@@ -40,6 +40,11 @@ after a named component is rejected rather than guessed. The tool rejects
 symlinked parent directories and never follows a released link into arbitrary
 filesystem state.
 
+Include/exclude rules apply to the final expanded archive paths, not only to the
+bare link. Nested `Cargo.toml` boundaries are preserved through aliases and use
+the manifest presence at each comparison endpoint. Links whose entire possible
+archive subtree is excluded are not traversed.
+
 The exception is specifically for released package paths. Workspace manifests,
 the lockfile, Cargo configuration and untracked source inputs must remain ordinary
 files. Preparation fingerprints the validated link kind, each intermediate link

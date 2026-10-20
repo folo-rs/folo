@@ -720,6 +720,12 @@ directory enumerates its direct tracked children and recursively maps every
 terminal file beneath the link's archive prefix. The active directory set rejects
 links back into a directory already being expanded.
 
+Each recursive level filters physical descendants at the endpoint's present
+nested-package boundaries, then applies package rules to the resulting archive
+path. Before resolving a symlink root, the compiled packaging policy conservatively
+decides whether any descendant can be selected; definitively excluded subtrees
+are skipped without inspecting a broken or cyclic target.
+
 This resolution happens before work-tree hashing. `git hash-object` receives only
 terminal regular files, so filters and line endings preserve the ordinary
 content-identity model without allowing Git or the filesystem to dereference an

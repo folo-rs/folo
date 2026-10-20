@@ -227,6 +227,45 @@ fn verify_packaging_applies_exclude_rules_to_directory_link_descendants() {
 #[cfg(unix)]
 #[cfg_attr(
     miri,
+    ignore = "cross-checks nested-package boundaries through a native directory link"
+)]
+#[test]
+fn verify_packaging_preserves_nested_boundaries_through_directory_links() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write("packages/demo/tests/real/outer.json", "outer\n");
+    fixture.write(
+        "packages/demo/tests/real/nested/Cargo.toml",
+        "[package]\nname='nested'\nversion='0.1.0'\nedition='2024'\n",
+    );
+    fixture.write(
+        "packages/demo/tests/real/nested/src/lib.rs",
+        "pub fn nested() {}\n",
+    );
+    symlink("real", fixture.path().join("packages/demo/tests/alias")).unwrap();
+    fixture.commit("nested directory-link fixture");
+
+    let (_, message) = check_verifying_packaging(&fixture, "HEAD");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+
+    fs::remove_file(
+        fixture
+            .path()
+            .join("packages/demo/tests/real/nested/Cargo.toml"),
+    )
+    .unwrap();
+    let (_, message) = check_verifying_packaging(&fixture, "HEAD");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
     ignore = "runs preparation against a real native symlink checkout"
 )]
 #[test]
