@@ -1350,12 +1350,18 @@ struct ResolvedWorkFile {
     executable: bool,
 }
 
+/// Selected archive entries plus physical inputs needed to reproduce their expansion.
+///
+/// `files` is keyed by consumer-visible archive path. The link and directory sets
+/// name work-tree inputs that preparation must fingerprint and prospective preview
+/// must reconstruct even when no selected terminal file survives.
 struct ResolvedWorkContent {
     files: BTreeMap<String, ResolvedWorkFile>,
     link_inputs: BTreeSet<String>,
     directory_inputs: BTreeSet<String>,
 }
 
+/// Historical terminal object or directory reached before archive-path selection.
 enum HistoricalResolvedNode {
     File(ReleasedFileIdentity),
     Directory(String),
@@ -1396,6 +1402,10 @@ fn historical_released_identities(
     clippy::too_many_arguments,
     reason = "historical directory-link expansion carries archive/source paths, endpoint policy and active-cycle state"
 )]
+/// Recursively maps historical physical paths into consumer-visible archive identities.
+///
+/// This layer owns archive selection and the active-directory cycle set; node
+/// validation and link following remain in `resolve_historical_node`.
 fn expand_historical_released_path(
     git: &GitRepo,
     name: &str,
@@ -1449,6 +1459,7 @@ fn expand_historical_released_path(
     Ok(())
 }
 
+/// Resolves one historical path to a terminal blob or tracked directory identity.
 fn resolve_historical_node(
     git: &GitRepo,
     name: &str,
@@ -1517,16 +1528,20 @@ fn work_released_identities(
     observations: Option<&LiveObservations>,
     case: PathCase,
 ) -> Result<HashMap<String, ReleasedFileIdentity>, AppError> {
+    let owned_tracked;
     let tracked = match observations {
-        Some(observations) => observations.all_tracked().to_vec(),
-        None => git.ls_files("")?,
+        Some(observations) => observations.all_tracked(),
+        None => {
+            owned_tracked = git.ls_files("")?;
+            &owned_tracked
+        }
     };
-    let boundary_paths = present_tracked_manifests(git, &tracked, case)?;
+    let boundary_paths = present_tracked_manifests(git, tracked, case)?;
     let resolved = resolved_work_files(
         git,
         name,
         released,
-        &tracked,
+        tracked,
         &boundary_paths,
         rules,
         rule_exceptions,
@@ -1561,6 +1576,7 @@ fn work_released_identities(
     clippy::too_many_arguments,
     reason = "released-file expansion needs full tracked identity, effective modes and operation-local observations"
 )]
+/// Expands every selected work-tree root and collects archive files plus capture dependencies.
 fn resolved_work_files(
     git: &GitRepo,
     name: &str,
@@ -1610,6 +1626,10 @@ fn resolved_work_files(
     })
 }
 
+/// Recursively maps one physical source node into selected archive entries.
+///
+/// This layer owns archive-rule selection, nested-package boundaries, cycle
+/// state and accumulation of physical link/directory dependencies.
 #[expect(
     clippy::too_many_arguments,
     reason = "work-tree directory-link expansion carries archive/source paths, endpoint observations and active-cycle state"
@@ -1698,6 +1718,7 @@ fn expand_work_released_path(
     Ok(())
 }
 
+/// Work-tree terminal node plus the physical links traversed to reach it.
 enum ResolvedWorkNode {
     File {
         file: ResolvedWorkFile,
@@ -1709,6 +1730,11 @@ enum ResolvedWorkNode {
     },
 }
 
+/// Observes and validates one work-tree node without selecting its archive path.
+///
+/// This layer owns effective modes, ancestor safety, unfollowed link reads and
+/// target-chain validation. The returned link set records the physical hops
+/// traversed to reach the terminal file or directory.
 #[expect(
     clippy::too_many_arguments,
     reason = "released-link resolution needs endpoint observations, path policy, ancestor state and capture-mode reuse together"
@@ -1896,6 +1922,7 @@ fn recorded_work_target(
     }
 }
 
+/// A target found only through tracked descendants must remain a directory.
 struct RecordedWorkTarget {
     path: String,
     directory_only: bool,
@@ -2006,6 +2033,9 @@ fn resolve_symlink_target(
     if symlink_target_is_absolute(target) {
         return Err(AbsoluteSymlinkTargetError::new(name, released_path, target).into());
     }
+    // Named-component cancellation and trailing directory syntax require
+    // filesystem traversal semantics this bounded resolver deliberately does
+    // not reconstruct. Ref: cargo-release-plan design, "Where Cargo adds content".
     if target == "." || target.ends_with('/') || target.ends_with("/.") {
         return Err(NonCanonicalSymlinkTargetError::new(name, released_path, target).into());
     }
@@ -2261,16 +2291,20 @@ fn observed_released_work_tree_paths(
         &side,
         |path| modes.is_symlink(path),
     );
+    let owned_tracked;
     let tracked = match observations {
-        Some(observations) => observations.all_tracked().to_vec(),
-        None => git.ls_files("")?,
+        Some(observations) => observations.all_tracked(),
+        None => {
+            owned_tracked = git.ls_files("")?;
+            &owned_tracked
+        }
     };
-    let boundary_paths = present_tracked_manifests(git, &tracked, case)?;
+    let boundary_paths = present_tracked_manifests(git, tracked, case)?;
     let resolved = resolved_work_files(
         git,
         &package.manifest.name,
         &content.released,
-        &tracked,
+        tracked,
         &boundary_paths,
         side.rules,
         &rule_exceptions,

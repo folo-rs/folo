@@ -31,8 +31,9 @@ placeholder.
 
 Supported links use UTF-8 relative targets and remain inside the selected
 workspace at every hop. They terminate at a Git-tracked regular file or expand a
-directory's tracked descendants recursively. Active-directory tracking rejects
-cycles without relying on a depth threshold. An absolute or escaping target,
+directory's tracked descendants recursively. A directory-link cycle is rejected
+when expansion follows a link back to a directory whose expansion is already in
+progress; there is no fixed nesting-depth limit. An absolute or escaping target,
 missing or untracked target, unsupported filesystem object, or non-portable target
 syntax is an assessment error with remediation in the diagnostic. Targets must
 also be canonical relative spellings: a trailing separator or parent traversal

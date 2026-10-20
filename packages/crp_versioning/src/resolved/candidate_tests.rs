@@ -58,6 +58,16 @@ fn history_verification_uses_original_repository_refs_and_preserves_failures() {
 }
 
 #[test]
+fn final_fingerprint_modes_keep_only_admitted_links() {
+    let mut inputs = inputs();
+    inputs.index = "120000 blob 0\ttests/link\0".to_owned();
+    assert!(!inputs.fingerprint_modes().unwrap().is_symlink("tests/link"));
+
+    inputs.symlink_inputs.insert("tests/link".into());
+    assert!(inputs.fingerprint_modes().unwrap().is_symlink("tests/link"));
+}
+
+#[test]
 fn captured_index_is_returned_verbatim() {
     let inputs = inputs();
     assert_eq!(inputs.index(), "100644 blob 0\tCargo.toml\0");

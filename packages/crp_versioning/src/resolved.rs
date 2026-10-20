@@ -145,6 +145,10 @@ impl Inputs {
             case,
         )?;
         links.retain(|path| !resolver_control_input(path));
+        // Excluded links are intentionally absent from prospective files while
+        // their index entries remain. Consult both staged and effective kinds so
+        // recapture omits a missing/native/placeholder link consistently, but
+        // retains real regular-file replacements and independent source/control inputs.
         let possible_links: BTreeSet<&String> = index_modes
             .symlinks
             .iter()
@@ -291,7 +295,7 @@ impl Inputs {
     // Native path-identity and fingerprint acquisition; the comparison protocol has pure tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
-        let modes = current.index_modes()?;
+        let modes = current.fingerprint_modes()?;
         self.compare_candidate_with(
             current,
             final_digest,
@@ -424,7 +428,7 @@ impl Inputs {
     #[cfg_attr(test, mutants::skip)]
     pub fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let identity = PathIdentity::new(&self.root, &PathCase::probe);
-        let modes = self.index_modes()?;
+        let modes = self.fingerprint_modes()?;
         self.final_digest_with(files, &identity, |replacements| {
             fingerprint_with_modes(
                 &self.root,
@@ -439,6 +443,14 @@ impl Inputs {
 
     fn index_modes(&self) -> Result<WorkTreeModes, AppError> {
         WorkTreeModes::from_index(self.index.as_bytes())
+    }
+
+    fn fingerprint_modes(&self) -> Result<WorkTreeModes, AppError> {
+        let mut modes = self.index_modes()?;
+        modes
+            .symlinks
+            .retain(|path| self.symlink_inputs.contains(Path::new(path)));
+        Ok(modes)
     }
 
     fn final_digest_with(

@@ -122,6 +122,8 @@ impl PackagingRules {
                 .iter()
                 .any(|pattern| pattern_may_match_at_or_below(pattern, path)),
             Selection::DenyList(_) => {
+                // A negation can re-include a descendant, so no positive pattern
+                // alone proves that the complete subtree is safe to discard.
                 self.patterns.iter().any(|pattern| pattern.starts_with('!'))
                     || !self
                         .patterns
@@ -133,6 +135,11 @@ impl PackagingRules {
     }
 }
 
+/// Returns true unless an allow-list pattern is provably irrelevant at and below `path`.
+///
+/// Ambiguous syntax intentionally keeps traversal possible; final membership
+/// remains the compiled matcher's responsibility. Ref: cargo-release-plan
+/// implementation guide, "Content identity and file modes".
 fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
     let pattern = pattern.strip_prefix('!').unwrap_or(pattern);
     let anchored = pattern.starts_with('/');
@@ -140,6 +147,8 @@ fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
     if !anchored && pattern.ends_with('/') {
         let directory = pattern.trim_end_matches('/');
         if !directory.contains('/') {
+            // An unanchored directory basename can first appear anywhere below
+            // the current alias root.
             return true;
         }
     }
@@ -147,14 +156,16 @@ fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
         return true;
     }
 
-    let raw_prefix = pattern
+    let prefix = pattern
         .split(['*', '?', '[', '{', '\\'])
         .next()
         .unwrap_or_default();
-    let prefix = if raw_prefix == pattern || raw_prefix.ends_with('/') {
-        raw_prefix.trim_end_matches('/')
+    let prefix = if prefix == pattern || prefix.ends_with('/') {
+        prefix.trim_end_matches('/')
     } else {
-        raw_prefix.rsplit_once('/').map_or("", |(parent, _)| parent)
+        // A partial literal component such as `alias*` does not prove that a
+        // differently suffixed component can be pruned.
+        prefix.rsplit_once('/').map_or("", |(parent, _)| parent)
     };
     prefix.is_empty()
         || prefix == path
@@ -166,6 +177,10 @@ fn pattern_may_match_at_or_below(pattern: &str, path: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// Returns true only when one positive deny pattern excludes the complete subtree.
+///
+/// The caller separately disables this proof when any negation exists. Final
+/// archive membership remains the compiled matcher's responsibility.
 fn pattern_excludes_subtree(pattern: &str, path: &str) -> bool {
     if pattern.starts_with('!') {
         return false;

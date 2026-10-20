@@ -362,6 +362,45 @@ fn prepare_accepts_a_tracked_directory_link_fixture_in_a_native_checkout() {
 #[cfg(unix)]
 #[cfg_attr(
     miri,
+    ignore = "replaces a tracked native link with an unstaged regular file"
+)]
+#[test]
+fn preview_preserves_an_admitted_link_to_regular_replacement() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"tests/**\"]",
+    );
+    fixture.write("packages/demo/tests/target", "target\n");
+    symlink("target", fixture.path().join("packages/demo/tests/link")).unwrap();
+    fixture.commit("tracked native link");
+    fs::remove_file(fixture.path().join("packages/demo/tests/link")).unwrap();
+    fixture.write("packages/demo/tests/link", "regular replacement\n");
+
+    let prepared = prepare(&fixture);
+    fixture.write(
+        "proposal.json",
+        r#"{"schema_version":8,"increments":[{"name":"demo","bump":"patch"}]}"#,
+    );
+    let preview = fixture.path().join("preview");
+
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared,
+        output: preview.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+
+    assert!(preview.join("plan.json").is_file());
+}
+
+#[cfg(unix)]
+#[cfg_attr(
+    miri,
     ignore = "replaces a tracked fixture directory with a real symbolic link"
 )]
 #[test]

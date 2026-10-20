@@ -804,8 +804,9 @@ Released symbolic links use a deliberately bounded subset of Cargo's dereference
 behavior. Every target is a UTF-8 relative path, every hop is Git-tracked, the
 chain remains inside the selected workspace, and the terminal target is a regular
 file or a directory with tracked descendants. Directory expansion recursively
-applies the same rules and detects active-directory cycles without a depth
-threshold. Absolute or escaping targets, missing or untracked targets,
+applies the same rules and rejects a link back to a directory whose expansion is
+already in progress, without imposing a depth threshold. Absolute or escaping
+targets, missing or untracked targets,
 unsupported filesystem objects, symlinked work-tree ancestors, trailing directory syntax,
 non-canonical traversal such as `name/../target`, and platform-dependent target
 syntax stop assessment with a condition-specific diagnostic. This reconstructs

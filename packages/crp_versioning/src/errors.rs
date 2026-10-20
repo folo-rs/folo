@@ -320,7 +320,7 @@ impl RefUnwindSafe for SymlinkTargetEncodingError {}
 /// A released symbolic link has an absolute target.
 #[ohno::error]
 #[display(
-    "Package '{}' releases symbolic link '{}' with absolute target '{}'; use a relative target to a tracked file inside the workspace",
+    "Package '{}' releases symbolic link '{}' with absolute target '{}'; use a relative target to a tracked file or a directory established by tracked descendants inside the workspace",
     package.quoted(),
     path.quoted(),
     target.quoted()
@@ -354,7 +354,7 @@ impl RefUnwindSafe for NonPortableSymlinkTargetError {}
 /// A released symbolic link resolves outside the selected workspace.
 #[ohno::error]
 #[display(
-    "Package '{}' releases symbolic link '{}' whose target '{}' resolves outside the workspace; point it to a tracked file inside the workspace",
+    "Package '{}' releases symbolic link '{}' whose target '{}' resolves outside the workspace; point it to a tracked file or a directory established by tracked descendants inside the workspace",
     package.quoted(),
     path.quoted(),
     target.quoted()
@@ -388,7 +388,7 @@ impl RefUnwindSafe for SymlinkCycleError {}
 /// A released symbolic link does not resolve to a tracked present path.
 #[ohno::error]
 #[display(
-    "Package '{}' releases symbolic link '{}' whose target '{}' is not a tracked present file; track and restore the target or exclude the link from the package",
+    "Package '{}' releases symbolic link '{}' whose target '{}' is neither a tracked present file nor a present directory established by tracked descendants; track and restore the file or directory contents, or exclude the link from the package",
     package.quoted(),
     path.quoted(),
     target.quoted()
