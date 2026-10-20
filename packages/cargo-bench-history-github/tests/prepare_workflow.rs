@@ -367,6 +367,64 @@ fn native_unowned_changes_skip_pr_benchmarks_but_preserve_history_and_mixed_scop
     assert_eq!(outputs.get("skip-all").unwrap(), "false");
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Native Git, Cargo metadata and package detector boundaries."
+)]
+fn native_root_members_preserve_benchmarks_and_dependents() {
+    // Cover standalone packages, benchmarked workspace roots and library-only roots.
+    for (workspace, root_benchmark, expected) in [
+        (false, true, "root"),
+        (true, true, "benchmark,root"),
+        (true, false, "benchmark"),
+    ] {
+        let mut fixture = Fixture::new();
+        let mut manifest = "[package]\nname='root'\nversion='0.0.0'\nedition='2024'\n".to_owned();
+        if workspace {
+            manifest.push_str(
+                "[workspace]\nresolver='3'\nmembers=['library','benchmark','unrelated']\n",
+            );
+            let dependent_manifest = fixture.checkout.join("benchmark").join("Cargo.toml");
+            let mut dependent = fs::read_to_string(&dependent_manifest).unwrap();
+            dependent.push_str("root={path='..'}\n");
+            fs::write(dependent_manifest, dependent).unwrap();
+        }
+        fs::create_dir_all(fixture.checkout.join("src")).unwrap();
+        fs::write(fixture.checkout.join("src").join("lib.rs"), "").unwrap();
+        if root_benchmark {
+            manifest.push_str("[[bench]]\nname='root_probe'\nharness=false\n");
+            fs::create_dir_all(fixture.checkout.join("benches")).unwrap();
+            fs::write(
+                fixture.checkout.join("benches").join("root_probe.rs"),
+                "fn main() {}\n",
+            )
+            .unwrap();
+        }
+        fs::write(fixture.checkout.join("Cargo.toml"), manifest).unwrap();
+        let output = Command::new("cargo")
+            .current_dir(&fixture.checkout)
+            .args(["generate-lockfile", "--offline"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        fixture.git(&["add", "."]);
+        fixture.commit();
+        fixture.base = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        fs::write(
+            fixture.checkout.join("src").join("lib.rs"),
+            "pub fn operation() {}\n",
+        )
+        .unwrap();
+        fixture.git(&["add", "."]);
+        fixture.commit();
+        fixture.head = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let outputs = fixture.prepare("pr", &json!({"platforms":"linux"}));
+        assert_eq!(outputs.get("packages").unwrap(), expected);
+        assert_eq!(outputs.get("skip-all").unwrap(), "false");
+    }
+}
+
 mod rolling {
     use std::time::SystemTime;
 

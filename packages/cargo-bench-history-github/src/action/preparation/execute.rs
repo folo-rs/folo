@@ -250,11 +250,15 @@ async fn affected_packages(
         }
         // A separate nested workspace is not part of this Cargo inventory. Resolve the
         // declared owner boundary so its test fixtures cannot become foreign package names.
-        let Some(directory) = workspace.package_directory(&path) else {
+        let Some((directory, name)) = workspace.package_owner(&path) else {
             continue;
         };
         if let Some(name) = host.package(&workspace.root, directory)? {
             owners.insert(name);
+        } else if directory == workspace.root {
+            // The detector treats the workspace root as workspace scope even when Cargo
+            // declares a root member. Its metadata identity preserves package/dependent scope.
+            owners.insert(name.to_owned());
         }
     }
     Ok(Some(owners))

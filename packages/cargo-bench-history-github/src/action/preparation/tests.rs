@@ -875,6 +875,43 @@ fn missing_detected_owner_does_not_widen_pr_scope() {
 }
 
 #[test]
+fn root_member_uses_metadata_identity_without_losing_dependents_or_nested_owners() {
+    for (path, expected) in [
+        ("src/lib.rs", "benchmark,root"),
+        ("benches/probe.rs", "benchmark,root"),
+        ("library/src/lib.rs", "benchmark"),
+    ] {
+        let mut host = FakeHost::new(&json!({"platforms":"linux"}));
+        host.event("pull_request", &event());
+        let mut metadata = metadata(&host);
+        metadata["workspace_members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("root"));
+        metadata["packages"].as_array_mut().unwrap().push(json!({
+            "id":"root", "name":"root", "manifest_path":host.root.join("Cargo.toml"),
+            "targets":[{"kind":["bench"]}], "dependencies":[],
+        }));
+        metadata["packages"][2]["dependencies"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":host.root}));
+        host.reply("false");
+        host.reply(SHA);
+        host.reply(BASE);
+        host.reply(&metadata.to_string());
+        host.reply(host.root.to_str().unwrap());
+        host.reply(&format!("{path}\0"));
+        // The native detector reports workspace scope for a root member.
+        host.packages.insert(host.root.clone(), None);
+        host.packages
+            .insert(host.root.join("library"), Some("library".to_owned()));
+        block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
+        assert!(output(&host).contains(&format!("packages={expected}\nskip-all=false\n")));
+    }
+}
+
+#[test]
 fn fixture_workspaces_within_members_query_the_declared_package_boundary() {
     let mut host = FakeHost::new(&json!({"platforms":"linux"}));
     host.event("pull_request", &event());
@@ -905,11 +942,11 @@ fn declared_member_boundaries_choose_the_deepest_member_without_prefix_collision
     }));
     let workspace = Workspace::parse(&metadata.to_string(), &host).unwrap();
     assert_eq!(
-        workspace.package_directory(&nested.join("src").join("lib.rs")),
-        Some(nested.as_path())
+        workspace.package_owner(&nested.join("src").join("lib.rs")),
+        Some((nested.as_path(), "nested"))
     );
     assert_eq!(
-        workspace.package_directory(&host.root.join("library-other").join("lib.rs")),
+        workspace.package_owner(&host.root.join("library-other").join("lib.rs")),
         None
     );
 }
