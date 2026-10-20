@@ -16,7 +16,7 @@ use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use crp_diag::Verbose;
 use crp_workspace::artifact_path;
 use crp_workspace::command::{hash_bytes, run_capture_bytes};
-use crp_workspace::git::{GitRepo, WorkTreeAncestors, WorkTreeModes};
+use crp_workspace::git::{GitRepo, WorkTreeAncestors, WorkTreeModes, WorkTreePath};
 use crp_workspace::manifest::{PathCase, parse_document, to_git_separators};
 use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
@@ -145,13 +145,22 @@ impl Inputs {
             case,
         )?;
         links.retain(|path| !resolver_control_input(path));
-        for link in &effective_modes.symlinks {
-            let link = PathBuf::from(link);
-            if !links.contains(&link)
-                && !source_paths.contains(&link)
-                && !resolver_control_input(&link)
+        let possible_links: BTreeSet<&String> = index_modes
+            .symlinks
+            .iter()
+            .chain(&effective_modes.symlinks)
+            .collect();
+        for link in possible_links {
+            let path = PathBuf::from(link);
+            if !links.contains(&path)
+                && !source_paths.contains(&path)
+                && !resolver_control_input(&path)
+                && matches!(
+                    git.work_tree_path(link, effective_modes.is_symlink(link))?,
+                    WorkTreePath::Missing | WorkTreePath::Symlink(_)
+                )
             {
-                paths.remove(&link);
+                paths.remove(&path);
             }
         }
         paths.extend(links.iter().cloned());

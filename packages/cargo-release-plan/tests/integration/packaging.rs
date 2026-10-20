@@ -113,6 +113,18 @@ fn prepare_accepts_a_tracked_directory_link_fixture_in_a_placeholder_checkout() 
     assert!(prepared.is_file());
     let report = fs::read_to_string(prepared.with_file_name("report.json")).unwrap();
     assert!(report.contains("\"status\": \"unchanged\""));
+
+    fixture.write("proposal.json", r#"{"schema_version":8,"increments":[]}"#);
+    let preview = fixture.path().join("preview");
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared,
+        output: preview.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    assert!(preview.join("plan.json").is_file());
 }
 
 #[cfg_attr(
