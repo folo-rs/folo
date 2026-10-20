@@ -11,20 +11,20 @@ use std::fs;
 use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 
 use crp_diag::Verbose;
 use crp_workspace::artifact_path;
 use crp_workspace::command::{hash_bytes, run_capture_bytes};
-use crp_workspace::git::{GitRepo, WorkTreeModes};
-use crp_workspace::manifest::{PathCase, parse_document};
+use crp_workspace::git::{GitRepo, WorkTreeAncestors, WorkTreeModes};
+use crp_workspace::manifest::{PathCase, parse_document, to_git_separators};
 use crp_workspace::source_inputs::SourceInputs;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
 use self::paths::PathIdentity;
-use crate::classify::{AcquiredWorkspace, Snapshots};
+use crate::classify::{AcquiredWorkspace, Snapshots, captured_package_link_inputs};
 use crate::groups::Groups;
 use crate::history::AssessmentHistory;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
@@ -56,6 +56,8 @@ pub struct Inputs {
     pub merge_target_revision: Option<String>,
     pub index: String,
     pub paths: BTreeSet<PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub symlink_inputs: BTreeSet<PathBuf>,
     pub digest: String,
 }
 
@@ -122,9 +124,27 @@ impl Inputs {
             },
         )?;
         capture_sources(&root, &sources, &mut paths)?;
-        let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
+        let case = PathCase::probe(&work_tree.workspace_root);
         let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root())?;
-        acquired.index_modes = Some(WorkTreeModes::from_index(&index)?);
+        let index_modes = WorkTreeModes::from_index(&index)?;
+        let effective_modes = git.work_tree_modes_from_index(index_modes.clone(), &["."], case)?;
+        let mut symlink_inputs = captured_package_link_inputs(
+            git,
+            &work_tree.packages,
+            &work_tree.tracked_paths,
+            &effective_modes,
+            case,
+        )?;
+        symlink_inputs.retain(|path| !resolver_control_input(path));
+        paths.extend(symlink_inputs.iter().cloned());
+        let digest = fingerprint_with_modes(
+            &root,
+            &paths,
+            &BTreeMap::new(),
+            &effective_modes,
+            &symlink_inputs,
+        )?;
+        acquired.index_modes = Some(index_modes);
         let index = String::from_utf8(index)
             .expect("index mode interpretation strictly decoded every NUL-delimited record");
         let inputs = Self {
@@ -137,6 +157,7 @@ impl Inputs {
             merge_target_revision: history.merge_target_revision.clone(),
             index,
             paths,
+            symlink_inputs,
             digest,
         };
         Ok((inputs, acquired))
@@ -240,11 +261,20 @@ impl Inputs {
     // Native path-identity and fingerprint acquisition; the comparison protocol has pure tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
+        let modes = current.index_modes()?;
         self.compare_candidate_with(
             current,
             final_digest,
             &PathIdentity::new(&current.root, &PathCase::probe),
-            || fingerprint(&current.root, &self.paths, &BTreeMap::new()),
+            || {
+                fingerprint_with_modes(
+                    &current.root,
+                    &self.paths,
+                    &BTreeMap::new(),
+                    &modes,
+                    &current.symlink_inputs,
+                )
+            },
         )
     }
 
@@ -255,7 +285,11 @@ impl Inputs {
         identity: &PathIdentity<'_>,
         fingerprint: impl FnOnce() -> Result<String, AppError>,
     ) -> Result<(), AppError> {
-        if current.head != self.head || !self.same_history(current) || current.index != self.index {
+        if current.head != self.head
+            || !self.same_history(current)
+            || current.index != self.index
+            || current.symlink_inputs != self.symlink_inputs
+        {
             return Err(StaleInputs::new().into());
         }
         if current.manifest != self.manifest || current.paths != self.paths {
@@ -329,6 +363,7 @@ impl Inputs {
             || !self.same_history(current)
             || current.index != self.index
             || current.paths != self.paths
+            || current.symlink_inputs != self.symlink_inputs
         {
             return Err(StaleInputs::new().into());
         }
@@ -356,9 +391,20 @@ impl Inputs {
     #[cfg_attr(test, mutants::skip)]
     pub fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let identity = PathIdentity::new(&self.root, &PathCase::probe);
+        let modes = self.index_modes()?;
         self.final_digest_with(files, &identity, |replacements| {
-            fingerprint(&self.root, &self.paths, replacements)
+            fingerprint_with_modes(
+                &self.root,
+                &self.paths,
+                replacements,
+                &modes,
+                &self.symlink_inputs,
+            )
         })
+    }
+
+    fn index_modes(&self) -> Result<WorkTreeModes, AppError> {
+        WorkTreeModes::from_index(self.index.as_bytes())
     }
 
     fn final_digest_with(
@@ -489,6 +535,20 @@ fn capture_sources(
         }
     }
     Ok(())
+}
+
+fn resolver_control_input(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if matches!(name, "Cargo.toml" | "Cargo.lock") {
+        return true;
+    }
+    matches!(name, "config" | "config.toml")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|parent| parent == ".cargo")
 }
 
 /// The complete resolved state embedded in the explicit plan for application.
@@ -854,12 +914,36 @@ pub fn fingerprint(
     paths: &BTreeSet<PathBuf>,
     replacements: &BTreeMap<PathBuf, Vec<u8>>,
 ) -> Result<String, AppError> {
+    fingerprint_with_modes(
+        root,
+        paths,
+        replacements,
+        &WorkTreeModes::default(),
+        &BTreeSet::new(),
+    )
+}
+
+fn fingerprint_with_modes(
+    root: &Path,
+    paths: &BTreeSet<PathBuf>,
+    replacements: &BTreeMap<PathBuf, Vec<u8>>,
+    modes: &WorkTreeModes,
+    symlink_inputs: &BTreeSet<PathBuf>,
+) -> Result<String, AppError> {
     let identity = PathIdentity::new(root, &PathCase::probe);
+    let mut ancestors = WorkTreeAncestors::default();
+    for path in paths {
+        if let Some(ancestor) = ancestors.first_symlink(root, path)? {
+            return Err(UnsupportedInput::new(root.join(ancestor)).into());
+        }
+    }
     let bytes = fingerprint_bytes(
         root,
         paths,
         replacements,
         &identity,
+        modes,
+        symlink_inputs,
         |path| {
             fs::symlink_metadata(path).map(|metadata| InputMetadata {
                 regular: metadata.is_file(),
@@ -869,6 +953,15 @@ pub fn fingerprint(
             })
         },
         |path| fs::read(path),
+        |path| {
+            let target = fs::read_link(path)?;
+            let target = target.to_str().ok_or_else(|| {
+                io::Error::new(ErrorKind::InvalidData, "symbolic-link target is not UTF-8")
+            })?;
+            Ok(to_git_separators(target, MAIN_SEPARATOR)
+                .as_bytes()
+                .to_vec())
+        },
     )?;
     hash_bytes(&bytes, root)
 }
@@ -888,13 +981,20 @@ fn executable_mode(mode: u32) -> bool {
     mode & 0o111 != 0
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fingerprinting keeps metadata, regular-file reads and unfollowed link reads as separate injected observations"
+)]
 fn fingerprint_bytes(
     root: &Path,
     paths: &BTreeSet<PathBuf>,
     replacements: &BTreeMap<PathBuf, Vec<u8>>,
     identity: &PathIdentity<'_>,
+    _modes: &WorkTreeModes,
+    symlink_inputs: &BTreeSet<PathBuf>,
     mut metadata: impl FnMut(&Path) -> io::Result<InputMetadata>,
     mut read: impl FnMut(&Path) -> io::Result<Vec<u8>>,
+    mut read_link: impl FnMut(&Path) -> io::Result<Vec<u8>>,
 ) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
     for relative in paths {
@@ -908,20 +1008,38 @@ fn fingerprint_bytes(
         };
         if metadata
             .as_ref()
-            .is_some_and(|metadata| !metadata.regular || metadata.symlink)
+            .is_some_and(|metadata| !metadata.regular && !metadata.symlink)
         {
             return Err(UnsupportedInput::new(&path).into());
         }
+        let observed_symlink = metadata.as_ref().is_some_and(|metadata| metadata.symlink)
+            || _modes.is_symlink(&to_git_separators(&name, MAIN_SEPARATOR));
+        if observed_symlink && !symlink_inputs.contains(relative) {
+            return Err(UnsupportedInput::new(&path).into());
+        }
+        let replacement = identity.replacement(relative, replacements);
+        bytes.push(match (&metadata, replacement) {
+            (None, None) => 0,
+            (Some(_), None) if observed_symlink => 2,
+            (_, Some(_)) | (Some(_), None) => 1,
+        });
         #[cfg(unix)]
-        bytes.push(u8::from(
-            metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.executable),
-        ));
-        let contents = if let Some(replacement) = identity.replacement(relative, replacements) {
+        {
+            bytes.push(u8::from(
+                metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.executable && !observed_symlink),
+            ));
+        }
+        let contents = if let Some(replacement) = replacement {
             Some(replacement.to_owned())
         } else if metadata.is_some() {
-            Some(read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?)
+            let contents = if metadata.as_ref().is_some_and(|metadata| metadata.symlink) {
+                read_link(&path)
+            } else {
+                read(&path)
+            };
+            Some(contents.map_err(|error| ReadFileError::caused_by(&path, error))?)
         } else {
             None
         };
@@ -1104,6 +1222,7 @@ mod tests {
                 .into_iter()
                 .map(PathBuf::from)
                 .collect(),
+            symlink_inputs: BTreeSet::new(),
             digest: "initial".to_owned(),
         }
     }
@@ -1299,6 +1418,7 @@ mod tests {
                 .into_iter()
                 .map(PathBuf::from)
                 .collect(),
+            symlink_inputs: BTreeSet::new(),
             digest: String::new(),
         };
         for paths in [

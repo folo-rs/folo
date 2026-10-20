@@ -483,6 +483,7 @@ mod tests {
             merge_target_revision: Some("parent-branch".into()),
             index: String::new(),
             paths: BTreeSet::new(),
+            symlink_inputs: BTreeSet::new(),
             digest: "digest".into(),
         };
         for stage in [PlanStage::Proposed, PlanStage::Expanded] {

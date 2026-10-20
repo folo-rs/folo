@@ -704,11 +704,25 @@ index and overlay `git diff-files --raw`: on a checkout with `core.fileMode`
 enabled, an unstaged executable-bit change is observed; when it is disabled, the
 index remains the stable fallback. Indexed symlink modes are retained as well
 because `core.symlinks = false` can materialize a link as an ordinary work-tree
-file; released symlinks are rejected before content hashing.
+file containing its target text.
 
 File bytes are loaded only after object identity differs, because mode-only
 changes render directly and bytes are needed for presentation rather than the
-verdict. Symbolic links are rejected before hashing or reading their targets.
+verdict. Each released path first resolves to a terminal identity. Ordinary files
+retain their own blob and mode. A symbolic link reads target text without
+following the filesystem, normalizes the relative Git path, and follows only
+tracked links within the workspace. A visited-path set detects cycles without a
+depth threshold. Historical targets come from tree modes and link blobs;
+work-tree targets combine effective Git modes with native-link or placeholder
+observations. The terminal regular file then supplies the blob identity and
+executable mode while the original link retains its archive path.
+
+This resolution happens before work-tree hashing. `git hash-object` receives only
+terminal regular files, so filters and line endings preserve the ordinary
+content-identity model without allowing Git or the filesystem to dereference an
+unvalidated link. Each work-tree component leading to the terminal file is
+inspected without following links; a symlinked ancestor stops assessment before
+the path can escape the workspace.
 
 ### Package boundaries and resources
 
@@ -955,13 +969,28 @@ limited to replacing workspace package identities.
 
 The prepared artifact contains only the post-refresh input snapshot. It cannot
 carry an alternative file overlay: both semantic grading and prospective cloning
-must start from the live state that preparation captured.
+must start from the live state that preparation captured. Fingerprints encode a
+tracked link's unfollowed target text, not its dereferenced bytes, and reject
+symlinked parent directories. Native links and `core.symlinks=false` placeholders
+therefore have one captured identity. The encoded file kind distinguishes that
+identity from a regular file containing the same text, so an unstaged type change
+invalidates evidence.
+
+Only links selected by a package's released-content rules receive this treatment,
+after the bounded resolver validates their complete tracked chain. Resolver
+control files (`Cargo.toml`, `Cargo.lock` and Cargo configuration) and untracked
+source inputs retain the ordinary-file requirement. Validated intermediate links
+and terminal files join the captured path set so later target changes cannot
+reuse stale evidence.
 
 Preview uses a disposable prospective workspace so version and requirement
 rewrites never become original planning inputs. Each iteration derives its
 candidate from the prepared input rather than incrementing the preceding
 candidate again. Classification uses the same release-history and merge-target
-commits throughout.
+commits throughout. The prospective checkout copies the original
+`core.symlinks` setting and preserves native links instead of flattening them
+through ordinary file copying, so preparation and preview interpret the same
+index entries consistently.
 New binary closure effects and their dependent/group consequences expand the
 candidate until it is stable. Existing sufficient versions are retained.
 

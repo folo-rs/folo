@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use super::*;
 
 fn regular() -> InputMetadata {
@@ -14,24 +16,51 @@ fn encode(
     contents: io::Result<Vec<u8>>,
     replacement: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, AppError> {
+    encode_with_modes(
+        metadata,
+        contents,
+        replacement,
+        &WorkTreeModes::default(),
+        false,
+    )
+}
+
+fn encode_with_modes(
+    metadata: io::Result<InputMetadata>,
+    contents: io::Result<Vec<u8>>,
+    replacement: Option<Vec<u8>>,
+    modes: &WorkTreeModes,
+    allow_symlink: bool,
+) -> Result<Vec<u8>, AppError> {
     let root = Path::new("root");
     let path = PathBuf::from("input");
     let mut metadata = Some(metadata);
-    let mut contents = Some(contents);
+    let contents = RefCell::new(Some(contents));
+    let symlink_inputs = if allow_symlink {
+        BTreeSet::from([path.clone()])
+    } else {
+        BTreeSet::new()
+    };
     fingerprint_bytes(
         root,
         &BTreeSet::from([path.clone()]),
         &replacement
-            .map(|bytes| BTreeMap::from([(path, bytes)]))
+            .map(|bytes| BTreeMap::from([(path.clone(), bytes)]))
             .unwrap_or_default(),
         &PathIdentity::new(root, &|_| panic!("exact names require no probe")),
+        modes,
+        &symlink_inputs,
         |path| {
             assert_eq!(path, root.join("input"));
             metadata.take().unwrap()
         },
         |path| {
             assert_eq!(path, root.join("input"));
-            contents.take().unwrap()
+            contents.borrow_mut().take().unwrap()
+        },
+        |path| {
+            assert_eq!(path, root.join("input"));
+            contents.borrow_mut().take().unwrap()
         },
     )
 }
@@ -61,16 +90,71 @@ fn byte_read_errors_propagate_including_disappearance_after_metadata() {
 }
 
 #[test]
-fn replacements_do_not_admit_directories_or_symlinks() {
-    for (regular, symlink) in [(false, false), (false, true), (true, true)] {
-        let metadata = InputMetadata {
-            regular,
-            symlink,
-            #[cfg(unix)]
-            executable: false,
-        };
-        let error = encode(Ok(metadata), Ok(Vec::new()), Some(Vec::new())).unwrap_err();
-        assert!(error.find_source::<UnsupportedInput>().is_some());
+fn replacements_do_not_admit_directories() {
+    let metadata = InputMetadata {
+        regular: false,
+        symlink: false,
+        #[cfg(unix)]
+        executable: false,
+    };
+    let error = encode(Ok(metadata), Ok(Vec::new()), Some(Vec::new())).unwrap_err();
+    assert!(error.find_source::<UnsupportedInput>().is_some());
+}
+
+#[test]
+fn native_and_placeholder_symlinks_encode_the_same_target_bytes() {
+    let native = InputMetadata {
+        regular: false,
+        symlink: true,
+        #[cfg(unix)]
+        executable: false,
+    };
+    let mut modes = WorkTreeModes::default();
+    modes.set("input", "120000");
+    let placeholder = regular();
+
+    let native = encode_with_modes(
+        Ok(native),
+        Ok(b"target".to_vec()),
+        None,
+        &WorkTreeModes::default(),
+        true,
+    )
+    .unwrap();
+    let placeholder =
+        encode_with_modes(Ok(placeholder), Ok(b"target".to_vec()), None, &modes, true).unwrap();
+    assert_eq!(native, placeholder);
+    assert_ne!(
+        native,
+        encode(Ok(regular()), Ok(b"target".to_vec()), None).unwrap()
+    );
+}
+
+#[test]
+fn unvalidated_symlinks_remain_unsupported_inputs() {
+    let native = InputMetadata {
+        regular: false,
+        symlink: true,
+        #[cfg(unix)]
+        executable: false,
+    };
+    let error = encode(Ok(native), Ok(b"target".to_vec()), None).unwrap_err();
+    assert!(error.find_source::<UnsupportedInput>().is_some());
+}
+
+#[test]
+fn resolver_control_inputs_are_never_package_link_exceptions() {
+    for path in [
+        "Cargo.toml",
+        "Cargo.lock",
+        ".cargo/config",
+        ".cargo/config.toml",
+        "nested/Cargo.toml",
+    ] {
+        assert!(resolver_control_input(Path::new(path)));
+    }
+    for path in ["src/lib.rs", "build.rs", "tests/fixture"] {
+        assert!(!resolver_control_input(Path::new(path)));
     }
 }
 
@@ -83,22 +167,30 @@ fn fingerprint_encoding_retains_names_presence_lengths_and_contents() {
     )
     .unwrap();
     // This is the persisted fingerprint format, not a digest tied to the host's Git process.
-    let mut prefix = vec![5, 0, 0, 0, 0, 0, 0, 0, b'i', b'n', b'p', b'u', b't'];
-    #[cfg(unix)]
-    prefix.push(0);
+    let prefix = vec![5, 0, 0, 0, 0, 0, 0, 0, b'i', b'n', b'p', b'u', b't'];
     let mut expected_missing = prefix.clone();
+    expected_missing.push(0);
+    #[cfg(unix)]
+    expected_missing.push(0);
     expected_missing.push(0);
     assert_eq!(missing, expected_missing);
 
     let empty = encode(Ok(regular()), Ok(Vec::new()), None).unwrap();
     let mut expected_empty = prefix.clone();
+    expected_empty.push(1);
+    #[cfg(unix)]
+    expected_empty.push(0);
     expected_empty.extend([1, 0, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(empty, expected_empty);
     assert_ne!(missing, empty);
 
     let contents = encode(Ok(regular()), Ok(b"abc".to_vec()), None).unwrap();
-    prefix.extend([1, 3, 0, 0, 0, 0, 0, 0, 0, b'a', b'b', b'c']);
-    assert_eq!(contents, prefix);
+    let mut expected_contents = prefix;
+    expected_contents.push(1);
+    #[cfg(unix)]
+    expected_contents.push(0);
+    expected_contents.extend([1, 3, 0, 0, 0, 0, 0, 0, 0, b'a', b'b', b'c']);
+    assert_eq!(contents, expected_contents);
     for metadata in [Ok(regular()), Err(ErrorKind::NotFound.into())] {
         assert_eq!(
             encode(

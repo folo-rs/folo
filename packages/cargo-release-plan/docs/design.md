@@ -795,7 +795,23 @@ Cargo includes several inputs outside ordinary package rules:
 * Without a `readme` declaration, Cargo detects a default README in the package
   directory. `readme = false` opts out.
 * A package-root `target` directory is never included.
-* Symbolic links are unsupported and reported as such when encountered in release inputs.
+* A Git-tracked symbolic link keeps its archive path while its terminal target
+  supplies the released bytes and executable mode. Resolution is independent of
+  whether the checkout materializes a native link or a regular placeholder.
+
+Released symbolic links use a deliberately bounded subset of Cargo's dereference
+behavior. Every target is a UTF-8 relative path, every hop is Git-tracked, the
+chain remains inside the selected workspace, and the terminal target is a regular
+file. Cycles, absolute or escaping targets, missing or untracked targets,
+directories, symlinked work-tree ancestors, trailing directory syntax,
+non-canonical traversal such as `name/../target`, and platform-dependent target
+syntax stop assessment with a condition-specific diagnostic. This reconstructs
+the intended package payload without traversing arbitrary filesystem state.
+
+This support applies only to links selected as package content. Workspace
+manifests, lockfiles, Cargo configuration and untracked build inputs remain
+ordinary files; they cannot use package-link handling to influence preparation
+or compatibility from outside the captured workspace.
 
 ### Relevant lockfile closures
 

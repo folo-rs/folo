@@ -24,16 +24,93 @@ fn declared_resources_keep_the_first_archive_path_claim() {
 }
 
 #[test]
-fn only_released_anchor_symlinks_are_rejected() {
-    let entries = HistoricalTree::new(vec![
-        tree_entry("pkg/link", "120000"),
-        tree_entry("pkg/plain", tree_mode(false)),
-    ]);
-    let plain = HashMap::from([("plain".to_string(), "pkg/plain".to_string())]);
-    reject_anchor_symlinks("pkg", &entries, &plain).unwrap();
-    let released = HashMap::from([("link".to_string(), "pkg/link".to_string())]);
-    let error = reject_anchor_symlinks("pkg", &entries, &released).unwrap_err();
-    assert!(error.find_source::<SymlinkReleasedError>().is_some());
+fn relative_symlink_targets_are_normalized_inside_the_workspace() {
+    assert_eq!(
+        resolve_symlink_target(
+            "pkg",
+            "workspace/pkg/link",
+            "workspace/pkg/link",
+            "../shared/./file",
+            "workspace",
+            PathCase::Sensitive,
+        )
+        .unwrap(),
+        "workspace/shared/file"
+    );
+    assert_eq!(
+        resolve_symlink_target(
+            "pkg",
+            "pkg/link",
+            "pkg/link",
+            "target",
+            "",
+            PathCase::Sensitive,
+        )
+        .unwrap(),
+        "pkg/target"
+    );
+}
+
+#[test]
+fn unsafe_symlink_target_shapes_have_distinct_conditions() {
+    let absolute = resolve_symlink_target(
+        "pkg",
+        "workspace/pkg/link",
+        "workspace/pkg/link",
+        "/outside",
+        "workspace",
+        PathCase::Sensitive,
+    )
+    .unwrap_err();
+    assert!(
+        absolute
+            .find_source::<AbsoluteSymlinkTargetError>()
+            .is_some()
+    );
+    let escaping = resolve_symlink_target(
+        "pkg",
+        "workspace/pkg/link",
+        "workspace/pkg/link",
+        "../../outside",
+        "workspace",
+        PathCase::Sensitive,
+    )
+    .unwrap_err();
+    assert!(
+        escaping
+            .find_source::<EscapingSymlinkTargetError>()
+            .is_some()
+    );
+    let nonportable = resolve_symlink_target(
+        "pkg",
+        "workspace/pkg/link",
+        "workspace/pkg/link",
+        r"..\shared",
+        "workspace",
+        PathCase::Sensitive,
+    )
+    .unwrap_err();
+    assert!(
+        nonportable
+            .find_source::<NonPortableSymlinkTargetError>()
+            .is_some()
+    );
+    for target in ["missing/../target", "target/", "target/."] {
+        let noncanonical = resolve_symlink_target(
+            "pkg",
+            "workspace/pkg/link",
+            "workspace/pkg/link",
+            target,
+            "workspace",
+            PathCase::Sensitive,
+        )
+        .unwrap_err();
+        assert!(
+            noncanonical
+                .find_source::<NonCanonicalSymlinkTargetError>()
+                .is_some()
+        );
+    }
 }
 
 #[test]
@@ -60,7 +137,7 @@ fn optional_reads_separate_absence_from_failures_at_each_acquisition() {
         panic!("a symbolic link must not be read")
     })
     .unwrap_err();
-    assert!(error.find_source::<SymlinkReleasedError>().is_some());
+    assert!(error.find_source::<SymlinkInputError>().is_some());
     assert_eq!(
         read_optional_bytes_with(path, "pkg", "Cargo.lock", Ok(false), || Ok(vec![])).unwrap(),
         Some(vec![])
@@ -79,46 +156,10 @@ fn optional_reads_separate_absence_from_failures_at_each_acquisition() {
 }
 
 #[test]
-fn filesystem_link_metadata_stops_hash_input_selection() {
-    let root = Path::new("repository");
-    let released = HashMap::from([("link".to_string(), "pkg/link".to_string())]);
-    let error =
-        validated_work_tree_files_with(root, "pkg", &released, &WorkTreeModes::default(), |path| {
-            assert_eq!(path, root.join("pkg/link"));
-            Ok(true)
-        })
-        .unwrap_err();
-    assert!(error.find_source::<SymlinkReleasedError>().is_some());
-}
-
-#[test]
 fn file_observations_preserve_presence_and_propagate_operational_failures() {
     let root = Path::new("repository");
-    let released = HashMap::from([("file".to_owned(), "pkg/file".to_owned())]);
     let paths = vec!["pkg/file".to_owned()];
     for missing in [false, true] {
-        let files = validated_work_tree_files_with(
-            root,
-            "pkg",
-            &released,
-            &WorkTreeModes::default(),
-            |_| {
-                if missing {
-                    Err(io::ErrorKind::NotFound.into())
-                } else {
-                    Ok(false)
-                }
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            files,
-            if missing {
-                vec![]
-            } else {
-                vec![("file", "pkg/file")]
-            }
-        );
         let present = present_in_work_tree_with(root, &paths, |path| {
             assert_eq!(path, root.join("pkg/file"));
             if missing {
@@ -130,22 +171,6 @@ fn file_observations_preserve_presence_and_propagate_operational_failures() {
         .unwrap();
         assert_eq!(present, if missing { vec![] } else { paths.clone() });
     }
-    let mut modes = WorkTreeModes::default();
-    modes.set("pkg/file", "120000");
-    assert!(
-        validated_work_tree_files_with(root, "pkg", &released, &modes, |_| panic!("index link"))
-            .unwrap_err()
-            .find_source::<SymlinkReleasedError>()
-            .is_some()
-    );
-    assert!(
-        validated_work_tree_files_with(root, "pkg", &released, &WorkTreeModes::default(), |_| Err(
-            io::ErrorKind::PermissionDenied.into()
-        ))
-        .unwrap_err()
-        .find_source::<ReadFileError>()
-        .is_some()
-    );
     assert!(
         present_in_work_tree_with(
             root,
@@ -159,23 +184,27 @@ fn file_observations_preserve_presence_and_propagate_operational_failures() {
 }
 
 #[test]
-fn acquired_hashes_keep_archive_names_and_source_order() {
-    let files = vec![
-        ("LICENSE", "shared/LICENSE"),
-        ("src/lib.rs", "pkg/src/lib.rs"),
-    ];
+fn work_tree_link_text_normalizes_native_separators_and_preserves_placeholder_bytes() {
     assert_eq!(
-        work_blob_ids_with(files.clone(), |paths| {
-            assert_eq!(paths, ["shared/LICENSE", "pkg/src/lib.rs"]);
-            Ok(vec!["license-id".into(), "source-id".into()])
-        })
+        work_tree_link_text(
+            "pkg",
+            "pkg/link",
+            WorkTreeSymlinkTarget::Placeholder(b"../shared".to_vec()),
+        )
         .unwrap(),
-        HashMap::from([
-            ("LICENSE".into(), "license-id".into()),
-            ("src/lib.rs".into(), "source-id".into())
-        ])
+        "../shared"
     );
-    work_blob_ids_with(files, |_| Err(io::Error::other("hashing failed").into())).unwrap_err();
+    let invalid = work_tree_link_text(
+        "pkg",
+        "pkg/link",
+        WorkTreeSymlinkTarget::Placeholder(vec![0xff]),
+    )
+    .unwrap_err();
+    assert!(
+        invalid
+            .find_source::<SymlinkTargetEncodingError>()
+            .is_some()
+    );
 }
 
 #[test]
@@ -202,32 +231,34 @@ fn check_acquired_diff(old_present: bool, new_present: bool) {
     for old_executable in [false, true] {
         for new_executable in [false, true] {
             for same_content in [false, true] {
-                let mut entry = tree_entry("old/file", tree_mode(old_executable));
-                entry.id = "old-id".into();
-                let tree = HistoricalTree::new(if old_present { vec![entry] } else { vec![] });
                 let anchor = if old_present {
-                    HashMap::from([("file".into(), "old/file".into())])
+                    HashMap::from([(
+                        "file".into(),
+                        ReleasedFileIdentity {
+                            id: "old-id".into(),
+                            executable: old_executable,
+                        },
+                    )])
                 } else {
                     HashMap::new()
                 };
-                // A tracked work-tree path remains selected even when deleted on disk.
-                let work = HashMap::from([("file".into(), "new/file".into())]);
                 let new_id = if same_content { "old-id" } else { "new-id" };
-                let ids = if new_present {
-                    HashMap::from([("file".into(), new_id.into())])
+                let work = if new_present {
+                    HashMap::from([(
+                        "file".into(),
+                        ReleasedFileIdentity {
+                            id: new_id.into(),
+                            executable: new_executable,
+                        },
+                    )])
                 } else {
                     HashMap::new()
                 };
-                let mut modes = WorkTreeModes::default();
-                modes.set("new/file", tree_mode(new_executable));
                 let content_changed = old_present != new_present || (old_present && !same_content);
                 let mode_changed = old_present && new_present && old_executable != new_executable;
                 let identified = PackageDiff {
-                    anchor_files: &anchor,
-                    work_files: &work,
-                    anchor_tree: &tree,
-                    work_modes: &modes,
-                    work_ids: &ids,
+                    anchor: &anchor,
+                    work: &work,
                 }
                 .identify();
                 let expected_ids: Vec<_> = if content_changed {

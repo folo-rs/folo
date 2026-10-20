@@ -16,7 +16,8 @@ use std::{fs, io, mem, str};
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
 use crp_workspace::git::{
     BLOB_BATCH_BYTES, BlobReader, CommitHeaders, GitObjectContext, GitRepo, HistoricalTree,
-    LiveObservations, TreeEntry, WorkTreeModes, decode_file, join_git_rel, tree_mode,
+    LiveObservations, TreeEntry, WorkTreeAncestors, WorkTreeModes, WorkTreePath,
+    WorkTreeSymlinkTarget, decode_file, join_git_rel, tree_mode,
 };
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
@@ -47,8 +48,10 @@ use crate::groups::{GroupVerdict, Groups};
 use crate::history::AssessmentHistory;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::{
-    LockfileClosureUnavailableError, MalformedLockfileError, ReadFileError, SymlinkReleasedError,
-    VersionRegressionError,
+    AbsoluteSymlinkTargetError, EscapingSymlinkTargetError, LockfileClosureUnavailableError,
+    MalformedLockfileError, MissingSymlinkTargetError, NonCanonicalSymlinkTargetError,
+    NonPortableSymlinkTargetError, NonRegularSymlinkTargetError, ReadFileError, SymlinkCycleError,
+    SymlinkInputError, SymlinkTargetEncodingError, SymlinkedAncestorError, VersionRegressionError,
 };
 
 #[cfg(test)]
@@ -743,7 +746,14 @@ fn classify_one(
         let content = released_in_work_tree(git, &side, &tracked_resources, Some(observations))?;
         let work_modes =
             observed_work_tree_modes(git, &side, &tracked_resources, Some(observations))?;
-        _ = validated_work_tree_files(git, name, &content.released, &work_modes)?;
+        _ = resolved_work_files(
+            git,
+            name,
+            &content.released,
+            &work_modes,
+            Some(observations),
+            side.case,
+        )?;
         let untracked = observed_untracked_released(
             git,
             &side,
@@ -1069,23 +1079,21 @@ fn diff_package_with_tree(
     let work = released_in_work_tree(git, work_side, &tracked_resources, observations)?;
     let work_files = &work.released;
 
-    reject_anchor_symlinks(name, anchor_tree, &anchor_files)?;
-
-    // Git converts content on its way into the object database, so a file on
-    // disk and the blob recording it need not hold the same bytes. Comparing
-    // content identity rather than raw bytes puts both ends in the one
-    // representation Git itself compares by, which is what keeps an LFS-tracked
-    // asset or a line-ending rule from making an untouched package look
-    // changed. Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
     let work_modes = observed_work_tree_modes(git, work_side, &tracked_resources, observations)?;
-    let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
+    let anchor_identities =
+        historical_released_identities(git, name, anchor_tree, &anchor_files, anchor.case)?;
+    let work_identities = work_released_identities(
+        git,
+        name,
+        work_files,
+        &work_modes,
+        observations,
+        work_side.case,
+    )?;
 
     let identified = PackageDiff {
-        anchor_files: &anchor_files,
-        work_files,
-        anchor_tree,
-        work_modes: &work_modes,
-        work_ids: &work_ids,
+        anchor: &anchor_identities,
+        work: &work_identities,
     }
     .identify();
     let ids = identified.blob_ids();
@@ -1130,47 +1138,34 @@ fn read_patch_blobs_with(
 /// Content bytes are requested only for differing objects, after presence and mode decisions.
 /// Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
 struct PackageDiff<'a> {
-    anchor_files: &'a HashMap<String, String>,
-    work_files: &'a HashMap<String, String>,
-    anchor_tree: &'a HistoricalTree,
-    work_modes: &'a WorkTreeModes,
-    work_ids: &'a HashMap<String, String>,
+    anchor: &'a HashMap<String, ReleasedFileIdentity>,
+    work: &'a HashMap<String, ReleasedFileIdentity>,
 }
 
 impl<'a> PackageDiff<'a> {
     fn identify(&self) -> IdentifiedDiff<'a> {
-        let Self {
-            anchor_files,
-            work_files,
-            anchor_tree,
-            work_modes,
-            work_ids,
-        } = self;
+        let Self { anchor, work } = self;
         // Cargo copies the executable bit into the archive, so a file made
         // executable without an edit is released content that changed even though
         // its blob is untouched. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
-        let rels: BTreeSet<&str> = anchor_files
+        let rels: BTreeSet<&str> = anchor
             .keys()
-            .chain(work_files.keys())
+            .chain(work.keys())
             .map(String::as_str)
             .collect();
 
         let mut entries = Vec::new();
         for rel in rels {
-            let old_id = anchor_files
-                .get(rel)
-                .and_then(|path| anchor_tree.entry(path).map(|entry| entry.id.as_str()));
-            let new_id = work_ids.get(rel).map(String::as_str);
+            let old = anchor.get(rel);
+            let new = work.get(rel);
+            let old_id = old.map(|file| file.id.as_str());
+            let new_id = new.map(|file| file.id.as_str());
             // The mode is only a change while the file exists at both ends: an
             // addition or a deletion is already reported by presence alone.
-            let mode_change = match (anchor_files.get(rel), work_files.get(rel)) {
-                (Some(old_path), Some(new_path)) if old_id.is_some() && new_id.is_some() => {
-                    let old_mode = tree_mode(
-                        anchor_tree
-                            .entry(old_path)
-                            .is_some_and(TreeEntry::is_executable),
-                    );
-                    let new_mode = tree_mode(work_modes.is_executable(new_path));
+            let mode_change = match (old, new) {
+                (Some(old), Some(new)) => {
+                    let old_mode = tree_mode(old.executable);
+                    let new_mode = tree_mode(new.executable);
                     (old_mode != new_mode).then_some((old_mode, new_mode))
                 }
                 _ => None,
@@ -1182,16 +1177,8 @@ impl<'a> PackageDiff<'a> {
                 path: rel,
                 old_id,
                 new_id,
-                old_mode: tree_mode(anchor_files.get(rel).is_some_and(|path| {
-                    anchor_tree
-                        .entry(path)
-                        .is_some_and(TreeEntry::is_executable)
-                })),
-                new_mode: tree_mode(
-                    work_files
-                        .get(rel)
-                        .is_some_and(|path| work_modes.is_executable(path)),
-                ),
+                old_mode: tree_mode(old.is_some_and(|file| file.executable)),
+                new_mode: tree_mode(new.is_some_and(|file| file.executable)),
                 mode_change,
             });
         }
@@ -1311,109 +1298,437 @@ fn observed_work_tree_modes(
     }
 }
 
-/// Object ids the released work-tree files would be stored under.
-///
-/// Keyed by the path each takes inside the package archive.
-///
-/// A tracked path the work tree no longer holds is left out, which is what makes
-/// it read as deleted. A symbolic link stops the run here rather than being
-/// hashed, because Git would hash the file it points at while the tree records
-/// the link itself.
-// Validates native files before hashing; the injected pairing operation is covered in process.
-#[cfg_attr(test, mutants::skip)]
-fn work_blob_ids(
+/// Canonical released identity at one comparison endpoint.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReleasedFileIdentity {
+    id: String,
+    executable: bool,
+}
+
+/// Terminal work-tree file selected for one package-archive path.
+#[derive(Debug, Eq, PartialEq)]
+struct ResolvedWorkFile {
+    path: String,
+    executable: bool,
+    inputs: BTreeSet<String>,
+}
+
+/// Historical identities after safely dereferencing released symbolic links.
+fn historical_released_identities(
     git: &GitRepo,
-    name: &str,
-    released: &HashMap<String, String>,
-    modes: &WorkTreeModes,
-) -> Result<HashMap<String, String>, AppError> {
-    let files = validated_work_tree_files(git, name, released, modes)?;
-    work_blob_ids_with(files, |paths| git.hash_objects(paths))
-}
-
-fn work_blob_ids_with(
-    files: Vec<(&str, &str)>,
-    hash: impl FnOnce(&[&str]) -> Result<Vec<String>, AppError>,
-) -> Result<HashMap<String, String>, AppError> {
-    let paths: Vec<&str> = files.iter().map(|(_, path)| *path).collect();
-    let ids = hash(&paths)?;
-    Ok(files
-        .into_iter()
-        .map(|(rel, _)| rel.to_string())
-        .zip(ids)
-        .collect())
-}
-
-/// Released work-tree files that are present and safe to hash.
-///
-/// Symbolic links stop classification before Git can dereference them. Both
-/// index modes and filesystem metadata are required because either one may be
-/// the only place that identifies a link in the current checkout.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "This internal acquisition operation consumes the classifier's concrete released-file map."
-)]
-// The in-process helper consumes the symlink observation; this adapter only acquires it.
-#[cfg_attr(test, mutants::skip)]
-pub fn validated_work_tree_files<'a>(
-    git: &GitRepo,
-    name: &str,
-    released: &'a HashMap<String, String>,
-    modes: &WorkTreeModes,
-) -> Result<Vec<(&'a str, &'a str)>, AppError> {
-    validated_work_tree_files_with(git.root(), name, released, modes, |path| {
-        fs::symlink_metadata(path).map(|metadata| metadata.file_type().is_symlink())
-    })
-}
-
-/// Validates acquired link metadata independently of host symlink privileges.
-fn validated_work_tree_files_with<'a>(
-    root: &Path,
-    name: &str,
-    released: &'a HashMap<String, String>,
-    modes: &WorkTreeModes,
-    mut symlink_metadata: impl FnMut(&Path) -> io::Result<bool>,
-) -> Result<Vec<(&'a str, &'a str)>, AppError> {
-    let mut files = Vec::with_capacity(released.len());
-    for (rel, path) in released {
-        if modes.is_symlink(path) {
-            return Err(SymlinkReleasedError::new(name, path).into());
-        }
-        match symlink_metadata(&root.join(path)) {
-            Ok(true) => {
-                return Err(SymlinkReleasedError::new(name, path).into());
-            }
-            Ok(false) => {}
-            Err(error) if is_not_found(&error) => continue,
-            Err(error) => {
-                return Err(ReadFileError::caused_by(root.join(path), error).into());
-            }
-        }
-        files.push((rel.as_str(), path.as_str()));
-    }
-    Ok(files)
-}
-
-/// Stops when the anchor released a symbolic link.
-///
-/// The tree's modes are the only place the distinction survives, so the paths
-/// released at the anchor are matched against the links the tree records.
-fn reject_anchor_symlinks(
     name: &str,
     tree: &HistoricalTree,
     released: &HashMap<String, String>,
-) -> Result<(), AppError> {
-    // The released paths are a hash map, so the lowest matching path is chosen
-    // to keep the reported one stable across runs.
-    let offender = released
-        .values()
-        .filter(|path| tree.entry(path).is_some_and(TreeEntry::is_symlink))
-        .min()
-        .cloned();
-    match offender {
-        Some(path) => Err(SymlinkReleasedError::new(name, &path).into()),
-        None => Ok(()),
+    case: PathCase,
+) -> Result<HashMap<String, ReleasedFileIdentity>, AppError> {
+    let mut selected: Vec<_> = released.iter().collect();
+    selected.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let mut identities = HashMap::with_capacity(selected.len());
+    for (archive_path, source_path) in selected {
+        let identity =
+            historical_released_identity(git, name, source_path, tree, git.prefix(), case)?;
+        identities.insert(archive_path.clone(), identity);
     }
+    Ok(identities)
+}
+
+fn historical_released_identity(
+    git: &GitRepo,
+    name: &str,
+    released_path: &str,
+    tree: &HistoricalTree,
+    workspace_dir: &str,
+    case: PathCase,
+) -> Result<ReleasedFileIdentity, AppError> {
+    let mut current = released_path.to_string();
+    let mut followed_link = false;
+    let mut visited = HashSet::new();
+    loop {
+        let recorded = tree
+            .entry(&current)
+            .map(|entry| entry.path.as_str())
+            .or_else(|| match case {
+                PathCase::Sensitive => None,
+                PathCase::Insensitive => case.recorded_path(tree.paths(), &current),
+            });
+        let Some(recorded) = recorded else {
+            return Err(missing_or_nonregular_link_target(
+                name,
+                released_path,
+                &current,
+                tree.paths(),
+                case,
+            ));
+        };
+        let entry = tree
+            .entry(recorded)
+            .expect("a recorded historical path has a tree entry");
+        if entry.is_symlink() {
+            followed_link = true;
+            if !visited.insert(recorded.to_string()) {
+                return Err(SymlinkCycleError::new(name, released_path, recorded).into());
+            }
+            let target = git.show_blob_bytes(&entry.id)?;
+            let target = str::from_utf8(&target).map_err(|error| {
+                SymlinkTargetEncodingError::caused_by(name, released_path, error)
+            })?;
+            current =
+                resolve_symlink_target(name, released_path, recorded, target, workspace_dir, case)?;
+            continue;
+        }
+        if followed_link && !tree_entry_is_regular(entry) {
+            return Err(NonRegularSymlinkTargetError::new(name, released_path, recorded).into());
+        }
+        return Ok(ReleasedFileIdentity {
+            id: entry.id.clone(),
+            executable: entry.is_executable(),
+        });
+    }
+}
+
+/// Work-tree identities after safely dereferencing released symbolic links.
+///
+/// Git still hashes terminal regular files so clean filters and line-ending
+/// conversion retain the same identity model as ordinary released files.
+#[cfg_attr(test, mutants::skip)] // Native file and Git hashing adapters.
+fn work_released_identities(
+    git: &GitRepo,
+    name: &str,
+    released: &HashMap<String, String>,
+    initial_modes: &WorkTreeModes,
+    observations: Option<&LiveObservations>,
+    case: PathCase,
+) -> Result<HashMap<String, ReleasedFileIdentity>, AppError> {
+    let resolved = resolved_work_files(git, name, released, initial_modes, observations, case)?;
+    let paths: Vec<&str> = resolved.values().map(|file| file.path.as_str()).collect();
+    let ids = git.hash_objects(&paths)?;
+    Ok(resolved
+        .into_iter()
+        .zip(ids)
+        .map(|((archive_path, file), id)| {
+            (
+                archive_path,
+                ReleasedFileIdentity {
+                    id,
+                    executable: file.executable,
+                },
+            )
+        })
+        .collect())
+}
+
+fn resolved_work_files(
+    git: &GitRepo,
+    name: &str,
+    released: &HashMap<String, String>,
+    initial_modes: &WorkTreeModes,
+    observations: Option<&LiveObservations>,
+    case: PathCase,
+) -> Result<BTreeMap<String, ResolvedWorkFile>, AppError> {
+    let mut selected: Vec<_> = released.iter().collect();
+    selected.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let mut resolved = BTreeMap::new();
+    let mut ancestors = WorkTreeAncestors::default();
+    for (archive_path, source_path) in selected {
+        if let Some(file) = resolve_work_file(
+            git,
+            name,
+            source_path,
+            initial_modes,
+            observations,
+            case,
+            &mut ancestors,
+            false,
+        )? {
+            resolved.insert(archive_path.clone(), file);
+        }
+    }
+    Ok(resolved)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "released-link resolution needs endpoint observations, path policy, ancestor state and capture-mode reuse together"
+)]
+fn resolve_work_file(
+    git: &GitRepo,
+    name: &str,
+    released_path: &str,
+    initial_modes: &WorkTreeModes,
+    observations: Option<&LiveObservations>,
+    case: PathCase,
+    ancestors: &mut WorkTreeAncestors,
+    modes_complete: bool,
+) -> Result<Option<ResolvedWorkFile>, AppError> {
+    let mut current = released_path.to_string();
+    let mut first = true;
+    let mut followed_link = false;
+    let mut visited = HashSet::new();
+    let mut inputs = BTreeSet::new();
+    loop {
+        inputs.insert(current.clone());
+        let modes = if first || modes_complete {
+            None
+        } else {
+            Some(observed_path_modes(git, &current, observations, case)?)
+        };
+        let modes = modes.as_ref().unwrap_or(initial_modes);
+        if let Some(ancestor) = ancestors.first_symlink(git.root(), Path::new(&current))? {
+            let ancestor =
+                to_git_separators(&ancestor.to_string_lossy(), MAIN_SEPARATOR).into_owned();
+            return Err(SymlinkedAncestorError::new(name, released_path, ancestor).into());
+        }
+        match git.work_tree_path(&current, modes.is_symlink(&current))? {
+            WorkTreePath::Missing if followed_link => {
+                return Err(MissingSymlinkTargetError::new(name, released_path, &current).into());
+            }
+            WorkTreePath::Missing => return Ok(None),
+            WorkTreePath::Other if followed_link => {
+                return Err(
+                    NonRegularSymlinkTargetError::new(name, released_path, &current).into(),
+                );
+            }
+            WorkTreePath::Other | WorkTreePath::Regular => {
+                return Ok(Some(ResolvedWorkFile {
+                    executable: modes.is_executable(&current),
+                    inputs,
+                    path: current,
+                }));
+            }
+            WorkTreePath::Symlink(target) => {
+                followed_link = true;
+                if !visited.insert(current.clone()) {
+                    return Err(SymlinkCycleError::new(name, released_path, &current).into());
+                }
+                let target = work_tree_link_text(name, released_path, target)?;
+                let requested = resolve_symlink_target(
+                    name,
+                    released_path,
+                    &current,
+                    &target,
+                    git.prefix(),
+                    case,
+                )?;
+                current =
+                    recorded_work_target(git, name, released_path, &requested, observations, case)?;
+                first = false;
+            }
+        }
+    }
+}
+
+/// Validated package-link paths and terminal dependencies required by captured preparation.
+pub(crate) fn captured_package_link_inputs(
+    git: &GitRepo,
+    packages: &[WorkPackage],
+    tracked: &[String],
+    modes: &WorkTreeModes,
+    case: PathCase,
+) -> Result<BTreeSet<PathBuf>, AppError> {
+    let mut captured = BTreeSet::new();
+    let mut ancestors = WorkTreeAncestors::default();
+    for package in packages {
+        let directory = join_git_rel(git.prefix(), &package.manifest.directory);
+        let resources = resolve_resources(&package.manifest, &directory, git.prefix());
+        let side = PackageSide {
+            dir: &directory,
+            rules: &package.manifest.packaging,
+            resources: &resources,
+            auto_readme: package.manifest.auto_readme,
+            case,
+        };
+        let resource_paths: Vec<&str> = resources.values().map(String::as_str).collect();
+        let tracked_resources = tracked_resources(&side, tracked);
+        let selected: Vec<String> = tracked
+            .iter()
+            .filter(|path| {
+                case.relativize(path, side.dir).is_some()
+                    || resource_paths
+                        .iter()
+                        .any(|resource| case.same_path(path, resource))
+            })
+            .cloned()
+            .collect();
+        let present = present_in_work_tree(git, &selected)?;
+        let mut released = released_from_paths(&selected, &present, &side);
+        add_resources(&mut released, tracked_resources.iter());
+        let mut seen = BTreeSet::new();
+        for source in released.values() {
+            if !seen.insert(source) {
+                continue;
+            }
+            if let Some(ancestor) = ancestors.first_symlink(git.root(), Path::new(source))? {
+                let ancestor =
+                    to_git_separators(&ancestor.to_string_lossy(), MAIN_SEPARATOR).into_owned();
+                return Err(
+                    SymlinkedAncestorError::new(&package.manifest.name, source, ancestor).into(),
+                );
+            }
+            if !matches!(
+                git.work_tree_path(source, modes.is_symlink(source))?,
+                WorkTreePath::Symlink(_)
+            ) {
+                continue;
+            }
+            let Some(resolved) = resolve_work_file(
+                git,
+                &package.manifest.name,
+                source,
+                modes,
+                None,
+                case,
+                &mut ancestors,
+                true,
+            )?
+            else {
+                continue;
+            };
+            captured.extend(resolved.inputs.into_iter().map(PathBuf::from));
+        }
+    }
+    Ok(captured)
+}
+
+fn observed_path_modes(
+    git: &GitRepo,
+    path: &str,
+    observations: Option<&LiveObservations>,
+    case: PathCase,
+) -> Result<WorkTreeModes, AppError> {
+    let narrow = || git.work_tree_modes(&[path], case);
+    match observations {
+        Some(observations) => observations.modes(&[path], narrow),
+        None => narrow(),
+    }
+}
+
+fn recorded_work_target(
+    git: &GitRepo,
+    name: &str,
+    released_path: &str,
+    requested: &str,
+    observations: Option<&LiveObservations>,
+    case: PathCase,
+) -> Result<String, AppError> {
+    let narrow = || git.tracked_paths(&[requested], case);
+    let paths = match observations {
+        Some(observations) => observations.tracked_paths(&[requested], narrow)?,
+        None => narrow()?,
+    };
+    match case.recorded_path(&paths, requested) {
+        Some(path) => Ok(path.to_string()),
+        None => Err(missing_or_nonregular_link_target(
+            name,
+            released_path,
+            requested,
+            &paths,
+            case,
+        )),
+    }
+}
+
+fn missing_or_nonregular_link_target(
+    name: &str,
+    released_path: &str,
+    target: &str,
+    paths: &[String],
+    case: PathCase,
+) -> AppError {
+    if paths
+        .iter()
+        .any(|path| case.relativize(path, target).is_some())
+    {
+        NonRegularSymlinkTargetError::new(name, released_path, target).into()
+    } else {
+        MissingSymlinkTargetError::new(name, released_path, target).into()
+    }
+}
+
+fn work_tree_link_text(
+    name: &str,
+    released_path: &str,
+    target: WorkTreeSymlinkTarget,
+) -> Result<String, AppError> {
+    match target {
+        WorkTreeSymlinkTarget::Native(path) => path
+            .to_str()
+            .map(|path| to_git_separators(path, MAIN_SEPARATOR).into_owned())
+            .ok_or_else(|| SymlinkTargetEncodingError::new(name, released_path).into()),
+        WorkTreeSymlinkTarget::Placeholder(bytes) => {
+            str::from_utf8(&bytes).map(str::to_owned).map_err(|error| {
+                SymlinkTargetEncodingError::caused_by(name, released_path, error).into()
+            })
+        }
+    }
+}
+
+fn resolve_symlink_target(
+    name: &str,
+    released_path: &str,
+    link_path: &str,
+    target: &str,
+    workspace_dir: &str,
+    case: PathCase,
+) -> Result<String, AppError> {
+    if target.contains('\\') || target.contains('\0') {
+        return Err(NonPortableSymlinkTargetError::new(name, released_path, target).into());
+    }
+    if symlink_target_is_absolute(target) {
+        return Err(AbsoluteSymlinkTargetError::new(name, released_path, target).into());
+    }
+    if target == "." || target.ends_with('/') || target.ends_with("/.") {
+        return Err(NonCanonicalSymlinkTargetError::new(name, released_path, target).into());
+    }
+    let mut components: Vec<&str> = link_path
+        .rsplit_once('/')
+        .map_or("", |(parent, _)| parent)
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect();
+    let mut saw_named_component = false;
+    for component in target.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if saw_named_component {
+                    return Err(
+                        NonCanonicalSymlinkTargetError::new(name, released_path, target).into(),
+                    );
+                }
+                if components.pop().is_none() {
+                    return Err(EscapingSymlinkTargetError::new(name, released_path, target).into());
+                }
+            }
+            component => {
+                saw_named_component = true;
+                components.push(component);
+            }
+        }
+    }
+    let resolved = components.join("/");
+    if !within_workspace(&resolved, workspace_dir, case) {
+        return Err(EscapingSymlinkTargetError::new(name, released_path, target).into());
+    }
+    Ok(resolved)
+}
+
+fn symlink_target_is_absolute(target: &str) -> bool {
+    target.starts_with('/')
+        || matches!(
+            target.as_bytes(),
+            [drive, b':', ..] if drive.is_ascii_alphabetic()
+        )
+}
+
+fn within_workspace(path: &str, workspace_dir: &str, case: PathCase) -> bool {
+    let workspace_dir = workspace_dir.trim_matches('/');
+    workspace_dir.is_empty()
+        || case.same_path(path, workspace_dir)
+        || case.relativize(path, workspace_dir).is_some()
+}
+
+fn tree_entry_is_regular(entry: &TreeEntry) -> bool {
+    entry.mode == tree_mode(false) || entry.mode == tree_mode(true)
 }
 
 fn released_at_commit(tree: &HistoricalTree, side: &PackageSide<'_>) -> HashMap<String, String> {
@@ -2552,13 +2867,11 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
     !last.presence.is_unpublished() && last.presence.released_version() != Some(reference)
 }
 
-/// Reads a tracked work-tree path the way Cargo would pack it.
+/// Reads an optional non-package input directly from the work tree.
 ///
-/// A symbolic link stops the run rather than being compared. Cargo dereferences
-/// a link when it builds a package archive, while Git stores the link as a blob holding
-/// the target path, so neither reading the target text nor following the link
-/// yields a comparison that is right at both ends. Ref: packages/cargo-release-plan/docs/design.md,
-/// "Released content".
+/// Package contents use the bounded symlink resolver above. Inputs such as the
+/// workspace lockfile retain their ordinary-file requirement because they are
+/// parsed as workspace state rather than compared as Cargo archive paths.
 // Native observations only; read_optional_bytes_with covers missing/error/link/byte distinctions.
 #[cfg_attr(test, mutants::skip)]
 pub fn read_optional_bytes(
@@ -2588,7 +2901,7 @@ fn read_optional_bytes_with(
 ) -> Result<Option<Vec<u8>>, AppError> {
     match symlink {
         Ok(true) => {
-            return Err(SymlinkReleasedError::new(name, rel).into());
+            return Err(SymlinkInputError::new(name, rel).into());
         }
         Ok(false) => {}
         Err(error) if is_not_found(&error) => return Ok(None),

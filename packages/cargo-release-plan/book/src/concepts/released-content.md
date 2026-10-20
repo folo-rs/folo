@@ -21,6 +21,27 @@ The executable bit is released content as well as file bytes. Git's file-mode
 handling allows the comparison to remain meaningful on filesystems without Unix
 executable permissions.
 
+Git-tracked symbolic links are assessed by their package payload rather than by
+the bytes Git stores for the link itself. The link keeps its path in the package,
+while the terminal target supplies the content and executable mode. The same
+result is used when a Unix checkout has a native link and when a Windows checkout
+materializes the link as a regular target-text placeholder.
+
+Supported links use UTF-8 relative targets, remain inside the selected workspace
+at every hop, and terminate at a Git-tracked regular file. A cycle, absolute or
+escaping target, missing or untracked target, directory, or non-portable target
+syntax is an assessment error with remediation in the diagnostic. Targets must
+also be canonical relative spellings: a trailing separator or parent traversal
+after a named component is rejected rather than guessed. The tool rejects
+symlinked parent directories and never follows a released link into arbitrary
+filesystem state.
+
+The exception is specifically for released package paths. Workspace manifests,
+the lockfile, Cargo configuration and untracked source inputs must remain ordinary
+files. Preparation fingerprints the validated link kind, each intermediate link
+and the terminal tracked file, so changing a target or replacing a regular file
+with a link invalidates previously prepared evidence.
+
 `Cargo.toml` is packaged content. Even a formatting-only change to a package
 manifest requires assessment; the tool does not maintain a second policy that
 decides which lines of that file are important.

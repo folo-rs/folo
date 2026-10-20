@@ -35,9 +35,15 @@ sensitivity from the operating system. Dependency membership uses the lexical me
 index first, then filesystem-resolved member identity, so caller path spelling does
 not remove dependency edges. Shared artifact-file operations own path
 resolution and atomic promotion, while callers own serialization and overwrite policy.
-Symbolic links are unsupported: Git modes and direct file metadata identify released
-links for rejection. General filesystem identity resolution still protects case and
-short-name aliases and artifact write locations; it is not a symlink support protocol.
+Git modes and direct file metadata identify released symbolic links consistently.
+The work-tree observation returns either a native link's unfollowed path or the
+target bytes from a `core.symlinks=false` placeholder. Versioning owns target
+syntax, workspace containment, chain resolution and package-release policy.
+Workspace also supplies a cached component-by-component parent observation so
+callers can reject a symlinked ancestor before any final-path metadata or hashing
+follows it.
+General filesystem identity resolution still protects case and short-name aliases
+and artifact write locations; it is not a broader symlink traversal protocol.
 Repository-controlled display strings use the diagnostic component's presentation helpers.
 The command boundary also supplies the fixed orchestration credential names shared by
 native, compatibility and registry compilation; each adapter owns environment mutation.

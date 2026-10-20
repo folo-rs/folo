@@ -1,6 +1,6 @@
 //! External acquisition for classify.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -9,7 +9,7 @@ use std::path::Path;
 use crp_diag::{Discard, Verbose};
 use crp_versioning::classify::*;
 use crp_versioning::resolved::Inputs;
-use crp_workspace::git::{GitRepo, WorkTreeModes};
+use crp_workspace::git::GitRepo;
 use crp_workspace::manifest::{
     PathCase, WorkspaceInherit, package_manifest_from_document, parse_document,
 };
@@ -168,67 +168,236 @@ fn acquired_classification_reuses_one_interval_and_observes_the_next_mutation() 
 
 #[test]
 #[cfg_attr(miri, ignore = "uses real filesystem metadata and a Git index")]
-fn work_tree_presence_and_hash_inputs_distinguish_missing_and_invalid_paths() {
+fn work_tree_presence_distinguishes_missing_and_invalid_paths() {
     let fixture = Repository::new();
     let git = fixture.repo();
     fixture.write("pkg/present", b"contents");
     let paths = vec!["pkg/present".to_string(), "pkg/missing".to_string()];
     assert_eq!(present_in_work_tree(&git, &paths).unwrap(), ["pkg/present"]);
-    let released = HashMap::from([
-        ("present".to_string(), "pkg/present".to_string()),
-        ("missing".to_string(), "pkg/missing".to_string()),
-    ]);
-    assert_eq!(
-        validated_work_tree_files(&git, "pkg", &released, &WorkTreeModes::default()).unwrap(),
-        [("present", "pkg/present")]
-    );
 
     // An interior NUL is rejected by filesystem APIs on both supported hosts.
     // Unlike permissions, this failure does not depend on the test user's privileges.
     let invalid = "pkg/invalid\0path".to_string();
     let error = present_in_work_tree(&git, std::slice::from_ref(&invalid)).unwrap_err();
     assert!(error.find_source::<std::io::Error>().is_some());
-    let error = validated_work_tree_files(
-        &git,
-        "pkg",
-        &HashMap::from([("invalid".to_string(), invalid)]),
-        &WorkTreeModes::default(),
-    )
-    .unwrap_err();
-    assert!(error.find_source::<std::io::Error>().is_some());
-
-    fixture.command(&["add", "pkg/present"]);
-    let id = git.hash_objects(&["pkg/present"]).unwrap().remove(0);
-    fixture.command(&[
-        "update-index",
-        "--cacheinfo",
-        &format!("120000,{id},pkg/present"),
-    ]);
-    // core.symlinks=false can leave an indexed link as a regular file on disk.
-    // The index must reject that path before the regular-file metadata can accept it.
-    fixture.command(&["config", "core.symlinks", "false"]);
-    let modes = git.work_tree_modes(&["pkg"], PathCase::Sensitive).unwrap();
-    let _error = validated_work_tree_files(&git, "pkg", &released, &modes).unwrap_err();
 }
 
 #[cfg(unix)]
 #[test]
 #[cfg_attr(miri, ignore = "creates real filesystem symbolic links")]
-fn filesystem_links_are_present_but_never_hashable_even_when_dangling() {
+fn native_symlinks_are_dereferenced_for_package_comparison() {
     let fixture = Repository::new();
-    fixture.write("pkg/target", b"contents");
-    symlink("target", fixture.path().join("pkg/link")).unwrap();
-    symlink("missing", fixture.path().join("pkg/dangling")).unwrap();
-    let git = fixture.repo();
-    for path in ["pkg/link", "pkg/dangling"] {
-        assert_eq!(
-            present_in_work_tree(&git, &[path.to_string()]).unwrap(),
-            [path]
-        );
-        let released = HashMap::from([("link".to_string(), path.to_string())]);
-        let _error = validated_work_tree_files(&git, "pkg", &released, &WorkTreeModes::default())
-            .unwrap_err();
+    fixture.write("shared/target", b"before\n");
+    fs::create_dir_all(fixture.path().join("pkg")).unwrap();
+    symlink("../shared/target", fixture.path().join("pkg/link")).unwrap();
+    fixture.command(&["add", "pkg", "shared"]);
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fixture.write("shared/target", b"after\n");
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (_, patch, stat, _) = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+    assert_eq!(stat.files, 1);
+    assert!(patch.contains("-before\n+after\n"));
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "replaces a tracked directory with a real symbolic link"
+)]
+fn symlinked_target_ancestors_are_rejected_before_hashing() {
+    let fixture = Repository::new();
+    fixture.write("shared/target", b"before\n");
+    fixture.command(&["add", "shared/target"]);
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/target");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fs::remove_dir_all(fixture.path().join("shared")).unwrap();
+    fixture.write("outside/target", b"outside\n");
+    symlink("../outside", fixture.path().join("shared")).unwrap();
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let error = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
+    assert!(error.to_string().contains("symbolic-link directory"));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares real Git symlink modes and work-tree files")]
+fn placeholder_symlink_chains_use_terminal_content_and_mode() {
+    let fixture = Repository::new();
+    fixture.write("shared/target", b"before\n");
+    fixture.command(&["add", "shared/target"]);
+    stage_placeholder_symlink(&fixture, "shared/alias", "target");
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/alias");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fixture.write("shared/target", b"after\n");
+    fixture.command(&["update-index", "--chmod=+x", "shared/target"]);
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, patch, stat, _) =
+        diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+    assert_eq!(
+        changed,
+        [ChangedItem::Package {
+            path: "link".to_string(),
+            change: "modified".to_string(),
+        }]
+    );
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (1, 1, 1));
+    assert!(patch.contains("-before\n+after\n"));
+    assert!(patch.contains("old mode 100644\nnew mode 100755"));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares real Git symlink modes and work-tree files")]
+fn changing_a_link_pointer_without_changing_its_payload_is_unchanged() {
+    let fixture = Repository::new();
+    fixture.write("shared/first", b"same\n");
+    fixture.write("shared/second", b"same\n");
+    fixture.command(&["add", "shared"]);
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/first");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/second");
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let (changed, patch, stat, _) =
+        diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap();
+    assert!(changed.is_empty());
+    assert!(patch.is_empty());
+    assert_eq!((stat.files, stat.insertions, stat.deletions), (0, 0, 0));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares real Git symlink modes")]
+fn symlink_cycles_are_rejected_without_traversal() {
+    let fixture = Repository::new();
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/alias");
+    stage_placeholder_symlink(&fixture, "shared/alias", "../pkg/link");
+    fixture.command(&["commit", "--quiet", "-m", "cycle"]);
+
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let error = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
+    assert!(error.to_string().contains("cycles"));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares real Git symlink modes and filesystem state")]
+fn symlink_targets_must_be_present_tracked_regular_files() {
+    for (target, expected) in [
+        ("../shared/missing", "not a tracked present file"),
+        ("../shared/dir", "not a regular file"),
+    ] {
+        let fixture = Repository::new();
+        if target.ends_with("/dir") {
+            fixture.write("shared/dir/file", b"tracked\n");
+            fixture.command(&["add", "shared/dir/file"]);
+        }
+        stage_placeholder_symlink(&fixture, "pkg/link", target);
+        fixture.command(&["commit", "--quiet", "-m", "invalid target"]);
+        let rules = PackagingRules::default();
+        let resources = BTreeMap::new();
+        let side = PackageSide {
+            dir: "pkg",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: false,
+            case: PathCase::Sensitive,
+        };
+        let error = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
+        assert!(error.to_string().contains(expected));
     }
+
+    let fixture = Repository::new();
+    fixture.write("shared/target", b"tracked\n");
+    fixture.command(&["add", "shared/target"]);
+    stage_placeholder_symlink(&fixture, "pkg/link", "../shared/target");
+    fixture.command(&["commit", "--quiet", "-m", "anchor"]);
+    fs::remove_file(fixture.path().join("shared/target")).unwrap();
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let error = diff_package(&fixture.repo(), "pkg", "HEAD", &side, &side).unwrap_err();
+    assert!(error.to_string().contains("not a tracked present file"));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "compares a real nested Git workspace")]
+fn symlink_targets_cannot_escape_a_nested_workspace() {
+    let fixture = Repository::new();
+    fixture.write("outside", b"outside\n");
+    stage_placeholder_symlink(&fixture, "workspace/pkg/link", "../../outside");
+    fixture.command(&["add", "outside"]);
+    fixture.command(&["commit", "--quiet", "-m", "escaping link"]);
+    let git = GitRepo::discover(&fixture.path().join("workspace")).unwrap();
+    let rules = PackagingRules::default();
+    let resources = BTreeMap::new();
+    let side = PackageSide {
+        dir: "workspace/pkg",
+        rules: &rules,
+        resources: &resources,
+        auto_readme: false,
+        case: PathCase::Sensitive,
+    };
+    let error = diff_package(&git, "pkg", "HEAD", &side, &side).unwrap_err();
+    assert!(error.to_string().contains("outside the workspace"));
+}
+
+fn stage_placeholder_symlink(fixture: &Repository, path: &str, target: &str) {
+    fixture.write(path, target.as_bytes());
+    fixture.command(&["add", path]);
+    let id = fixture.command(&["rev-parse", &format!(":{path}")]);
+    fixture.command(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("120000,{},{}", id.trim(), path),
+    ]);
+    fixture.command(&["config", "core.symlinks", "false"]);
 }
 
 #[test]
