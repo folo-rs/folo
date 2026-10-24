@@ -299,6 +299,14 @@ and conditions, then filters explicit benchmark targets and exclusions. Visited 
 bounds cyclic dependency traversal. The native adapters and in-memory action host execute the
 same orchestration.
 
+Preparation tests separate unowned-only changes, each mixed-path order, shared-root inputs
+and exclusions so each interpreter test exercises one scope decision. Miri uses representative
+nested paths through the real preparation pipeline; native runs retain the full path spelling
+matrix. Scope projection needs only an owned benchmark and an unrelated benchmark. Separate
+dependency-closure tests cover transitive dependencies and excluded intermediate members.
+The in-memory host supplies default configuration directly when no configuration file is
+selected; explicit-file scenarios still exercise the real TOML parser.
+
 History and PR emit canonical instance, matrix, expected platforms and collection-job prefix,
 plus head/base, concrete package CSV, `skip-all` and `skipped`. An empty PR scope does not reach
 collection as an empty package input, which would otherwise select workspace. A fork policy skip
