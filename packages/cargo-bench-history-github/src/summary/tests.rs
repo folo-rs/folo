@@ -4,6 +4,7 @@
 )]
 
 use cbh_model::{BackfillCompletion, BackfillCounts, BackfillStop};
+use reqwest::Url;
 use serde_json::{Value, json};
 
 use crate::result::Outcome;
@@ -84,6 +85,11 @@ fn all_analysis_outcomes_keep_execution_publication_and_coverage_separate() {
         assert!(card.contains("0123456789abcdef"));
         assert!(card.contains("**Next action:**"));
         assert!(card.contains("Live-head freshness not checked"));
+        if outcome == Outcome::Clean {
+            assert!(card.contains("Retain the report and continue collecting"));
+            assert!(!card.contains("rerun the failed collection"));
+            assert!(!card.contains("completed platforms only"));
+        }
     }
 }
 
@@ -112,6 +118,9 @@ fn assert_missing_platforms(outcome: Outcome) {
     } else {
         assert!(card.contains("| Report disposition | inconclusive |"));
         assert!(!card.contains("| Report disposition | clean |"));
+        assert!(card.contains("No notable changes detected on the completed platforms only."));
+        assert!(card.contains("Inspect the missing platform jobs and rerun the failed collection"));
+        assert!(!card.contains("Retain the report and continue collecting"));
     }
 }
 
@@ -151,7 +160,12 @@ fn freshness_requires_an_observed_head_and_publication_completion_is_not_a_write
 
 #[test]
 fn unavailable_reports_never_invent_a_verdict_for_any_execution_state() {
-    for execution in ["success", "failure", "cancelled", "skipped"] {
+    for (execution, label, interrupted) in [
+        ("success", "Completed", false),
+        ("failure", "Failed", true),
+        ("cancelled", "Cancelled", true),
+        ("skipped", "Skipped", false),
+    ] {
         let mut input = input(json!({"kind":"unavailable", "reason":"reports_unavailable"}));
         input["execution"] = json!(execution);
         let card = render(serde_json::from_value(input).unwrap(), |_| {
@@ -161,6 +175,15 @@ fn unavailable_reports_never_invent_a_verdict_for_any_execution_state() {
         assert!(card.contains("no benchmark verdict"));
         assert!(card.contains("No validated analysis report"));
         assert!(!card.contains("No notable changes"));
+        assert!(card.contains(&format!("| Execution | {label} |")));
+        assert_eq!(
+            card.contains("Any available evidence covers only completed work"),
+            interrupted
+        );
+        assert_eq!(
+            card.contains("Partial storage writes may remain"),
+            interrupted
+        );
     }
 }
 
@@ -239,8 +262,8 @@ fn bounded_backfill_retains_counts_missing_legs_and_safe_continuation() {
     assert!(card.contains("repeating overwrite starts"));
 }
 
-#[test]
-fn backfill_rejects_duplicate_unexpected_mismatched_or_contradictory_evidence() {
+/// Starts from consistent failed-run evidence so each case rejects its own contradiction.
+fn assert_invalid_backfill(change: impl FnOnce(&mut Value)) {
     let completion = BackfillCompletion::new(
         "a".repeat(40),
         "b".repeat(40),
@@ -255,22 +278,57 @@ fn backfill_rejects_duplicate_unexpected_mismatched_or_contradictory_evidence() 
     .unwrap()
     .to_json()
     .unwrap();
-    for mutation in ["success", "range", "duplicate", "unknown", "publication"] {
-        let mut input = backfill_input();
-        input["result"]["platforms"][0]["execution"] = json!("failure");
-        match mutation {
-            "success" => input["result"]["platforms"][0]["execution"] = json!("success"),
-            "range" => input["result"]["from"] = json!("c".repeat(40)),
-            "duplicate" => input["result"]["platforms"][1]["platform"] = json!("linux"),
-            "unknown" => input["result"]["platforms"][1]["platform"] = json!("other"),
-            "publication" => input["publication"] = json!("completed"),
-            _ => unreachable!(),
-        }
-        render(serde_json::from_value(input).unwrap(), |_| {
-            Ok(completion.as_bytes().to_vec())
-        })
-        .unwrap_err();
-    }
+    let mut input = backfill_input();
+    input["result"]["platforms"][0]["execution"] = json!("failure");
+    change(&mut input);
+    let error = render(serde_json::from_value(input).unwrap(), |_| {
+        Ok(completion.as_bytes().to_vec())
+    })
+    .unwrap_err();
+    assert!(error.find_source::<InvalidSummary>().is_some());
+}
+
+#[test]
+fn backfill_rejects_successful_execution_with_a_stopping_failure() {
+    assert_invalid_backfill(|input| {
+        input["result"]["platforms"][0]["execution"] = json!("success");
+    });
+}
+
+#[test]
+fn backfill_rejects_a_mismatched_oldest_endpoint() {
+    assert_invalid_backfill(|input| input["result"]["from"] = json!("c".repeat(40)));
+}
+
+#[test]
+fn backfill_rejects_a_mismatched_newest_endpoint() {
+    assert_invalid_backfill(|input| input["result"]["to"] = json!("c".repeat(40)));
+}
+
+#[test]
+fn backfill_rejects_skipped_execution_with_matching_completion() {
+    assert_invalid_backfill(|input| {
+        input["result"]["platforms"][0]["execution"] = json!("skipped");
+    });
+}
+
+#[test]
+fn backfill_rejects_duplicate_platforms() {
+    assert_invalid_backfill(|input| {
+        input["result"]["platforms"][1]["platform"] = json!("linux");
+    });
+}
+
+#[test]
+fn backfill_rejects_unexpected_platforms() {
+    assert_invalid_backfill(|input| {
+        input["result"]["platforms"][1]["platform"] = json!("other");
+    });
+}
+
+#[test]
+fn backfill_rejects_analysis_publication() {
+    assert_invalid_backfill(|input| input["publication"] = json!("completed"));
 }
 
 #[test]
@@ -321,6 +379,123 @@ fn unsafe_links_and_unknown_input_fields_are_rejected() {
     let mut value = analysis();
     value["extra"] = json!(true);
     serde_json::from_value::<SummaryInput>(value).unwrap_err();
+}
+
+/// Both externally supplied link fields must enforce the same admission policy.
+fn assert_rejected_link(url: &str) {
+    for field in ["run_url", "artifact_url"] {
+        let mut input = input(json!({"kind":"unavailable", "reason":"reports_unavailable"}));
+        input[field] = json!(url);
+        let error = render(serde_json::from_value(input).unwrap(), |_| {
+            panic!("unavailable results must not read evidence")
+        })
+        .unwrap_err();
+        assert!(error.find_source::<InvalidSummary>().is_some(), "{field}");
+    }
+}
+
+#[test]
+fn links_reject_non_http_schemes_even_with_a_host() {
+    let value = "ftp://example.com/report";
+    let url = Url::parse(value).unwrap();
+    assert_eq!(url.scheme(), "ftp");
+    assert_eq!(url.host_str(), Some("example.com"));
+    assert!(url.username().is_empty());
+    assert_eq!(url.password(), None);
+    assert_rejected_link(value);
+}
+
+#[test]
+fn links_reject_username_without_password() {
+    let value = "https://user@example.com/report";
+    let url = Url::parse(value).unwrap();
+    assert_eq!(url.username(), "user");
+    assert_eq!(url.password(), None);
+    assert_rejected_link(value);
+}
+
+#[test]
+fn links_reject_password_without_username() {
+    let value = "https://:password@example.com/report";
+    let url = Url::parse(value).unwrap();
+    assert!(url.username().is_empty());
+    assert_eq!(url.password(), Some("password"));
+    assert_rejected_link(value);
+}
+
+#[test]
+fn http_links_require_a_host_at_the_parser_boundary() {
+    // HTTP(S) parsing rejects a missing host before the renderer can inspect it.
+    for value in ["http://", "https://?query"] {
+        Url::parse(value).unwrap_err();
+        assert_rejected_link(value);
+    }
+}
+
+#[test]
+fn links_reject_control_characters_even_when_the_parser_removes_them() {
+    let value = "https://example.com/re\nport";
+    assert_eq!(
+        Url::parse(value).unwrap().as_str(),
+        "https://example.com/report"
+    );
+    assert_rejected_link(value);
+}
+
+#[test]
+fn http_and_https_links_preserve_destinations_and_encode_markdown_delimiters() {
+    for scheme in ["http", "https"] {
+        let mut input = input(json!({"kind":"unavailable", "reason":"reports_unavailable"}));
+        input["run_url"] = json!(format!("{scheme}://example.com/run"));
+        input["artifact_url"] = json!(format!("{scheme}://example.com/(report)?q=<value>"));
+        let card = render(serde_json::from_value(input).unwrap(), |_| {
+            panic!("unavailable results must not read evidence")
+        })
+        .unwrap();
+        assert!(card.contains(&format!(
+            "[Workflow run and diagnostics]({scheme}://example.com/run)"
+        )));
+        assert!(card.contains(&format!(
+            "[Full report or completion artifacts]({scheme}://example.com/%28report%29?q=%3Cvalue%3E)"
+        )));
+    }
+}
+
+/// Checks only the generated inventory line, independently of unrelated card wording.
+fn assert_package_inventory(packages: &[&str], expected: &str) {
+    let mut input = analysis();
+    input["result"]["packages"] = json!(packages);
+    let card = render_report(input, &report(Outcome::Clean, false));
+    assert_eq!(
+        card.lines()
+            .find(|line| line.starts_with("Selected packages:"))
+            .unwrap(),
+        format!("Selected packages: {expected}.")
+    );
+}
+
+#[test]
+fn inventory_below_the_visible_boundary_has_no_omission_notice() {
+    assert_package_inventory(
+        &["first", "second"],
+        "<code>first</code>, <code>second</code>",
+    );
+}
+
+#[test]
+fn inventory_at_the_visible_boundary_has_no_omission_notice() {
+    assert_package_inventory(
+        &["first", "second", "third"],
+        "<code>first</code>, <code>second</code>, <code>third</code>",
+    );
+}
+
+#[test]
+fn inventory_above_the_visible_boundary_discloses_the_full_count() {
+    assert_package_inventory(
+        &["first", "second", "third", "fourth"],
+        "<code>first</code>, <code>second</code>, <code>third</code> (4 total; see artifacts/logs)",
+    );
 }
 
 #[test]
