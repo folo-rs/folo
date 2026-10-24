@@ -1,6 +1,8 @@
 use std::cell::Cell;
 use std::ptr;
 
+use crp_workspace::git::WorkTreeSymlinkTarget;
+
 use super::*;
 
 fn inputs() -> Inputs {
@@ -65,6 +67,150 @@ fn final_fingerprint_modes_keep_only_admitted_links() {
 
     inputs.symlink_inputs.insert("tests/link".into());
     assert!(inputs.fingerprint_modes().unwrap().is_symlink("tests/link"));
+}
+
+#[test]
+fn link_and_directory_identity_changes_are_independently_stale() {
+    let inputs = inputs();
+    let identity = PathIdentity::new(Path::new("retained"), &|_| PathCase::Insensitive);
+    for (links, directories) in [(true, false), (false, true), (true, true)] {
+        let mut changed = inputs.clone();
+        if links {
+            changed.symlink_inputs.insert("tests/link".into());
+        }
+        if directories {
+            changed.directory_inputs.insert("shared".into());
+        }
+        for (original, current) in [(&inputs, &changed), (&changed, &inputs)] {
+            for digest in ["initial", "final"] {
+                let current = Inputs {
+                    digest: digest.into(),
+                    ..current.clone()
+                };
+                assert!(
+                    original
+                        .compare(&current, Some("final"))
+                        .unwrap_err()
+                        .find_source::<StaleInputs>()
+                        .is_some()
+                );
+                assert!(
+                    original
+                        .compare_candidate_with(&current, digest, &identity, || {
+                            panic!("changed input kinds precede alias and digest checks")
+                        })
+                        .unwrap_err()
+                        .find_source::<StaleInputs>()
+                        .is_some()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn captured_link_admission_preserves_independent_sources_and_controls() {
+    for path in ["tests/link", "src/input", ".cargo/config.toml"] {
+        for (released, source) in [(false, false), (true, false), (false, true)] {
+            let path = PathBuf::from(path);
+            let mut paths = BTreeSet::from([path.clone()]);
+            let mut inputs = CapturedPackageLinkInputs {
+                links: if released {
+                    paths.clone()
+                } else {
+                    BTreeSet::new()
+                },
+                directories: BTreeSet::from([PathBuf::from("shared")]),
+            };
+            let sources = if source {
+                paths.clone()
+            } else {
+                BTreeSet::new()
+            };
+            let control = resolver_control_input(&path);
+            let mut modes = WorkTreeModes::default();
+            modes.set(path.to_str().unwrap(), "120000");
+            let mut observed = false;
+            admit_captured_links(
+                &mut paths,
+                &sources,
+                &modes,
+                &modes,
+                &mut inputs,
+                |name, indexed| {
+                    assert_eq!(Path::new(name), path);
+                    assert!(indexed);
+                    observed = true;
+                    Ok(WorkTreePath::Missing)
+                },
+            )
+            .unwrap();
+            assert_eq!(observed, !(released || source || control));
+            assert_eq!(paths.contains(&path), released || source || control);
+            assert_eq!(inputs.links.contains(&path), released && !control);
+            assert!(paths.contains(Path::new("shared")));
+        }
+    }
+}
+
+#[test]
+fn excluded_link_admission_uses_both_mode_sets_and_the_effective_physical_kind() {
+    for (staged, effective) in [(true, false), (false, true), (true, true)] {
+        for kind in [
+            WorkTreePath::Missing,
+            WorkTreePath::Symlink(WorkTreeSymlinkTarget::Native("target".into())),
+            WorkTreePath::Symlink(WorkTreeSymlinkTarget::Placeholder(b"target".to_vec())),
+            WorkTreePath::Regular,
+            WorkTreePath::Directory,
+            WorkTreePath::Other,
+        ] {
+            let retained = !matches!(kind, WorkTreePath::Missing | WorkTreePath::Symlink(_));
+            let mut index = WorkTreeModes::default();
+            let mut modes = WorkTreeModes::default();
+            if staged {
+                index.set("tests/link", "120000");
+            }
+            if effective {
+                modes.set("tests/link", "120000");
+            }
+            let mut paths = BTreeSet::from([PathBuf::from("tests/link")]);
+            let mut inputs = CapturedPackageLinkInputs {
+                links: BTreeSet::new(),
+                directories: BTreeSet::new(),
+            };
+            let mut kind = Some(kind);
+            admit_captured_links(
+                &mut paths,
+                &BTreeSet::new(),
+                &index,
+                &modes,
+                &mut inputs,
+                |path, indexed| {
+                    assert_eq!(path, "tests/link");
+                    assert_eq!(indexed, effective);
+                    Ok(kind.take().unwrap())
+                },
+            )
+            .unwrap();
+            assert!(kind.is_none());
+            assert_eq!(paths.contains(Path::new("tests/link")), retained);
+        }
+    }
+    let mut modes = WorkTreeModes::default();
+    modes.set("tests/link", "120000");
+    let error = admit_captured_links(
+        &mut BTreeSet::new(),
+        &BTreeSet::new(),
+        &modes,
+        &modes,
+        &mut CapturedPackageLinkInputs {
+            links: BTreeSet::new(),
+            directories: BTreeSet::new(),
+        },
+        |_, _| Err(CandidateFailure::new().into()),
+    )
+    .unwrap_err();
+    assert!(error.find_source::<CandidateFailure>().is_some());
 }
 
 #[test]

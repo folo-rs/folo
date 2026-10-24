@@ -171,7 +171,7 @@ fn validated_directories_encode_presence_without_contents() {
         #[cfg(unix)]
         executable: false,
     };
-    encode_with_modes(
+    let encoded = encode_with_modes(
         Ok(directory),
         Err(ErrorKind::Other.into()),
         None,
@@ -180,6 +180,12 @@ fn validated_directories_encode_presence_without_contents() {
         true,
     )
     .unwrap();
+    // The persisted directory marker has no content field, unlike even an empty regular file.
+    let mut expected = vec![5, 0, 0, 0, 0, 0, 0, 0, b'i', b'n', b'p', b'u', b't', 3];
+    #[cfg(unix)]
+    expected.push(0);
+    expected.push(0);
+    assert_eq!(encoded, expected);
 }
 
 #[test]
@@ -193,7 +199,17 @@ fn resolver_control_inputs_are_never_package_link_exceptions() {
     ] {
         assert!(resolver_control_input(Path::new(path)));
     }
-    for path in ["src/lib.rs", "build.rs", "tests/fixture"] {
+    for path in [
+        "src/lib.rs",
+        "build.rs",
+        "tests/fixture",
+        "config",
+        "config.toml",
+        "other/config",
+        "other/config.toml",
+        ".cargo/other",
+        "nested/.cargo/other",
+    ] {
         assert!(!resolver_control_input(Path::new(path)));
     }
 }
@@ -252,6 +268,14 @@ fn executable_mode_observes_each_execute_bit_and_ignores_other_bits() {
     for mode in [0o100, 0o010, 0o001, 0o111, 0o755, 0o100755] {
         assert!(executable_mode(mode));
     }
+}
+
+#[test]
+fn only_regular_executable_inputs_contribute_the_execute_bit() {
+    assert!(fingerprint_executable(true, false));
+    assert!(!fingerprint_executable(false, false));
+    assert!(!fingerprint_executable(true, true));
+    assert!(!fingerprint_executable(false, true));
 }
 
 #[test]

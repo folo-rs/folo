@@ -175,6 +175,16 @@ injected observations and effects. This keeps transitive membership, original/fi
 fingerprints, retained isolation, foreign-owner rejection and marker invalidation within
 unit mutation coverage. Native adapters retain integration coverage for subprocess
 arguments, real aliases, atomic file promotion and workspace lifetime.
+Archive expansion consumes acquired trees and unfollowed node observations. Historical
+link traversal requests exact blob identities lazily; work-tree traversal shares its
+operation's ancestor observations and distinguishes complete capture modes from the
+initial package scope. In-process tests protect archive names, resource exceptions,
+package boundaries, cycle rejection and missing/error distinctions. Native adapters
+retain integration coverage for Git mode queries and actual link observations.
+Capture selects link, source and resolver-control membership independently before
+fingerprinting. The byte encoder consumes injected metadata and reads, including
+directory presence without file contents. Prospective copying separates captured-kind
+permissions from native creation so both policies and filesystem effects remain covered.
 Workspace owns source-location discovery; versioning
 requires relocatable dependency paths and captures the same reserved files and recursive
 source contents for fingerprints.
