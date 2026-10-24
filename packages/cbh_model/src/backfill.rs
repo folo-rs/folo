@@ -226,6 +226,33 @@ mod tests {
     }
 
     #[test]
+    fn completion_roundtrips_each_write_mode() {
+        for overwrite in [false, true] {
+            let completion = BackfillCompletion::new(
+                "a".repeat(40),
+                "b".repeat(40),
+                1,
+                BackfillCounts {
+                    stored: 1,
+                    ..BackfillCounts::default()
+                },
+                BackfillStop::RangeExhausted,
+                overwrite,
+            )
+            .unwrap();
+            assert_eq!(completion.overwrite(), overwrite);
+
+            let json = completion.to_json().unwrap();
+            let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(wire.get("overwrite").unwrap(), overwrite);
+
+            let decoded = BackfillCompletion::from_slice(json.as_bytes()).unwrap();
+            assert_eq!(decoded.overwrite(), overwrite);
+            assert_eq!(decoded, completion);
+        }
+    }
+
+    #[test]
     fn inconsistent_counts_and_stops_are_rejected() {
         for (total, counts, stop) in [
             (0, BackfillCounts::default(), BackfillStop::RangeExhausted),
