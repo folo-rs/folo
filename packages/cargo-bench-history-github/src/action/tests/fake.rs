@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::{Future, ready};
 use std::path::{Path, PathBuf};
 
-use cbh_config::parse_config;
+use cbh_config::{Config, parse_config};
 use ohno::AppError;
 use serde_json::{Value, json};
 
@@ -199,7 +199,8 @@ impl Host for FakeHost {
             Some(path) => {
                 parse_config(str::from_utf8(&self.read(&cwd.join(path)).unwrap()).unwrap()).unwrap()
             }
-            None => parse_config("").unwrap(),
+            // No file means default configuration; TOML parsing belongs to explicit-file cases.
+            None => Config::default(),
         };
         ready(project_instance(&config, cwd))
     }
