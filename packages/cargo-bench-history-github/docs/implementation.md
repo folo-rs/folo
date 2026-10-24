@@ -301,9 +301,12 @@ same orchestration.
 
 Preparation tests separate unowned-only changes, each mixed-path order, shared-root inputs
 and exclusions so each interpreter test exercises one scope decision. Miri uses representative
-nested paths through the real preparation pipeline; native runs retain the full path spelling
-matrix. Scope projection needs only an owned benchmark and an unrelated benchmark. Separate
-dependency-closure tests cover transitive dependencies and excluded intermediate members.
+nested paths; native runs retain the full path spelling matrix. Focused ownership and dependency
+tests invoke the production scope phases directly, without repeating event and configuration
+setup. Full preparation tests retain coverage of shared-root selection, exclusions and empty
+and nonempty output wiring. Scope projection needs only an owned benchmark and an unrelated
+benchmark. Separate dependency-closure tests cover transitive dependencies, cycles and excluded
+intermediate members.
 The in-memory host supplies default configuration directly when no configuration file is
 selected; explicit-file scenarios still exercise the real TOML parser.
 

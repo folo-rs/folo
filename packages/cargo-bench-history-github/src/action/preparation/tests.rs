@@ -15,6 +15,7 @@ use tick::Clock;
 
 use crate::action::errors::{InvalidInput, InvalidOutput};
 use crate::action::port::Output;
+use crate::action::preparation::execute::affected_packages;
 use crate::action::preparation::inputs::{WorkflowInputs, package_name};
 use crate::action::preparation::scope::Workspace;
 use crate::action::preparation::{Flow, PrepareWorkflowArgs, prepare_with as prepare_with_clock};
@@ -55,29 +56,6 @@ fn event() -> Value {
         "head":{"sha":SHA, "repo":{"full_name":"owner/repo"}},
         "base":{"sha":BASE, "repo":{"full_name":"owner/repo"}}
     }})
-}
-
-fn metadata(host: &FakeHost) -> Value {
-    let mut packages = Vec::new();
-    for (name, kind, dependency) in [
-        ("library", "lib", None),
-        ("middle", "lib", Some("library")),
-        ("benchmark", "bench", Some("middle")),
-        ("unrelated", "bench", None),
-    ] {
-        let dependencies = dependency.map_or_else(Vec::new, |name| {
-            vec![json!({"path":host.root.join(name), "kind":"dev"})]
-        });
-        packages.push(json!({
-            "id":name, "name":name, "manifest_path":host.root.join(name).join("Cargo.toml"),
-            "targets":[{"kind":[kind]}], "dependencies":dependencies,
-        }));
-    }
-    json!({
-        "workspace_root":host.root,
-        "workspace_members":["library","middle","benchmark","unrelated"],
-        "packages":packages,
-    })
 }
 
 fn prepare_responses(host: &FakeHost, flow: Flow) {
@@ -369,25 +347,33 @@ fn rolling_subsecond_window_rounds_the_lower_bound_up_and_upper_bound_down() {
 }
 
 #[test]
-fn rolling_backfill_uses_span_magnitudes_and_utc_calendar_months() {
-    for lookback in ["1 month ago", "-P1M"] {
-        let host = FakeHost::new(&json!({
-            "platforms":"linux", "lookback":lookback, "minimum-age":"PT0S",
-        }));
-        host.reply("false");
-        host.reply(SHA);
-        host.reply(RANGE_END);
-        host.reply(BASE);
-        block_on(prepare_with(args(&host, Flow::Backfill), &host)).unwrap();
-        let processes = host.processes.borrow();
-        assert!(processes[2].args.contains(&age_argument("min-age", NOW)));
-        assert!(
-            processes[3]
-                .args
-                .contains(&age_argument("max-age", "2024-02-29T12:00:00Z"))
-        );
-        assert!(output(&host).contains(&format!("from={BASE}\nto={RANGE_END}\n")));
-    }
+fn rolling_backfill_uses_relative_span_magnitudes_and_utc_calendar_months() {
+    assert_calendar_month_lookback("1 month ago");
+}
+
+#[test]
+fn rolling_backfill_uses_iso_span_magnitudes_and_utc_calendar_months() {
+    assert_calendar_month_lookback("-P1M");
+}
+
+/// Both duration spellings must preserve calendar arithmetic, not fixed-day subtraction.
+fn assert_calendar_month_lookback(lookback: &str) {
+    let host = FakeHost::new(&json!({
+        "platforms":"linux", "lookback":lookback, "minimum-age":"PT0S",
+    }));
+    host.reply("false");
+    host.reply(SHA);
+    host.reply(RANGE_END);
+    host.reply(BASE);
+    block_on(prepare_with(args(&host, Flow::Backfill), &host)).unwrap();
+    let processes = host.processes.borrow();
+    assert!(processes[2].args.contains(&age_argument("min-age", NOW)));
+    assert!(
+        processes[3]
+            .args
+            .contains(&age_argument("max-age", "2024-02-29T12:00:00Z"))
+    );
+    assert!(output(&host).contains(&format!("from={BASE}\nto={RANGE_END}\n")));
 }
 
 #[test]
@@ -734,11 +720,7 @@ fn resolved_base_must_match_the_frozen_event_commit() {
 
 #[test]
 fn affected_scope_expands_through_excluded_nonbenchmark_dependencies() {
-    let mut host = FakeHost::new(&json!({
-        "platforms":"linux", "exclude":"library,middle",
-    }));
-    host.event("pull_request", &event());
-    host.env.insert("GITHUB_SHA".to_owned(), "c".repeat(40));
+    let mut host = FakeHost::new(&json!({}));
     // The transitive chain must survive excluded intermediate members; an unrelated
     // benchmark is covered by the separate scope-projection cases.
     let root = serde_json::to_string(&host.root).unwrap();
@@ -750,10 +732,7 @@ fn affected_scope_expands_through_excluded_nonbenchmark_dependencies() {
         serde_json::to_string(&host.root.join("middle").join("Cargo.toml")).unwrap();
     let benchmark_manifest =
         serde_json::to_string(&host.root.join("benchmark").join("Cargo.toml")).unwrap();
-    host.reply("false");
-    host.reply(SHA);
-    host.reply(BASE);
-    host.reply(&format!(
+    let metadata = format!(
         r#"{{"workspace_root":{root},"workspace_members":["library","middle","benchmark"],
             "packages":[
                 {{"id":"library","name":"library","manifest_path":{library_manifest},
@@ -764,14 +743,15 @@ fn affected_scope_expands_through_excluded_nonbenchmark_dependencies() {
                   "targets":[{{"kind":["bench"]}}],
                   "dependencies":[{{"path":{middle},"kind":"dev"}}]}}
             ]}}"#,
-    ));
+    );
     host.reply(host.root.to_str().unwrap());
     host.reply("library/deleted.rs\0library/new.rs\0");
     host.packages
         .insert(host.root.join("library"), Some("library".to_owned()));
-    block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
-    assert!(output(&host).contains(&format!("head={SHA}\nbase={BASE}\n")));
-    assert!(output(&host).contains("packages=benchmark\nskip-all=false\n"));
+    assert_eq!(
+        affected_selection(&host, &metadata, "library,middle"),
+        "benchmark"
+    );
     assert_eq!(host.package_queries.borrow().len(), 2);
     let processes = host.processes.borrow();
     let diff = processes.last().unwrap();
@@ -816,15 +796,53 @@ fn unowned_paths_do_not_widen_pr_scope() {
 #[test]
 fn unowned_paths_before_owned_paths_do_not_widen_pr_scope() {
     for path in unowned_paths() {
-        assert_pr_scope(&format!("{path}\0owner/deleted.rs\0"), "", "owner", 1);
+        assert_affected_scope(&format!("{path}\0owner/deleted.rs\0"), "owner", 1);
     }
 }
 
 #[test]
 fn unowned_paths_after_owned_paths_do_not_widen_pr_scope() {
     for path in unowned_paths() {
-        assert_pr_scope(&format!("owner/deleted.rs\0{path}\0"), "", "owner", 1);
+        assert_affected_scope(&format!("owner/deleted.rs\0{path}\0"), "owner", 1);
     }
+}
+
+/// Exercises path ordering without repeating event, configuration and output preparation.
+fn assert_affected_scope(changes: &str, packages: &str, package_queries: usize) {
+    let mut host = FakeHost::new(&json!({}));
+    host.reply(host.root.to_str().unwrap());
+    host.reply(changes);
+    host.packages
+        .insert(host.root.join("owner"), Some("owner".to_owned()));
+    assert_eq!(
+        affected_selection(&host, &benchmark_pair_metadata(&host), ""),
+        packages
+    );
+    assert_eq!(host.package_queries.borrow().len(), package_queries);
+}
+
+/// Runs the production ownership and dependency phases; output wiring has separate full-flow tests.
+fn affected_selection(host: &FakeHost, metadata: &str, exclude: &str) -> String {
+    let workspace = Workspace::parse(metadata, host).unwrap();
+    let affected = block_on(affected_packages(
+        host,
+        &host.root,
+        &workspace,
+        &SHA.parse().unwrap(),
+        &BASE.parse().unwrap(),
+    ))
+    .unwrap();
+    let excluded = exclude
+        .split(',')
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect();
+    workspace
+        .select(affected, &excluded)
+        .unwrap()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Distinguishes affected from workspace scope without repeating dependency-closure coverage.
@@ -834,7 +852,13 @@ fn assert_pr_scope(changes: &str, exclude: &str, packages: &str, package_queries
     host.reply("false");
     host.reply(SHA);
     host.reply(BASE);
-    host.reply(&benchmark_pair_metadata(&host));
+    // One candidate detects accidental workspace fallback for empty scope. Nonempty scope
+    // needs distinct owners to distinguish broad selection from exclusion or package ownership.
+    if packages.is_empty() {
+        host.reply(&single_member_metadata(&host).to_string());
+    } else {
+        host.reply(&benchmark_pair_metadata(&host));
+    }
     host.reply(host.root.to_str().unwrap());
     host.reply(changes);
     host.packages
@@ -912,26 +936,18 @@ fn paths_outside_the_measured_workspace_preserve_owned_scope() {
 
 /// Exercises repository-relative paths against a nested measured workspace.
 fn assert_nested_workspace_scope(changes: &str, packages: &str) {
-    let mut host = FakeHost::new(&json!({"platforms":"linux"}));
+    let mut host = FakeHost::new(&json!({}));
     let repository = host.root.clone();
     host.root = repository.join("measured");
-    host.files.insert(
-        host.root.join("inputs.json"),
-        br#"{"platforms":"linux"}"#.to_vec(),
-    );
-    host.event("pull_request", &event());
-    prepare_single_member_responses(&host);
     host.reply(repository.to_str().unwrap());
     host.reply(changes);
     host.packages
         .insert(host.root.join("owner"), Some("owner".to_owned()));
 
-    block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
-
-    assert!(output(&host).contains(&format!(
-        "packages={packages}\nskip-all={}\nskipped=false\n",
-        packages.is_empty(),
-    )));
+    assert_eq!(
+        affected_selection(&host, &single_member_metadata(&host).to_string(), ""),
+        packages
+    );
     assert_eq!(
         host.package_queries.borrow().len(),
         usize::from(!packages.is_empty())
@@ -940,19 +956,16 @@ fn assert_nested_workspace_scope(changes: &str, packages: &str) {
 
 #[test]
 fn missing_detected_owner_does_not_widen_pr_scope() {
-    let mut host = FakeHost::new(&json!({"platforms":"linux"}));
-    host.event("pull_request", &event());
-    host.reply("false");
-    host.reply(SHA);
-    host.reply(BASE);
-    host.reply(&benchmark_pair_metadata(&host));
+    let mut host = FakeHost::new(&json!({}));
     host.reply(host.root.to_str().unwrap());
     host.reply("other/deleted.rs\0owner/src/lib.rs\0");
     host.packages.insert(host.root.join("other"), None);
     host.packages
         .insert(host.root.join("owner"), Some("owner".to_owned()));
-    block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
-    assert!(output(&host).contains("packages=owner\nskip-all=false\n"));
+    assert_eq!(
+        affected_selection(&host, &benchmark_pair_metadata(&host), ""),
+        "owner"
+    );
     assert_eq!(host.package_queries.borrow().len(), 2);
 }
 
@@ -973,18 +986,14 @@ fn root_member_does_not_override_nested_owners() {
 
 /// An unrelated benchmark distinguishes root ownership from an accidental workspace-wide fallback.
 fn assert_root_member_scope(path: &str, expected: &str) {
-    let mut host = FakeHost::new(&json!({"platforms":"linux"}));
-    host.event("pull_request", &event());
+    let mut host = FakeHost::new(&json!({}));
     let root = serde_json::to_string(&host.root).unwrap();
     let root_manifest = serde_json::to_string(&host.root.join("Cargo.toml")).unwrap();
     let nested_manifest =
         serde_json::to_string(&host.root.join("nested").join("Cargo.toml")).unwrap();
     let other_manifest =
         serde_json::to_string(&host.root.join("other").join("Cargo.toml")).unwrap();
-    host.reply("false");
-    host.reply(SHA);
-    host.reply(BASE);
-    host.reply(&format!(
+    let metadata = format!(
         r#"{{"workspace_root":{root},"workspace_members":["root","nested","other"],"packages":[
             {{"id":"root","name":"root","manifest_path":{root_manifest},
               "targets":[{{"kind":["bench"]}}],"dependencies":[]}},
@@ -993,15 +1002,14 @@ fn assert_root_member_scope(path: &str, expected: &str) {
             {{"id":"other","name":"other","manifest_path":{other_manifest},
               "targets":[{{"kind":["bench"]}}],"dependencies":[]}}
         ]}}"#,
-    ));
+    );
     host.reply(host.root.to_str().unwrap());
     host.reply(&format!("{path}\0"));
     // The native detector reports workspace scope for a root member.
     host.packages.insert(host.root.clone(), None);
     host.packages
         .insert(host.root.join("nested"), Some("nested".to_owned()));
-    block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
-    assert!(output(&host).contains(&format!("packages={expected}\nskip-all=false\n")));
+    assert_eq!(affected_selection(&host, &metadata, ""), expected);
 }
 
 #[test]
@@ -1014,7 +1022,7 @@ fn fixture_workspaces_within_members_query_the_declared_package_boundary() {
     host.packages
         .insert(host.root.join("owner"), Some("owner".to_owned()));
     block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
-    assert!(output(&host).contains("packages=owner\n"));
+    assert!(output(&host).contains("packages=owner\nskip-all=false\nskipped=false\n"));
     let queries = host.package_queries.borrow();
     assert_eq!(queries.len(), 1);
     assert_eq!(queries[0].1, host.root.join("owner"));
@@ -1023,12 +1031,12 @@ fn fixture_workspaces_within_members_query_the_declared_package_boundary() {
 #[test]
 fn declared_member_boundaries_choose_the_deepest_member_without_prefix_collisions() {
     let host = FakeHost::new(&json!({}));
-    let mut metadata = metadata(&host);
+    let mut metadata = single_member_metadata(&host);
     metadata["workspace_members"]
         .as_array_mut()
         .unwrap()
         .push(json!("nested"));
-    let nested = host.root.join("library").join("nested");
+    let nested = host.root.join("owner").join("nested");
     metadata["packages"].as_array_mut().unwrap().push(json!({
         "id":"nested", "name":"nested", "manifest_path":nested.join("Cargo.toml"),
         "targets":[{"kind":["bench"]}], "dependencies":[],
@@ -1039,8 +1047,12 @@ fn declared_member_boundaries_choose_the_deepest_member_without_prefix_collision
         Some((nested.as_path(), "nested"))
     );
     assert_eq!(
-        workspace.package_owner(&host.root.join("library-other").join("lib.rs")),
+        workspace.package_owner(&host.root.join("owner-other").join("lib.rs")),
         None
+    );
+    assert_eq!(
+        workspace.package_owner(&host.root.join("owner").join("lib.rs")),
+        Some((host.root.join("owner").as_path(), "owner"))
     );
 }
 
@@ -1113,13 +1125,29 @@ fn assert_preparation_failure(failure: &str) {
 #[test]
 fn scope_closure_handles_cycles_and_ignores_registry_edges() {
     let host = FakeHost::new(&json!({}));
-    let mut metadata = metadata(&host);
-    metadata["packages"][1]["dependencies"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"path":host.root.join("benchmark")}));
-    metadata["packages"][3]["dependencies"] = json!([{"name":"library","path":null}]);
-    let workspace = Workspace::parse(&metadata.to_string(), &host).unwrap();
+    let root = serde_json::to_string(&host.root).unwrap();
+    let library = serde_json::to_string(&host.root.join("library")).unwrap();
+    let benchmark = serde_json::to_string(&host.root.join("benchmark")).unwrap();
+    let library_manifest =
+        serde_json::to_string(&host.root.join("library").join("Cargo.toml")).unwrap();
+    let benchmark_manifest =
+        serde_json::to_string(&host.root.join("benchmark").join("Cargo.toml")).unwrap();
+    let unrelated_manifest =
+        serde_json::to_string(&host.root.join("unrelated").join("Cargo.toml")).unwrap();
+    // A library/benchmark cycle must terminate without following a same-named registry edge.
+    let metadata = format!(
+        r#"{{"workspace_root":{root},"workspace_members":["library","benchmark","unrelated"],
+            "packages":[
+                {{"id":"library","name":"library","manifest_path":{library_manifest},
+                  "targets":[],"dependencies":[{{"path":{benchmark}}}]}},
+                {{"id":"benchmark","name":"benchmark","manifest_path":{benchmark_manifest},
+                  "targets":[{{"kind":["bench"]}}],"dependencies":[{{"path":{library}}}]}},
+                {{"id":"unrelated","name":"unrelated","manifest_path":{unrelated_manifest},
+                  "targets":[{{"kind":["bench"]}}],
+                  "dependencies":[{{"name":"library","path":null}}]}}
+            ]}}"#,
+    );
+    let workspace = Workspace::parse(&metadata, &host).unwrap();
     assert_eq!(
         workspace
             .select(

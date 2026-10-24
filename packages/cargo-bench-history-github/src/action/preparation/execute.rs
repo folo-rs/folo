@@ -191,7 +191,7 @@ pub(crate) async fn resolve(
 }
 
 /// Maps changed paths to owners, widening only for known shared build inputs.
-async fn affected_packages(
+pub(crate) async fn affected_packages(
     host: &impl Host,
     cwd: &Path,
     workspace: &Workspace,
