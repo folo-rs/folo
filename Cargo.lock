@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "action-pairing-check"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "mimalloc",
+ "mutants",
+ "ohno",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "testing",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -389,20 +403,6 @@ name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
-
-[[package]]
-name = "benchmark-action-check"
-version = "0.0.0"
-dependencies = [
- "clap",
- "mimalloc",
- "mutants",
- "ohno",
- "serde",
- "serde_json",
- "tempfile",
- "testing",
-]
 
 [[package]]
 name = "benchmarks"

@@ -69,9 +69,10 @@ directly:
   [docs/release-versioning.md](docs/release-versioning.md#on-a-pull-request).
 * **Run the repository-specific extension after version planning.** After
   `increment-versions`, including after reassessment, run
-  [`pair-benchmark-action-release`](.github/skills/pair-benchmark-action-release/SKILL.md).
-  Start with its one-line relevance check; a false result ends repo-specific action work.
-  Follow [benchmark action releases](docs/benchmark-action-releases.md) for paired PRs,
+  [`pair-action-releases`](.github/skills/pair-action-releases/SKILL.md).
+  Check both `cargo-bench-history-action` and `cargo-release-plan-action`; a false result
+  ends work only for that action, not the other. Follow
+  [paired action releases](docs/action-releases.md) for paired PRs,
   independent action-version decisions and publication follow-up.
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
@@ -397,10 +398,11 @@ merge, and the `increment-versions` skill applies the plan. Merge publishes.
 deciding a version increment; debugging `validate-versions`, `cargo-release-plan`,
 or the `increment-versions` skill.
 
-### [docs/benchmark-action-releases.md](docs/benchmark-action-releases.md)
+### [docs/action-releases.md](docs/action-releases.md)
 
-Repository-specific coordination with `folo-rs/cargo-bench-history-action`: the
-`pair-benchmark-action-release` extension after general version planning, paired PR
+Repository-specific coordination with `folo-rs/cargo-bench-history-action` and
+`folo-rs/cargo-release-plan-action`: the
+`pair-action-releases` extension after general version planning, paired PR
 presentation, action-version decisions and the required published-installation gate.
 
 **Open this when**: completing `increment-versions`; updating a tool pinned by the

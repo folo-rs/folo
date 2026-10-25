@@ -1,7 +1,8 @@
-# Benchmark action releases
+# Paired action releases
 
 This chapter owns the repository-specific release coordination between `folo-rs/folo`
-and `folo-rs/cargo-bench-history-action`. The action selects exact tool versions, but its
+and its maintained action repositories, `folo-rs/cargo-bench-history-action` and
+`folo-rs/cargo-release-plan-action`. Each action selects exact tool versions, but its
 own version and publication are separate from Cargo package versioning.
 
 ## Meta
@@ -12,29 +13,33 @@ own version and publication are separate from Cargo package versioning.
   planning), [`release-automation.md`](release-automation.md) (monorepo publication),
   [`git-workflow.md`](git-workflow.md#versionrelease-plan-section) (general PR presentation),
   [action design](../packages/cargo-bench-history/docs/reusable-action.md#81-releasing-the-action-operator-flow)
-  (installation and action release mechanics).
+  (benchmark installation and release mechanics), and the release-plan action's
+  [maintainer procedure](https://github.com/folo-rs/cargo-release-plan-action/blob/main/docs/setup.md).
 
-Run the [`pair-benchmark-action-release` skill](../.github/skills/pair-benchmark-action-release/SKILL.md)
+Run the [`pair-action-releases` skill](../.github/skills/pair-action-releases/SKILL.md)
 after the general [`increment-versions` skill](../.github/skills/increment-versions/SKILL.md),
 including after reassessment. The extension consumes the verified complete release plan;
 it does not change the general skill or its crate-versioning decisions.
 
 ## Fast relevance check
 
-After version planning, start with one command using the final verified report:
+After version planning, check every maintained action using the final verified report:
 
 ```powershell
-just benchmark-action-pairing-needed 'C:\release-evidence\verified\report.json'
+just action-pairing-needed 'C:\release-evidence\verified\report.json' cargo-bench-history
+just action-pairing-needed 'C:\release-evidence\verified\report.json' cargo-release-plan
 ```
 
-It prints only `true` or `false` on stdout. `false` ends action coordination immediately:
-do not inspect action PRs, clone another checkout or read the remaining action-release procedure.
-`true` means a pinned tool is in the pending release set, including retained increments and
-dependency/group effects; continue with the pairing skill. It does not mean the action pins
+Each invocation prints only `true` or `false` on stdout for its selected action. `false` ends
+coordination for that action only; continue checking the others. Do not inspect PRs or require
+a checkout for an unaffected action. Only successful negative results for every action establish
+that no paired PR is needed. `true` means a pinned tool is in the pending release set, including
+retained increments and dependency/group effects; continue with the pairing skill. It does not mean the action pins
 necessarily still need editing.
 
-The nonpublished helper reads the authoritative tool names from the action repository's
-`release.json`, not a second maintained list. No pending releases means no manifest lookup at all.
+The nonpublished helper reads the authoritative tool names from each selected action repository's
+`release.json`, not a second maintained pin list. It reads the benchmark action's tool array and
+the release-plan action's package-keyed tool object. No pending releases means no manifest lookup at all.
 Otherwise it fetches only that small file through the existing GitHub CLI authentication.
 Malformed evidence and lookup failures are errors, never `false`.
 
@@ -42,8 +47,11 @@ For an initial action bootstrap or a proposed manifest not yet on its default br
 the local manifest explicitly:
 
 ```powershell
-just benchmark-action-pairing-needed 'C:\release-evidence\verified\report.json' 'C:\Source\cargo-bench-history-action\release.json'
+just action-pairing-needed 'C:\release-evidence\verified\report.json' cargo-release-plan 'C:\Source\cargo-release-plan-action\release.json'
 ```
+
+The local manifest overrides only the selected action. Add any new maintained action to the
+checker selectors and the skill's action table, with coverage for its manifest layout.
 
 ## Release scope and version decisions
 
@@ -54,12 +62,20 @@ This applies regardless of the reason for the tool's movement: source changes, d
 group effects, version-only increments, and first publication all count. Inspect the complete
 verified pending release set, including retained increments, not only a newly applied plan.
 
-The action's release manifest defines the executable tool set, including test-only tools:
+The benchmark action's release manifest defines the executable tool set, including test-only tools:
 `cargo-bench-history`, `cargo-bench-history-github` and `cargo-bench-history-faker`.
 Check the actual manifest for additional pins; do not maintain a second machine-readable list
 in this repository. Workflow scope selection links `cargo-detect-package` as a Rust library
 dependency of the companion, not as a separately installed executable or action pin. Its
 release effects reach the action through the companion's ordinary Cargo dependency/version plan.
+
+The release-plan action pins `cargo-release-plan` and its external checker. Any pending CRP
+release requires its own paired action PR, even if no benchmark-action tool moves.
+The external checker's version remains governed by that action's compatibility requirements,
+not by unrelated monorepo increments. Folo's source-mode use of the action does not exempt its
+published-tool pins from coordination. Assess cumulative compatibility from the action's actual
+old pin rather than assuming it matches the monorepo's preceding release.
+
 Private implementation packages matter through the pinned binary version they move, not
 through independent action pins. The action repository's own release instructions determine
 its version decision; monorepo tool versions do not determine the action's version number.
@@ -89,8 +105,9 @@ pairing obligation nor completing its skill authorizes merging or publishing eit
 
 Merge order is monorepo first, action second. Monorepo merge starts asynchronous registry and
 prebuilt-binary publication; it does not prove that the selected versions are installable.
-The action repository's required `install-tools` check must really install each exact manifest
-package through `install` with its published lockfile and its promised prebuilt archives
+The action repository's required published-installation gate (`install-tools` in the benchmark
+action and `Published installation` in the release-plan action) must really install each exact
+manifest package through `install` with its published lockfile and its promised prebuilt archives
 through `binstall` with source fallback disabled, across the supported targets. It verifies
 the executable versions and exercises the command contracts used by the action and workflows.
 
@@ -110,6 +127,11 @@ release and moving the floating major tag. A later successful run never justifie
 the gate on an untested manifest.
 
 ## Automatic publication follow-up
+
+An explicit user prohibition on automations overrides scheduling, not release acceptance.
+Retain the owning action session and exact pair, record that post-publication retries must be
+human-arranged, and do not create a schedule or hidden watcher. The action still cannot merge
+until its published-installation and other required checks pass.
 
 The paired action PR's existing Local App session owns a session automation that wakes it
 every 60 minutes. This cadence provides automatic recovery from asynchronous publication

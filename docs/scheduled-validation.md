@@ -485,7 +485,7 @@ per-PR timer, automation or hidden watcher. A delay in results worth awaiting is
 not a reason to end that work, add `needs-human` or request a check waiver.
 
 The separate paired action PR session owns the narrowly scoped
-[hourly publication retry](benchmark-action-releases.md#automatic-publication-follow-up).
+[hourly publication retry](action-releases.md#automatic-publication-follow-up).
 Its session automation recovers artifact-dependent checks after the monorepo merges;
 it is not an intake monitor or a replacement for this repair's foreground follow-up.
 
@@ -771,7 +771,7 @@ when assessing a new admission. Finished owners are not woken for a relationship
 that can instead use their merged result. Surface unresolved operator inputs
 without guessing approval. Neither coordination nor ordinary repair follow-up uses per-PR
 timers or hidden watchers. The paired action session's
-[automatic publication follow-up](benchmark-action-releases.md#automatic-publication-follow-up)
+[automatic publication follow-up](action-releases.md#automatic-publication-follow-up)
 is the sole task-specific exception and remains owned by that action session.
 
 A paused machine leaves the backlog intact. After an explicit handoff, a human

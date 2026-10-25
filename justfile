@@ -12,8 +12,8 @@ target_package := if package == "" { " --workspace" } else { " -p " + replace(pa
 _default:
     @just --list
 
+import 'justfiles/just_action_releases.just'
 import 'justfiles/just_basics.just'
-import 'justfiles/just_benchmark_action.just'
 import 'justfiles/just_book.just'
 import 'justfiles/just_delta.just'
 import 'justfiles/just_quality.just'

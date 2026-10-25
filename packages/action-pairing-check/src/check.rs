@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ohno::AppError;
 use serde::Deserialize;
@@ -32,7 +32,22 @@ enum Status {
 #[derive(Deserialize)]
 struct ActionManifest {
     schema_version: u32,
-    tools: Vec<Tool>,
+    tools: Tools,
+}
+
+/// Reads each action's own manifest layout without maintaining another pin inventory.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Tools {
+    Named(Vec<Tool>),
+    Keyed(BTreeMap<String, ToolVersion>),
+}
+
+/// The action validates version values; relevance needs only well-formed pin entries.
+#[derive(Deserialize)]
+struct ToolVersion {
+    #[serde(rename = "version")]
+    _version: String,
 }
 
 /// Other manifest fields belong to the action's own release validation.
@@ -94,8 +109,12 @@ pub(crate) fn pairing_needed(
         return Err(InvalidInput::new("Unsupported action release manifest schema").into());
     }
     let mut tools = BTreeSet::new();
-    for tool in manifest.tools {
-        if !valid_package_name(&tool.name) || !tools.insert(tool.name) {
+    let names = match manifest.tools {
+        Tools::Named(tools) => tools.into_iter().map(|tool| tool.name).collect(),
+        Tools::Keyed(tools) => tools.into_keys().collect::<Vec<_>>(),
+    };
+    for name in names {
+        if !valid_package_name(&name) || !tools.insert(name) {
             return Err(
                 InvalidInput::new("Action manifest has an empty or duplicate tool name").into(),
             );
@@ -193,6 +212,46 @@ mod tests {
     }
 
     #[test]
+    fn action_results_are_independent_for_the_complete_release_set() {
+        // Model the distinct manifest layouts, not a second copy of their current versions.
+        let benchmark = manifest(&["cargo-bench-history", "fixture"]);
+        let release = json!({
+            "schema_version": 1,
+            "tools": {
+                "cargo-release-plan": {"version": "1.2.3"},
+                "external-checker": {"version": "4.5.6"}
+            }
+        })
+        .to_string();
+
+        for (packages, expected) in [
+            (
+                vec![("cargo-release-plan", "pending-release")],
+                [false, true],
+            ),
+            (
+                vec![("cargo-bench-history", "pending-release")],
+                [true, false],
+            ),
+            (
+                vec![
+                    ("cargo-release-plan", "pending-release"),
+                    ("fixture", "pending-release"),
+                ],
+                [true, true],
+            ),
+            (vec![("unrelated", "pending-release")], [false, false]),
+        ] {
+            for (manifest, expected) in [&benchmark, &release].into_iter().zip(expected) {
+                assert_eq!(
+                    pairing_needed(&report(&packages), || Ok(manifest.clone()), |_| {}).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
     fn malformed_reports_and_unfinished_plans_fail_before_lookup() {
         for invalid in [
             "{}".to_owned(),
@@ -217,6 +276,11 @@ mod tests {
             manifest(&[""]),
             manifest(&["tool "]),
             manifest(&["tool", "tool"]),
+            r#"{"schema_version":1,"tools":{}}"#.to_owned(),
+            r#"{"schema_version":1,"tools":{"":{"version":"1.2.3"}}}"#.to_owned(),
+            r#"{"schema_version":1,"tools":{"tool ":{"version":"1.2.3"}}}"#.to_owned(),
+            r#"{"schema_version":1,"tools":{"tool":null}}"#.to_owned(),
+            r#"{"schema_version":1,"tools":{"tool":{}}}"#.to_owned(),
         ] {
             _ = pairing_needed(
                 &report(&[("tool", "pending-release")]),
