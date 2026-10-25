@@ -1,4 +1,4 @@
-//! Repository-specific relevance check for benchmark-action release coordination.
+//! Repository-specific relevance check for paired action releases.
 
 mod check;
 mod run;

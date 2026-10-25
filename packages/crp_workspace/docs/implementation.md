@@ -172,6 +172,12 @@ and configuration precedence consume captured values or narrow read callbacks. M
 projection shares those operations rather than duplicating publication and dependency
 decisions in a test model. Only native forwarding is excluded from unit mutation testing;
 boundary integrations exercise the actual commands and filesystem effects.
+Parent traversal interprets injected, non-dereferencing kind observations and caches only
+confirmed ordinary directories within one operation. Missing entries and non-directories
+stop traversal; operational errors remain errors. Separate native boundary coverage verifies
+that the acquisition does not follow a link. Complete tracked-list access remains independent
+of narrowed mode and untracked query scopes. Subtree pruning tests use in-memory rules and
+literal paths; uncertain patterns never substitute for final compiled membership matching.
 The shared repository fixture's Git and filesystem methods have individual
 native-support mutation exclusions. I/O scheduling stays unit-tested, including
 callback execution and rejection after a predecessor poisons its slot.

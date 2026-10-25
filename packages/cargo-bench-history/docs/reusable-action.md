@@ -198,7 +198,7 @@ binary version comes from the action release's manifest. There is no caller vers
 override or independently moving latest-tool selection. Updating the tested combination is
 an action release, which may change only that manifest. Tool and action version numbers
 remain independent. Every monorepo PR moving a pinned tool version has a paired action PR
-to adopt it, following the [release policy](../../../docs/benchmark-action-releases.md).
+to adopt it, following the [release policy](../../../docs/action-releases.md).
 
 A pinned action release or commit selects an exact tested combination. Each floating major
 tag advances only among that major's action releases with their own tested manifests.
@@ -1573,14 +1573,14 @@ There is no manual tag-preparation step or crates.io publication in the action r
    PR has merged, and automatically retries checks failing on its unpublished artifacts.
    It verifies the current manifest's actual results and clears the follow-up when those
    checks pass or the pair reaches a terminal disposition, following the
-   [automatic publication policy](../../../docs/benchmark-action-releases.md#automatic-publication-follow-up).
+   [automatic publication policy](../../../docs/action-releases.md#automatic-publication-follow-up).
    No further user prompt, cross-repository dispatch service or stored credential is required.
 5. Once the current action PR passes its required checks and review, it can merge.
 6. The action's release workflow publishes the reviewed version and advances its floating
    major after the final availability gate.
 
-The [repository-specific release policy](../../../docs/benchmark-action-releases.md)
-and [`pair-benchmark-action-release` skill](../../../.github/skills/pair-benchmark-action-release/SKILL.md),
+The [repository-specific release policy](../../../docs/action-releases.md)
+and [`pair-action-releases` skill](../../../.github/skills/pair-action-releases/SKILL.md),
 run after general `increment-versions`, require this pairing, including dependency/group and
 version-only movements. The manifest is the scope authority, including its test-only faker pin.
 Library dependencies reach the action through their pinned executable's release. Reuse an

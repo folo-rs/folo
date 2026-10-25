@@ -359,6 +359,44 @@ mod tests {
     }
 
     #[test]
+    fn reserved_roots_are_pruned_even_when_patterns_admit_their_descendants() {
+        let include = rules(Some(&["Cargo.lock/child", "target/child"]), None).unwrap();
+        for path in ["Cargo.lock", "target", "target/child", "./target/child/"] {
+            assert!(!include.may_release_path_or_descendant(path));
+        }
+        let all = PackagingRules::default();
+        for path in ["Cargo.lock", "target", "target/child"] {
+            assert!(!all.may_release_path_or_descendant(path));
+        }
+        for path in ["nested/Cargo.lock", "nested/target", "targets/child"] {
+            assert!(all.may_release_path_or_descendant(path));
+        }
+    }
+
+    #[test]
+    fn subtree_proofs_distinguish_literal_components_from_uncertain_globs() {
+        for pattern in ["*", "?", "[ab]", "{a,b}", r"\a"] {
+            // A filename can itself contain glob characters; textual equality is not proof
+            // that an uncertain pattern excludes every possible descendant.
+            assert!(!pattern_excludes_subtree(pattern, pattern));
+        }
+        for (pattern, path, excluded) in [
+            ("cache", "nested/cache/file", true),
+            ("cache/", "nested/cache/file", true),
+            ("cache", "nested/caches/file", false),
+            ("/cache", "nested/cache/file", false),
+            ("/cache", "cache/file", true),
+            ("cache/**", "cache/file", true),
+            ("cache/**", "caches/file", false),
+            ("nested/cache", "nested/cache/file", true),
+            ("nested/cache", "elsewhere/nested/cache/file", false),
+            ("!cache", "cache/file", false),
+        ] {
+            assert_eq!(pattern_excludes_subtree(pattern, path), excluded);
+        }
+    }
+
+    #[test]
     fn the_build_directory_is_never_released_by_default() {
         // Cargo drops it before reading either manifest key, so neither the
         // default selection nor an `include` naming it can pack build output.

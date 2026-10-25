@@ -1,6 +1,6 @@
 [package]
-name = "benchmark-action-check"
-description = "Checks whether a verified monorepo release needs benchmark-action coordination"
+name = "action-pairing-check"
+description = "Checks whether a verified monorepo release needs paired action coordination"
 publish = false
 version = "0.0.0"
 

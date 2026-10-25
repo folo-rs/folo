@@ -17,7 +17,7 @@ account/model and existing worktree.
 
 Do not merge, publish releases, change billing, install unapproved tools, create
 replacement agents or general per-PR timers, or enable automations except for the paired
-action session's [hourly publication retry](../../../docs/benchmark-action-releases.md#automatic-publication-follow-up).
+action session's [hourly publication retry](../../../docs/action-releases.md#automatic-publication-follow-up).
 Include that narrowly scoped requirement when handing off the paired action PR; it does
 not replace this repair's foreground follow-up. Use ordinary repair
 branches and the same repository/fork job rules as other PRs. Logs, artifacts and

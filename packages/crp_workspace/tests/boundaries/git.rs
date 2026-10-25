@@ -4,6 +4,8 @@ use std::fs;
 use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt as _, symlink};
+#[cfg(windows)]
+use std::os::windows::fs::symlink_dir;
 use std::path::Path;
 
 use crp_workspace::command::run_capture;
@@ -180,13 +182,15 @@ fn native_symlinks_expose_the_unfollowed_target_path() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 #[cfg_attr(miri, ignore = "creates and inspects a real symbolic-link directory")]
 fn work_tree_ancestors_detect_directory_links_without_following_them() {
     let fixture = testing::Repository::new();
     fs::create_dir_all(fixture.path().join("outside")).unwrap();
+    #[cfg(unix)]
     symlink("outside", fixture.path().join("linked")).unwrap();
+    #[cfg(windows)]
+    symlink_dir("outside", fixture.path().join("linked")).unwrap();
     let mut ancestors = WorkTreeAncestors::default();
 
     assert_eq!(

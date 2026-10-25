@@ -1,4 +1,4 @@
-# Benchmark-action relevance check
+# Action-pairing relevance check
 
 This nonpublished helper implements the inexpensive first step of the repository-specific
 action-pairing skill. General crate version planning remains in `cargo-release-plan`.
@@ -6,7 +6,7 @@ action-pairing skill. General crate version planning remains in `cargo-release-p
 The input is the final verified release report. Its schema revision follows the
 application's report contract; the projection does not reinterpret release-history
 or anticipated-parent evidence. The checker projects its pending package names
-and intersects them with names from the action's authoritative release manifest. This includes
+and intersects them with names from the selected action's authoritative release manifest. This includes
 retained pending versions, first publication and dependent/group movement without deriving
 versions a second time. Nonpublished alignment-only helpers are not publication candidates.
 
@@ -14,6 +14,12 @@ An empty pending set returns `false` before any manifest access. Other changes r
 small manifest through the existing GitHub CLI authentication, not a checkout or PR listing.
 Bootstrap and proposed action manifests can be supplied explicitly as a local file. Missing,
 malformed or unsupported inputs fail rather than returning a success-shaped `false`.
+
+The required `--action` argument selects `cargo-bench-history` or `cargo-release-plan`.
+Repository endpoints are fixed, while each remote `release.json` remains the only pin inventory.
+The benchmark action names tools in an array; the release-plan action keys them by package name.
+The checker reads both layouts. Each action gets its own result: a negative benchmark result
+cannot dispose of release-plan pairing. The calling skill must check every maintained action.
 
 Stdout contains exactly `true` or `false` on success; verbose reasoning goes to stderr.
 The pure decision and deferred-loader ordering have in-memory tests. Native executable tests

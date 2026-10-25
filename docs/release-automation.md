@@ -77,7 +77,5 @@ Tool and action versions are independent. Actual registry packages and every
 promised archive must be available before their corresponding action release.
 Source-mode CI does not replace that installation gate.
 
-Folo's benchmark integration has its own
-[paired-action policy](benchmark-action-releases.md).
-[`folo-rs/cargo-release-plan-action`](https://github.com/folo-rs/cargo-release-plan-action)
-has its own release stream and exact published-installation gate.
+Both maintained actions follow the [paired-action policy](action-releases.md).
+Each action has an independent release stream and an exact published-installation gate.

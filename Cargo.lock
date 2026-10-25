@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "action-pairing-check"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "mimalloc",
+ "mutants",
+ "ohno",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "testing",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -391,20 +405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
-name = "benchmark-action-check"
-version = "0.0.0"
-dependencies = [
- "clap",
- "mimalloc",
- "mutants",
- "ohno",
- "serde",
- "serde_json",
- "tempfile",
- "testing",
-]
-
-[[package]]
 name = "benchmarks"
 version = "0.0.1-never"
 dependencies = [
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "clap",
  "crp_diag",
@@ -1218,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "crp_diag"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "crp_native"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "command-group",
  "criterion",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "crp_publication"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "crp-publication-test-helper",
  "crp_diag",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "crp_versioning"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "criterion",
  "crp_diag",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "crp_workspace"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "criterion",
  "crp_diag",

@@ -96,6 +96,8 @@ impl Inputs {
     ///
     /// Assessed source, configuration and history must remain unchanged during capture
     /// and while using the returned observation.
+    // Native acquisition and hashing; admit_captured_links tests link/source/control selection.
+    #[cfg_attr(test, mutants::skip)]
     pub fn capture_with_snapshots(
         manifest: &Path,
         release_history: Option<&str>,
@@ -134,41 +136,22 @@ impl Inputs {
         let index = run_capture_bytes("git", &["ls-files", "--stage", "-z"], git.root())?;
         let index_modes = WorkTreeModes::from_index(&index)?;
         let effective_modes = git.work_tree_modes_from_index(index_modes.clone(), &["."], case)?;
-        let CapturedPackageLinkInputs {
-            mut links,
-            directories,
-        } = captured_package_link_inputs(
+        let mut link_inputs = captured_package_link_inputs(
             git,
             &work_tree.packages,
             &work_tree.tracked_paths,
             &effective_modes,
             case,
         )?;
-        links.retain(|path| !resolver_control_input(path));
-        // Excluded links are intentionally absent from prospective files while
-        // their index entries remain. Consult both staged and effective kinds so
-        // recapture omits a missing/native/placeholder link consistently, but
-        // retains real regular-file replacements and independent source/control inputs.
-        let possible_links: BTreeSet<&String> = index_modes
-            .symlinks
-            .iter()
-            .chain(&effective_modes.symlinks)
-            .collect();
-        for link in possible_links {
-            let path = PathBuf::from(link);
-            if !links.contains(&path)
-                && !source_paths.contains(&path)
-                && !resolver_control_input(&path)
-                && matches!(
-                    git.work_tree_path(link, effective_modes.is_symlink(link))?,
-                    WorkTreePath::Missing | WorkTreePath::Symlink(_)
-                )
-            {
-                paths.remove(&path);
-            }
-        }
-        paths.extend(links.iter().cloned());
-        paths.extend(directories.iter().cloned());
+        admit_captured_links(
+            &mut paths,
+            &source_paths,
+            &index_modes,
+            &effective_modes,
+            &mut link_inputs,
+            |path, indexed_link| git.work_tree_path(path, indexed_link),
+        )?;
+        let CapturedPackageLinkInputs { links, directories } = link_inputs;
         let digest = fingerprint_with_modes(
             &root,
             &paths,
@@ -583,6 +566,38 @@ fn capture_sources(
     Ok(())
 }
 
+/// Keeps independent source/control inputs while omitting excluded package links.
+fn admit_captured_links(
+    paths: &mut BTreeSet<PathBuf>,
+    sources: &BTreeSet<PathBuf>,
+    index: &WorkTreeModes,
+    effective: &WorkTreeModes,
+    inputs: &mut CapturedPackageLinkInputs,
+    mut observe: impl FnMut(&str, bool) -> Result<WorkTreePath, AppError>,
+) -> Result<(), AppError> {
+    inputs.links.retain(|path| !resolver_control_input(path));
+    // Prospective copies omit excluded links but retain their index entries. Both mode
+    // sets matter for missing/native/placeholder links and real regular-file replacements.
+    let possible_links: BTreeSet<&String> =
+        index.symlinks.iter().chain(&effective.symlinks).collect();
+    for link in possible_links {
+        let path = PathBuf::from(link);
+        if !inputs.links.contains(&path)
+            && !sources.contains(&path)
+            && !resolver_control_input(&path)
+            && matches!(
+                observe(link, effective.is_symlink(link))?,
+                WorkTreePath::Missing | WorkTreePath::Symlink(_)
+            )
+        {
+            paths.remove(&path);
+        }
+    }
+    paths.extend(inputs.links.iter().cloned());
+    paths.extend(inputs.directories.iter().cloned());
+    Ok(())
+}
+
 fn resolver_control_input(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -970,6 +985,9 @@ pub fn fingerprint(
     )
 }
 
+// Native ancestors, metadata, reads and Git hashing; fingerprint_bytes owns the encoding.
+// Boundary tests exercise real capture, recapture, replacement and rejected ancestors.
+#[cfg_attr(test, mutants::skip)]
 fn fingerprint_with_modes(
     root: &Path,
     paths: &BTreeSet<PathBuf>,
@@ -1032,6 +1050,12 @@ fn executable_mode(mode: u32) -> bool {
     mode & 0o111 != 0
 }
 
+/// Link identity never inherits the execute permission of its native metadata.
+#[cfg(any(unix, test))]
+fn fingerprint_executable(executable: bool, symlink: bool) -> bool {
+    executable && !symlink
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "fingerprinting keeps metadata, regular-file reads and unfollowed link reads as separate injected observations"
@@ -1080,11 +1104,9 @@ fn fingerprint_bytes(
         });
         #[cfg(unix)]
         {
-            bytes.push(u8::from(
-                metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.executable && !observed_symlink),
-            ));
+            bytes.push(u8::from(metadata.as_ref().is_some_and(|metadata| {
+                fingerprint_executable(metadata.executable, observed_symlink)
+            })));
         }
         let contents = if let Some(replacement) = replacement {
             Some(replacement.to_owned())

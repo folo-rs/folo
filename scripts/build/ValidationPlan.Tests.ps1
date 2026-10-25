@@ -130,7 +130,7 @@ Describe 'Non-Cargo change domains' {
     }
 
     It 'keeps the pairing recipe in the release test domain' {
-        $plan = Get-ValidationPlan -ChangedPath @('justfiles/just_benchmark_action.just')
+        $plan = Get-ValidationPlan -ChangedPath @('justfiles/just_action_releases.just')
         $plan.script_domains | Should -Be @('release')
         $plan.bicep | Should -BeFalse
     }

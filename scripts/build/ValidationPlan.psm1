@@ -11,9 +11,9 @@ $PSNativeCommandUseErrorActionPreference = $true
 # supplement the owning directory; unknown script/recipe locations select the full suite.
 $script:ScriptDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility', 'workflow')
 $script:RecipeDomains = @{
+    'just_action_releases.just' = @('release')
     'just_basics.just' = @('build', 'scheduled')
     'just_bench_history.just' = @('bench-history')
-    'just_benchmark_action.just' = @('release')
     'just_book.just' = @('book')
     'just_delta.just' = @('build')
     'just_quality.just' = @('build', 'scheduled')

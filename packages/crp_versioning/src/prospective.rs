@@ -135,40 +135,50 @@ impl Prospective {
         Ok(manifest)
     }
 
-    fn copy_input(
+    /// Copies one admitted input without following a symbolic link.
+    // Native copying is covered by boundary tests; copy_kind owns permission decisions.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn copy_input(
         source: &Path,
         destination: &Path,
         metadata: &fs::Metadata,
         allow_symlink: bool,
         allow_directory: bool,
     ) -> Result<(), AppError> {
-        if metadata.file_type().is_symlink() {
-            if !allow_symlink {
-                return Err(UnsupportedInput::new(source).into());
-            }
-            let target =
-                fs::read_link(source).map_err(|error| ReadFileError::caused_by(source, error))?;
-            Self::create_symlink(source, &target, destination)
-                .map_err(|error| WriteFileError::caused_by(destination, error))?;
+        let kind = if metadata.file_type().is_symlink() {
+            CopyKind::Symlink
         } else if metadata.is_dir() {
-            if !allow_directory {
-                return Err(UnsupportedInput::new(source).into());
-            }
-            fs::create_dir_all(destination)
-                .map_err(|error| WriteFileError::caused_by(destination, error))?;
+            CopyKind::Directory
         } else {
-            _ = fs::copy(source, destination)
-                .map_err(|error| WriteFileError::caused_by(destination, error))?;
+            CopyKind::File
+        };
+        match copy_kind(source, kind, allow_symlink, allow_directory)? {
+            CopyKind::Symlink => {
+                let target = fs::read_link(source)
+                    .map_err(|error| ReadFileError::caused_by(source, error))?;
+                Self::create_symlink(source, &target, destination)
+                    .map_err(|error| WriteFileError::caused_by(destination, error))?;
+            }
+            CopyKind::Directory => {
+                fs::create_dir_all(destination)
+                    .map_err(|error| WriteFileError::caused_by(destination, error))?;
+            }
+            CopyKind::File => {
+                _ = fs::copy(source, destination)
+                    .map_err(|error| WriteFileError::caused_by(destination, error))?;
+            }
         }
         Ok(())
     }
 
     #[cfg(unix)]
+    #[cfg_attr(test, mutants::skip)] // Native link creation; boundary tests assert target spelling.
     fn create_symlink(_source: &Path, target: &Path, destination: &Path) -> io::Result<()> {
         symlink(target, destination)
     }
 
     #[cfg(windows)]
+    #[cfg_attr(test, mutants::skip)] // Native target-kind choice and link creation have Windows boundary tests.
     fn create_symlink(source: &Path, target: &Path, destination: &Path) -> io::Result<()> {
         match fs::metadata(source) {
             Ok(metadata) if metadata.is_dir() => symlink_dir(target, destination),
@@ -311,6 +321,28 @@ impl Drop for Prospective {
     }
 }
 
+/// The filesystem effect permitted by captured input identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CopyKind {
+    File,
+    Directory,
+    Symlink,
+}
+
+/// Rejects unadmitted special kinds before performing any copy effects.
+fn copy_kind(
+    source: &Path,
+    kind: CopyKind,
+    allow_symlink: bool,
+    allow_directory: bool,
+) -> Result<CopyKind, AppError> {
+    match kind {
+        CopyKind::Symlink if !allow_symlink => Err(UnsupportedInput::new(source).into()),
+        CopyKind::Directory if !allow_directory => Err(UnsupportedInput::new(source).into()),
+        _ => Ok(kind),
+    }
+}
+
 fn cleanup_unretained(retained: bool, remove: impl FnOnce() -> io::Result<()>) {
     // A resolver error remains the useful diagnostic even if cleanup also fails.
     if !retained {
@@ -333,6 +365,31 @@ mod tests {
 
     use super::*;
     use crate::resolved::UnsupportedInput;
+
+    #[test]
+    fn copying_requires_independent_link_and_directory_permissions() {
+        for allow_link in [false, true] {
+            for allow_directory in [false, true] {
+                for (kind, allowed) in [
+                    (CopyKind::File, true),
+                    (CopyKind::Directory, allow_directory),
+                    (CopyKind::Symlink, allow_link),
+                ] {
+                    let result = copy_kind(Path::new("input"), kind, allow_link, allow_directory);
+                    if allowed {
+                        assert_eq!(result.unwrap(), kind);
+                    } else {
+                        assert!(
+                            result
+                                .unwrap_err()
+                                .find_source::<UnsupportedInput>()
+                                .is_some()
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn retention_rejects_foreign_or_unreadable_owners_before_mutating_evidence() {

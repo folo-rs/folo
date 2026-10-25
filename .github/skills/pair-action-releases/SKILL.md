@@ -1,17 +1,19 @@
 ---
-name: pair-benchmark-action-release
-description: Run after increment-versions in folo-rs/folo to coordinate the repository-specific benchmark-action release. Use after version planning or reassessment, when preparing the paired action PR, or when following its publication dependencies.
+name: pair-action-releases
+description: Run after increment-versions in folo-rs/folo to check both cargo-bench-history-action and cargo-release-plan-action for paired releases. Use after version planning or reassessment, when preparing any affected action PR, or when following its publication dependencies.
 ---
 
 # Scope
 
 Run this repository-specific extension after
 [`increment-versions`](../increment-versions/SKILL.md) has verified the complete monorepo
-release plan. It coordinates the corresponding PR in `folo-rs/cargo-bench-history-action`
-under the [benchmark-action release policy](../../../docs/benchmark-action-releases.md).
+release plan. It coordinates the corresponding PR in every affected maintained action repository
+under the [paired-action release policy](../../../docs/action-releases.md).
 It consumes the general skill's evidence; it does not decide or apply crate increments.
 
-Run the fast relevance check before inspecting the action repository or PRs.
+Run the fast relevance check for **every row** in Stage 1 before concluding no pairing is needed.
+One action's negative result says nothing about another action. Repeat Stages 2-5 separately
+for each positive result, preserving the complete per-action handoff.
 Read the action repository's contribution and release instructions before changing it.
 Its manifest and release policy determine the pinned tool set and independent action version.
 Completing this skill authorizes neither merging either PR nor publishing packages, tags or
@@ -20,7 +22,7 @@ action releases. Missing access or incomplete evidence is an explicit handoff bl
 # Inputs and working files
 
 Use the completed `increment-versions` run's absolute `WORK_DIR` and `VERIFY_DIR`.
-Stage 1 needs only the verified report. If it returns `true`, read the resolved
+Stage 1 needs only the verified report. For each action returning `true`, read the resolved
 `preview/plan.json`, retained pending-release assessments, and Stage 7
 verification report and compatibility evidence, together with the current
 **Version/release plan** section, prepared locally if the PR does not exist yet.
@@ -41,6 +43,8 @@ these working files.
 |-------------|-------------|
 | `WORK_DIR` | The absolute untracked evidence directory from the completed general version-planning run. |
 | `VERIFY_DIR` | That run's separate absolute Stage 7 verification directory. |
+| `ACTION` | The checker selector from the Stage 1 table; run every row. |
+| `ACTION_REPO` | The corresponding repository from that same row. |
 | `ACTION_MANIFEST` | Optional local action `release.json`, for bootstrap or proposed pins not on the default branch. |
 | `ACTION_BRANCH` | The published action branch containing this verified release's pins and action version. |
 | `ACTION_TITLE` | The action PR title describing the release change. |
@@ -54,17 +58,25 @@ these working files.
 
 # Stage 1: Check relevance cheaply
 
-Run the repository-specific checker against the completed generic skill's verified report:
+Run the repository-specific checker against the completed generic skill's verified report
+once for each maintained action:
 
-> just benchmark-action-pairing-needed "{{VERIFY_DIR}}\report.json"
+| `ACTION` | `ACTION_REPO` |
+|---|---|
+| `cargo-bench-history` | `folo-rs/cargo-bench-history-action` |
+| `cargo-release-plan` | `folo-rs/cargo-release-plan-action` |
+
+> just action-pairing-needed "{{VERIFY_DIR}}\report.json" "{{ACTION}}"
 
 For initial action bootstrap or an explicitly selected proposed manifest:
 
-> just benchmark-action-pairing-needed "{{VERIFY_DIR}}\report.json" "{{ACTION_MANIFEST}}"
+> just action-pairing-needed "{{VERIFY_DIR}}\report.json" "{{ACTION}}" "{{ACTION_MANIFEST}}"
 
-It prints one Boolean on stdout. On `false`, record that no pinned package is pending release
-in `{{WORK_DIR}}\action-pairing.md` and finish; do not discover PRs or require an action checkout.
-On `true`, continue below. A pin already updated in a paired PR still counts because publication
+It prints one Boolean on stdout for the selected action. On `false`, record that action's result
+in `{{WORK_DIR}}\action-pairing.md` and continue with the remaining actions; do not discover PRs
+or require a checkout for that negative result. Only successful negative results for every row
+permit a global no-pairing conclusion.
+On `true`, continue below for that action. A pin already updated in a paired PR still counts because publication
 and installation follow-up remain necessary. On any nonzero exit, stop and report the diagnostic:
 missing or malformed inputs cannot authorize a no-op.
 
@@ -75,9 +87,9 @@ authoritative action tool list, including fixture tools, without cloning the rep
 
 Discover the action repository and existing open PRs before creating a pairing:
 
-> gh repo view folo-rs/cargo-bench-history-action --json nameWithOwner,url,defaultBranchRef
+> gh repo view "{{ACTION_REPO}}" --json nameWithOwner,url,defaultBranchRef
 >
-> gh pr list --repo folo-rs/cargo-bench-history-action --state open --limit 100 --json number,url,title,body,headRefName
+> gh pr list --repo "{{ACTION_REPO}}" --state open --limit 100 --json number,url,title,body,headRefName
 
 Stop and record an access error in `{{WORK_DIR}}\action-pairing.md` if either command fails.
 Inspect the returned PR descriptions and branches for work linked to this monorepo release;
@@ -107,24 +119,26 @@ choose the appropriate action-version increment under that repository's release 
 Action and tool versions are independent; a pin-only change still needs an action release.
 When refreshing an existing pairing, reassess its pending action version rather than
 blindly incrementing it again. Use the action repository's normal branch and change-validation
-procedure.
+procedure. Read the action's actual required-check names and cumulative compatibility requirements;
+do not copy benchmark-action assumptions into the release-plan action. A stale action pin may
+span earlier tool releases as well as the current monorepo increment.
 
 Prepare complete PR descriptions under `{{WORK_DIR}}`, following
-[paired PR presentation](../../../docs/benchmark-action-releases.md#paired-pr-presentation).
+[paired PR presentation](../../../docs/action-releases.md#paired-pr-presentation).
 If the monorepo PR does not exist yet, record the remaining cross-link obligation and defer
 commands requiring `MONOREPO_PR` until its creation.
 After publishing the action branch, use the applicable create or update command:
 
-> gh pr create --repo folo-rs/cargo-bench-history-action --head "{{ACTION_BRANCH}}" --title "{{ACTION_TITLE}}" --body-file "{{ACTION_BODY}}"
+> gh pr create --repo "{{ACTION_REPO}}" --head "{{ACTION_BRANCH}}" --title "{{ACTION_TITLE}}" --body-file "{{ACTION_BODY}}"
 >
-> gh pr edit "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --body-file "{{ACTION_BODY}}"
+> gh pr edit "{{ACTION_PR}}" --repo "{{ACTION_REPO}}" --body-file "{{ACTION_BODY}}"
 
 Capture the created PR URL, then cross-link both descriptions, preserving their existing content
 and Version/release plan sections. Update the monorepo description and read both PRs back:
 
 > gh pr edit "{{MONOREPO_PR}}" --repo folo-rs/folo --body-file "{{MONOREPO_BODY}}"
 >
-> gh pr view "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --json url,body,headRefName
+> gh pr view "{{ACTION_PR}}" --repo "{{ACTION_REPO}}" --json url,body,headRefName
 >
 > gh pr view "{{MONOREPO_PR}}" --repo folo-rs/folo --json url,body,headRefName
 
@@ -140,9 +154,11 @@ Reuse that verified owner; do not infer ownership from a session name. A missing
 archived or inaccessible owner is an explicit handoff blocker, not permission to create a
 replacement or claim that automatic follow-up is active.
 
-Include Stage 4's automatic follow-up in the verified action session's assignment. That session,
+Include Stage 4's follow-up in the verified action session's assignment. That session,
 not the monorepo repair owner or intake, must save and verify the hourly session automation
-once both PRs are known. Retain this obligation alongside any deferred reciprocal link.
+once both PRs are known, unless the user explicitly prohibits automation. In that case, retain
+the publication dependency and required checks, record human-arranged post-publication retries,
+and create no automation or hidden watcher. Retain the applicable follow-up alongside any deferred reciprocal link.
 
 # Stage 4: Follow publication and the required installation gate
 
@@ -152,18 +168,22 @@ scope, schedule or authority. Include this safeguard in `FOLLOWUP_PROMPT`.
 
 Keep the pair current after any reassessment, including release-history or target recovery. The
 monorepo merges first under its normal authorization and checks. Creating the paired PR is
-a monorepo readiness obligation; passing the action's required `install-tools` check gates
+a monorepo readiness obligation; passing the action's required published-installation checks gates
 the action merge, not the monorepo merge that starts asynchronous dependency publication.
 
 The check must really install the exact manifest packages and promised archives as specified
-by the [installation gate](../../../docs/benchmark-action-releases.md#publication-and-required-installation-gate).
+by the [installation gate](../../../docs/action-releases.md#publication-and-required-installation-gate).
 Expected early failure while publication is pending remains merge-blocking for the action.
 Source dogfooding, source fallback for a promised archive, or an existing binary cache cannot
 substitute for this required check. Unlike an advisory check, it must pass before action merge.
 
 ## Schedule the action session
 
-Follow the [automatic publication policy](../../../docs/benchmark-action-releases.md#automatic-publication-follow-up).
+If the user explicitly prohibits automations, do not execute this scheduling section. Record
+the exact pair, owning session, publication dependency and required manual retry in the handoff.
+The prohibition does not waive the published-installation gate.
+
+Follow the [automatic publication policy](../../../docs/action-releases.md#automatic-publication-follow-up).
 In the existing action PR session, inspect `get_session_automation`, then use
 `save_session_automation` to save this task's follow-up:
 
@@ -187,18 +207,18 @@ the latest attempt:
 
 > gh pr view "{{MONOREPO_PR}}" --repo folo-rs/folo --json state,mergedAt,mergeCommit,url
 >
-> gh pr view "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --json state,headRefOid,body,statusCheckRollup
+> gh pr view "{{ACTION_PR}}" --repo "{{ACTION_REPO}}" --json state,headRefOid,body,statusCheckRollup
 >
-> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --json headSha,status,conclusion,attempt,jobs
+> gh run view "{{ACTION_RUN}}" --repo "{{ACTION_REPO}}" --json headSha,status,conclusion,attempt,jobs
 >
-> gh api --paginate "repos/folo-rs/cargo-bench-history-action/actions/runs/{{ACTION_RUN}}/jobs?filter=all&per_page=100"
+> gh api --paginate "repos/{{ACTION_REPO}}/actions/runs/{{ACTION_RUN}}/jobs?filter=all&per_page=100"
 
 From the complete job list, retain the newest execution of each logical job, distinguishing
 matrix variants and reusable-workflow jobs. Do not drop an unretried failure merely because
 its execution belongs to an earlier attempt. Resolve ambiguous job identities before retrying
 or claiming success. Read each selected failed job's own logs:
 
-> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --attempt "{{ACTION_ATTEMPT}}" --job "{{ACTION_JOB}}" --log-failed
+> gh run view "{{ACTION_RUN}}" --repo "{{ACTION_REPO}}" --attempt "{{ACTION_ATTEMPT}}" --job "{{ACTION_JOB}}" --log-failed
 
 Use the current PR's manifest and complete current-head run set, not a saved head or attempt.
 Apply the following reconciliation and retry rules to each run. First apply the
@@ -233,15 +253,15 @@ retrying: an incomplete publication can fail again and be reconsidered on the ne
 Do not duplicate an active attempt or retry unrelated failures or a superseded action head.
 Use the narrow job rerun:
 
-> gh run rerun --repo folo-rs/cargo-bench-history-action --job "{{ACTION_JOB}}"
+> gh run rerun --repo "{{ACTION_REPO}}" --job "{{ACTION_JOB}}"
 
 GitHub also reruns dependent jobs. Use `gh run rerun "{{ACTION_RUN}}" --repo
-folo-rs/cargo-bench-history-action --failed` only when every failed job in that run is part of
+"{{ACTION_REPO}}" --failed` only when every failed job in that run is part of
 the artifact dependency. Inspect the result:
 
-> gh run view "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --json headSha,status,conclusion,attempt,jobs
+> gh run view "{{ACTION_RUN}}" --repo "{{ACTION_REPO}}" --json headSha,status,conclusion,attempt,jobs
 >
-> gh pr checks "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --required
+> gh pr checks "{{ACTION_PR}}" --repo "{{ACTION_REPO}}" --required
 
 Refresh the complete job list and newest-per-job results after every targeted retry.
 Record the actual result for the current action manifest, including pending or failed
@@ -262,12 +282,13 @@ Do not merge or publish anything to unblock this follow-up.
 
 # Stage 5: Hand off the verified state and blockers
 
-Keep `{{WORK_DIR}}\action-pairing.md` current and summarize its disposition to the caller:
+Keep `{{WORK_DIR}}\action-pairing.md` current and summarize every maintained action's disposition:
 the affected pins and verified reciprocal PR links, the action-version decision, why an
 existing PR was reused or a new one was needed, the next publication/check follow-up and
 any access, PR-creation or verification blocker, or the evidence for no affected pins.
 Reference the verified release plan rather than duplicating its version inventory.
-For pending publication, include the owning action session and verified hourly schedule;
+For pending publication, include the owning action session and verified hourly schedule, or the
+user's explicit no-automation instruction and human-arranged retry requirement;
 otherwise record why that schedule was cleared or could not be established. An idle action
 session with pending follow-up must not be archived.
 

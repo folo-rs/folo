@@ -344,6 +344,7 @@ mod tests {
         )
         .unwrap();
         assert!(Rc::ptr_eq(&tracked, &observed.tracked));
+        assert_eq!(observed.all_tracked(), tracked.as_ref());
         for directory in ["a", "b"] {
             let paths = [directory, "shared/LICENSE"];
             assert!(
@@ -373,6 +374,26 @@ mod tests {
             ["a/nested/new"]
         );
         assert_eq!((modes_count.get(), untracked_count.get()), (1, 1));
+    }
+
+    #[test]
+    fn complete_tracked_listing_is_independent_of_query_scopes() {
+        for tracked in [
+            vec![],
+            vec!["outside/file".to_owned(), "nested/Cargo.toml".to_owned()],
+        ] {
+            let observed = LiveObservations::acquire_with(
+                tracked.clone().into(),
+                &[],
+                &[],
+                PathCase::Sensitive,
+                true,
+                |_| panic!("no mode scope"),
+                |_| panic!("no untracked scope"),
+            )
+            .unwrap();
+            assert_eq!(observed.all_tracked(), tracked);
+        }
     }
 
     #[test]

@@ -2,8 +2,8 @@
 
 This chapter covers conventions for working with git and GitHub pull requests.
 
-For repository-specific benchmark-action coordination, see
-[paired PR presentation](benchmark-action-releases.md#paired-pr-presentation).
+For repository-specific action release coordination, see
+[paired PR presentation](action-releases.md#paired-pr-presentation).
 
 ## Creating GitHub pull requests
 

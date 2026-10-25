@@ -846,10 +846,27 @@ pub struct WorkTreeAncestors {
 
 impl WorkTreeAncestors {
     /// Returns the first symbolic-link ancestor without following it.
+    // Native non-dereferencing metadata; first_symlink_with owns traversal and cache policy.
+    #[cfg_attr(test, mutants::skip)]
     pub fn first_symlink(
         &mut self,
         root: &Path,
         relative: &Path,
+    ) -> Result<Option<PathBuf>, AppError> {
+        self.first_symlink_with(root, relative, |path| {
+            fs::symlink_metadata(path).map(|metadata| AncestorMetadata {
+                symlink: metadata.file_type().is_symlink(),
+                directory: metadata.is_dir(),
+            })
+        })
+    }
+
+    /// Interprets unfollowed parent observations for one unchanged work-tree operation.
+    fn first_symlink_with(
+        &mut self,
+        root: &Path,
+        relative: &Path,
+        mut observe: impl FnMut(&Path) -> io::Result<AncestorMetadata>,
     ) -> Result<Option<PathBuf>, AppError> {
         let Some(parent) = relative.parent() else {
             return Ok(None);
@@ -864,21 +881,27 @@ impl WorkTreeAncestors {
                 continue;
             }
             let path = root.join(&current);
-            let metadata = match fs::symlink_metadata(&path) {
+            let metadata = match observe(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(ReadFileError::caused_by(path, error).into()),
             };
-            if metadata.file_type().is_symlink() {
+            if metadata.symlink {
                 return Ok(Some(current));
             }
-            if !metadata.is_dir() {
+            if !metadata.directory {
                 return Ok(None);
             }
             self.safe.insert(current.clone());
         }
         Ok(None)
     }
+}
+
+/// Only unfollowed entry kind determines whether an ancestor may be traversed.
+struct AncestorMetadata {
+    symlink: bool,
+    directory: bool,
 }
 
 /// Interprets Git's ancestry predicate without confusing a query failure with non-ancestry.
@@ -1083,6 +1106,115 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::*;
+
+    #[test]
+    fn ancestor_observation_stops_at_the_first_link_and_caches_only_safe_directories() {
+        let root = Path::new("root");
+        let mut ancestors = WorkTreeAncestors::default();
+        let mut observed = Vec::new();
+        let link = ancestors
+            .first_symlink_with(root, Path::new("safe/link/deeper/file"), |path| {
+                observed.push(path.to_owned());
+                Ok(AncestorMetadata {
+                    symlink: path == root.join("safe/link"),
+                    directory: path == root.join("safe"),
+                })
+            })
+            .unwrap();
+        assert_eq!(link, Some(PathBuf::from("safe/link")));
+        assert_eq!(observed, [root.join("safe"), root.join("safe/link")]);
+
+        let link = ancestors
+            .first_symlink_with(root, Path::new("safe/link/file"), |path| {
+                assert_eq!(path, root.join("safe/link"));
+                Ok(AncestorMetadata {
+                    symlink: true,
+                    directory: false,
+                })
+            })
+            .unwrap();
+        assert_eq!(link, Some(PathBuf::from("safe/link")));
+        let mut fresh = WorkTreeAncestors::default();
+        let link = fresh
+            .first_symlink_with(root, Path::new("safe/link/file"), |path| {
+                assert_eq!(path, root.join("safe"));
+                Ok(AncestorMetadata {
+                    symlink: true,
+                    directory: false,
+                })
+            })
+            .unwrap();
+        assert_eq!(link, Some(PathBuf::from("safe")));
+    }
+
+    #[test]
+    fn missing_and_non_directory_ancestors_stop_without_becoming_cached() {
+        let root = Path::new("root");
+        for missing in [false, true] {
+            let mut ancestors = WorkTreeAncestors::default();
+            let result = ancestors
+                .first_symlink_with(root, Path::new("parent/child/file"), |path| {
+                    assert_eq!(path, root.join("parent"));
+                    if missing {
+                        Err(io::ErrorKind::NotFound.into())
+                    } else {
+                        Ok(AncestorMetadata {
+                            symlink: false,
+                            directory: false,
+                        })
+                    }
+                })
+                .unwrap();
+            assert_eq!(result, None);
+            let link = ancestors
+                .first_symlink_with(root, Path::new("parent/file"), |_| {
+                    Ok(AncestorMetadata {
+                        symlink: true,
+                        directory: false,
+                    })
+                })
+                .unwrap();
+            assert_eq!(link, Some(PathBuf::from("parent")));
+        }
+    }
+
+    #[test]
+    fn ancestor_observation_propagates_errors_and_does_not_observe_the_final_component() {
+        let root = Path::new("root");
+        let mut ancestors = WorkTreeAncestors::default();
+        for relative in ["", "file", "./file"] {
+            assert_eq!(
+                ancestors
+                    .first_symlink_with(root, Path::new(relative), |_| panic!("no parent"))
+                    .unwrap(),
+                None,
+            );
+        }
+        let mut observed = Vec::new();
+        assert_eq!(
+            ancestors
+                .first_symlink_with(root, Path::new("safe/child/file"), |path| {
+                    observed.push(path.to_owned());
+                    Ok(AncestorMetadata {
+                        symlink: false,
+                        directory: true,
+                    })
+                })
+                .unwrap(),
+            None,
+        );
+        assert_eq!(observed, [root.join("safe"), root.join("safe/child")]);
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::NotADirectory,
+        ] {
+            let error = ancestors
+                .first_symlink_with(root, Path::new("failed/file"), |_| Err(kind.into()))
+                .unwrap_err();
+            assert!(error.find_source::<ReadFileError>().is_some());
+            assert_eq!(error.find_source::<io::Error>().unwrap().kind(), kind);
+        }
+    }
 
     #[test]
     fn recorded_paths_reject_lossy_decoding() {

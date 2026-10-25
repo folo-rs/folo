@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use ohno::AppError;
 
 use crate::check::pairing_needed;
@@ -27,17 +27,43 @@ pub fn run() -> ExitCode {
 
 /// Inputs to the repo-specific relevance check, not another version-planning interface.
 #[derive(Parser)]
-#[command(about = "Print whether a verified release report affects benchmark-action tool pins")]
+#[command(
+    about = "Print whether a verified release report affects the selected action's tool pins"
+)]
 struct Args {
     /// Stage 7 report.json produced by the completed increment-versions workflow.
     #[arg(long)]
     report: PathBuf,
+    /// Action whose authoritative manifest supplies the tool pins.
+    #[arg(long, value_enum)]
+    action: Action,
     /// Proposed/local action release.json; otherwise read the action repository's default branch.
     #[arg(long)]
     action_manifest: Option<PathBuf>,
     /// Explain candidate and matching package names on stderr.
     #[arg(long)]
     verbose: bool,
+}
+
+/// Selects a maintained action repository, independently of its current tool pins.
+#[derive(Clone, Copy, ValueEnum)]
+enum Action {
+    CargoBenchHistory,
+    CargoReleasePlan,
+}
+
+impl Action {
+    /// Both repositories keep their installation authority in the root release manifest.
+    const fn manifest_endpoint(self) -> &'static str {
+        match self {
+            Self::CargoBenchHistory => {
+                "repos/folo-rs/cargo-bench-history-action/contents/release.json"
+            }
+            Self::CargoReleasePlan => {
+                "repos/folo-rs/cargo-release-plan-action/contents/release.json"
+            }
+        }
+    }
 }
 
 /// Connects file/GitHub input acquisition to the pure relevance decision.
@@ -49,11 +75,11 @@ fn execute(args: Args) -> Result<bool, AppError> {
         &report,
         || match args.action_manifest {
             Some(path) => read_input(&path),
-            None => published_manifest(),
+            None => published_manifest(args.action),
         },
         |message| {
             if args.verbose {
-                eprintln!("[benchmark-action-check] {message}");
+                eprintln!("[action-pairing-check] {message}");
             }
         },
     )
@@ -70,14 +96,11 @@ fn read_input(path: &Path) -> Result<String, AppError> {
 /// Fetches only the authoritative manifest, not the action repository or its PR history.
 // Spawning the authenticated GitHub CLI cannot be exercised by in-process unit tests.
 #[cfg_attr(test, mutants::skip)]
-fn published_manifest() -> Result<String, AppError> {
-    // The action repository documents release.json as its pinned-tool authority.
-    const MANIFEST_ENDPOINT: &str =
-        "repos/folo-rs/cargo-bench-history-action/contents/release.json";
+fn published_manifest(action: Action) -> Result<String, AppError> {
     let output = Command::new("gh")
         .args([
             "api",
-            MANIFEST_ENDPOINT,
+            action.manifest_endpoint(),
             "--header",
             "Accept: application/vnd.github.raw+json",
         ])
@@ -100,7 +123,7 @@ struct ReadFailed {
 
 /// Retains a process or encoding failure from the GitHub manifest lookup.
 #[ohno::error]
-#[display("Cannot read the benchmark-action release manifest")]
+#[display("Cannot read the selected action's release manifest")]
 struct ManifestLookup;
 
 /// A missing/bootstrap manifest is an explicit decision blocker, never an unrelated-change result.
@@ -110,4 +133,33 @@ struct ManifestLookup;
 )]
 struct ManifestUnavailable {
     diagnostic: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_action_controls_manifest_lookup() {
+        for (action, endpoint) in [
+            (
+                "cargo-bench-history",
+                "repos/folo-rs/cargo-bench-history-action/contents/release.json",
+            ),
+            (
+                "cargo-release-plan",
+                "repos/folo-rs/cargo-release-plan-action/contents/release.json",
+            ),
+        ] {
+            let args = Args::try_parse_from([
+                "action-pairing-check",
+                "--report",
+                "verified-report.json",
+                "--action",
+                action,
+            ])
+            .unwrap();
+            assert_eq!(args.action.manifest_endpoint(), endpoint);
+        }
+    }
 }

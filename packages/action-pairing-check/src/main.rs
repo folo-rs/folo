@@ -9,5 +9,5 @@ use std::process::ExitCode;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
-    benchmark_action_check::run()
+    action_pairing_check::run()
 }

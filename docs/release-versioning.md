@@ -26,8 +26,9 @@ Human review of the complete PR is the approval step. Keep its
 [Version/release plan](git-workflow.md#versionrelease-plan-section) current with
 the complete expanded target set and retained pending releases. After every
 assessment or reassessment, run the repository-specific
-`pair-benchmark-action-release` extension; its fast relevance check determines
-whether benchmark-action coordination is needed.
+`pair-action-releases` extension. Its fast relevance checks cover both
+`cargo-bench-history-action` and `cargo-release-plan-action` independently; one
+negative result cannot establish that the other action needs no paired PR.
 
 The [local-planning walkthrough](https://folo-rs.github.io/folo/cargo-release-plan/integration/local-planning.html)
 owns the command sequence and evidence interpretation. The skill uses installed
