@@ -112,6 +112,14 @@ the PR rather than describing only the latest application of the skill. State
 the reason for a level above the SemVer floor; identify mechanical realignment
 without inventing a consumer-facing change.
 
+When a row covers changes of different semantic levels, put the changes requiring
+the final level first, labelled **Breaking:**, **Nonbreaking:** or **Patch:**,
+and the remaining changes in an **Additional:** paragraph. Use `<br><br>` between
+paragraphs in a table cell. No split is needed for changes of the same level.
+The [increment-versions summary guidance][version-summary] includes an example.
+
+[version-summary]: ../.github/skills/increment-versions/SKILL.md#stage-5-review-resolved-effects
+
 If there are no released-content or version changes, state that explicitly
 instead of omitting the section. Identify new packages separately with their manual
 bootstrap versions, higher versions intended for the first automated release, and

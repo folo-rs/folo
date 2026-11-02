@@ -210,6 +210,16 @@ and substantive reason. Explain dependent/group movements and retained versions.
 Mark non-publishable packages **version alignment only, not published** without
 inventing a published predecessor. State explicitly when nothing is to release.
 
+When a rationale covers changes of different semantic levels, separate the changes
+that require the final level from the remaining changes. Label the first paragraph
+**Breaking:**, **Nonbreaking:** or **Patch:** to match the final level, and the
+second **Additional:**. Use `<br><br>` between paragraphs in a Markdown table cell.
+No split is needed when all changes have the same level. For example:
+
+> **Breaking:** Public defining package `tick` releases incompatible type identities exposed by
+> `observed`.<br><br>**Additional:** Private macro cleanup and sink optimizations preserve existing
+> contracts. Published workspace requirements must name the new `observed_macros_impl` version.
+
 ## First-publication handoff
 
 This handoff applies to configured publication, not standalone version planning.
