@@ -187,10 +187,7 @@ evidence; obtain missing evidence or report uncertainty rather than infer compat
 
 Write `decisions.json` with semantic impacts, not numeric version bumps. Omit packages
 requiring no semantic increment. Record substantive reasons, including inherited
-changes, dependency effects and retained pending versions. Keep each reason's
-assessed impact with the explanation so the final summary can distinguish changes
-that require the selected level from lower-impact changes. Do not add these
-explanations to the `decisions.json` schema. Do not invent a Git
+changes, dependency effects and retained pending versions. Do not invent a Git
 anchor for a package absent from release history and the anticipated parent.
 
 # Stage 5: Review resolved effects
@@ -213,19 +210,11 @@ and substantive reason. Explain dependent/group movements and retained versions.
 Mark non-publishable packages **version alignment only, not published** without
 inventing a published predecessor. State explicitly when nothing is to release.
 
-Lead each rationale with the changes that require the final semantic impact,
-labelled **Breaking:**, **Nonbreaking:** or **Patch:** to match that impact.
-When the row also covers lower-impact changes, put them afterward in a separate
-**Additional:** paragraph. Omit **Additional:** when there are no lower-impact
-changes; do not bury a level-determining reason among compatible cleanup or
-requirement rewrites. Include every reason that independently requires the final
-level, including dependency-supplied effects.
-
-For a group row, identify which members supply the level-determining changes and
-which move only for alignment. Explain retained versions and mechanical movements
-as such, without inventing semantic changes to fit a label. Use `<br><br>` to
-separate the labelled paragraphs inside a Markdown table cell. For example, a
-breaking row with additional patch-level changes can use:
+When a rationale covers changes of different semantic levels, separate the changes
+that require the final level from the remaining changes. Label the first paragraph
+**Breaking:**, **Nonbreaking:** or **Patch:** to match the final level, and the
+second **Additional:**. Use `<br><br>` between paragraphs in a Markdown table cell.
+No split is needed when all changes have the same level. For example:
 
 > **Breaking:** Public defining package `tick` releases incompatible type identities exposed by `observed`.<br><br>**Additional:** Private macro cleanup and sink optimizations preserve existing contracts. Published workspace requirements must name the new `observed_macros_impl` version.
 

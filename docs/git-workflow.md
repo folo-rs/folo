@@ -112,13 +112,10 @@ the PR rather than describing only the latest application of the skill. State
 the reason for a level above the SemVer floor; identify mechanical realignment
 without inventing a consumer-facing change.
 
-Lead each row's rationale with the changes that require its final semantic level,
-using **Breaking:**, **Nonbreaking:** or **Patch:** as the label. If the row also
-includes lower-impact changes, separate them into an **Additional:** paragraph
-afterward; otherwise omit that paragraph. Use `<br><br>` between paragraphs in a
-table cell. For group rows, name the members responsible for the final level and
-distinguish alignment-only members. Keep retained-version and mechanical-alignment
-explanations explicit rather than presenting them as semantic changes.
+When a row covers changes of different semantic levels, put the changes requiring
+the final level first, labelled **Breaking:**, **Nonbreaking:** or **Patch:**,
+and the remaining changes in an **Additional:** paragraph. Use `<br><br>` between
+paragraphs in a table cell. No split is needed for changes of the same level.
 The [increment-versions summary guidance](../.github/skills/increment-versions/SKILL.md#stage-5-review-resolved-effects)
 includes an example.
 
