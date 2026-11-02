@@ -216,7 +216,9 @@ that require the final level from the remaining changes. Label the first paragra
 second **Additional:**. Use `<br><br>` between paragraphs in a Markdown table cell.
 No split is needed when all changes have the same level. For example:
 
-> **Breaking:** Public defining package `tick` releases incompatible type identities exposed by `observed`.<br><br>**Additional:** Private macro cleanup and sink optimizations preserve existing contracts. Published workspace requirements must name the new `observed_macros_impl` version.
+> **Breaking:** Public defining package `tick` releases incompatible type identities exposed by
+> `observed`.<br><br>**Additional:** Private macro cleanup and sink optimizations preserve existing
+> contracts. Published workspace requirements must name the new `observed_macros_impl` version.
 
 ## First-publication handoff
 
