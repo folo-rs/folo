@@ -2683,7 +2683,6 @@ version = "0.8.0"
 dependencies = [
  "alloc_tracker",
  "criterion",
- "futures",
  "gungraun",
  "hashbrown",
  "many_cpus",
