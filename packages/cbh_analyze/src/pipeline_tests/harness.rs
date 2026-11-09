@@ -3,10 +3,9 @@
 use std::num::NonZero;
 use std::path::PathBuf;
 
-use anyspawn::Spawner;
 use cbh_command::AnalyzeOptions;
 use cbh_config::Config;
-use cbh_detect::{MAX_BRANCH_BASE_COMMITS, MIN_REGIME, MIN_SERIES_POINTS};
+use cbh_detect::{MAX_BRANCH_BASE_COMMITS, MIN_REGIME, MIN_SERIES_POINTS, Spawner};
 use cbh_diag::{RecordingReporter, Reporter};
 use cbh_git::FakeGitHistory;
 use cbh_model::{

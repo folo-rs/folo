@@ -2,7 +2,7 @@
 //!
 //! Some analysis passes walk a slice whose elements are independent — detecting
 //! each series, or fetching + parsing each stored object, for instance — and
-//! distribute it across worker tasks dispatched through an [`anyspawn::Spawner`].
+//! distribute it across worker tasks dispatched through a [`crate::Spawner`].
 //! The partition is always the same shape: split the slice into one balanced,
 //! contiguous chunk per worker, process each chunk on its own blocking task, and
 //! recombine in input order. The arithmetic that decides how many workers to use and

@@ -41,7 +41,7 @@ orchestration — time comes from the injected `tick::Clock` (`new_tokio` in pro
 ## Compute fan-out
 
 Do **not** spawn ad-hoc threads (`std::thread::scope`, `map_parallel`-style helpers) for
-compute. Route every parallel pass through the injected `anyspawn::Spawner` that
+compute. Route every parallel pass through the injected `cbh_detect::Spawner` that
 `analyze_with` threads through: production injects the Tokio blocking pool, tests inject
 `cbh_detect::testing::synchronous_spawner` (exposed by the `private-test-util`
 feature), so the work stays runtime-agnostic and Miri-safe.

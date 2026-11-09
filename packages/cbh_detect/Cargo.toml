@@ -4,7 +4,7 @@
 name = "cbh_detect"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.5.0"
+version = "0.6.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -55,7 +55,7 @@ doc = false
 # scatter helpers that the documentation figures render and the tests assert on. Never
 # forwarded by the shell crate, so end-user builds never see it. See
 # docs/impl-crate-split.md for the `test-util` vs `private-test-util` distinction.
-private-test-util = ["dep:thread_aware"]
+private-test-util = []
 
 [dependencies]
 anyspawn = { workspace = true }
@@ -68,13 +68,14 @@ nonempty = { workspace = true, features = ["serialize"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 smallvec = { workspace = true, features = ["serde"] }
-thread_aware = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
+anyspawn = { workspace = true, features = ["tokio"] }
 criterion = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 testing = { path = "../testing" }
+tokio = { workspace = true, features = ["rt"] }
 
 [[bench]]
 name = "cbh_detect_branch"

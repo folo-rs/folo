@@ -2,7 +2,7 @@
 name = "nm_otel_impl"
 description = "Implementation crate for nm_otel; do not depend on it directly"
 publish = true
-version = "0.7.0"
+version = "0.8.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -49,7 +49,6 @@ doc = false
 private-test-util = ["dep:opentelemetry_sdk"]
 
 [dependencies]
-futures = { workspace = true }
 hashbrown = { workspace = true, features = ["inline-more"] }
 nm = { workspace = true }
 opentelemetry = { workspace = true, features = ["metrics"] }

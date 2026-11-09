@@ -56,6 +56,10 @@ delegating. Their inner `*_with` orchestrators receive generic ports and explici
 which keeps policy deterministic and same-crate tests in memory. The component crates own the
 adapter implementations; `cbh_analyze` selects and coordinates them.
 
+The query adapters wrap their Tokio-backed `anyspawn` instance in `cbh_detect::Spawner`.
+Loading and detection share that analysis-owned boundary, so in-memory tests can inject an
+inline executor without constructing a runtime or changing the orchestration path.
+
 The query entry points acquire the quota-respecting processor count from `many_cpus` alongside
 the production spawner, including processors across Windows processor groups. The process-wide
 default set respects hard resource limits rather than inheriting the calling thread's soft

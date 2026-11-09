@@ -29,8 +29,10 @@
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 mod detect;
+mod spawner;
 
 pub use detect::*;
+pub use spawner::*;
 
 #[cfg(feature = "private-test-util")]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
