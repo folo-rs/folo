@@ -19,9 +19,10 @@ use std::collections::HashMap;
 use std::num::NonZero;
 use std::sync::Arc;
 
-use anyspawn::Spawner;
 use cbh_detect::testing::synchronous_spawner;
-use cbh_detect::{DiscriminantFilter, DiscriminantSetQuery, balanced_chunk_sizes, worker_count};
+use cbh_detect::{
+    DiscriminantFilter, DiscriminantSetQuery, Spawner, balanced_chunk_sizes, worker_count,
+};
 use cbh_diag::StderrReporter;
 use cbh_model::{BenchmarkIdPrefix, Engine, MetricKind, StorageKey, parse_key};
 use cbh_storage::{MemoryStorage, Storage};

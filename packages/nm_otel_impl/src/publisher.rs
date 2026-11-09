@@ -5,10 +5,9 @@ use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::time::Duration;
 
-use futures::StreamExt;
 use nm::Report;
 use opentelemetry::metrics::MeterProvider;
-use tick::{Clock, PeriodicTimer};
+use tick::{Clock, Timer};
 
 use crate::mapping::{InstrumentRegistry, export_report};
 use crate::state::CollectionState;
@@ -260,9 +259,10 @@ impl Publisher {
     // disables watchdogs, so executing such a mutant hangs the test process.
     #[cfg_attr(test, mutants::skip)]
     pub async fn publish_forever(&mut self) {
-        let mut timer = PeriodicTimer::new(&self.clock, self.interval);
+        let mut timer = Timer::new(&self.clock, self.interval);
 
-        while timer.next().await.is_some() {
+        loop {
+            _ = timer.next().await;
             self.run_one_iteration();
         }
     }

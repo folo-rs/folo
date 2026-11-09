@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyspawn::Spawner;
+use anyspawn::Spawner as RuntimeSpawner;
 use cbh_command::AnalyzeOptions;
 use cbh_config::{
     Config, cache_env, load_config, resolve_cache_path, resolve_config_path, resolve_local_path,
@@ -19,8 +19,8 @@ use cbh_config::{
 use cbh_detect::{
     AnalysisContext, AnalysisMode, BranchComparison, BranchEvaluationTrace, Detection,
     MAX_BRANCH_BASE_COMMITS, MIN_REGIME, MIN_SERIES_POINTS, Series, SeriesCensus, SeriesFilter,
-    Testability, UnjudgedReason, apply_base_blessings, apply_blessings, find_changes_spawned,
-    retain_present_at_context, short_commit, testability,
+    Spawner, Testability, UnjudgedReason, apply_base_blessings, apply_blessings,
+    find_changes_spawned, retain_present_at_context, short_commit, testability,
 };
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
@@ -102,7 +102,7 @@ pub async fn execute(
     // Distribute the compute-bound detection across the runtime's blocking pool, so
     // the analysis shares the ambient Tokio worker threads rather than spawning its
     // own short-lived ones.
-    let spawner = Spawner::new_tokio();
+    let spawner = Spawner::new(RuntimeSpawner::new_tokio(None));
     let available_parallelism = NonZero::new(SystemHardware::current().processors().len())
         .expect("a processor set is never empty");
     let current =

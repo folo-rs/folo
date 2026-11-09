@@ -16,13 +16,13 @@ use std::collections::BTreeSet;
 use std::num::NonZero;
 use std::path::Path;
 
-use anyspawn::Spawner;
+use anyspawn::Spawner as RuntimeSpawner;
 use cbh_command::{ListOptions, ListSubject};
 use cbh_config::{
     Config, cache_env, load_config, resolve_cache_path, resolve_config_path, resolve_local_path,
     resolve_project_id, resolve_repo, storage_env,
 };
-use cbh_detect::{AnalysisMode, apply_base_blessings};
+use cbh_detect::{AnalysisMode, Spawner, apply_base_blessings};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BlessingScope, DiscriminantSet};
@@ -87,7 +87,7 @@ pub async fn execute(
     let now = resolve_now(clock_override);
     // The object-load and detection work shares the ambient Tokio worker threads
     // (mirrors `analyze::execute`).
-    let spawner = Spawner::new_tokio();
+    let spawner = Spawner::new(RuntimeSpawner::new_tokio(None));
     let available_parallelism = NonZero::new(SystemHardware::current().processors().len())
         .expect("a processor set is never empty");
     let outcome = list_with(

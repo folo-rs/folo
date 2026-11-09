@@ -69,11 +69,11 @@ use std::ops::Range;
 use std::slice;
 use std::sync::Arc;
 
-use anyspawn::Spawner;
 use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use cbh_stats as stats;
 use serde::Serialize;
 
+use crate::Spawner;
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
 use crate::detect::{Series, SeriesPoint, branch, noise_gates};

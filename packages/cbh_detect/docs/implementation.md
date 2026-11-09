@@ -109,8 +109,12 @@ candidate work without introducing cross-series allocation decisions that would 
 dependence assumptions of Benjamini–Hochberg. The ceiling is a hard bound, not a claim that every
 candidate is cheap: an ambiguous maximum-length series may consume the full orbit.
 
-Parallel work is supplied through an executor abstraction, preserving the same deterministic
-analysis logic for production execution and synchronous component tests. Worker partitioning uses
+Parallel work is supplied through the analysis-owned `Spawner`, preserving the same deterministic
+analysis logic for production execution and synchronous component tests. Its runtime adapter
+delegates to `anyspawn`, while its private test executor runs blocking work and immediately-ready
+futures inline at dispatch time. A pending test future is an error rather than a reason to run a
+runtime. Runtime join failures panic explicitly so a cancelled or panicking worker cannot turn
+into an incomplete successful analysis. Worker partitioning uses
 an explicit nonzero parallelism value supplied alongside the spawner. The command adapters own
 host-capacity discovery; neither detector preparation nor partition arithmetic queries the
 operating system. Tests can exercise single-worker and multi-worker partitions using the same

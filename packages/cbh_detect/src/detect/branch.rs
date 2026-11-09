@@ -5,10 +5,10 @@ use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
 
-use anyspawn::Spawner;
 use cbh_model::{DiscriminantSet, MetricKind};
 use cbh_stats as stats;
 
+use crate::Spawner;
 use crate::detect::findings::{
     AnalysisContext, BranchComparison, BranchComparisonTrace, BranchEvaluationTrace,
     BranchExcursion, BranchRangeRelation, BranchSeriesTrace, Detection, Direction, Finding,
