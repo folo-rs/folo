@@ -204,7 +204,7 @@ fn duration(values: &BTreeMap<String, String>, key: &str) -> Result<Span, AppErr
 }
 
 fn cutoff(span: Span, key: &str, now: Timestamp) -> Result<Timestamp, AppError> {
-    now.to_zoned(TimeZone::UTC)
+    now.to_zoned_datetime(TimeZone::UTC)
         .checked_sub(span)
         .map(|zoned| zoned.timestamp())
         .map_err(|error| {
