@@ -63,7 +63,7 @@ impl IssueIdentity {
             Self::Rolling(_) => {
                 let now = Timestamp::try_from(clock.system_time())
                     .map_err(InvalidPublicationDate::caused_by)?;
-                let date = now.to_zoned(TimeZone::UTC).date();
+                let date = now.to_zoned_datetime(TimeZone::UTC).date();
                 Ok(format!("{} (updated {date})", self.phrase()))
             }
         }
@@ -118,7 +118,7 @@ mod tests {
     use super::*;
 
     pub(crate) fn clock(value: &str) -> Clock {
-        Clock::new_frozen_at(SystemTime::from(value.parse::<Timestamp>().unwrap()))
+        Clock::new_frozen_at(SystemTime::try_from(value.parse::<Timestamp>().unwrap()).unwrap())
     }
 
     #[test]

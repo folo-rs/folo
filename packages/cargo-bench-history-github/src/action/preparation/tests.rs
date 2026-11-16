@@ -28,7 +28,7 @@ const RANGE_END: &str = "cccccccccccccccccccccccccccccccccccccccc";
 const NOW: &str = "2024-03-31T12:00:00Z";
 
 fn clock(now: &str) -> Clock {
-    Clock::new_frozen_at(SystemTime::from(now.parse::<Timestamp>().unwrap()))
+    Clock::new_frozen_at(SystemTime::try_from(now.parse::<Timestamp>().unwrap()).unwrap())
 }
 
 fn age_argument(name: &str, value: &str) -> OsString {
@@ -495,7 +495,8 @@ fn rolling_clock_outside_calendar_range_withholds_outputs() {
     host.reply("false");
     host.reply(SHA);
     // Advance just beyond Jiff's representable timestamps without reading a real clock.
-    let time = SystemTime::from(Timestamp::MAX)
+    let time = SystemTime::try_from(Timestamp::MAX)
+        .unwrap()
         .checked_add(Duration::from_secs(1))
         .unwrap();
     let error = block_on(prepare_with_clock(

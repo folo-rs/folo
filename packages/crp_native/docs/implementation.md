@@ -14,6 +14,8 @@ Historical source worktrees supply immutable build inputs and tracked toolchains
 Native uses the controller checkout to create those source worktrees for build requests.
 It verifies the actual source, compiler host, selected package and binary target, and executable before
 staging archives and checksums. No registry or GitHub delivery policy belongs here.
+Toolchain preparation disables Rustup self-updates: selecting a source compiler must
+not replace the shared toolchain manager while other builds may be using it.
 
 ZIP creation uses the `zip` crate with only Deflate and the explicitly selected
 safe-Rust `miniz_oxide` backend through `flate2`.
