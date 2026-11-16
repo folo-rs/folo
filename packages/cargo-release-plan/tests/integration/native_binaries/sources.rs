@@ -70,6 +70,23 @@ fn source_toolchain_preserves_explicit_caller_build_flags() {
 }
 
 #[test]
+fn source_preparation_does_not_update_the_toolchain_manager() {
+    testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
+        let fixture = Fixture::new();
+        let result = fixture
+            .batch_command(&json!([fixture.binary("alpha")]), "out")
+            .arg("--no-upload")
+            // A self-update must fail without reaching a server; source preparation needs
+            // only the tracked toolchain, not access to Rustup's own release service.
+            .env("RUSTUP_UPDATE_ROOT", "not-a-url")
+            .output()
+            .unwrap();
+        assert_success(&result);
+        assert_eq!(fixture.outcomes("out")[0]["status"], "staged-only");
+    });
+}
+
+#[test]
 fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
     testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
         let fixture = Fixture::new();
