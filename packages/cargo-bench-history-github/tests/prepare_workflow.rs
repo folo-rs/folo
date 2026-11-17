@@ -440,7 +440,8 @@ mod rolling {
     }
 
     async fn range(fixture: &Fixture, input: Value, now: &str) -> Option<(String, String)> {
-        let clock = Clock::new_frozen_at(SystemTime::from(now.parse::<Timestamp>().unwrap()));
+        let clock =
+            Clock::new_frozen_at(SystemTime::try_from(now.parse::<Timestamp>().unwrap()).unwrap());
         prepare_backfill_at(
             &serde_json::to_vec(&input).unwrap(),
             &fixture.checkout,

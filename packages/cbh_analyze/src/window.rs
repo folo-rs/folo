@@ -69,7 +69,7 @@ const HISTORY_DEFAULT_LOOKBACK_MONTHS: i32 = 6;
 /// The instant [`HISTORY_DEFAULT_LOOKBACK_MONTHS`] before `now`, anchored with
 /// calendar-correct zoned arithmetic (months have no fixed length).
 fn default_history_since(now: Timestamp) -> Result<Timestamp, AnalyzeError> {
-    now.to_zoned(TimeZone::UTC)
+    now.to_zoned_datetime(TimeZone::UTC)
         .checked_sub(Span::new().months(HISTORY_DEFAULT_LOOKBACK_MONTHS))
         .map(|zoned| zoned.timestamp())
         .map_err(|error| WindowOutOfRangeError::caused_by("default --since window", error).into())
@@ -138,7 +138,7 @@ fn parse_instant(
     if let Ok(date) = value.parse::<Date>() {
         // UTC has no DST transitions, so civil midnight always maps to an instant.
         let zoned = date
-            .to_zoned(TimeZone::UTC)
+            .to_zoned_datetime(TimeZone::UTC)
             .expect("UTC midnight is always a valid instant");
         return Ok(Some(zoned.timestamp()));
     }
@@ -154,7 +154,7 @@ fn parse_instant(
 /// Calendar units (months, years) have no fixed length, so the subtraction is
 /// anchored to `now`'s UTC zoned datetime rather than to a bare duration.
 fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, AnalyzeError> {
-    now.to_zoned(TimeZone::UTC)
+    now.to_zoned_datetime(TimeZone::UTC)
         .checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
         .map_err(|error| WindowOutOfRangeError::caused_by(format!("{flag} duration"), error).into())

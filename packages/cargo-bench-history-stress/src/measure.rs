@@ -7,7 +7,7 @@
 //! on; without that every object would be filtered out.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use all_the_time::Session;
 use cargo_bench_history::{
@@ -142,7 +142,7 @@ pub(crate) async fn measure(
 
         let started = Instant::now();
         let span = operation.measure_process().iterations(1);
-        let outcome = run_with_overrides(&command, overrides(workspace, anchor))
+        let outcome = run_with_overrides(&command, overrides(workspace, anchor)?)
             .await
             .map_err(|error| fail(format!("{} analysis failed: {error}", mode.keyword())))?;
         drop(span);
@@ -287,15 +287,15 @@ fn build_options(
 }
 
 /// The overrides anchoring the analysis to the seeded workspace and clock.
-fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
-    Overrides {
+fn overrides(workspace: &Path, anchor: Timestamp) -> Result<Overrides, Error> {
+    Ok(Overrides {
         workspace_dir: Some(workspace.to_path_buf()),
         target_root: None,
         bench_command: None,
-        clock: Some(Clock::new_frozen_at(anchor)),
+        clock: Some(Clock::new_frozen_at(SystemTime::try_from(anchor)?)),
         storage_override: None,
         auto_discriminants: None,
-    }
+    })
 }
 
 /// The path to the seeded configuration file under `workspace`.
@@ -312,7 +312,7 @@ mod tests {
         let workspace = Path::new("/tmp/stress-ws");
         let anchor = Timestamp::from_second(1_750_000_000).expect("anchor is in range");
 
-        let overrides = overrides(workspace, anchor);
+        let overrides = overrides(workspace, anchor).unwrap();
 
         // The seeded workspace and the fixed analysis clock are what make the
         // measurement read synthetic data at a reproducible "now"; the other

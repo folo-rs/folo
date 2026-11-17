@@ -15,6 +15,8 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "private-test-util")]
+use std::time::SystemTime;
 use std::{fs, thread};
 
 #[cfg(feature = "private-test-util")]
@@ -27,8 +29,6 @@ use cbh_model::{
 };
 #[cfg(feature = "private-test-util")]
 use clap::Parser as _;
-#[cfg(feature = "private-test-util")]
-use jiff::Timestamp;
 #[cfg(feature = "private-test-util")]
 use ohno::AppError;
 use serde_json::{Value, json};
@@ -67,7 +67,7 @@ async fn backfill_job_dispatch_writes_once_and_rejects_unfinished_evidence() {
     for occupied in [false, true] {
         let result = __private::run_commands(
             vec![Cli::try_parse_from(arguments).unwrap()],
-            Clock::new_frozen_at(Timestamp::UNIX_EPOCH),
+            Clock::new_frozen_at(SystemTime::UNIX_EPOCH),
             NonZero::new(7).unwrap(),
             &head(),
             &jobs.to_string(),
@@ -91,7 +91,7 @@ async fn backfill_job_dispatch_writes_once_and_rejects_unfinished_evidence() {
     jobs[1]["status"] = json!("in_progress");
     __private::run_commands(
         vec![Cli::try_parse_from(arguments).unwrap()],
-        Clock::new_frozen_at(Timestamp::UNIX_EPOCH),
+        Clock::new_frozen_at(SystemTime::UNIX_EPOCH),
         NonZero::new(7).unwrap(),
         &head(),
         &jobs.to_string(),

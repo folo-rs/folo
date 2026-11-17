@@ -6,6 +6,7 @@ pub(crate) use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 pub(crate) use cargo_bench_history::{
     AutoDiscriminants, BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo,
@@ -920,7 +921,9 @@ impl Workspace {
                 workspace_dir: Some(self.root().to_path_buf()),
                 target_root: Some(target_root),
                 bench_command: Some(bench_command),
-                clock: Some(Clock::new_frozen_at(analysis_now())),
+                clock: Some(Clock::new_frozen_at(
+                    SystemTime::try_from(analysis_now()).unwrap(),
+                )),
                 storage_override: None,
                 auto_discriminants: self.auto_discriminants_override(),
             },
@@ -959,7 +962,9 @@ impl Workspace {
                 workspace_dir: Some(self.root().to_path_buf()),
                 target_root: None,
                 bench_command: Some(bench_command),
-                clock: Some(Clock::new_frozen_at(analysis_now())),
+                clock: Some(Clock::new_frozen_at(
+                    SystemTime::try_from(analysis_now()).unwrap(),
+                )),
                 storage_override: None,
                 auto_discriminants: self.auto_discriminants_override(),
             },

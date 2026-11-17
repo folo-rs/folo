@@ -396,6 +396,29 @@ standard validation on both Windows and Linux, execute:
 1. `just validate-local`
 2. `wsl -e bash -l -c "just validate-local"`
 
+### Hosted runner images
+
+Use the latest stable GitHub-hosted runner labels (`ubuntu-latest`, `windows-latest`
+and `macos-latest`) wherever they support the required architecture. Following these
+labels avoids depending on older images as GitHub updates and retires them. Pin an
+OS version only when an explicit compatibility or architecture requirement needs it,
+and document the reason beside the selection or in the owning workflow guide.
+
+Preserve target and architecture coverage when selecting labels. The ARM64 jobs use
+`ubuntu-24.04-arm` and `windows-11-arm` because GitHub provides no corresponding
+`-latest` labels; the unqualified Linux and Windows latest labels select x86_64.
+Use `macos-latest` for Apple Silicon macOS. Check GitHub's
+[supported runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#supported-runners-and-hardware-resources)
+before changing these selections.
+
+Latest labels do not guarantee runner availability. Allocation and capacity failures
+can affect supported images, so investigate those failures separately from image
+compatibility or retirement.
+
+Apply the same maintenance discipline to delegated workflow behavior: follow
+[maintained action adoption](action-releases.md#adopt-maintained-action-releases-in-folo)
+after action releases merge, even when Folo installs their tools from source.
+
 ### Platform support and validation
 
 ARM64 is a nice-to-have, minimally supported target. Its validation is best-effort:

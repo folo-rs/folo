@@ -851,7 +851,12 @@ fn checker_start_failure_retains_selected_but_unidentified_state() {
         fs::create_dir_all(&tools).unwrap();
         let checker = tools.join(format!("cargo-semver-checks{EXE_SUFFIX}"));
         #[cfg(windows)]
-        fs::write(&checker, b"not an executable image").unwrap();
+        let _checker_writer = {
+            // An open writer prevents Windows from mapping an executable image, while lookup
+            // can still inspect the file. Invalid image contents can display an OS error dialog.
+            fs::copy(env!("CARGO_BIN_EXE_cargo-release-plan"), &checker).unwrap();
+            fs::OpenOptions::new().write(true).open(&checker).unwrap()
+        };
         #[cfg(unix)]
         {
             // A missing interpreter deterministically fails launch. Unrecognized executable

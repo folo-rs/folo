@@ -782,6 +782,7 @@ mod tests {
     use std::future::{Future, ready};
     use std::io;
     use std::path::PathBuf;
+    use std::time::SystemTime;
 
     use cbh_detect::{Blessing, examples, find_changes};
     use cbh_diag::RecordingReporter;
@@ -3007,6 +3008,11 @@ mod tests {
         // `tick::Clock`; a frozen clock must surface its own instant verbatim rather than
         // any default minted independently of the clock.
         let anchor = ts(1_700_000_000);
-        assert_eq!(resolve_now(Some(Clock::new_frozen_at(anchor))), anchor);
+        assert_eq!(
+            resolve_now(Some(Clock::new_frozen_at(
+                SystemTime::try_from(anchor).unwrap()
+            ))),
+            anchor
+        );
     }
 }

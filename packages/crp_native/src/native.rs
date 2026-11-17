@@ -227,10 +227,17 @@ impl Native {
             ))?;
         self.verify_toolchain(&path, &source_toolchain, &binary.source_sha)?;
         // Rustup reads the tracked source manifest, including its component selection.
-        // No controller-repository script is needed by an installed release tool.
+        // Preparing source must not replace the shared Rustup executable, particularly while
+        // other builds use it. Toolchain installation does not require updating Rustup itself.
         self.source_command(
             "rustup",
-            &strings(&["toolchain", "install", "--profile", "minimal"]),
+            &strings(&[
+                "toolchain",
+                "install",
+                "--profile",
+                "minimal",
+                "--no-self-update",
+            ]),
         )?;
         let compiler = self.source_command("rustc", &strings(&["--version", "--verbose"]))?;
         let host = compiler
