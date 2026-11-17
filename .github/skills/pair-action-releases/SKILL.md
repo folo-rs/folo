@@ -292,6 +292,11 @@ user's explicit no-automation instruction and human-arranged retry requirement;
 otherwise record why that schedule was cleared or could not be established. An idle action
 session with pending follow-up must not be archived.
 
+Keep the subsequent Folo caller adoption in the current monorepo session's plan,
+following [maintained-action adoption](../../../docs/action-releases.md#adopt-maintained-action-releases-in-folo).
+Waiting for the action's prerequisites does not complete that session's task or
+justify moving required follow-up to `TODO.md`.
+
 When a summary is posted as a GitHub comment, place execution diagnostics in a collapsible
 section. The handoff does not grant merge or
 publication authority.

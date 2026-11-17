@@ -143,9 +143,12 @@ reason in the owning guidance.
 
 Submit the caller update through normal review and applicable workflow checks.
 Verify required release and installation evidence under the action's own policy;
-an upstream merge does not itself prove publication succeeded. Keep an actionable
-repository follow-up until an unavailable prerequisite permits adoption. This
-procedure grants no authority to merge either repository or publish a release.
+an upstream merge does not itself prove publication succeeded. Keep adoption in
+the current Folo session's plan until its prerequisites permit completion; do not
+move this required follow-up to `TODO.md` or a separate backlog task. The same
+session retains responsibility while waiting for the paired action and completes
+the caller update when eligible, subject to normal authorization. This procedure
+grants no authority to merge either repository or publish a release.
 An action-reference-only update does not require a crate increment unless it also
 changes released package content.
 

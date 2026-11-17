@@ -79,9 +79,15 @@ directly:
   guidance refines and sometimes overrides the workspace-wide rules.
 * **Keep issue state out of documentation.** Do not store point-in-time issue
   state or issue-specific follow-up notes in documentation, including `AGENTS.md`.
-  Keep that tracking in issue/PR discussions, or in `TODO.md` if repository-local
-  notes are needed. Technical guidance may cite issues as durable references,
+  Keep that tracking in the session plan or issue/PR discussions.
+  Technical guidance may cite issues as durable references,
   but must not record their current status or disposition.
+* **Keep session work in the session plan.** Required follow-up within the current
+  task, including release coordination and adopting a paired action after its
+  prerequisites complete, belongs in the owning session's plan, not `TODO.md`.
+  Keep that session responsible through completion or an explicit handoff; waiting
+  for another PR or publication is not a reason to defer the task to the repository
+  backlog. Reserve `TODO.md` for independently deferred work outside the current task.
 * **`AGENTS.md` files are agent instructions, not design or implementation
   docs.** A package-local `AGENTS.md` holds only actionable guidance for working
   in that package — conventions to follow, gotchas, invariants to preserve, how
