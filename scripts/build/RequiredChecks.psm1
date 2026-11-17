@@ -12,6 +12,7 @@
 
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'ValidationPlan.psm1')
+Import-Module (Join-Path $PSScriptRoot 'MacOsCapacity.psm1')
 
 function Assert-RequiredCheck {
     # Throws when any merge-blocking dependency did not produce an allowed result, so the
@@ -19,7 +20,12 @@ function Assert-RequiredCheck {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string] $NeedsJson,
-        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]] $MustSucceedJob
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]] $MustSucceedJob,
+        [ValidateSet('standard', 'queue', 'canary')][string] $CapacityPolicy,
+        [string] $Repository,
+        [long] $RunId,
+        [int] $RunAttempt,
+        [string] $HeadSha
     )
 
     if ($MustSucceedJob.Count -eq 0) {
@@ -38,8 +44,22 @@ function Assert-RequiredCheck {
     }
 
     $failure = @(Get-RequiredCheckFailure -NeedsJson $NeedsJson -MustSucceedJob $normalized)
+    if ($failure.Count -gt 0 -and $CapacityPolicy) {
+        $gate = if ($CapacityPolicy -ceq 'canary') { 'result' } else { 'required-checks' }
+        $jobs = @(Get-RunnerCapacityJob -Repository $Repository -RunId $RunId `
+                -RunAttempt $RunAttempt -HeadSha $HeadSha -GateName $gate)
+        $optional = @(Get-OptionalMacOsDependency -Policy $CapacityPolicy -Job $jobs)
+        $failure = @($failure | Where-Object {
+                $name, $result = $_ -csplit '=', 2
+                $exempt = $name -cin $optional -and $result -cin @('failure', 'cancelled', 'skipped')
+                if ($exempt) {
+                    Write-Warning "Capacity exception for ${name}: hosted macOS never acquired a runner. This is absent validation, not a passing macOS check."
+                }
+                -not $exempt
+            })
+    }
     if ($failure.Count -eq 0) {
-        Write-Host 'All merge-blocking jobs succeeded or were skipped where skipping is allowed.'
+        Write-Host 'Merge-blocking dependencies satisfy the required validation policy.'
         return
     }
 

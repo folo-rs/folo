@@ -352,6 +352,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
+      checks: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -361,10 +363,14 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
           MUST_SUCCEED_JOBS: configuration storage exercise backfill rolling-backfill no-eligible-backfill verify-rolling-backfill verify-no-work verify-backfill verify
+          GH_TOKEN: ${{ github.token }}
+          CAPACITY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/build/RequiredChecks.psm1 -Force
           $jobs = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
-          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $jobs
+          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $jobs `
+            -CapacityPolicy canary -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID `
+            -RunAttempt $env:GITHUB_RUN_ATTEMPT -HeadSha $env:CAPACITY_HEAD

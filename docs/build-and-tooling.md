@@ -415,6 +415,15 @@ Latest labels do not guarantee runner availability. Allocation and capacity fail
 can affect supported images, so investigate those failures separately from image
 compatibility or retirement.
 
+Hosted macOS validation is non-blocking only when authenticated GitHub evidence
+confirms that `macos-latest` was cancelled without acquiring a runner or executing
+steps because hosted capacity was unavailable. The validation gate reports this
+as **not run**, not a pass. Real macOS failures, unrelated cancellations, unknown
+evidence and non-macOS failures remain blocking. Keep the matrix leg and latest
+runner label; do not make all macOS checks advisory or silently drop coverage.
+See [the capacity gate](../.github/workflows/implementation.md#macos-runner-capacity).
+This exception does not waive promised release artifacts or native publication.
+
 Apply the same maintenance discipline to delegated workflow behavior: follow
 [maintained action adoption](action-releases.md#adopt-maintained-action-releases-in-folo)
 after action releases merge, even when Folo installs their tools from source.
@@ -436,7 +445,8 @@ Base the expectation on the affected code, not just a green result elsewhere.
 Architecture-specific behavior or an unexplained ARM64 failure needs investigation
 before assuming the change works. Existing scheduled ARM64 checks remain useful
 best-effort coverage; this policy does not change their commands or reporting, turn
-observed failures into passes, or bypass required CI checks.
+observed failures into passes, or bypass required CI checks. The narrowly verified
+hosted macOS capacity exception above is part of the validation fan-in itself.
 
 ## Automation language and boundaries
 

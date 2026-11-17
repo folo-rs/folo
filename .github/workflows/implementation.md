@@ -637,6 +637,35 @@ The queue fan-in uses the same classifier with every dependency in its must-succ
 and no `prepare` dependency. No queue job may skip. Repair branches use the same
 repository/event conditions as other branches.
 
+### macOS runner capacity
+
+The fan-ins retain `macos-latest` coverage but permit a narrow **not run** outcome
+when GitHub cannot allocate a hosted macOS runner. `MacOsCapacity.psm1` uses
+read-only Actions/checks access, validates the repository, event head and current
+run attempt, and reconciles each logical job's newest execution across attempts.
+It requires a completed cancellation, exactly the `macos-latest` label, no
+allocated runner and an empty step list. The matching GitHub Actions check must
+belong to this job and check suite. Its complete annotations must contain the
+exact hosted-runner acquisition failure; only GitHub's accompanying macOS ARM
+capacity notices are also allowed. Missing, stale, ambiguous or unknown evidence
+cannot grant an exception. The run identity is checked again after acquisition.
+
+The explicit matrix policies require both Linux and Windows legs to succeed.
+The caller-canary policy also requires its complete known job graph: only the
+unavailable macOS collector/backfill and their causally skipped analysis or
+verification may be absent. An executed analysis or verifier failure still blocks,
+as does a skipped verifier without its own proven unavailable prerequisite.
+An unexpanded no-work backfill matrix needs no child-job record, but its preparation
+and no-work verifier must both succeed.
+The canary's internal fan-in and the outer Standard fan-in both apply the policy,
+because GitHub can retain a failed reusable-call result despite a successful
+internal result gate. No production benchmark consumer semantics are changed.
+
+Each exception emits a warning describing absent validation. It does not rewrite
+the cancelled check or claim macOS passed. The repository ruleset continues to
+require `required-checks`; removing that aggregate would also waive unrelated
+platform and release validation and is not an acceptable capacity workaround.
+
 ## Scheduled validation implementation
 
 The scheduled scripts own planning, check invocation and readable reporting.

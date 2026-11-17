@@ -118,6 +118,14 @@ published-binary availability. Early failure while publication is pending is exp
 This is a required merge check: the action PR cannot merge while it is pending or failed,
 even when unrelated advisory checks would not delay a merge.
 
+An action's capacity-aware validation aggregate may explicitly accept an unavailable
+macOS leg only after authenticating its no-step hosted-runner acquisition failure.
+This is absent macOS validation, not a successful installation. Keep all non-macOS
+installation gates, actual macOS failures and promised artifact/publication
+requirements intact. Missing artifacts or arbitrary cancellations are not capacity
+exceptions. Follow the owning action's verified gate policy rather than treating a
+cancelled check as passed or removing its aggregate from the ruleset.
+
 External publication does not rerun a failed GitHub check. The session owning the paired
 action PR automatically follows the monorepo release and retries artifact-dependent failures
 under the [hourly follow-up policy](#automatic-publication-follow-up), without another user

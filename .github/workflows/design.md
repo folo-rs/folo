@@ -399,6 +399,12 @@ required through this fan-in.
 The queue fan-in requires every queue check to succeed; none may skip. It uses the
 same result classifier without a change plan, because queue scope is unconditional.
 
+Both fan-ins permit positively verified hosted macOS runner-capacity cancellations,
+not actual macOS failures. Linux and Windows remain required, and macOS stays in
+the matrices. This exception is disclosed as absent coverage and includes only
+causally skipped canary dependents; missing or unexplained evidence fails closed.
+See [the capacity gate](implementation.md#macos-runner-capacity).
+
 `alert` keeps a `needs:` list of its own, which also names the advisory jobs the fan-in excludes,
 so a new job joins both. The two lists answer different questions — what blocks a merge, and what
 is worth an issue after a push to `main` — and folding `alert` onto the fan-in would tie issue

@@ -74,6 +74,10 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   depending on it would file an issue about a cancelled run.
 - The job's GitHub check name is the literal `required-checks` (`name: required-checks`).
   Do not rename it.
+- Preserve the authenticated, no-step hosted macOS capacity exception in the fan-in.
+  Keep actual macOS failures and every non-macOS failure blocking; do not replace
+  evidence-based classification with `continue-on-error` or a blanket advisory matrix.
+  Update the explicit caller-canary job policy when its graph or pinned contract changes.
 - Keep `merge_group` exclusive to `merge-queue-validation.yml`, using the literal
   `required-checks` fan-in name and requiring every queue job to succeed. Run only
   full-workspace dev Clippy, formatting and version readiness there; do not add delta.
