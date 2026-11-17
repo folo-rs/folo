@@ -180,6 +180,14 @@ verdict does not suppress comparisons when the report supplied targets.
 
 ## Platform strategy
 
+Hosted image selection follows the
+[latest-label policy](../../docs/build-and-tooling.md#hosted-runner-images).
+Repository-owned macOS matrices use `macos-latest`. ARM64 validation and cache warmup retain
+`ubuntu-24.04-arm` and `windows-11-arm` because GitHub has no corresponding latest
+labels; replacing them with `ubuntu-latest` or `windows-latest` would select x86_64.
+Reusable workflows delegate runner selection to their owning action; check that
+action's runner manifest and generated matrices when updating its caller revision.
+
 Test passes are organised as an x86_64/ARM64 pair. The x64 pass carries coverage
 instrumentation (which needs a nightly-only toolchain component), while the ARM pass
 doubles as the MSRV pass and exists to exercise architecture-gated code that x86_64 runners
