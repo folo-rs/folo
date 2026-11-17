@@ -1,5 +1,7 @@
 Utilities for working with non-zero integers.
 
+This crate supports `#![no_std]` without an allocator.
+
 Currently this implements a shorthand macro for creating non-zero integers
 from literals at compile time:
 

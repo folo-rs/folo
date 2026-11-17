@@ -2,14 +2,14 @@
 #[macro_export]
 macro_rules! nz {
     ($x:expr) => {
-        const { ::std::num::NonZero::new($x).expect("expression must evaluate to non-zero value") }
+        const { ::core::num::NonZero::new($x).expect("expression must evaluate to non-zero value") }
     };
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::num::NonZero;
+    use core::num::NonZero;
 
     #[test]
     fn basic_functionality() {
