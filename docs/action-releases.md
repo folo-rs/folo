@@ -126,6 +126,29 @@ triggers its own release workflow, which rechecks availability before creating t
 release and moving the floating major tag. A later successful run never justifies waiving
 the gate on an untested manifest.
 
+## Adopt maintained action releases in Folo
+
+After a new maintained action version merges, refresh Folo's applicable immutable
+action references to the verified merged revision. Inspect the merge result and
+the action's release manifest to confirm the selected version and commit; do not
+adopt an unmerged PR head or replace immutable references with floating tags.
+Update references that must share the action's contracts together, including
+reusable workflows and composite actions, and keep version annotations consistent.
+
+Folo dogfoods both the latest maintained action versions and source-selected tool
+versions. Source installation selects tool code, not the action's runner matrices,
+workflow orchestration or installation logic, so source mode does not remove this
+adoption obligation. Preserve intentional compatibility exceptions with an explicit
+reason in the owning guidance.
+
+Submit the caller update through normal review and applicable workflow checks.
+Verify required release and installation evidence under the action's own policy;
+an upstream merge does not itself prove publication succeeded. Keep an actionable
+repository follow-up until an unavailable prerequisite permits adoption. This
+procedure grants no authority to merge either repository or publish a release.
+An action-reference-only update does not require a crate increment unless it also
+changes released package content.
+
 ## Automatic publication follow-up
 
 An explicit user prohibition on automations overrides scheduling, not release acceptance.

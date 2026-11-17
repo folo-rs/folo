@@ -415,6 +415,10 @@ Latest labels do not guarantee runner availability. Allocation and capacity fail
 can affect supported images, so investigate those failures separately from image
 compatibility or retirement.
 
+Apply the same maintenance discipline to delegated workflow behavior: follow
+[maintained action adoption](action-releases.md#adopt-maintained-action-releases-in-folo)
+after action releases merge, even when Folo installs their tools from source.
+
 ### Platform support and validation
 
 ARM64 is a nice-to-have, minimally supported target. Its validation is best-effort:
