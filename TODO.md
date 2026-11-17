@@ -4,16 +4,6 @@ Tracking notes for follow-up work that is intentionally deferred. Each entry
 should describe the task, the trigger condition that makes it actionable, and
 links to the relevant code.
 
-## Adopt the benchmark action paired with the no_std release
-
-After the benchmark action paired with
-[Folo #975](https://github.com/folo-rs/folo/pull/975) merges and satisfies its
-release requirements, refresh Folo's applicable immutable benchmark-action
-references together to the verified merged revision and selected action version.
-Follow [maintained-action adoption](docs/action-releases.md#adopt-maintained-action-releases-in-folo);
-do not pin the unmerged action PR head. Remove this entry when the caller update
-lands.
-
 ## Give dure-test-helper preparations stable executable ownership
 
 The [helper locator](packages/dure-test-helper/src/locate.rs) returns a shared
