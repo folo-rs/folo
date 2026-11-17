@@ -4,20 +4,6 @@ Tracking notes for follow-up work that is intentionally deferred. Each entry
 should describe the task, the trigger condition that makes it actionable, and
 links to the relevant code.
 
-## Apply the latest-runner policy to delegated x64 release jobs
-
-The action revision selected by [Release](.github/workflows/release.yml) delegates
-native runner selection to
-[cargo-release-plan-action's manifest](https://github.com/folo-rs/cargo-release-plan-action/blob/71895eb598ac36d3cd1756c5ba446f94b7dd20de/release.json),
-which selects `ubuntu-24.04` and `windows-2025` where latest labels
-can preserve the required architecture. Update those selections and directly
-coupled workflow logic in the owning action repository under the
-[hosted-runner policy](docs/build-and-tooling.md#hosted-runner-images).
-Once that action revision is available, follow
-[maintained action adoption](docs/action-releases.md#adopt-maintained-action-releases-in-folo),
-preserving native target coverage and publication behavior.
-Keep the ARM64 Linux and Windows labels unless GitHub offers matching latest labels.
-
 ## Give dure-test-helper preparations stable executable ownership
 
 The [helper locator](packages/dure-test-helper/src/locate.rs) returns a shared

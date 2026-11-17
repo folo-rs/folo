@@ -65,7 +65,7 @@ jobs:
       # Ref: .github/workflows/implementation.md#merge-queue-validation.
       - name: Install release tool
         id: tool
-        uses: folo-rs/cargo-release-plan-action@71895eb598ac36d3cd1756c5ba446f94b7dd20de # v0.2.3
+        uses: folo-rs/cargo-release-plan-action@a4c60ef9e45507939c5a0dfe1e2cd6c4ff0f035a # v0.2.4
         with:
           command: version
           install-method: path
