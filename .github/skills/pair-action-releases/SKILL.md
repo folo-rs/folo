@@ -177,6 +177,11 @@ Expected early failure while publication is pending remains merge-blocking for t
 Source dogfooding, source fallback for a promised archive, or an existing binary cache cannot
 substitute for this required check. Unlike an advisory check, it must pass before action merge.
 
+Native macOS PR checks are advisory because hosted runner capacity is unreliable.
+Keep them green and investigate failures, but do not wait for queued or unrun macOS
+jobs or report them as passing. Verify the owning action's required installation gate
+and exact promised archives, including macOS. Preserve all publication requirements.
+
 ## Schedule the action session
 
 If the user explicitly prohibits automations, do not execute this scheduling section. Record

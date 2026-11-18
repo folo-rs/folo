@@ -415,6 +415,12 @@ Latest labels do not guarantee runner availability. Allocation and capacity fail
 can affect supported images, so investigate those failures separately from image
 compatibility or retirement.
 
+Hosted macOS merge validation is advisory because runner capacity is unreliable.
+Keep the checks running on `macos-latest`, keep them green, and investigate observed
+failures, but do not wait for queued or unrun macOS checks before an otherwise
+ready merge. See [how the jobs are separated](../.github/workflows/implementation.md#macos-advisory-validation).
+This does not waive promised release artifacts or native publication.
+
 Apply the same maintenance discipline to delegated workflow behavior: follow
 [maintained action adoption](action-releases.md#adopt-maintained-action-releases-in-folo)
 after action releases merge, even when Folo installs their tools from source.

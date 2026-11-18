@@ -5,6 +5,11 @@ on:
   # Deep validation reaches this same graph through Standard, without duplicate event runs.
   # Ref: implementation.md#reusable-workflow-canary.
   workflow_call:
+    inputs:
+      macos-only:
+        description: Run the advisory macOS history and explicit backfill canaries instead of the required Linux/Windows suite.
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -100,9 +105,9 @@ jobs:
     with:
       azure-client-id: ${{ needs.configuration.outputs.client-id }}
       azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
-      # Cover the action's supported native runners independently of Folo's benchmark policy.
-      # Ref: implementation.md#reusable-workflow-canary.
-      platforms: ubuntu-latest,windows-latest,macos-latest
+      # Each lane has its own concurrency key and persistent report/receipt namespace.
+      platforms: &canary-platforms ${{ inputs.macos-only && 'macos-latest' || 'ubuntu-latest,windows-latest' }}
+      config: ${{ inputs.macos-only && '.cargo/history_macos.toml' || '.cargo/history_linux_windows.toml' }}
       install-method: path
       source-path: .
       working-directory: .github/fixtures/bench-history-caller
@@ -125,17 +130,18 @@ jobs:
       azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
       from: ${{ needs.configuration.outputs.from }}
       to: ${{ needs.configuration.outputs.to }}
-      platforms: ubuntu-latest,windows-latest,macos-latest
+      platforms: *canary-platforms
       install-method: path
       source-path: .
       working-directory: .github/fixtures/bench-history-caller
-      config: .cargo/backfill_history.toml
+      config: &backfill-config ${{ inputs.macos-only && '.cargo/backfill_macos.toml' || '.cargo/backfill_linux_windows.toml' }}
       bench: synthetic
       best-of: 1
       rustflags: -Cllvm-args=-align-all-functions=6 -Cllvm-args=-align-all-nofallthru-blocks=6
 
   rolling-backfill:
     needs: [configuration, storage]
+    if: '!inputs.macos-only'
     uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
@@ -159,6 +165,7 @@ jobs:
 
   no-eligible-backfill:
     needs: configuration
+    if: '!inputs.macos-only'
     uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
@@ -270,18 +277,23 @@ jobs:
         env:
           CANARY_FROM: ${{ needs.configuration.outputs.from }}
           CANARY_TO: ${{ needs.configuration.outputs.to }}
+          BACKFILL_CONFIG: *backfill-config
+          BACKFILL_PROJECT: ${{ inputs.macos-only && 'reusable-backfill-macos' || 'reusable-backfill-linux-windows' }}
+          CANARY_TARGETS: &canary-targets ${{ inputs.macos-only && 'aarch64-apple-darwin' || 'x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc' }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $reportPath = Join-Path $env:RUNNER_TEMP 'backfill-canary-runs.json'
           & ./scripts/bench-history/Assert-BackfillCanary.ps1 -Workspace $env:GITHUB_WORKSPACE `
-            -From $env:CANARY_FROM -To $env:CANARY_TO -OutputPath $reportPath
+            -From $env:CANARY_FROM -To $env:CANARY_TO -OutputPath $reportPath `
+            -Config $env:BACKFILL_CONFIG -Project $env:BACKFILL_PROJECT `
+            -TargetTriple ($env:CANARY_TARGETS -csplit ',')
       - name: Retain the backfill verification listing
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: backfill-caller-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: backfill-caller-report-${{ inputs.macos-only && 'macos' || 'linux-windows' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/backfill-canary-runs.json
           if-no-files-found: error
 
@@ -326,17 +338,18 @@ jobs:
         env:
           REPORT_DIRECTORY: ${{ runner.temp }}/caller-report
           EXPECTED_OUTCOME: ${{ needs.exercise.outputs.outcome }}
+          CANARY_TARGETS: *canary-targets
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/bench-history/HistoryCanary.psm1 -Force
-          Assert-HistoryCanaryReport -ReportDirectory $env:REPORT_DIRECTORY -ExpectedOutcome $env:EXPECTED_OUTCOME
+          Assert-HistoryCanaryReport -ReportDirectory $env:REPORT_DIRECTORY -ExpectedOutcome $env:EXPECTED_OUTCOME `
+            -TargetTriple ($env:CANARY_TARGETS -csplit ',')
 
   result:
-    # A selected reusable call cannot succeed through skipped prerequisites or verifiers.
-    # Every contract job is mandatory, including the no-work call whose inner matrix skips.
-    # Ref: implementation.md#merge-blocking-result.
+    # Each lane must pass its own contracts. Only Linux/Windows runs the
+    # additional Linux rolling and no-work cases.
     if: always()
     needs:
       - configuration
@@ -360,11 +373,12 @@ jobs:
         shell: pwsh
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-          MUST_SUCCEED_JOBS: configuration storage exercise backfill rolling-backfill no-eligible-backfill verify-rolling-backfill verify-no-work verify-backfill verify
+          MUST_SUCCEED_JOBS: configuration storage exercise backfill verify-backfill verify
+          LINUX_ONLY_JOBS: ${{ !inputs.macos-only && 'rolling-backfill no-eligible-backfill verify-rolling-backfill verify-no-work' || '' }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/build/RequiredChecks.psm1 -Force
-          $jobs = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
+          $jobs = @(("$env:MUST_SUCCEED_JOBS $env:LINUX_ONLY_JOBS" -split '\s+') | Where-Object { $_ })
           Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $jobs

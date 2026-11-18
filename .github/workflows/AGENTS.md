@@ -62,20 +62,24 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
 - When adding a merge-blocking job to `standard-validation.yml`, add it to the `required-checks`
   job's `needs:` list. Never add it to the GitHub ruleset. Matrix jobs with a job-level
   `if:` that can be false can only be required through this fan-in. Advisory jobs
-  (`coverage-notify`) and `alert` stay off that list. If the new job has no skip
+  (including macOS) and `alert` stay off that list. If the new job has no skip
   condition, also add its id to `MUST_SUCCEED_JOBS` in that job so a skipped result cannot
   green the fan-in. Change-selected jobs stay in `needs:` and must succeed whenever the plan
   selects them; update `RequiredChecks.psm1` when adding a new planned job. Keep `prepare`
   in the must-succeed list so unavailable plans cannot authorize skips.
 - Add the new job to the `alert` job's `needs:` list as well. That list covers everything worth
-  an issue after a failed push to `main`, including the advisory jobs the fan-in excludes, so the
+  an issue after a failed push to `main`, including `coverage-notify` but not macOS, so the
   two lists are maintained together rather than derived from each other. Never add
   `required-checks` itself to `alert`: the fan-in reports a cancelled dependency as a failure, so
   depending on it would file an issue about a cancelled run.
 - The job's GitHub check name is the literal `required-checks` (`name: required-checks`).
   Do not rename it.
+- Keep macOS validation green and investigate real failures. Keep it outside every required
+  dependency path, including matrices and reusable calls, because hosted capacity is unreliable.
+  Do not wait for queued macOS jobs or hide failures with `continue-on-error`.
+  See [macOS advisory validation](implementation.md#macos-advisory-validation).
 - Keep `merge_group` exclusive to `merge-queue-validation.yml`, using the literal
-  `required-checks` fan-in name and requiring every queue job to succeed. Run only
+  `required-checks` fan-in name and requiring every dependency to succeed. Run only
   full-workspace dev Clippy, formatting and version readiness there; do not add delta.
 - Keep Standard validation reusable by Deep validation. Only PR events may prune its
   package/tooling scope; keep platform matrices identical across PR, push and reusable runs.

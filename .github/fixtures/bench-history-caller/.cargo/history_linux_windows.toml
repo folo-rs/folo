@@ -1,0 +1,6 @@
+[project]
+id = "reusable-history-linux-windows"
+
+[storage.azure]
+account = "folovalidate"
+container = "bench-history-caller-canary"

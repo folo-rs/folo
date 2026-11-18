@@ -22,9 +22,9 @@ Describe 'No-work backfill caller verification' {
         }
         $script:Evidence = @{
             pages = @(
-                @{ jobs = @(@{ name = 'no-eligible-backfill / prepare'; conclusion = 'success' }) }
+                @{ jobs = @(@{ name = 'benchmark-canary / no-eligible-backfill / prepare'; conclusion = 'success' }) }
                 @{ jobs = @(
-                        @{ name = 'no-eligible-backfill / backfill'; conclusion = 'skipped' }
+                        @{ name = 'benchmark-canary / no-eligible-backfill / backfill'; conclusion = 'skipped' }
                         @{ name = 'backfill / backfill (ubuntu-latest)'; conclusion = 'success' }
                     ) }
             )
@@ -51,14 +51,14 @@ Describe 'No-work backfill caller verification' {
     }
 
     It 'classifies no-work jobs under <Prefix> without accepting a similar job segment' -ForEach @(
-        @{ Prefix = 'benchmark-canary / ' }
-        @{ Prefix = 'standard / benchmark-canary / ' }
+        @{ Prefix = '' }
+        @{ Prefix = 'standard / ' }
     ) {
         foreach ($page in $script:Evidence.pages) {
             foreach ($job in $page.jobs) { $job.name = "$Prefix$($job.name)" }
         }
         $script:Evidence.pages[1].jobs += @{
-            name = "${Prefix}other-no-eligible-backfill / backfill"; conclusion = 'success'
+            name = "${Prefix}benchmark-canary-macos / no-eligible-backfill / prepare"; conclusion = 'skipped'
         }
         { & $script:Verify @script:Invocation } | Should -Not -Throw
         $script:Evidence.pages[1].jobs[0].conclusion = 'success'

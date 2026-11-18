@@ -81,7 +81,10 @@ Describe 'History caller report verification' {
                 @{ engine = 'criterion'; target_triple = 'aarch64-apple-darwin'; machine_key = 'macos'; runs = 20; series = 1; regressions = 0 }
             )
         }
-        $script:Invocation = @{ ReportDirectory = $script:ReportDirectory; ExpectedOutcome = 'clean' }
+        $script:Invocation = @{
+            ReportDirectory = $script:ReportDirectory; ExpectedOutcome = 'clean'
+            TargetTriple = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
+        }
     }
 
     BeforeAll {
@@ -100,6 +103,17 @@ Describe 'History caller report verification' {
     }
 
     It 'accepts one partition per expected target' {
+        Write-Report
+        { Assert-HistoryCanaryReport @script:Invocation } | Should -Not -Throw
+    }
+
+    It 'checks exactly the targets of the selected canary lane' {
+        $script:Invocation.TargetTriple = @('aarch64-apple-darwin')
+        Write-Report
+        { Assert-HistoryCanaryReport @script:Invocation } | Should -Throw
+        $script:Report.sets = @($script:Report.sets[2])
+        $script:Report.series = 1
+        $script:Report.census.in_scope = 1
         Write-Report
         { Assert-HistoryCanaryReport @script:Invocation } | Should -Not -Throw
     }

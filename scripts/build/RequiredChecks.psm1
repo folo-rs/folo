@@ -1,12 +1,12 @@
 #requires -Version 7.6
 
-# Fan-in classification for the Standard and Merge queue validation `required-checks` jobs.
+# Fan-in classification for the Standard and Merge queue `required-checks` jobs and
+# the reusable benchmark canary's `result` job.
 #
 # GitHub's required-checks field matches a check-name string and cannot express that only the
 # matrix legs selected for a run are required. The ruleset therefore requires only this job.
-# Parsing `toJSON(needs)` is the required-checks job's substantive work. The logic lives here so
-# the classification is Pester-tested and visible to `just validate-scripts` rather than sitting
-# inline in YAML.
+# The gate must work even when toolchain setup failed, so it uses the runner's
+# PowerShell to evaluate `toJSON(needs)` without installing the toolchain.
 # See .github/workflows/design.md ("Required checks fan-in") and
 # .github/workflows/implementation.md.
 
@@ -39,7 +39,7 @@ function Assert-RequiredCheck {
 
     $failure = @(Get-RequiredCheckFailure -NeedsJson $NeedsJson -MustSucceedJob $normalized)
     if ($failure.Count -eq 0) {
-        Write-Host 'All merge-blocking jobs succeeded or were skipped where skipping is allowed.'
+        Write-Host 'Merge-blocking dependencies satisfy the required validation policy.'
         return
     }
 

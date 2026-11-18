@@ -108,8 +108,9 @@ prebuilt-binary publication; it does not prove that the selected versions are in
 The action repository's required published-installation gate (`install-tools` in the benchmark
 action and `Published installation` in the release-plan action) must really install each exact
 manifest package through `install` with its published lockfile and its promised prebuilt archives
-through `binstall` with source fallback disabled, across the supported targets. It verifies
-the executable versions and exercises the command contracts used by the action and workflows.
+with source fallback disabled. Required native installation verifies executable versions
+and command contracts on non-macOS runners. For macOS, the merge gate verifies the exact
+promised archives without relying on a hosted macOS runner.
 
 Availability runs bypass the installed-binary cache and use isolated installation roots.
 Source fallback, an existing binary cache, or a source-checkout build is not proof of
@@ -117,6 +118,12 @@ published-binary availability. Early failure while publication is pending is exp
 **and still merge-blocking for the action**, even when only an archive is missing.
 This is a required merge check: the action PR cannot merge while it is pending or failed,
 even when unrelated advisory checks would not delay a merge.
+
+Native macOS PR validation is advisory because hosted runner capacity is unreliable.
+Keep it green and investigate failures, but do not wait for it if it is queued or
+never ran. Missing native coverage is not a successful installation. Follow the
+owning action's required archive, installation, and publication checks; a missing
+promised macOS artifact still blocks.
 
 External publication does not rerun a failed GitHub check. The session owning the paired
 action PR automatically follows the monorepo release and retries artifact-dependent failures
