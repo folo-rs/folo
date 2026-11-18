@@ -334,9 +334,9 @@ jobs:
           Assert-HistoryCanaryReport -ReportDirectory $env:REPORT_DIRECTORY -ExpectedOutcome $env:EXPECTED_OUTCOME
 
   result:
-    # A selected reusable call cannot succeed through skipped prerequisites or verifiers.
-    # Every contract job is mandatory, including the no-work call whose inner matrix skips.
-    # Ref: implementation.md#merge-blocking-result.
+    # Every contract job is mandatory, including the no-work fixture. The canary policy
+    # can excuse only verified capacity loss and the verifier skips it explains.
+    # Ref: implementation.md#choosing-a-capacity-policy.
     if: always()
     needs:
       - configuration

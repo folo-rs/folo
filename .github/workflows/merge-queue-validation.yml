@@ -87,8 +87,8 @@ jobs:
           }
 
   required-checks:
-    # The ruleset uses the same check name on PR and queue SHAs; neither queue job may skip.
-    # Ref: .github/workflows/implementation.md#merge-blocking-result.
+    # The ruleset uses the same check name on PR and queue SHAs, but the queue policy
+    # checks the queue's own Clippy matrix. Ref: implementation.md#choosing-a-capacity-policy.
     name: required-checks
     if: always()
     needs: [clippy-dev, validate-versions]

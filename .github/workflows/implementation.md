@@ -617,8 +617,9 @@ source and archive path before release.
 
 The `required-checks` job is the intended single ruleset target. Each validation workflow's
 fan-in contains every one of its merge-blocking jobs. `scripts/build/RequiredChecks.psm1` rejects failed,
-cancelled, missing, and unknown dependency results. It permits `skipped` only for jobs whose
-event, platform, or package scope legitimately excludes them.
+cancelled, missing, and unknown dependency results by default. It permits `skipped` for jobs whose
+event, platform, or package scope legitimately excludes them. The
+[capacity policies](#choosing-a-capacity-policy) are a separate exception, not part of scope selection.
 
 For tooling checks it reads `prepare`'s explicit path plan and reconstructs script selection
 using its affected-package output. The execution-domain output must agree with that
@@ -626,16 +627,17 @@ selection. Every selected tooling job must succeed; every tooling dependency mus
 even when not selected. Preparation remains a must-succeed dependency, so a failed planner
 cannot turn downstream skips into merge approval.
 The same reconstruction checks the explicit hosted-canary output against the path/trust plan
-and affected consumers. A selected call must succeed; skipping is accepted only for an
-explicitly irrelevant or credential-ineligible call, never for absent or malformed scope.
+and affected consumers. Under the normal result policy, a selected call must succeed;
+skipping is accepted only for an explicitly irrelevant or credential-ineligible call,
+never for absent or malformed scope.
 
-The classifier only observes what `needs` supplies, so it also rejects an unconditional gate
+The baseline classifier only observes what `needs` supplies, so it also rejects an unconditional gate
 that its must-succeed list names but the payload omits. A name that drifts out of the `needs:`
 list therefore fails the fan-in instead of silently disappearing from it.
 
 The queue fan-in uses the same classifier with every dependency in its must-succeed list
-and no `prepare` dependency. No queue job may skip. Repair branches use the same
-repository/event conditions as other branches.
+and no `prepare` dependency. No queue dependency can be skipped as out of scope.
+Repair branches use the same repository/event conditions as other branches.
 
 ### macOS runner capacity
 
@@ -678,18 +680,55 @@ after reading evidence. Across reruns it uses each logical job's unique newest
 execution, retaining unretried results: an older capacity cancellation cannot
 override a newer actual failure. Missing, stale or ambiguous evidence blocks.
 
-After detecting capacity loss, Linux and Windows must still succeed, and other
-dependencies retain their normal success or legitimate-skip requirements. The
-caller-canary policy additionally permits only the known analysis/verification
-skips caused by its confirmed unavailable macOS collector/backfill; an executed
-failure or otherwise unexplained skip still blocks. Both the
-internal canary gate and outer Standard gate apply this policy because GitHub can
-retain a failed reusable-call result despite a successful internal gate.
-
 Each exception emits a warning describing absent validation. It does not rewrite
 the cancelled check or claim macOS passed. `macos-latest` remains in the matrices,
 and production benchmark consumer semantics and publication requirements are
 unchanged.
+
+#### Choosing a capacity policy
+
+[`Assert-RequiredCheck`](../../scripts/build/RequiredChecks.psm1)'s `-CapacityPolicy`
+selects the job graph to inspect, not how
+strictly to detect capacity loss. GitHub's `needs` context reports a single result
+for an entire matrix or reusable call. That result cannot tell the gate whether
+one macOS leg never started or another leg actually failed. The policies name
+the individual jobs the gate must account for before it can excuse an aggregate
+result. They all use the same [capacity evidence](#macos-runner-capacity).
+
+Select the policy for the **gate evaluating `needs`**, not for the event that
+triggered it or the job that happened to fail:
+
+| `-CapacityPolicy` | Use at | Dependencies eligible for an exception |
+| --- | --- | --- |
+| `standard` | [`standard-validation.yml`](standard-validation.yml), `required-checks`, including when called by Deep validation | `clippy-dev-docs` if only its macOS leg was unavailable; `benchmark-canary` independently if its child jobs satisfy the `canary` policy and its internal `result` succeeded. |
+| `queue` | [`merge-queue-validation.yml`](merge-queue-validation.yml), `required-checks` | `clippy-dev` if only its macOS leg was unavailable. The queue runs a different Clippy matrix and has no benchmark canary. Version readiness remains required. |
+| `canary` | [`benchmark-action-canary.yml`](benchmark-action-canary.yml), `result` | `exercise` and its skipped `verify` after an unavailable macOS collector; `backfill` and its skipped `verify-backfill` after an unavailable macOS backfill leg. Each exception needs evidence from its own prerequisite. |
+| Omitted | A gate without one of these explicitly supported job graphs | None. The normal `needs` checks apply and the gate does not fetch capacity evidence. |
+
+With a policy selected, the gate fetches Actions and Checks evidence only if the
+normal result checks find a blocking dependency. Pass `-Repository`, `-RunId`,
+`-RunAttempt` and `-HeadSha` for the current run, and give the gate `actions: read`
+and `checks: read` with `GH_TOKEN`. For a pull request, pass the PR head SHA
+reported by the Actions run, not the synthetic merge commit checked out for testing.
+The same policy values are passed as `-Policy` to `Get-OptionalMacOsDependency`,
+which decides from job records which dependency IDs the gate may excuse.
+
+The Clippy exception requires the exact Linux, Windows and macOS matrix legs,
+with Linux and Windows successful. For example, a Windows Clippy failure still
+blocks even with verified macOS capacity loss. The canary exception checks the
+known child jobs as a group. A confirmed unavailable `exercise` collector can explain a
+zero-step skip of `exercise / analyze` and `verify`, but cannot explain a skipped
+`verify-backfill`. The no-work fixture may have no expanded backfill job; its
+preparation and verifier must still succeed. When Standard checks `benchmark-canary`
+from the outside, it repeats the child-job check and requires the inner `result` to
+pass: GitHub can still report the reusable call as failed even when that gate passed.
+An executed failure, a missing required job or an otherwise unexplained skip
+is not excused.
+
+Do not reuse a policy for a different job graph or select one as a fallback after
+a failed run. When changing a matrix name, reusable call or its dependencies,
+update the job expectations in [`MacOsCapacity.psm1`](../../scripts/build/MacOsCapacity.psm1)
+and [its Pester cases](../../scripts/build/MacOsCapacity.Tests.ps1) alongside the workflow.
 
 ## Scheduled validation implementation
 

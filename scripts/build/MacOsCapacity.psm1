@@ -1,6 +1,7 @@
 #Requires -Version 7.6
 
-# Read-only evidence for the validation fan-ins when hosted macOS cannot acquire a runner.
+# Supplies read-only evidence to RequiredChecks.psm1 and maps verified hosted macOS
+# capacity cancellations to dependencies in the calling gate's known job graph.
 # PowerShell is already available in these jobs, even when Rust setup did not run.
 # Ref: ../../.github/workflows/implementation.md#macos-runner-capacity.
 Set-StrictMode -Version Latest

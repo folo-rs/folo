@@ -385,7 +385,7 @@ Expected — Waiting for status to be reported forever if they are listed as req
 A ruleset that requires merge-blocking Standard validation therefore lists only this fan-in. The
 job is `if: always()`, `needs:` every merge-blocking job in Standard validation (including
 `prepare` and `validate-versions`), succeeds when every dependency reports `success` or an
-allowed `skipped`, and fails on `failure`, `cancelled`, or any other result.
+allowed `skipped`, and otherwise fails unless the capacity exception below applies.
 Unconditional gates may not skip. Change-selected tooling jobs must succeed when selected;
 only an explicit no-work plan permits them to skip. Missing plans or dependencies fail the
 fan-in. Advisory jobs stay off that list. `alert` stays off it
@@ -396,14 +396,15 @@ is never added to the GitHub ruleset. Unconditional gates are also named in the 
 must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
 required through this fan-in.
 
-The queue fan-in requires every queue check to succeed; none may skip. It uses the
-same result classifier without a change plan, because queue scope is unconditional.
+The queue fan-in normally requires every queue check to succeed; none is out of scope.
+It uses the same result classifier without a change plan, because queue scope is unconditional.
 
 Both fan-ins permit positively verified hosted macOS runner-capacity cancellations,
 not actual macOS failures. Linux and Windows remain required, and macOS stays in
 the matrices. This exception is disclosed as absent coverage and includes only
 causally skipped canary dependents; missing or unexplained evidence fails closed.
-See [the capacity gate](implementation.md#macos-runner-capacity).
+Each gate selects a [policy for its own job graph](implementation.md#choosing-a-capacity-policy);
+the [detection rule](implementation.md#macos-runner-capacity) is the same for all of them.
 
 `alert` keeps a `needs:` list of its own, which also names the advisory jobs the fan-in excludes,
 so a new job joins both. The two lists answer different questions — what blocks a merge, and what

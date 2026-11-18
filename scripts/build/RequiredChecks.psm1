@@ -1,12 +1,13 @@
 #requires -Version 7.6
 
-# Fan-in classification for the Standard and Merge queue validation `required-checks` jobs.
+# Fan-in classification for the Standard and Merge queue `required-checks` jobs and
+# the reusable benchmark canary's `result` job.
 #
 # GitHub's required-checks field matches a check-name string and cannot express that only the
 # matrix legs selected for a run are required. The ruleset therefore requires only this job.
-# Parsing `toJSON(needs)` is the required-checks job's substantive work. The logic lives here so
-# the classification is Pester-tested and visible to `just validate-scripts` rather than sitting
-# inline in YAML.
+# The gate must work even when toolchain setup failed, so it uses the runner's PowerShell to
+# evaluate `toJSON(needs)` and consult GitHub only to check whether a blocking result
+# qualifies for a capacity exception.
 # See .github/workflows/design.md ("Required checks fan-in") and
 # .github/workflows/implementation.md.
 
@@ -17,6 +18,9 @@ Import-Module (Join-Path $PSScriptRoot 'MacOsCapacity.psm1')
 function Assert-RequiredCheck {
     # Throws when any merge-blocking dependency did not produce an allowed result, so the
     # fan-in fails closed. Prints the failing job names for the run log.
+    # CapacityPolicy identifies the calling gate's job graph, not a severity level.
+    # Omit it for normal needs-only checks. See
+    # .github/workflows/implementation.md#choosing-a-capacity-policy.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string] $NeedsJson,

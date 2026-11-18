@@ -667,12 +667,13 @@ jobs:
   # Fan-in for merge-blocking Standard validation jobs. GitHub's required-checks field is a string
   # match on this job's name, so matrix legs that never ran cannot be listed there.
   # Succeeds when every dependency succeeded, or skipped if that job is allowed to skip;
-  # fails on failure, cancelled, or any other result. Advisory jobs (`coverage-notify`)
-  # and `alert` stay off this list. When adding a merge-blocking job, add it here - never
-  # to the GitHub ruleset. Unconditional gates also go on MUST_SUCCEED_JOBS below.
+  # otherwise only the Standard capacity policy can excuse a blocking result.
+  # Advisory jobs (`coverage-notify`) and `alert` stay off this list. When adding a
+  # merge-blocking job, add it here, never to the GitHub ruleset. Unconditional gates
+  # also go on MUST_SUCCEED_JOBS below.
   required-checks:
-    # Matrix names never become independent ruleset targets.
-    # Ref: .github/workflows/implementation.md#merge-blocking-result.
+    # The standard policy checks this Clippy matrix and the nested benchmark canary.
+    # Ref: implementation.md#choosing-a-capacity-policy.
     name: required-checks
     if: always()
     needs:
@@ -691,8 +692,7 @@ jobs:
       actions: read
       checks: read
     steps:
-      # No setup-environment: this job only classifies `needs` results. Installing the
-      # toolchain after every Standard validation run would add work for no benefit. PowerShell is
+      # No setup-environment: this gate must work even when a dependency's setup failed. PowerShell is
       # preinstalled on ubuntu-latest; the module comes from the checkout.
       - name: Checkout repository
         uses: actions/checkout@v7
