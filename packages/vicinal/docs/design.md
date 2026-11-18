@@ -11,8 +11,8 @@ the set of processors on which a worker is permitted to run.
 ## Worker policies
 
 `WorkerPolicy` is an opaque configuration value. Constructors select a fixed worker count
-per processor, per memory region or per system, without a policy trait or generic pool and
-scheduler types. Counts and processor membership are independent for each pool.
+per processor, per memory region or per system, without generic pool and scheduler types.
+Counts and processor membership are independent for each pool.
 Additional constructors can extend configuration without exposing its representation.
 
 The default is processor-local scheduling. Applications configure explicit counts through
@@ -58,6 +58,29 @@ by the number of submitting processors; a system count is also independent of th
 of submitting regions. Counts must be nonzero but may exceed the
 processor count, supporting blocking workloads.
 
+## Application-controlled growth
+
+Fixed worker counts are the default. `PoolBuilder::scaling_policy` opts into an external
+`ScalingPolicy` whose `start_worker` callback decides whether one additional worker may start.
+Vicinal owns thread management and enforces the ceiling; the application owns the growth algorithm.
+The configured worker count becomes a maximum per locality group without changing task routing
+or processor membership. Construction starts no workers and makes no policy calls, including
+when eager selection is configured.
+
+The policy is considered only when the group has queued work, every existing worker is busy,
+no worker is still initializing and the ceiling has not been reached. A group with no workers
+qualifies. Checks occur on submission and when a worker becomes busy with more work still queued,
+so a burst arriving during initialization can grow after initialization finishes. Each approval
+permits at most one worker. The snapshot reports existing workers, the ceiling and queued tasks.
+Concurrent execution can make a snapshot stale; approval does not guarantee startup.
+
+Calls for one group are serialized; calls for different groups may overlap. Policy callbacks
+run on submitting or worker threads outside queue and registration locks. They must return promptly,
+must not panic, must not submit to or shut down their pool and must not wait for same-pool work.
+Refusal leaves work queued; refusing the first worker prevents execution until a later submission
+obtains approval. There is no timer or idle retirement.
+After reaching a group's ceiling, its callback is no longer invoked. Workers persist until shutdown.
+
 ## Eager construction
 
 `PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` to move worker startup
@@ -78,6 +101,7 @@ The pool respects the exact selection without independently applying a quota or 
 A successful eager construction means every selected worker has applied affinity and completed
 its initialization callback. The callback's effects are visible to the constructing thread.
 This prepares workers, not task-specific storage, application caches or a guaranteed sleeping state.
+With an application scaling policy, eager construction only seeds membership and starts no workers.
 
 Selection seeds membership rather than restricting future submissions. Submissions from other
 eligible processors create missing destinations lazily or expand existing shared groups.
@@ -167,8 +191,9 @@ the pool does not forcibly terminate threads. Every later submission panics sync
 even after the pool is dropped. Task panics retain their separate behavior and do not
 poison the pool.
 
-Worker startup establishes the full configured count and initial affinity before
-accepting work for a destination. Eager construction failures, including initializer panics,
+Fixed-count startup establishes the full configured count and initial affinity before
+accepting work for a destination. Scaling pools admit work before requesting individual workers.
+Eager construction failures, including initializer panics,
 propagate on the constructing call after stopping and joining every created worker; no partial
 pool is returned. User initialization side effects are not reversible, and the pool cannot
 forcibly terminate a callback that does not return.

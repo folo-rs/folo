@@ -14,8 +14,8 @@ use tracing::{debug, error};
 
 use crate::pool_inner::worker_loop;
 use crate::{
-    ErasedTaskHandle, GroupId, GroupRegistry, NEVER_POISONED, SubmissionTarget, ThreadInit,
-    WorkerGroup, WorkerPolicy, discard_panic, extract_panic_message,
+    ErasedTaskHandle, GroupId, GroupRegistry, NEVER_POISONED, ScalingPolicyHandle,
+    SubmissionTarget, ThreadInit, WorkerGroup, WorkerPolicy, discard_panic, extract_panic_message,
 };
 
 /// Groups pool lifecycle diagnostics under their owner, including admission and execution.
@@ -29,6 +29,7 @@ pub(crate) struct PoolInner {
     pub(crate) registry: GroupRegistry,
     pub(crate) policy: WorkerPolicy,
     thread_init: Option<ThreadInit>,
+    pub(crate) scaling_policy: Option<ScalingPolicyHandle>,
 
     /// Serializes cold startup and handle registration with the shutdown transition.
     pub(crate) worker_handles: Mutex<Vec<ThreadJoinHandle<()>>>,
@@ -48,6 +49,7 @@ impl PoolInner {
         hardware: SystemHardware,
         policy: WorkerPolicy,
         thread_init: Option<ThreadInit>,
+        scaling_policy: Option<ScalingPolicyHandle>,
     ) -> Self {
         let member_processors = if policy.shares_processors() {
             let mut processors = hardware
@@ -69,6 +71,7 @@ impl PoolInner {
             hardware,
             policy,
             thread_init,
+            scaling_policy,
             worker_handles: Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
             poisoned: AtomicBool::new(false),
@@ -128,52 +131,73 @@ impl PoolInner {
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
         mut completion: impl FnMut(Receiver<ThreadResult<()>>),
     ) {
-        // Startup owns registration, so this revision describes the supplied initial mask.
-        // Acquiring pairs with eager snapshot publication before threads are spawned.
+        if self.scaling_policy.is_some() {
+            return;
+        }
+
+        for worker_index in 0..self.policy.count().get() {
+            completion(self.start_worker_on(
+                destination,
+                worker_index,
+                affinity,
+                handles,
+                &mut spawn,
+                pin.clone(),
+            ));
+        }
+    }
+
+    /// Registers one worker and waits for affinity setup, without waiting for user initialization.
+    #[cfg_attr(test, mutants::skip)] // Broken acknowledgments or registration can strand workers.
+    pub(crate) fn start_worker_on(
+        self: &Arc<Self>,
+        destination: GroupId,
+        worker_index: u32,
+        affinity: &Arc<ProcessorSet>,
+        handles: &mut Vec<ThreadJoinHandle<()>>,
+        mut spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
+        pin: impl Fn(&ProcessorSet) + Send + 'static,
+    ) -> Receiver<ThreadResult<()>> {
         let revision = self
             .registry
             .get_or_init(destination)
             .affinity_revision
             .load(Ordering::Acquire);
-        for worker_index in 0..self.policy.count().get() {
-            // The buffer permits initialization to finish without waiting for the constructor.
-            // Affinity and initialization share the channel, in that order.
-            let (ready, receiver) = sync_channel(1);
-            let entry: WorkerEntry = Box::new({
-                let inner = Arc::clone(self);
-                let affinity = Arc::clone(affinity);
-                let pin = pin.clone();
-                move || {
-                    let result = panic::catch_unwind(AssertUnwindSafe(|| pin(&affinity)));
-                    let pinned = result.is_ok();
-                    if ready.send(result).is_err() || !pinned {
-                        return;
-                    }
-
-                    inner.run_worker(destination, worker_index, revision, ready, &pin);
+        // The buffer permits initialization to finish without waiting for the constructor.
+        // Affinity and initialization share the channel, in that order.
+        let (ready, receiver) = sync_channel(1);
+        let entry: WorkerEntry = Box::new({
+            let inner = Arc::clone(self);
+            let affinity = Arc::clone(affinity);
+            move || {
+                let result = panic::catch_unwind(AssertUnwindSafe(|| pin(&affinity)));
+                let pinned = result.is_ok();
+                if ready.send(result).is_err() || !pinned {
+                    return;
                 }
-            });
-            let builder = thread::Builder::new()
-                .name(format!("{}-{destination}-{worker_index}", self.pool_name));
-            let handle = spawn(builder, entry).unwrap_or_else(|error| {
-                panic!("failed to start worker in {destination:?}: {error}")
-            });
-            handles.push(handle);
 
-            match receiver.recv() {
-                Ok(Ok(())) => {}
-                Ok(Err(payload)) => panic::resume_unwind(payload),
-                Err(error) => panic!("worker in {destination:?} exited before readiness: {error}"),
+                inner.run_worker(destination, worker_index, revision, ready, &pin);
             }
-            completion(receiver);
+        });
+        let builder =
+            thread::Builder::new().name(format!("{}-{destination}-{worker_index}", self.pool_name));
+        let handle = spawn(builder, entry)
+            .unwrap_or_else(|error| panic!("failed to start worker in {destination:?}: {error}"));
+        handles.push(handle);
+
+        match receiver.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(payload)) => panic::resume_unwind(payload),
+            Err(error) => panic!("worker in {destination:?} exited before readiness: {error}"),
         }
+        receiver
     }
 
     /// Contains initialization and the task loop within the worker's infrastructure boundary.
     // Omitting initialization or failure propagation can strand accepted work.
     #[cfg_attr(test, mutants::skip)]
     fn run_worker(
-        &self,
+        self: &Arc<Self>,
         destination: GroupId,
         worker_index: u32,
         revision: usize,

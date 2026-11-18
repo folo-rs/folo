@@ -14,7 +14,7 @@ use crate::{GroupId, IterationResult, NEVER_POISONED, PoolInner, WorkerCore, Wor
 // Broken wakeup coordination can strand workers indefinitely.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn worker_loop(
-    inner: &PoolInner,
+    inner: &Arc<PoolInner>,
     destination: GroupId,
     worker_index: u32,
     mut revision: usize,
@@ -27,6 +27,7 @@ pub(crate) fn worker_loop(
         &state.shutdown_flag,
     );
     let shared = inner.policy.shares_processors();
+    let scaling = inner.scaling_policy.is_some();
 
     loop {
         if inner.shutdown.load(Ordering::Acquire) {
@@ -37,6 +38,7 @@ pub(crate) fn worker_loop(
             refresh_affinity(state, &mut revision, &pin);
         }
 
+        let mut tracked = false;
         let outcome = core.run_one_iteration_with(
             || {
                 if inner.shutdown.load(Ordering::Acquire) {
@@ -47,13 +49,27 @@ pub(crate) fn worker_loop(
                     refresh_affinity(state, &mut revision, &pin);
                 }
 
-                !inner.shutdown.load(Ordering::Acquire)
+                if inner.shutdown.load(Ordering::Acquire) {
+                    return false;
+                }
+                if scaling
+                    && state.worker_count.load(Ordering::Acquire) < inner.policy.count().get()
+                {
+                    tracked = true;
+                    state.busy_workers.fetch_add(1, Ordering::AcqRel);
+                    inner.grow_if_busy(destination, state);
+                }
+                true
             },
             || inner.stop_admission(),
         );
 
         match outcome {
             IterationResult::ExecutedUrgent | IterationResult::ExecutedRegular => {
+                if tracked {
+                    state.outstanding_tasks.fetch_sub(1, Ordering::Release);
+                    state.busy_workers.fetch_sub(1, Ordering::Release);
+                }
                 trace!(
                     target: POOL_LOG_TARGET,
                     pool_id = inner.pool_id,

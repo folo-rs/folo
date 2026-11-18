@@ -14,6 +14,9 @@
 //! [`WorkerPolicy`] can instead share workers across the caller's memory region or across
 //! the system. Each policy starts its fixed worker count on first use of a destination by default.
 //! [`PoolBuilder::eager`] initializes selected destinations during construction instead.
+//! Opt into [`PoolBuilder::scaling_policy`] to treat counts as ceilings and let an application
+//! policy approve one additional worker only when a locality group is saturated.
+//! Scaling pools start no workers during construction, even with eager selection.
 //!
 //! # Quick start
 //!
@@ -74,6 +77,8 @@
 //! Initializers may overlap and must not depend on construction returning, including to publish
 //! the pool's scheduler. Eager construction leaves the calling thread's affinity unchanged.
 //! It prepares workers, not task-specific allocations or caches.
+//! With [`PoolBuilder::scaling_policy`], eager selection seeds affinity membership only:
+//! workers start on demand after policy approval, not during construction.
 //!
 //! # Tradeoffs
 //!
@@ -142,6 +147,8 @@ mod join_handle;
 mod metrics;
 mod pool;
 mod pool_inner;
+mod scaling_policy;
+mod scaling_state;
 mod scheduler;
 mod task;
 mod task_error;
@@ -156,6 +163,8 @@ pub(crate) use group_registry::*;
 pub use join_handle::*;
 pub use pool::*;
 pub(crate) use pool_inner::PoolInner;
+pub use scaling_policy::*;
+pub use scaling_state::*;
 pub use scheduler::*;
 pub(crate) use task::*;
 pub use task_error::*;

@@ -15,6 +15,11 @@ A regional policy shares a fixed worker count across submitting processors in ea
 region. A system policy shares a fixed count across all submitting processors, regardless
 of region. Workers start on first use of a destination by default and persist until shutdown.
 Opt into eager initialization to prepare selected destinations during pool construction.
+Alternatively, `PoolBuilder::scaling_policy` accepts an application-owned `ScalingPolicy`.
+This turns the configured worker count into a ceiling per destination. Construction starts
+no workers, even with eager selection. `ScalingPolicy::start_worker` approves at most one new
+worker per call and is called only with queued work, all existing workers busy and the count
+below its ceiling. Workers persist until shutdown; Vicinal supplies no built-in scaling algorithm.
 
 ## Example
 
@@ -118,6 +123,7 @@ The selection is initial membership, not a permanent limit. Later submissions fr
 processors still create missing destinations or expand shared affinity. Choose a processor set
 once and reuse it for the application and pool rather than independently choosing quota-sized
 subsets. Eager construction prepares workers, not task-specific allocations or application caches.
+With a scaling policy, eager selection seeds the permitted processors but starts no workers.
 
 ## Tradeoffs
 

@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use event_listener::Event;
@@ -34,6 +34,12 @@ pub(crate) struct WorkerGroup {
     /// Published only after every worker acknowledges affinity, or startup fails permanently.
     pub(crate) startup: OnceLock<Result<(), ()>>,
 
+    /// Used only by scaling pools; fixed pools do not update these counters.
+    pub(crate) worker_count: AtomicU32,
+    pub(crate) busy_workers: AtomicU32,
+    pub(crate) growing: AtomicBool,
+    pub(crate) outstanding_tasks: AtomicUsize,
+
     /// The selected/admitted shared-worker mask. Workers clone it only when its revision changes.
     pub(crate) affinity: Mutex<Option<Arc<ProcessorSet>>>,
     pub(crate) affinity_revision: AtomicUsize,
@@ -63,6 +69,10 @@ impl WorkerGroup {
             wake_event: Event::new(),
             shutdown_flag: AtomicBool::new(false),
             startup: OnceLock::new(),
+            worker_count: AtomicU32::new(0),
+            busy_workers: AtomicU32::new(0),
+            growing: AtomicBool::new(false),
+            outstanding_tasks: AtomicUsize::new(0),
             affinity: Mutex::new(None),
             affinity_revision: AtomicUsize::new(0),
             task_pool: Mutex::new(MultiPool::new()),

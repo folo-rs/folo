@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 
-use crate::{PoolInner, Scheduler, WorkerPolicy};
+use crate::{PoolInner, ScalingPolicy, Scheduler, WorkerPolicy};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -27,6 +27,8 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// Shared workers use the initial selection plus processors that submitted accepted work
 /// to their pool and destination, refreshing affinity at task boundaries without adding workers.
 /// A pool's policy does not change after construction.
+/// [`PoolBuilder::scaling_policy`] optionally makes counts ceilings for application-controlled
+/// growth instead. Scaling pools start with no workers, including during eager construction.
 ///
 /// # Lifetime
 ///
@@ -103,6 +105,7 @@ pub struct PoolBuilder {
     hardware: Option<SystemHardware>,
     thread_init: Option<ThreadInit>,
     eager: Option<ProcessorSet>,
+    scaling_policy: Option<ScalingPolicyHandle>,
 }
 
 impl PoolBuilder {
@@ -113,6 +116,7 @@ impl PoolBuilder {
             hardware: None,
             thread_init: None,
             eager: None,
+            scaling_policy: None,
         }
     }
 
@@ -134,6 +138,41 @@ impl PoolBuilder {
         self
     }
 
+    /// Enables application-controlled, one-worker-at-a-time growth.
+    ///
+    /// With a scaling policy, [`WorkerPolicy`] counts become hard ceilings per locality group.
+    /// Construction starts no workers, even with [`Self::eager`]; eager selection only seeds
+    /// affinity membership. Workers start only after [`ScalingPolicy::start_worker`] approves
+    /// queued work in a saturated group below its ceiling. Workers persist until shutdown.
+    ///
+    /// Without this setting, the existing fixed-count behavior is unchanged.
+    /// Repeated calls replace the callback; the last setter wins.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use new_zealand::nz;
+    /// use vicinal::{Pool, ScalingPolicy, ScalingState, WorkerPolicy};
+    ///
+    /// struct GrowWhenBusy;
+    ///
+    /// impl ScalingPolicy for GrowWhenBusy {
+    ///     fn start_worker(&self, _state: &ScalingState) -> bool {
+    ///         true
+    ///     }
+    /// }
+    ///
+    /// let pool = Pool::builder()
+    ///     .worker_policy(WorkerPolicy::per_system(nz!(64_u32)))
+    ///     .scaling_policy(GrowWhenBusy)
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn scaling_policy(mut self, policy: impl ScalingPolicy) -> Self {
+        self.scaling_policy = Some(AssertUnwindSafe(Box::new(policy)));
+        self
+    }
+
     /// Initializes workers for the selected processors during construction.
     ///
     /// [`Self::build`] waits for every selected worker to apply its initial affinity and finish
@@ -149,6 +188,7 @@ impl PoolBuilder {
     /// This is an initial selection, not a permanent restriction. Later submissions from other
     /// eligible processors start missing destinations lazily or expand shared-worker affinity.
     /// The selection must belong to the pool's [`SystemHardware`] instance.
+    /// With [`Self::scaling_policy`], selection seeds affinity but starts no workers.
     ///
     /// # Example
     ///
@@ -227,6 +267,7 @@ impl PoolBuilder {
     ///
     /// By default, construction starts no workers. With [`Self::eager`], it waits for the selected
     /// workers' affinity setup and initialization. Other destinations remain lazy.
+    /// With [`Self::scaling_policy`], eager selection only seeds affinity and starts no workers.
     ///
     /// # Panics
     ///
@@ -250,6 +291,7 @@ impl PoolBuilder {
                 hardware,
                 self.policy,
                 self.thread_init,
+                self.scaling_policy,
             )),
         };
         if let Some(processors) = self.eager {
@@ -268,6 +310,7 @@ impl fmt::Debug for PoolBuilder {
             .field("hardware", &self.hardware)
             .field("has_thread_init", &self.thread_init.is_some())
             .field("eager", &self.eager)
+            .field("has_scaling_policy", &self.scaling_policy.is_some())
             .finish()
     }
 }
@@ -277,6 +320,9 @@ impl fmt::Debug for PoolBuilder {
 /// The callback is never exposed through a builder or scheduler's unwind boundary, so its
 /// captures need not be unwind-safe. See docs/implementation.md, "Worker initialization".
 pub(crate) type ThreadInit = AssertUnwindSafe<Box<dyn Fn() + Send + Sync>>;
+
+/// The callback is not exposed through the builder or scheduler's unwind boundary.
+pub(crate) type ScalingPolicyHandle = AssertUnwindSafe<Box<dyn ScalingPolicy>>;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
