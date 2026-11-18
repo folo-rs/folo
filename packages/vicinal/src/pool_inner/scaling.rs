@@ -9,11 +9,8 @@ use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use many_cpus::ProcessorSet;
 
 use crate::pool_inner::WorkerEntry;
+use crate::worker_group::{GROWTH_IDLE, GROWTH_PENDING, GROWTH_RUNNING};
 use crate::{GroupId, NEVER_POISONED, PoolInner, ScalingState, WorkerGroup};
-
-const GROWTH_IDLE: u8 = 0;
-const GROWTH_RUNNING: u8 = 1;
-const GROWTH_PENDING: u8 = 2;
 
 impl PoolInner {
     /// Avoids queue inspection, policy dispatch and registration locking when capacity is available.

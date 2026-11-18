@@ -13,6 +13,10 @@ use plurality::MultiPool;
 
 use crate::ErasedTaskHandle;
 
+pub(crate) const GROWTH_IDLE: u8 = 0;
+pub(crate) const GROWTH_RUNNING: u8 = 1;
+pub(crate) const GROWTH_PENDING: u8 = 2;
+
 /// Everything a group's worker threads share: the work they draw from, the storage that
 /// work lives in, and the signals that tell them to wake up or stop.
 ///
@@ -71,7 +75,7 @@ impl WorkerGroup {
             startup: OnceLock::new(),
             worker_count: AtomicU32::new(0),
             busy_workers: AtomicU32::new(0),
-            growth_state: AtomicU8::new(0),
+            growth_state: AtomicU8::new(GROWTH_IDLE),
             outstanding_tasks: AtomicUsize::new(0),
             affinity: Mutex::new(None),
             affinity_revision: AtomicUsize::new(0),

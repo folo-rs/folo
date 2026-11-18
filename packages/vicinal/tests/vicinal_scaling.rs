@@ -31,6 +31,8 @@ struct ThresholdPolicy {
 
 impl ScalingPolicy for ThresholdPolicy {
     fn start_worker(&self, state: &ScalingState) -> bool {
+        const REQUIRED_QUEUED_TASKS: usize = 2;
+
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         self.snapshots.lock().unwrap().push((
             state.workers(),
@@ -42,7 +44,7 @@ impl ScalingPolicy for ThresholdPolicy {
             self.first_release.lock().unwrap().recv().unwrap();
         }
 
-        state.queued_tasks() >= 2
+        state.queued_tasks() >= REQUIRED_QUEUED_TASKS
     }
 }
 
