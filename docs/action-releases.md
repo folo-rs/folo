@@ -120,6 +120,11 @@ even when unrelated advisory checks would not delay a merge.
 
 An action's capacity-aware validation aggregate may explicitly accept an unavailable
 macOS leg only after authenticating its no-step hosted-runner acquisition failure.
+Detection requires GitHub's exact runner-acquisition failure annotation, not merely
+a cancelled job or a capacity notice.
+[Folo's detector](../.github/workflows/implementation.md#macos-runner-capacity)
+documents the diagnostic texts and its corroborating evidence checks; each action's
+documentation describes its own evidence acquisition and validation boundaries.
 This is absent macOS validation, not a successful installation. Keep all non-macOS
 installation gates, actual macOS failures and promised artifact/publication
 requirements intact. Missing artifacts or arbitrary cancellations are not capacity

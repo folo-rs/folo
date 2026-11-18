@@ -639,32 +639,57 @@ repository/event conditions as other branches.
 
 ### macOS runner capacity
 
-The fan-ins retain `macos-latest` coverage but permit a narrow **not run** outcome
-when GitHub cannot allocate a hosted macOS runner. `MacOsCapacity.psm1` uses
-read-only Actions/checks access, validates the repository, event head and current
-run attempt, and reconciles each logical job's newest execution across attempts.
-It requires a completed cancellation, exactly the `macos-latest` label, no
-allocated runner and an empty step list. The matching GitHub Actions check must
-belong to this job and check suite. Its complete annotations must contain the
-exact hosted-runner acquisition failure; only GitHub's accompanying macOS ARM
-capacity notices are also allowed. Missing, stale, ambiguous or unknown evidence
-cannot grant an exception. The run identity is checked again after acquisition.
+`MacOsCapacity.psm1` detects runner-capacity loss from **GitHub's check-run
+annotations**, not from job logs, queue duration or a `cancelled` conclusion alone.
+Using authenticated read-only Actions/checks access, it follows the Actions job's
+`check_run_url` to read that check's metadata, then reads every page of
+`GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations`.
+There must be at least one annotation with `annotation_level: failure` and a
+`message` matching this text exactly, including case:
 
-The explicit matrix policies require both Linux and Windows legs to succeed.
-The caller-canary policy also requires its complete known job graph: only the
-unavailable macOS collector/backfill and their causally skipped analysis or
-verification may be absent. An executed analysis or verifier failure still blocks,
-as does a skipped verifier without its own proven unavailable prerequisite.
-An unexpanded no-work backfill matrix needs no child-job record, but its preparation
-and no-work verifier must both succeed.
-The canary's internal fan-in and the outer Standard fan-in both apply the policy,
-because GitHub can retain a failed reusable-call result despite a successful
-internal result gate. No production benchmark consumer semantics are changed.
+```text
+The job was not acquired by Runner of type hosted even after multiple attempts
+```
+
+This is GitHub reporting that it could not acquire a hosted runner after retries.
+The remaining annotations may only repeat that failure or have
+`annotation_level: notice` with this exact, case-sensitive message:
+
+```text
+Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times.
+```
+
+The notice alone does **not** prove allocation failed. Any other annotation,
+including a different failure message, prevents the exception. The number of fetched
+annotations must match the check run's `output.annotations_count`, so a partial
+response cannot hide contradictory evidence.
+
+The acquisition diagnostic is necessary but not sufficient. The job must be an
+allowlisted macOS leg with `status: completed`, `conclusion: cancelled`, exactly
+`labels: ["macos-latest"]`, an explicitly empty `steps` array, `runner_id: 0`
+and `runner_name: ""`. This rules out a job that acquired a runner and then failed
+or was cancelled while executing. Its linked check must also be completed and
+cancelled, have the same job name, head SHA and workflow check-suite ID, and
+belong to GitHub Actions (app ID `15368`, slug `github-actions`). A message in
+step output or an unrelated check is not capacity evidence.
+
+The gate verifies the repository, run ID, head SHA and current attempt before and
+after reading evidence. Across reruns it uses each logical job's unique newest
+execution, retaining unretried results: an older capacity cancellation cannot
+override a newer actual failure. Missing, stale or ambiguous evidence blocks.
+
+After detecting capacity loss, Linux and Windows must still succeed, and other
+dependencies retain their normal success or legitimate-skip requirements. The
+caller-canary policy additionally permits only the known analysis/verification
+skips caused by its confirmed unavailable macOS collector/backfill; an executed
+failure or otherwise unexplained skip still blocks. Both the
+internal canary gate and outer Standard gate apply this policy because GitHub can
+retain a failed reusable-call result despite a successful internal gate.
 
 Each exception emits a warning describing absent validation. It does not rewrite
-the cancelled check or claim macOS passed. The repository ruleset continues to
-require `required-checks`; removing that aggregate would also waive unrelated
-platform and release validation and is not an acceptable capacity workaround.
+the cancelled check or claim macOS passed. `macos-latest` remains in the matrices,
+and production benchmark consumer semantics and publication requirements are
+unchanged.
 
 ## Scheduled validation implementation
 

@@ -417,11 +417,15 @@ compatibility or retirement.
 
 Hosted macOS validation is non-blocking only when authenticated GitHub evidence
 confirms that `macos-latest` was cancelled without acquiring a runner or executing
-steps because hosted capacity was unavailable. The validation gate reports this
-as **not run**, not a pass. Real macOS failures, unrelated cancellations, unknown
-evidence and non-macOS failures remain blocking. Keep the matrix leg and latest
+steps because hosted capacity was unavailable. Detection requires GitHub's exact
+runner-acquisition failure annotation on the job's linked check run; a queued or
+cancelled state, or a capacity notice alone, is insufficient.
+The validation gate reports this as **not run**, not a pass.
+Real macOS failures, unrelated cancellations, unknown evidence and non-macOS
+failures remain blocking. Keep the matrix leg and latest
 runner label; do not make all macOS checks advisory or silently drop coverage.
-See [the capacity gate](../.github/workflows/implementation.md#macos-runner-capacity).
+See [how capacity loss is detected](../.github/workflows/implementation.md#macos-runner-capacity)
+for the annotation texts and required corroborating evidence.
 This exception does not waive promised release artifacts or native publication.
 
 Apply the same maintenance discipline to delegated workflow behavior: follow
