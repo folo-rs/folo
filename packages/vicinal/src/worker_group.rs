@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use event_listener::Event;
@@ -37,7 +37,7 @@ pub(crate) struct WorkerGroup {
     /// Used only by scaling pools; fixed pools do not update these counters.
     pub(crate) worker_count: AtomicU32,
     pub(crate) busy_workers: AtomicU32,
-    pub(crate) growing: AtomicBool,
+    pub(crate) growth_state: AtomicU8,
     pub(crate) outstanding_tasks: AtomicUsize,
 
     /// The selected/admitted shared-worker mask. Workers clone it only when its revision changes.
@@ -71,7 +71,7 @@ impl WorkerGroup {
             startup: OnceLock::new(),
             worker_count: AtomicU32::new(0),
             busy_workers: AtomicU32::new(0),
-            growing: AtomicBool::new(false),
+            growth_state: AtomicU8::new(0),
             outstanding_tasks: AtomicUsize::new(0),
             affinity: Mutex::new(None),
             affinity_revision: AtomicUsize::new(0),

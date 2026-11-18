@@ -1,7 +1,7 @@
 //! Application-controlled growth through the public pool and scheduling APIs.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
@@ -19,6 +19,31 @@ testing::init_tracing!();
 struct Policy {
     calls: Arc<AtomicUsize>,
     allowed: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+struct ThresholdPolicy {
+    calls: Arc<AtomicUsize>,
+    snapshots: Arc<Mutex<Vec<(u32, u32, usize)>>>,
+    first_entered: Sender<()>,
+    first_release: Arc<Mutex<Receiver<()>>>,
+}
+
+impl ScalingPolicy for ThresholdPolicy {
+    fn start_worker(&self, state: &ScalingState) -> bool {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        self.snapshots.lock().unwrap().push((
+            state.workers(),
+            state.max_workers(),
+            state.queued_tasks(),
+        ));
+        if call == 0 {
+            self.first_entered.send(()).unwrap();
+            self.first_release.lock().unwrap().recv().unwrap();
+        }
+
+        state.queued_tasks() >= 2
+    }
 }
 
 impl Policy {
@@ -148,6 +173,40 @@ fn policy_can_decline_the_first_worker_and_allow_a_later_submission() {
 }
 
 #[test]
+fn concurrent_demand_is_rechecked_after_a_declined_decision() {
+    with_watchdog(|| {
+        let (first_entered, entered) = channel();
+        let (first_release, release) = channel();
+        let policy = Arc::new(ThresholdPolicy {
+            calls: Arc::new(AtomicUsize::new(0)),
+            snapshots: Arc::new(Mutex::new(Vec::new())),
+            first_entered,
+            first_release: Arc::new(Mutex::new(release)),
+        });
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(WorkerPolicy::per_system(nz!(1_u32)))
+            .scaling_policy((*policy).clone())
+            .build();
+        let scheduler = pool.scheduler();
+
+        let (first, second) = thread::scope(|scope| {
+            let first = scope.spawn(|| scheduler.spawn(|| 42));
+            entered.recv().unwrap();
+            let second = scope.spawn(|| scheduler.spawn_urgent(|| 43));
+            let second = second.join().unwrap();
+            first_release.send(()).unwrap();
+
+            (first.join().unwrap(), second)
+        });
+
+        assert_eq!(block_on(first).unwrap(), 42);
+        assert_eq!(block_on(second).unwrap(), 43);
+        assert_eq!(*policy.snapshots.lock().unwrap(), [(0, 1, 1), (0, 1, 2)]);
+    });
+}
+
+#[test]
 fn queued_burst_waits_for_initialization_then_grows_to_the_ceiling() {
     const MAXIMUM: usize = 3;
 
@@ -208,10 +267,17 @@ fn concurrent_submissions_cannot_exceed_the_ceiling() {
 
     with_watchdog(|| {
         let policy = Policy::new(true);
+        let initialized = Arc::new(AtomicUsize::new(0));
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(WorkerPolicy::per_system(nz!(3_u32)))
             .scaling_policy(policy.clone())
+            .thread_init({
+                let initialized = Arc::clone(&initialized);
+                move || {
+                    initialized.fetch_add(1, Ordering::SeqCst);
+                }
+            })
             .build();
         let scheduler = pool.scheduler();
         let barrier = Barrier::new(SUBMISSIONS);
@@ -252,6 +318,8 @@ fn concurrent_submissions_cannot_exceed_the_ceiling() {
         for handle in handles {
             block_on(handle).unwrap();
         }
+        drop(pool);
         assert_eq!(policy.calls.load(Ordering::SeqCst), MAXIMUM);
+        assert_eq!(initialized.load(Ordering::SeqCst), MAXIMUM);
     });
 }

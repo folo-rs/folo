@@ -20,12 +20,14 @@ use crate::ScalingState;
 ///
 /// The callback runs on submitting or worker threads, outside queue and registration locks.
 /// It must not panic, must return promptly, must not submit to or shut down its pool, and
-/// must not wait for same-pool work. Policy invocation has no dedicated unwind boundary.
+/// must not wait for same-pool work. It must preserve the calling thread's affinity because a
+/// worker may execute its next task immediately after the callback returns. Policy invocation
+/// has no dedicated unwind boundary.
 pub trait ScalingPolicy: Send + Sync + 'static {
     /// Returns whether to start one additional worker.
     ///
-    /// Returning `false` leaves tasks queued. In particular, refusing the first worker
-    /// prevents execution until a later submission obtains approval.
+    /// Returning `false` leaves tasks queued. In particular, refusing the first worker prevents
+    /// execution until later demand causes a subsequent decision that obtains approval.
     /// Implementations must not panic.
     fn start_worker(&self, state: &ScalingState) -> bool;
 }

@@ -49,9 +49,11 @@
 //! Regions are identified by [`many_cpus::MemoryRegionId`], not by a task's allocations or data.
 //!
 //! With a regional [`WorkerPolicy`], submissions from processors in the same region share one
-//! configured worker count. Eager construction or the first submission activates those workers;
-//! further submissions from that region do not add workers. Each pool accounts for its regions
-//! independently, and scheduler clones share their pool's workers.
+//! configured worker count. In fixed-count mode, eager construction or the first submission
+//! activates those workers; further submissions from that region do not add workers. With a
+//! scaling policy, the count is a ceiling and saturated demand can request workers one at a time.
+//! Each pool accounts for its regions independently, and scheduler clones share their pool's
+//! workers.
 //!
 //! With [`WorkerPolicy::per_system`], all submitting processors share one configured
 //! worker count per pool, regardless of memory region. Workers may move across regions but

@@ -112,7 +112,7 @@ impl PoolInner {
                 // Each queued task may block its worker; do not coalesce wakeups.
                 state.wake_event.notify(1.additional());
                 if self.scaling_policy.is_some()
-                    && state.worker_count.load(Ordering::Acquire) < self.policy.count().get()
+                    && state.worker_count.load(Ordering::SeqCst) < self.policy.count().get()
                 {
                     self.grow_if_busy(target.group, state);
                 }
@@ -225,10 +225,10 @@ impl PoolInner {
 
         queue.push_back(task.take().expect("admission consumes each task once"));
         if self.scaling_policy.is_some()
-            && state.worker_count.load(Ordering::Acquire) < self.policy.count().get()
+            && state.worker_count.load(Ordering::SeqCst) < self.policy.count().get()
         {
             // Publish demand before a worker can dequeue this task.
-            state.outstanding_tasks.fetch_add(1, Ordering::Release);
+            state.outstanding_tasks.fetch_add(1, Ordering::SeqCst);
         }
         let expanded = affinity.is_some();
 

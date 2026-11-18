@@ -52,11 +52,10 @@ pub(crate) fn worker_loop(
                 if inner.shutdown.load(Ordering::Acquire) {
                     return false;
                 }
-                if scaling
-                    && state.worker_count.load(Ordering::Acquire) < inner.policy.count().get()
+                if scaling && state.worker_count.load(Ordering::SeqCst) < inner.policy.count().get()
                 {
                     tracked = true;
-                    state.busy_workers.fetch_add(1, Ordering::AcqRel);
+                    state.busy_workers.fetch_add(1, Ordering::SeqCst);
                     inner.grow_if_busy(destination, state);
                 }
                 true
@@ -67,8 +66,8 @@ pub(crate) fn worker_loop(
         match outcome {
             IterationResult::ExecutedUrgent | IterationResult::ExecutedRegular => {
                 if tracked {
-                    state.outstanding_tasks.fetch_sub(1, Ordering::Release);
-                    state.busy_workers.fetch_sub(1, Ordering::Release);
+                    state.outstanding_tasks.fetch_sub(1, Ordering::SeqCst);
+                    state.busy_workers.fetch_sub(1, Ordering::SeqCst);
                 }
                 trace!(
                     target: POOL_LOG_TARGET,

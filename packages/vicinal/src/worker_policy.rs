@@ -42,8 +42,9 @@ impl WorkerPolicy {
     /// Each task is routed to its submitting processor's [`many_cpus::MemoryRegionId`].
     /// Workers may run only on processors in that region selected by
     /// [`PoolBuilder::eager`][crate::PoolBuilder::eager] or that have submitted accepted work.
-    /// Without eager selection, the first submission starts the workers on its processor.
-    /// New submitting processors expand the permitted set without adding workers.
+    /// Without eager selection, the first submission starts the fixed worker count on its
+    /// processor. With a scaling policy, it only requests the first worker. New submitting
+    /// processors expand the permitted set without adding workers.
     ///
     /// Workers refresh affinity at task boundaries. A running task may finish with the
     /// previous narrower set and may migrate within that set. Membership is cumulative:
@@ -85,8 +86,9 @@ impl WorkerPolicy {
     /// Workers may run only on processors selected by
     /// [`PoolBuilder::eager`][crate::PoolBuilder::eager] or that have submitted accepted work,
     /// regardless of memory region. Without eager selection, the first submission starts the
-    /// workers on its processor; new submitting processors expand affinity without adding workers.
-    /// Separate pools have independent worker counts and permitted processor sets.
+    /// fixed worker count on its processor; with a scaling policy, it only requests the first
+    /// worker. New submitting processors expand affinity without adding workers. Separate pools
+    /// have independent worker counts and permitted processor sets.
     ///
     /// Workers refresh affinity at task boundaries. A running task may finish with the
     /// previous narrower set and may migrate within that set, including across memory regions.

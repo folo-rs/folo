@@ -6,6 +6,7 @@ mod failures;
 pub(crate) mod helpers;
 mod initialization;
 mod initialization_races;
+mod scaling;
 mod shutdown;
 mod startup;
 mod topology;

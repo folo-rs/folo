@@ -93,16 +93,22 @@ Once a group reaches its immutable ceiling, later tasks bypass demand and busy-c
 Already tracked tasks release their own counts on completion, but no later decision reads them:
 workers never retire, so reaching the ceiling permanently disables growth for that group.
 
-A group-local nonblocking gate serializes policy decisions without holding queue or registration
-locks across application code. Approval is rechecked under worker registration before reserving
-one slot. The reservation counts toward the ceiling before the gate is released and remains
-available capacity during initialization. Startup shares the fixed path's affinity acknowledgment,
-initializer, failure handling and retained join handles. New workers use the latest group mask.
+A group-local nonblocking state machine serializes policy decisions without holding queue or
+registration locks across application code. Concurrent callers mark a pending decision instead
+of waiting; the current owner processes that changed demand before releasing ownership. Scaling
+demand and busy counters use one sequentially consistent order so the submission and worker
+checks cannot miss each other's publications. Approval is rechecked under worker registration
+before reserving one slot. The reservation counts toward the ceiling while initialization is in
+progress. Startup shares the fixed path's affinity acknowledgment, initializer, failure handling
+and retained join handles. New workers use the latest group mask.
 
 Growth is checked on submission and at the transition into busy execution. The latter handles
-work queued during startup without introducing polling or callbacks on completion. Eager scaling
+work queued during startup without introducing polling or callbacks on completion. A failed
+growth startup closes admission, then uses the pool-wide poison path after releasing worker
+registration so every queue is drained before the original panic resumes. Eager scaling
 construction validates and seeds the same membership masks as fixed construction but creates no
-workers. Policy invocation has no dedicated unwind boundary; callbacks must not panic.
+workers. Policy invocation has no dedicated unwind boundary; callbacks must not panic or change
+the calling thread's affinity.
 The `vicinal/policy_dispatch/scaling` Criterion cases compare fixed scheduling, scaling at
 the ceiling and scaling below the ceiling with the same actual one-worker capacity. Startup
 is outside measurement. The below-ceiling callback refuses additional workers so differences

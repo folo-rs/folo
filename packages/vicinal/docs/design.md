@@ -51,12 +51,11 @@ previous narrower mask. Migration within the permitted mask is allowed even duri
 but is not required. Regional work never moves to another region to obtain an idle worker.
 System workers may move between permitted processors in different memory regions.
 
-Each destination starts its configured worker count once, on first use or during eager
-construction. Construction starts no workers by default. Workers persist until shutdown.
-Shared worker counts are not multiplied
-by the number of submitting processors; a system count is also independent of the number
-of submitting regions. Counts must be nonzero but may exceed the
-processor count, supporting blocking workloads.
+In fixed-count mode, each destination starts its configured worker count once, on first use
+or during eager construction. Construction starts no workers by default. Workers persist until
+shutdown. Shared worker counts are not multiplied by the number of submitting processors; a
+system count is also independent of the number of submitting regions. Counts must be nonzero
+but may exceed the processor count, supporting blocking workloads.
 
 ## Application-controlled growth
 
@@ -74,11 +73,13 @@ so a burst arriving during initialization can grow after initialization finishes
 permits at most one worker. The snapshot reports existing workers, the ceiling and queued tasks.
 Concurrent execution can make a snapshot stale; approval does not guarantee startup.
 
-Calls for one group are serialized; calls for different groups may overlap. Policy callbacks
-run on submitting or worker threads outside queue and registration locks. They must return promptly,
-must not panic, must not submit to or shut down their pool and must not wait for same-pool work.
-Refusal leaves work queued; refusing the first worker prevents execution until a later submission
-obtains approval. There is no timer or idle retirement.
+Calls for one group are serialized; concurrent demand leaves a pending check for the current
+caller to process before releasing decision ownership. Calls for different groups may overlap.
+Policy callbacks run on submitting or worker threads outside queue and registration locks. They
+must return promptly, must not panic, must preserve the calling thread's affinity, must not submit
+to or shut down their pool and must not wait for same-pool work. Refusal leaves work queued;
+refusing the first worker prevents execution until later demand causes a decision that obtains
+approval. There is no timer or idle retirement.
 After reaching a group's ceiling, its callback is no longer invoked. Workers persist until shutdown.
 
 ## Eager construction
