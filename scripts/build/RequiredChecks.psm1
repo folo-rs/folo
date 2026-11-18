@@ -5,31 +5,21 @@
 #
 # GitHub's required-checks field matches a check-name string and cannot express that only the
 # matrix legs selected for a run are required. The ruleset therefore requires only this job.
-# The gate must work even when toolchain setup failed, so it uses the runner's PowerShell to
-# evaluate `toJSON(needs)` and consult GitHub only to check whether a blocking result
-# qualifies for a capacity exception.
+# The gate must work even when toolchain setup failed, so it uses the runner's
+# PowerShell to evaluate `toJSON(needs)` without installing the toolchain.
 # See .github/workflows/design.md ("Required checks fan-in") and
 # .github/workflows/implementation.md.
 
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'ValidationPlan.psm1')
-Import-Module (Join-Path $PSScriptRoot 'MacOsCapacity.psm1')
 
 function Assert-RequiredCheck {
     # Throws when any merge-blocking dependency did not produce an allowed result, so the
     # fan-in fails closed. Prints the failing job names for the run log.
-    # CapacityPolicy identifies the calling gate's job graph, not a severity level.
-    # Omit it for normal needs-only checks. See
-    # .github/workflows/implementation.md#choosing-a-capacity-policy.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string] $NeedsJson,
-        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]] $MustSucceedJob,
-        [ValidateSet('standard', 'queue', 'canary')][string] $CapacityPolicy,
-        [string] $Repository,
-        [long] $RunId,
-        [int] $RunAttempt,
-        [string] $HeadSha
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]] $MustSucceedJob
     )
 
     if ($MustSucceedJob.Count -eq 0) {
@@ -48,20 +38,6 @@ function Assert-RequiredCheck {
     }
 
     $failure = @(Get-RequiredCheckFailure -NeedsJson $NeedsJson -MustSucceedJob $normalized)
-    if ($failure.Count -gt 0 -and $CapacityPolicy) {
-        $gate = if ($CapacityPolicy -ceq 'canary') { 'result' } else { 'required-checks' }
-        $jobs = @(Get-RunnerCapacityJob -Repository $Repository -RunId $RunId `
-                -RunAttempt $RunAttempt -HeadSha $HeadSha -GateName $gate)
-        $optional = @(Get-OptionalMacOsDependency -Policy $CapacityPolicy -Job $jobs)
-        $failure = @($failure | Where-Object {
-                $name, $result = $_ -csplit '=', 2
-                $exempt = $name -cin $optional -and $result -cin @('failure', 'cancelled', 'skipped')
-                if ($exempt) {
-                    Write-Warning "Capacity exception for ${name}: hosted macOS never acquired a runner. This is absent validation, not a passing macOS check."
-                }
-                -not $exempt
-            })
-    }
     if ($failure.Count -eq 0) {
         Write-Host 'Merge-blocking dependencies satisfy the required validation policy.'
         return

@@ -42,7 +42,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-      checks: read
       id-token: write
       issues: write
     secrets:

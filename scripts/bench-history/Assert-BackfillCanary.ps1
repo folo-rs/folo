@@ -11,11 +11,9 @@ param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $From,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $To,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $OutputPath,
-    [ValidateNotNullOrEmpty()][string] $Config = '.cargo/backfill_history.toml',
-    [ValidateNotNullOrEmpty()][string] $Project = 'reusable-backfill-canary',
-    [ValidateNotNullOrEmpty()][string[]] $TargetTriple = @(
-        'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin'
-    )
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Config,
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Project,
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string[]] $TargetTriple
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

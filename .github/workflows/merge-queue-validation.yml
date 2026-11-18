@@ -21,9 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
+        platform: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.platform }}
-    steps:
+    steps: &queue-clippy-steps
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -32,14 +32,14 @@ jobs:
         with:
           save-build-cache: "true"
       - name: Run format-check
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.platform == 'ubuntu-latest' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           just format-check
-      - name: Run clippy dev on ${{ matrix.platform }}
+      - name: Run clippy dev
         # Formatting failures must not suppress independent compiler/lint findings.
         # Ref: .github/workflows/design.md#job-granularity-and-gating.
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -49,6 +49,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           just clippy dev
+
+  # Keep the real result visible without holding the queue on runner allocation.
+  # Ref: implementation.md#macos-advisory-validation.
+  clippy-dev-macos:
+    runs-on: macos-latest
+    steps: *queue-clippy-steps
 
   # Reassess the queue candidate with its target separate from actual configured release history.
   # SemVer analysis and binstall checks remain in Standard validation.
@@ -87,16 +93,12 @@ jobs:
           }
 
   required-checks:
-    # The ruleset uses the same check name on PR and queue SHAs, but the queue policy
-    # checks the queue's own Clippy matrix. Ref: implementation.md#choosing-a-capacity-policy.
+    # The ruleset uses the same check name on PR and queue SHAs; macOS is not a dependency.
+    # Ref: implementation.md#macos-advisory-validation.
     name: required-checks
     if: always()
     needs: [clippy-dev, validate-versions]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      checks: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -106,14 +108,10 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
           MUST_SUCCEED_JOBS: clippy-dev validate-versions
-          GH_TOKEN: ${{ github.token }}
-          CAPACITY_HEAD: ${{ github.sha }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/build/RequiredChecks.psm1 -Force
           $mustSucceed = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
-          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $mustSucceed `
-            -CapacityPolicy queue -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID `
-            -RunAttempt $env:GITHUB_RUN_ATTEMPT -HeadSha $env:CAPACITY_HEAD
+          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $mustSucceed

@@ -20,8 +20,8 @@ $json = gh api --paginate --slurp "repos/$Repository/actions/runs/$RunId/attempt
 $json | Set-Content -LiteralPath $OutputPath -Encoding utf8
 $pages = $json | ConvertFrom-Json
 # Reusable callers prepend their job names, including Standard nested under Deep validation.
-# Match a complete job-name segment, not one fixed nesting depth or a substring lookalike.
-$jobs = @($pages.jobs | Where-Object { $_.name -cmatch '(^| / )no-eligible-backfill / ' })
+# Only the required caller runs this case. Ignore any skipped descendants of the advisory call.
+$jobs = @($pages.jobs | Where-Object { $_.name -cmatch '(^| / )benchmark-canary / no-eligible-backfill / ' })
 $preparation = @($jobs | Where-Object { $_.name -cmatch '(^| / )no-eligible-backfill / prepare$' })
 if ($preparation.Count -ne 1 -or $preparation[0].conclusion -cne 'success') {
     throw 'The no-eligible canary must have successful preparation in this run attempt.'

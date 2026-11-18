@@ -56,6 +56,20 @@ BeforeAll {
             ForEach-Object { $_.Groups[1].Value.Trim() }
     }
 
+    function Get-WorkflowPrerequisite([string] $Workflow, [string] $Name) {
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $pending = [System.Collections.Generic.Stack[string]]::new()
+        $pending.Push($Name)
+        while ($pending.Count -gt 0) {
+            foreach ($dependency in @(Get-WorkflowJobDependency (Get-WorkflowJob $Workflow $pending.Pop()))) {
+                if ($seen.Add($dependency)) {
+                    $dependency
+                    $pending.Push($dependency)
+                }
+            }
+        }
+    }
+
     function Get-WorkflowEvent([string] $Workflow) {
         $events = [regex]::Match($Workflow, '(?ms)^on:\r?\n(?<body>.*?)(?=^\S|\z)')
         $events.Success | Should -BeTrue
@@ -362,14 +376,21 @@ Describe 'Standard validation dependency relationships' {
     }
 
     Describe 'Required reusable canary relationships' {
-        It 'keeps backfill calls in distinct configuration-keyed concurrency groups' {
-            $configs = @(foreach ($name in @('backfill', 'rolling-backfill', 'no-eligible-backfill')) {
+        It 'keeps caller lanes and cases in distinct concurrency and storage namespaces' {
+            $projects = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            $configs = @(foreach ($name in @('exercise', 'backfill', 'rolling-backfill', 'no-eligible-backfill')) {
                     $job = Get-WorkflowJob $canary $name
-                    $config = [regex]::Match($job, '(?m)^      config: ([^\r\n]+)').Groups[1].Value
-                    $config | Should -Not -BeNullOrEmpty
-                    Test-Path -LiteralPath (Join-Path $root ".github/fixtures/bench-history-caller/$config") |
-                        Should -BeTrue
-                    $config
+                    $config = [regex]::Match($job, '(?m)^      config: ([^\r\n]+)')
+                    $config.Success | Should -BeTrue
+                    $paths = [regex]::Matches($config.Groups[1].Value, '\.cargo/\w+\.toml')
+                    $paths.Count | Should -Be $(if ($name -in @('exercise', 'backfill')) { 2 } else { 1 })
+                    foreach ($path in $paths) {
+                        $content = Get-Content -LiteralPath (Join-Path $root ".github/fixtures/bench-history-caller/$($path.Value)") -Raw
+                        $project = [regex]::Match($content, '(?m)^id = "([^"]+)"').Groups[1].Value
+                        $project | Should -Not -BeNullOrEmpty
+                        $projects.Add($project) | Should -BeTrue
+                        $path.Value
+                    }
                 })
             @($configs | Sort-Object -Unique).Count | Should -Be $configs.Count
         }
@@ -386,10 +407,23 @@ Describe 'Standard validation dependency relationships' {
             @(Get-WorkflowJobName $queue) | Should -Not -Contain 'benchmark-canary'
         }
 
-        It 'propagates every contract job failure, cancellation, unexpected skip or absence' {
+        It 'keeps macOS collection and backfill out of the selected required call' {
+            (Get-WorkflowJob $standard 'benchmark-canary') | Should -Not -Match '(?m)^      macos-only:'
+            (Get-WorkflowJob $standard 'benchmark-canary-macos') | Should -Match '(?m)^      macos-only: true\r?$'
+            $canary | Should -Match '(?m)^      macos-only:\r?\n(?:        [^\r\n]+\r?\n)*?        default: false\r?$'
+            (Get-WorkflowJob $canary 'exercise') | Should -Match '(?m)^      platforms: &canary-platforms \$\{\{ inputs\.macos-only && ''macos-latest'' \|\| ''ubuntu-latest,windows-latest'' \}\}\r?$'
+            (Get-WorkflowJob $canary 'backfill') | Should -Match '(?m)^      platforms: \*canary-platforms\r?$'
+            foreach ($name in @('rolling-backfill', 'no-eligible-backfill')) {
+                (Get-WorkflowJob $canary $name) | Should -Match '(?m)^    if: ''!inputs\.macos-only''\r?$'
+            }
+        }
+
+        It 'propagates every required contract job failure, cancellation, unexpected skip or absence' {
             $fanIn = Get-WorkflowJob $canary 'result'
             $dependencies = @(Get-WorkflowJobDependency $fanIn)
-            $mustSucceed = @(Get-MustSucceedJob $fanIn)
+            $linuxOnly = [regex]::Match($fanIn, "(?m)LINUX_ONLY_JOBS: .*&& '([^']+)'").Groups[1].Value -split ' '
+            $common = @(Get-MustSucceedJob $fanIn)
+            $mustSucceed = $common + $linuxOnly
             $checks = @(Get-WorkflowJobName $canary | Where-Object { $_ -ne 'result' })
             @($dependencies | Sort-Object) | Should -Be @($checks | Sort-Object)
             @($mustSucceed | Sort-Object) | Should -Be @($checks | Sort-Object)
@@ -408,17 +442,25 @@ Describe 'Standard validation dependency relationships' {
                     Should -Throw
                 $results[$name] = @{ result = 'success' }
             }
+            foreach ($name in $linuxOnly) { $results[$name].result = 'skipped' }
+            { Assert-RequiredCheck -NeedsJson (ConvertTo-Json $results) -MustSucceedJob $common } |
+                Should -Not -Throw
         }
     }
 
-    It 'classifies every blocking job and reports every substantive job directly' {
+    It 'keeps both macOS lanes off the required and main-push alert paths' {
         $jobNames = @(Get-WorkflowJobName $standard)
-        $blocking = @($jobNames | Where-Object { $_ -notin @('required-checks', 'alert', 'coverage-notify') })
-        $reported = @($jobNames | Where-Object { $_ -notin @('required-checks', 'alert') })
+        $advisory = @('clippy-dev-docs-macos', 'benchmark-canary-macos')
+        $blocking = @($jobNames | Where-Object { $_ -notin (@('required-checks', 'alert', 'coverage-notify') + $advisory) })
+        $reported = @($blocking + 'coverage-notify')
         $fanIn = @(Get-WorkflowJobDependency (Get-WorkflowJob $standard 'required-checks'))
         $alert = @(Get-WorkflowJobDependency (Get-WorkflowJob $standard 'alert'))
         @($fanIn | Sort-Object) | Should -Be @($blocking | Sort-Object)
         @($alert | Sort-Object) | Should -Be @($reported | Sort-Object)
+        foreach ($gate in @('required-checks', 'alert')) {
+            $prerequisites = @(Get-WorkflowPrerequisite $standard $gate)
+            foreach ($name in $advisory) { $prerequisites | Should -Not -Contain $name }
+        }
     }
 }
 
@@ -439,15 +481,29 @@ Describe 'Merge queue validation relationships' {
         $pattern = '(?m)^        platform: \[([^\]]+)\]'
         $standardPlatforms = [regex]::Match((Get-WorkflowJob $standard 'clippy-dev-docs'), $pattern).Groups[1].Value
         $queuePlatforms = [regex]::Match((Get-WorkflowJob $queue 'clippy-dev'), $pattern).Groups[1].Value
-        $queuePlatforms | Should -Not -BeNullOrEmpty
+        $queuePlatforms | Should -Be 'ubuntu-latest, windows-latest'
         $queuePlatforms | Should -Be $standardPlatforms
+        foreach ($workflow in @(
+                @{ Content = $standard; Job = 'clippy-dev-docs' }
+                @{ Content = $queue; Job = 'clippy-dev' }
+            )) {
+            $required = Get-WorkflowJob $workflow.Content $workflow.Job
+            $mac = Get-WorkflowJob $workflow.Content "$($workflow.Job)-macos"
+            $sharedSteps = [regex]::Match($required, '(?m)^    steps: &([\w-]+)').Groups[1].Value
+            $sharedSteps | Should -Not -BeNullOrEmpty
+            $mac | Should -Match '(?m)^    runs-on: macos-latest\r?$'
+            $mac | Should -Match ('(?m)^    steps: \*' + [regex]::Escape($sharedSteps) + '\r?$')
+            $mac | Should -Not -Match 'continue-on-error:'
+            @(Get-WorkflowPrerequisite $workflow.Content 'required-checks') |
+                Should -Not -Contain "$($workflow.Job)-macos"
+        }
     }
 
     It 'requires every queue check and rejects unsuccessful or missing results' {
         $fanIn = Get-WorkflowJob $queue 'required-checks'
         $dependencies = @(Get-WorkflowJobDependency $fanIn)
         $mustSucceed = @(Get-MustSucceedJob $fanIn)
-        $checks = @(Get-WorkflowJobName $queue | Where-Object { $_ -ne 'required-checks' })
+        $checks = @(Get-WorkflowJobName $queue | Where-Object { $_ -notin @('required-checks', 'clippy-dev-macos') })
         @($dependencies | Sort-Object) | Should -Be @($checks | Sort-Object)
         @($mustSucceed | Sort-Object) | Should -Be @($checks | Sort-Object)
         $results = @{}

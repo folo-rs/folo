@@ -177,12 +177,10 @@ Expected early failure while publication is pending remains merge-blocking for t
 Source dogfooding, source fallback for a promised archive, or an existing binary cache cannot
 substitute for this required check. Unlike an advisory check, it must pass before action merge.
 
-Use the owning action's authenticated capacity-aware gate where provided. It may
-report a no-step hosted macOS runner-acquisition cancellation as unavailable validation,
-not an executed pass. Confirm the exact exception and warning; actual macOS failures,
-non-macOS failures, missing artifacts and unknown cancellation evidence still block.
-Preserve promised publication artifacts and all other gate requirements. Do not retry
-or remove required contexts merely because the raw cancelled macOS check stays red.
+Native macOS PR checks are advisory because hosted runner capacity is unreliable.
+Keep them green and investigate failures, but do not wait for queued or unrun macOS
+jobs or report them as passing. Verify the owning action's required installation gate
+and exact promised archives, including macOS. Preserve all publication requirements.
 
 ## Schedule the action session
 

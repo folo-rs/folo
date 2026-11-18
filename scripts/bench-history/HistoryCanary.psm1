@@ -36,7 +36,8 @@ function Assert-HistoryCanaryReport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $ReportDirectory,
-        [Parameter(Mandatory)][ValidateSet('clean', 'insufficient_baseline', 'partial')][string] $ExpectedOutcome
+        [Parameter(Mandatory)][ValidateSet('clean', 'insufficient_baseline', 'partial')][string] $ExpectedOutcome,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string[]] $TargetTriple
     )
 
     foreach ($name in @('report.md', 'report.json', 'summary.md')) {
@@ -49,11 +50,10 @@ function Assert-HistoryCanaryReport {
         throw 'The downloaded report does not match the non-regressing reusable workflow outputs.'
     }
 
-    $expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
     $sets = @($report.sets)
     $actualTargets = @($sets | ForEach-Object { $_.target_triple } | Sort-Object -Unique)
-    if (($actualTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
-        throw 'The report did not contain the synthetic measurements from every supported target.'
+    if (($actualTargets -join ',') -cne (($TargetTriple | Sort-Object -Unique) -join ',')) {
+        throw 'The report did not contain exactly the selected synthetic measurement targets.'
     }
 
     # Machine-key selection can include several partitions per target. The fixture contributes

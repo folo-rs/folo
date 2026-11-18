@@ -19,10 +19,13 @@ Describe 'Backfill caller report verification' {
             From = 'b' * 40
             To = 'a' * 40
             OutputPath = Join-Path $TestDrive 'backfill-canary-runs.json'
+            Config = '.cargo/backfill_linux_windows.toml'
+            Project = 'reusable-backfill-linux-windows'
+            TargetTriple = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc')
         }
         $script:Report = @{
-            project = 'reusable-backfill-canary'
-            sets = @(foreach ($target in @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')) {
+            project = $script:Invocation.Project
+            sets = @(foreach ($target in $script:Invocation.TargetTriple) {
                 @{
                     engine = 'criterion'
                     target_triple = $target
@@ -83,7 +86,7 @@ Describe 'Backfill caller report verification' {
             $selected -ceq (Join-Path -Path $TestDrive -ChildPath 'invocation workspace' `
                 -AdditionalChildPath '.github', 'fixtures', 'bench-history-caller', '.cargo', 'rolling.toml')
         }
-        $script:Report.project = 'reusable-backfill-canary'
+        $script:Report.project = 'reusable-backfill-linux-windows'
         { & $script:Verify @script:Invocation } | Should -Throw
     }
 
@@ -107,27 +110,27 @@ Describe 'Backfill caller report verification' {
                     $set.commits[1].commit = 'd' * 40
                 }
             }
-            'missing start' { $script:Report.sets[2].commits = @($script:Report.sets[2].commits[1]) }
-            'missing end' { $script:Report.sets[2].commits = @($script:Report.sets[2].commits[0]) }
+            'missing start' { $script:Report.sets[1].commits = @($script:Report.sets[1].commits[1]) }
+            'missing end' { $script:Report.sets[1].commits = @($script:Report.sets[1].commits[0]) }
             'dirty endpoint' {
-                $script:Report.sets[2].commits[1].clean = 0
-                $script:Report.sets[2].commits[1].dirty = 1
+                $script:Report.sets[1].commits[1].clean = 0
+                $script:Report.sets[1].commits[1].dirty = 1
             }
-            'empty endpoint' { $script:Report.sets[2].commits[1].runs = 0 }
-            'wrong engine' { $script:Report.sets[2].engine = 'gungraun' }
-            'missing target' { $script:Report.sets = @($script:Report.sets[0..1]) }
-            'empty series' { $script:Report.sets[2].series = 0 }
+            'empty endpoint' { $script:Report.sets[1].commits[1].runs = 0 }
+            'wrong engine' { $script:Report.sets[1].engine = 'gungraun' }
+            'missing target' { $script:Report.sets = @($script:Report.sets[0]) }
+            'empty series' { $script:Report.sets[1].series = 0 }
             'empty store' { $script:Report.sets = @() }
         }
         { & $script:Verify @script:Invocation } | Should -Throw
     }
 
     It 'requires the endpoints in the same comparable partition' {
-        $end = $script:Report.sets[2].commits[1]
-        $script:Report.sets[2].commits = @($script:Report.sets[2].commits[0])
+        $end = $script:Report.sets[1].commits[1]
+        $script:Report.sets[1].commits = @($script:Report.sets[1].commits[0])
         $script:Report.sets += @{
             engine = 'criterion'
-            target_triple = 'aarch64-apple-darwin'
+            target_triple = 'x86_64-pc-windows-msvc'
             series = 1
             runs = 1
             commits = @($end)

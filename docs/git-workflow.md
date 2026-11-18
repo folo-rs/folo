@@ -18,6 +18,11 @@ GitHub rules, not a check's name or duration. Preserve required validation, revi
 and approval obligations and any verification explicitly requested by the user.
 Do not use "every check has finished" as a readiness condition.
 
+Hosted macOS validation is advisory because runner capacity is unreliable. Do not
+wait for it before review or an otherwise authorized merge, even when it is still
+queued or never ran. Keep the checks green and investigate actual failures;
+missing coverage is not a pass. Native release requirements are separate.
+
 Wait for an optional check only when its result could plausibly change the
 readiness decision for the actual diff. Benchmark comparisons are normally
 low-signal for documentation or test-only changes that leave benchmarked code,

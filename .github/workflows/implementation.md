@@ -289,8 +289,11 @@ History publication is disabled; backfill has no publication.
 Its standalone fixture writes deterministic Criterion artifacts through the existing faker
 library instead of measuring elapsed time.
 
-The canary is `workflow_call`-only. Standard validation invokes it as `benchmark-canary` and
-includes that result in both `required-checks` and main-push failure reporting. Deep validation
+The canary is `workflow_call`-only. Standard validation invokes it twice with the same scope
+condition. The default `benchmark-canary` call runs Linux and Windows and feeds `required-checks`
+and main-push failure reporting. `benchmark-canary-macos` passes `macos-only: true` to run the same
+history and explicit-range backfill contracts on Apple Silicon without holding up either gate.
+The Linux rolling and no-work cases run only in the default call. Deep validation
 reuses the same graph through Standard and forwards its required token permissions. Main
 pushes and scheduled/manual main calls select full scope; PRs combine explicit fixture/tooling
 paths with Cargo delta's transitive impact on the CLI, companion and faker consumers. Private
@@ -317,9 +320,11 @@ those identifiers but exports none. Collection depends on both jobs and receives
 directly from configuration.
 
 The storage job creates the fixture's dedicated container through data-plane access; it does
-not provision Azure management resources or use production history. Both calls use that container,
-with separate configured project identities. The history flow's Linux, Windows and
-Apple Silicon macOS collection jobs store measurements and transport receipts. Its analysis
+not provision Azure management resources or use production history. Each lane uses distinct
+configuration paths and project IDs for history and backfill. The pinned workflows use the config
+path for concurrency and the project namespace for storage and history artifacts. Sharing those
+inputs could make a queued macOS run delay or cancel required work, or mix the lanes' evidence.
+The history flow's collection jobs store measurements and transport receipts. Its analysis
 job reconciles platform evidence, analyzes the real frozen head and uploads reports.
 The history verification job downloads that artifact and checks the expected synthetic
 series and honest outcome/coverage outputs. Lack of a baseline is not mistaken for failure or
@@ -338,9 +343,9 @@ while partial or insufficient baselines are inconclusive. Statistical coverage d
 substitute for platform collection evidence.
 
 For backfill, configuration freezes the real event head and its first parent as the inclusive
-`to` and `from` endpoints. The shared workflow runs the nested synthetic fixture on Linux,
-Windows and Apple Silicon macOS, using `.cargo/backfill_history.toml` to select the isolated
-`reusable-backfill-canary` project in the existing test container.
+`to` and `from` endpoints. The shared workflow runs the nested synthetic fixture on the
+selected lane's platforms. The pinned workflow takes config from the invocation checkout, not
+from each measured commit, so a lane config need not exist at both endpoints.
 Both real endpoints must have consistent fixture locks. A lockfile repair checkpoint followed
 by its guard/workflow integration provides valid adjacent inputs; changing the range, discarding
 dirty flags or weakening the clean-endpoint assertions would hide the defect.
@@ -393,18 +398,17 @@ The `prepare` job publishes the affected-package set and the independent path pl
 impact for script integration tests. Release validation remains unconditional and independent
 of preparation, with separately reported steps in one environment.
 
-The `clippy-dev-docs` matrix shares setup for dev-profile Clippy, documentation and
-minimum-dependency compilation; its Ubuntu leg first checks workspace formatting.
-Documentation steps build all-feature and default-feature documentation and run doctests.
-They use the same Linux, macOS and Windows matrix as Clippy and minimum-dependency compilation,
-including on pull requests. `check-frozen` runs last because it
+The `clippy-dev-docs` Linux/Windows matrix and the advisory `clippy-dev-docs-macos`
+job share setup and steps for dev-profile Clippy, documentation and minimum-dependency
+compilation. The Ubuntu leg first checks workspace formatting. Documentation steps
+build all-feature and default-feature documentation and run doctests. `check-frozen` runs last because it
 rewrites the manifests and lockfile, so later checks cannot accidentally use frozen inputs.
 Each platform proceeds independently rather than waiting for other platforms' Clippy results.
-The matrix also runs `just release-binary-smoke` before minimum-dependency freezing.
+These jobs also run `just release-binary-smoke` before minimum-dependency freezing.
 Its independent `release_binary_smoke` selection combines path inputs with Cargo
 impact on the helper. Script-only selection starts the matrix without expanding
 empty Cargo scope into a workspace-wide check. The required-checks fan-in rejects
-a skipped or absent selected platform job.
+a skipped or absent selected required job.
 The `test-x64` matrix shares its Linux/Windows environment across coverage-instrumented tests,
 benchmark smoke tests and external-type checks. Test or upload failures do not suppress
 benchmark or external-type checks. Coverage reporting consumes successful measurement;
@@ -618,8 +622,7 @@ source and archive path before release.
 The `required-checks` job is the intended single ruleset target. Each validation workflow's
 fan-in contains every one of its merge-blocking jobs. `scripts/build/RequiredChecks.psm1` rejects failed,
 cancelled, missing, and unknown dependency results by default. It permits `skipped` for jobs whose
-event, platform, or package scope legitimately excludes them. The
-[capacity policies](#choosing-a-capacity-policy) are a separate exception, not part of scope selection.
+event, platform, or package scope legitimately excludes them.
 
 For tooling checks it reads `prepare`'s explicit path plan and reconstructs script selection
 using its affected-package output. The execution-domain output must agree with that
@@ -627,108 +630,34 @@ selection. Every selected tooling job must succeed; every tooling dependency mus
 even when not selected. Preparation remains a must-succeed dependency, so a failed planner
 cannot turn downstream skips into merge approval.
 The same reconstruction checks the explicit hosted-canary output against the path/trust plan
-and affected consumers. Under the normal result policy, a selected call must succeed;
+and affected consumers. A selected required call must succeed;
 skipping is accepted only for an explicitly irrelevant or credential-ineligible call,
 never for absent or malformed scope.
 
-The baseline classifier only observes what `needs` supplies, so it also rejects an unconditional gate
+The gate only observes what `needs` supplies, so it also rejects an unconditional dependency
 that its must-succeed list names but the payload omits. A name that drifts out of the `needs:`
 list therefore fails the fan-in instead of silently disappearing from it.
 
-The queue fan-in uses the same classifier with every dependency in its must-succeed list
+The queue fan-in uses the same gate with every dependency in its must-succeed list
 and no `prepare` dependency. No queue dependency can be skipped as out of scope.
 Repair branches use the same repository/event conditions as other branches.
 
-### macOS runner capacity
+### macOS advisory validation
 
-`MacOsCapacity.psm1` detects runner-capacity loss from **GitHub's check-run
-annotations**, not from job logs, queue duration or a `cancelled` conclusion alone.
-Using authenticated read-only Actions/checks access, it follows the Actions job's
-`check_run_url` to read that check's metadata, then reads every page of
-`GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations`.
-There must be at least one annotation with `annotation_level: failure` and a
-`message` matching this text exactly, including case:
+Hosted macOS runners can stay queued or never start because of limited capacity.
+Standard and merge-queue validation therefore run macOS jobs separately from the required
+Linux/Windows matrices. The macOS Clippy jobs share the same steps as their required
+counterparts through YAML aliases. The [benchmark canary](#reusable-workflow-canary)
+uses a separate reusable call for macOS for the same reason.
 
-```text
-The job was not acquired by Runner of type hosted even after multiple attempts
-```
-
-This is GitHub reporting that it could not acquire a hosted runner after retries.
-The remaining annotations may only repeat that failure or have
-`annotation_level: notice` with this exact, case-sensitive message:
-
-```text
-Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times.
-```
-
-The notice alone does **not** prove allocation failed. Any other annotation,
-including a different failure message, prevents the exception. The number of fetched
-annotations must match the check run's `output.annotations_count`, so a partial
-response cannot hide contradictory evidence.
-
-The acquisition diagnostic is necessary but not sufficient. The job must be an
-allowlisted macOS leg with `status: completed`, `conclusion: cancelled`, exactly
-`labels: ["macos-latest"]`, an explicitly empty `steps` array, `runner_id: 0`
-and `runner_name: ""`. This rules out a job that acquired a runner and then failed
-or was cancelled while executing. Its linked check must also be completed and
-cancelled, have the same job name, head SHA and workflow check-suite ID, and
-belong to GitHub Actions (app ID `15368`, slug `github-actions`). A message in
-step output or an unrelated check is not capacity evidence.
-
-The gate verifies the repository, run ID, head SHA and current attempt before and
-after reading evidence. Across reruns it uses each logical job's unique newest
-execution, retaining unretried results: an older capacity cancellation cannot
-override a newer actual failure. Missing, stale or ambiguous evidence blocks.
-
-Each exception emits a warning describing absent validation. It does not rewrite
-the cancelled check or claim macOS passed. `macos-latest` remains in the matrices,
-and production benchmark consumer semantics and publication requirements are
-unchanged.
-
-#### Choosing a capacity policy
-
-[`Assert-RequiredCheck`](../../scripts/build/RequiredChecks.psm1)'s `-CapacityPolicy`
-selects the job graph to inspect, not how
-strictly to detect capacity loss. GitHub's `needs` context reports a single result
-for an entire matrix or reusable call. That result cannot tell the gate whether
-one macOS leg never started or another leg actually failed. The policies name
-the individual jobs the gate must account for before it can excuse an aggregate
-result. They all use the same [capacity evidence](#macos-runner-capacity).
-
-Select the policy for the **gate evaluating `needs`**, not for the event that
-triggered it or the job that happened to fail:
-
-| `-CapacityPolicy` | Use at | Dependencies eligible for an exception |
-| --- | --- | --- |
-| `standard` | [`standard-validation.yml`](standard-validation.yml), `required-checks`, including when called by Deep validation | `clippy-dev-docs` if only its macOS leg was unavailable; `benchmark-canary` independently if its child jobs satisfy the `canary` policy and its internal `result` succeeded. |
-| `queue` | [`merge-queue-validation.yml`](merge-queue-validation.yml), `required-checks` | `clippy-dev` if only its macOS leg was unavailable. The queue runs a different Clippy matrix and has no benchmark canary. Version readiness remains required. |
-| `canary` | [`benchmark-action-canary.yml`](benchmark-action-canary.yml), `result` | `exercise` and its skipped `verify` after an unavailable macOS collector; `backfill` and its skipped `verify-backfill` after an unavailable macOS backfill leg. Each exception needs evidence from its own prerequisite. |
-| Omitted | A gate without one of these explicitly supported job graphs | None. The normal `needs` checks apply and the gate does not fetch capacity evidence. |
-
-With a policy selected, the gate fetches Actions and Checks evidence only if the
-normal result checks find a blocking dependency. Pass `-Repository`, `-RunId`,
-`-RunAttempt` and `-HeadSha` for the current run, and give the gate `actions: read`
-and `checks: read` with `GH_TOKEN`. For a pull request, pass the PR head SHA
-reported by the Actions run, not the synthetic merge commit checked out for testing.
-The same policy values are passed as `-Policy` to `Get-OptionalMacOsDependency`,
-which decides from job records which dependency IDs the gate may excuse.
-
-The Clippy exception requires the exact Linux, Windows and macOS matrix legs,
-with Linux and Windows successful. For example, a Windows Clippy failure still
-blocks even with verified macOS capacity loss. The canary exception checks the
-known child jobs as a group. A confirmed unavailable `exercise` collector can explain a
-zero-step skip of `exercise / analyze` and `verify`, but cannot explain a skipped
-`verify-backfill`. The no-work fixture may have no expanded backfill job; its
-preparation and verifier must still succeed. When Standard checks `benchmark-canary`
-from the outside, it repeats the child-job check and requires the inner `result` to
-pass: GitHub can still report the reusable call as failed even when that gate passed.
-An executed failure, a missing required job or an otherwise unexplained skip
-is not excused.
-
-Do not reuse a policy for a different job graph or select one as a fallback after
-a failed run. When changing a matrix name, reusable call or its dependencies,
-update the job expectations in [`MacOsCapacity.psm1`](../../scripts/build/MacOsCapacity.psm1)
-and [its Pester cases](../../scripts/build/MacOsCapacity.Tests.ps1) alongside the workflow.
+Do not add macOS jobs to the required dependency graph, even indirectly through
+a mixed matrix or reusable call. `needs` waits for the entire dependency;
+`continue-on-error` would still wait and would hide a real failure. The `required-checks`
+job evaluates only its own `needs` results and does not infer a cause from queue state.
+Actions shows macOS results as they are: investigate failures and keep the checks
+green, but do not wait for queued jobs or describe an unrun check as passing.
+Scheduled validation still reports macOS results. Native release builds and promised
+release artifacts are not made optional by this merge policy.
 
 ## Scheduled validation implementation
 

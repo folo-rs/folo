@@ -142,40 +142,6 @@ Describe 'Get-RequiredCheckFailure' {
     }
 }
 
-Describe 'capacity-aware fan-in' {
-    BeforeEach {
-        Mock Get-RunnerCapacityJob -ModuleName RequiredChecks { @{} }
-        Mock Get-OptionalMacOsDependency -ModuleName RequiredChecks { 'clippy-dev' }
-        Mock Write-Warning -ModuleName RequiredChecks {}
-        $script:arguments = @{
-            NeedsJson = '{"clippy-dev":{"result":"failure"},"validate-versions":{"result":"success"}}'
-            MustSucceedJob = @('clippy-dev', 'validate-versions')
-            CapacityPolicy = 'queue'; Repository = 'folo-rs/folo'; RunId = 42
-            RunAttempt = 2; HeadSha = 'a' * 40
-        }
-    }
-
-    It 'permits an authenticated capacity loss with an explicit warning' {
-        Assert-RequiredCheck @arguments
-        Should -Invoke Get-RunnerCapacityJob -ModuleName RequiredChecks -Times 1 -Exactly
-        Should -Invoke Write-Warning -ModuleName RequiredChecks -Times 1 -Exactly
-    }
-
-    It 'keeps other failures and missing unconditional jobs blocking' -ForEach @(
-        '{"clippy-dev":{"result":"failure"},"validate-versions":{"result":"failure"}}',
-        '{"validate-versions":{"result":"success"}}'
-    ) {
-        $arguments.NeedsJson = $_
-        { Assert-RequiredCheck @arguments -WarningAction SilentlyContinue } | Should -Throw
-    }
-
-    It 'does not acquire runner evidence for a successful fan-in' {
-        $arguments.NeedsJson = '{"clippy-dev":{"result":"success"},"validate-versions":{"result":"success"}}'
-        Assert-RequiredCheck @arguments
-        Should -Invoke Get-RunnerCapacityJob -ModuleName RequiredChecks -Times 0
-    }
-}
-
 Describe 'Planned tooling results' {
     BeforeEach {
         $script:plan = @{
