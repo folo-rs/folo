@@ -124,6 +124,12 @@ validate-scripts:
 hack:
     cargo hack check {{ target_package }} --feature-powerset --locked
 
+# Checks dependency advisories, licenses, banned packages and sources using the
+# workspace-wide policy in deny.toml.
+[group('quality')]
+deny:
+    cargo deny --locked check
+
 # Offline compiler/type-catalog checks own Bicep semantics; no Azure authentication or deployment.
 # Ref: docs/build-and-tooling.md#bicep-validation.
 [group('quality')]
@@ -286,6 +292,7 @@ validate-local:
     just package="{{ package }}" test-docs
     just package="{{ package }}" docs
     just package="{{ package }}" docs-default-features
+    just deny
     just package="{{ package }}" machete
     just package="{{ package }}" default-features-check
     just package="{{ package }}" check-external-types

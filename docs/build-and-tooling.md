@@ -95,6 +95,8 @@ exclusions and the Gungraun runner/library and mdBook/preprocessor version pairi
 apply equally to binary and source installs.
 The cargo-audit invocation supplies its publisher's nested release-tag URL explicitly,
 because automatic discovery does not find those archives.
+`just deny` applies the dependency advisory, license, duplicate-version and source policy
+in `deny.toml`; it runs as part of `validate-local`.
 Cargo-sort uses crates.io source because the publisher's archive at the pinned release
 reports a different version; see [the upstream report](https://github.com/DevinR528/cargo-sort/issues/138).
 
