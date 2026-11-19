@@ -1,17 +1,16 @@
-//! Example: Export nm metrics to OpenTelemetry with console output.
+//! Example: Export nm metrics to OpenTelemetry in memory.
 //!
-//! This example demonstrates how to use `nm_otel` to export nm metrics
-//! to an OpenTelemetry console exporter.
+//! This example demonstrates how to use `nm_otel` with an in-memory OpenTelemetry exporter.
 //!
 //! The publisher periodically collects nm metrics and records OpenTelemetry
 //! instruments. The provider's reader independently exports those values.
 
+use std::error::Error;
 use std::time::Duration;
 
 use nm::{Event, Magnitude};
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use opentelemetry_stdout::MetricExporter;
+use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::Clock;
 use tokio::spawn;
 use tokio::time::sleep;
@@ -19,11 +18,11 @@ use tokio::time::sleep;
 /// Keeps the demonstration responsive while leaving several recordings per export.
 const NM_RECORDING_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Makes each console export contain multiple nm recordings.
+/// Makes each export contain multiple nm recordings.
 const OTEL_EXPORT_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Generates activity between successive nm recordings.
-const ACTIVITY_INTERVAL: Duration = Duration::from_millis(500);
+/// Allows the publisher enough time to collect the initial activity.
+const DEMO_DURATION: Duration = Duration::from_millis(2100);
 
 /// Spans the simulated response-time range and separates representative samples.
 const RESPONSE_TIME_BUCKETS_MS: &[Magnitude] = &[1, 5, 10, 50, 100, 500, 1000];
@@ -70,12 +69,13 @@ fn simulate_http_activity() {
 }
 
 #[tokio::main]
-async fn main() {
-    let exporter = MetricExporter::default();
-    let reader = PeriodicReader::builder(exporter)
+async fn main() -> Result<(), Box<dyn Error>> {
+    let exporter = InMemoryMetricExporter::default();
+    let reader = PeriodicReader::builder(exporter.clone())
         .with_interval(OTEL_EXPORT_INTERVAL)
         .build();
     let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
+    let publisher_provider = meter_provider.clone();
     let clock = Clock::new_tokio();
 
     simulate_http_activity();
@@ -84,23 +84,33 @@ async fn main() {
     println!();
     println!("nm collection and instrument recording interval: {NM_RECORDING_INTERVAL:?}.");
     println!("OpenTelemetry reader export interval: {OTEL_EXPORT_INTERVAL:?}.");
-    println!("Press Ctrl+C to exit.");
+    println!("The demonstration runs for {DEMO_DURATION:?} and then prints its collected export.");
     println!();
 
     let mut publisher = Publisher::builder()
-        .provider(meter_provider)
+        .provider(publisher_provider)
         .clock(clock)
         .interval(NM_RECORDING_INTERVAL)
         .build();
 
-    _ = spawn(async {
-        loop {
-            sleep(ACTIVITY_INTERVAL).await;
-            simulate_http_activity();
-        }
+    let publisher_task = spawn(async move {
+        publisher.publish_forever().await;
     });
 
-    publisher.publish_forever().await;
+    sleep(DEMO_DURATION).await;
+    publisher_task.abort();
+    _ = publisher_task.await;
+
+    meter_provider.force_flush()?;
+    let metrics = exporter.get_finished_metrics()?;
+    meter_provider.shutdown()?;
+
+    println!(
+        "Collected {} OpenTelemetry resource metric batches.",
+        metrics.len()
+    );
+
+    Ok(())
 }
 
 ::testing::set_allocator!();

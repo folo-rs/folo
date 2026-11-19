@@ -2,7 +2,7 @@
 name = "nm_otel"
 description = "OpenTelemetry bridge for nm metrics"
 publish = true
-version = "0.8.0"
+version = "0.8.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -28,8 +28,7 @@ nm_otel_impl = { workspace = true }
 # The user-facing examples create nm events and publish them through a configured
 # OpenTelemetry SDK provider.
 nm = { path = "../nm" }
-opentelemetry-stdout = { workspace = true, features = ["metrics"] }
-opentelemetry_sdk = { workspace = true, features = ["metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tick = { workspace = true, features = ["tokio", "test-util"] }

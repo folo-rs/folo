@@ -2,7 +2,7 @@
 name = "many_cpus_impl"
 description = "Implementation crate for many_cpus - do not reference directly"
 publish = true
-version = "2.4.27"
+version = "2.4.28"
 
 authors.workspace = true
 edition.workspace = true
@@ -19,9 +19,9 @@ all-features = true
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
 allowed_external_types = [
-    "heapless::vec::Vec",
     "nonempty::Iter",
     "nonempty::NonEmpty",
+    "smallvec::SmallVec",
     "windows::Win32::System::SystemInformation::GROUP_AFFINITY",
 ]
 
@@ -57,7 +57,6 @@ libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 folo_ffi = { workspace = true }
-heapless = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",

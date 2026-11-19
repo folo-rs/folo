@@ -715,8 +715,8 @@ impl BuildTargetPlatform {
     fn affinity_mask_to_processor_ids(
         &self,
         affinity: &GROUP_AFFINITY,
-    ) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
-        let mut result = heapless::Vec::new();
+    ) -> SmallVec<[ProcessorId; PROCESSOR_GROUP_MAX_SIZE]> {
+        let mut result = SmallVec::new();
 
         let group_index: ProcessorGroupIndex = affinity.Group;
 
@@ -738,7 +738,7 @@ impl BuildTargetPlatform {
 
             result.push(*meta.all_processor_ids.get(index_in_group as usize).expect(
                 "internal conflict between processor group metadata - expected ID not found",
-            )).expect("result could only be full if we somehow processed more than PROCESSOR_GROUP_MAX_SIZE processors, which is nonsense");
+            ));
         }
 
         result
@@ -826,7 +826,7 @@ impl BuildTargetPlatform {
     pub fn affinity_mask_to_processor_ids_for_bench(
         &self,
         mask: &GROUP_AFFINITY,
-    ) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
+    ) -> SmallVec<[ProcessorId; PROCESSOR_GROUP_MAX_SIZE]> {
         self.affinity_mask_to_processor_ids(mask)
     }
 
