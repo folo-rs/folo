@@ -5,8 +5,7 @@
 
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use opentelemetry_stdout::MetricExporter;
+use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::Clock;
 
 thread_local! {
@@ -15,7 +14,7 @@ thread_local! {
 
 #[tokio::main]
 async fn main() {
-    let exporter = MetricExporter::default();
+    let exporter = InMemoryMetricExporter::default();
     let reader = PeriodicReader::builder(exporter).build();
     let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
 

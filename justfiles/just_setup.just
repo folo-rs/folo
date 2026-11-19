@@ -35,7 +35,6 @@ install-tools:
         -PackageUrl '{ repo }/releases/download/cargo-audit/v{ version }/{ name }-{ target }-v{ version }.{ archive-format }'
     Install-CargoTool -Package @(
         "cargo-delta@$env:CARGO_DELTA_VERSION"
-        "cargo-deny@$env:CARGO_DENY_VERSION"
         "cargo-each@$env:CARGO_EACH_VERSION"
         "cargo-freeze-deps@$env:CARGO_FREEZE_DEPS_VERSION"
         "cargo-hack@$env:CARGO_HACK_VERSION"

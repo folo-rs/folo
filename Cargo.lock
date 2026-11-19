@@ -908,15 +908,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chrono"
-version = "0.4.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "chunked_transfer"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2660,11 +2651,10 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "nm",
  "nm_otel_impl",
- "opentelemetry-stdout",
  "opentelemetry_sdk",
  "static_assertions",
  "testing",
@@ -2674,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2833,17 +2823,6 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror",
-]
-
-[[package]]
-name = "opentelemetry-stdout"
-version = "0.33.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2afbc6661934787ce79bef1e35d0ffe9d62e945f07f664dc1283ce83292b908a"
-dependencies = [
- "chrono",
- "opentelemetry",
- "opentelemetry_sdk",
 ]
 
 [[package]]

@@ -1,7 +1,6 @@
-//! Example: Export nm metrics to OpenTelemetry with console output.
+//! Example: Export nm metrics to OpenTelemetry in memory.
 //!
-//! This example demonstrates how to use `nm_otel` to export nm metrics
-//! to an OpenTelemetry console exporter.
+//! This example demonstrates how to use `nm_otel` with an in-memory OpenTelemetry exporter.
 //!
 //! The publisher periodically collects nm metrics and records OpenTelemetry
 //! instruments. The provider's reader independently exports those values.
@@ -10,8 +9,7 @@ use std::time::Duration;
 
 use nm::{Event, Magnitude};
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use opentelemetry_stdout::MetricExporter;
+use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::Clock;
 use tokio::spawn;
 use tokio::time::sleep;
@@ -71,7 +69,7 @@ fn simulate_http_activity() {
 
 #[tokio::main]
 async fn main() {
-    let exporter = MetricExporter::default();
+    let exporter = InMemoryMetricExporter::default();
     let reader = PeriodicReader::builder(exporter)
         .with_interval(OTEL_EXPORT_INTERVAL)
         .build();
