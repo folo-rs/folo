@@ -1,6 +1,7 @@
 mod admission;
 mod eager;
 mod inner;
+mod scaling;
 mod worker_loop;
 
 pub(crate) use inner::*;

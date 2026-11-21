@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use event_listener::Event;
@@ -12,6 +12,10 @@ use many_cpus::ProcessorSet;
 use plurality::MultiPool;
 
 use crate::ErasedTaskHandle;
+
+pub(crate) const GROWTH_IDLE: u8 = 0;
+pub(crate) const GROWTH_RUNNING: u8 = 1;
+pub(crate) const GROWTH_PENDING: u8 = 2;
 
 /// Everything a group's worker threads share: the work they draw from, the storage that
 /// work lives in, and the signals that tell them to wake up or stop.
@@ -33,6 +37,12 @@ pub(crate) struct WorkerGroup {
 
     /// Published only after every worker acknowledges affinity, or startup fails permanently.
     pub(crate) startup: OnceLock<Result<(), ()>>,
+
+    /// Used only by scaling pools; fixed pools do not update these counters.
+    pub(crate) worker_count: AtomicU32,
+    pub(crate) busy_workers: AtomicU32,
+    pub(crate) growth_state: AtomicU8,
+    pub(crate) outstanding_tasks: AtomicUsize,
 
     /// The selected/admitted shared-worker mask. Workers clone it only when its revision changes.
     pub(crate) affinity: Mutex<Option<Arc<ProcessorSet>>>,
@@ -63,6 +73,10 @@ impl WorkerGroup {
             wake_event: Event::new(),
             shutdown_flag: AtomicBool::new(false),
             startup: OnceLock::new(),
+            worker_count: AtomicU32::new(0),
+            busy_workers: AtomicU32::new(0),
+            growth_state: AtomicU8::new(GROWTH_IDLE),
+            outstanding_tasks: AtomicUsize::new(0),
             affinity: Mutex::new(None),
             affinity_revision: AtomicUsize::new(0),
             task_pool: Mutex::new(MultiPool::new()),

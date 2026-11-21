@@ -17,7 +17,7 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use testing::DefaultAllocator;
 use threadpool::ThreadPool;
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::{Pool, ScalingPolicy, ScalingState, WorkerPolicy};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
@@ -56,6 +56,15 @@ fn simulate_work() -> u32 {
             .wrapping_add(LCG_INCREMENT);
     }
     value
+}
+
+/// Keeps actual concurrency identical while exercising optional growth checks below the ceiling.
+struct OneWorker;
+
+impl ScalingPolicy for OneWorker {
+    fn start_worker(&self, state: &ScalingState) -> bool {
+        state.workers() == 0
+    }
 }
 
 /// Shares affinity and measurement sessions across initialization and dispatch comparisons.
@@ -642,6 +651,36 @@ fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &Tim
                 });
             });
         }
+    }
+    // Warm each one-worker pool outside measurement. The below-ceiling policy refuses further
+    // workers, keeping task execution and placement equal across all three scheduling paths.
+    for (name, maximum, scaling) in [
+        ("scaling/fixed", nz!(1_u32), false),
+        ("scaling/at_ceiling", nz!(1_u32), true),
+        ("scaling/below_ceiling", nz!(2_u32), true),
+    ] {
+        let allocation = allocs.operation(format!("vicinal/policy_dispatch/{name}"));
+        let time = times.operation(format!("vicinal/policy_dispatch/{name}"));
+        group.bench_function(name, |b| {
+            let builder = Pool::builder().worker_policy(WorkerPolicy::per_system(maximum));
+            let pool = if scaling {
+                builder.scaling_policy(OneWorker).build()
+            } else {
+                builder.build()
+            };
+            let scheduler = pool.scheduler();
+            block_on(scheduler.spawn(|| {})).unwrap();
+
+            b.iter_custom(|iterations| {
+                let _allocations = allocation.measure_process().iterations(iterations);
+                let _time = time.measure_process().iterations(iterations);
+                let start = Instant::now();
+                for _ in 0..iterations {
+                    black_box(block_on(scheduler.spawn(|| black_box(simulate_work()))).unwrap());
+                }
+                start.elapsed()
+            });
+        });
     }
     group.finish();
 }

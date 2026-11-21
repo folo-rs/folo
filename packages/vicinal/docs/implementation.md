@@ -82,6 +82,38 @@ therefore runs without any group-state lock held.
 Each enqueue wakes an additional sleeping worker: notification coalescing must not leave
 idle workers asleep while an already notified worker enters a blocking task.
 
+### Optional growth admission
+
+The scaling path is separate from fixed-count startup. Fixed pools do not update scaling
+counters or invoke policies. Scaling pools track outstanding tasks, busy workers and reserved
+worker capacity with group-local atomics. Outstanding demand is published under the existing
+queue lock before a task can be dequeued. Completion releases demand before publishing idle
+capacity. Saturation checks require neither an additional queue lock nor an allocation.
+Once a group reaches its immutable ceiling, later tasks bypass demand and busy-counter updates.
+Already tracked tasks release their own counts on completion, but no later decision reads them:
+workers never retire, so reaching the ceiling permanently disables growth for that group.
+
+A group-local nonblocking state machine serializes policy decisions without holding queue or
+registration locks across application code. Concurrent callers mark a pending decision instead
+of waiting; the current owner processes that changed demand before releasing ownership. Scaling
+demand and busy counters use one sequentially consistent order so the submission and worker
+checks cannot miss each other's publications. Approval is rechecked under worker registration
+before reserving one slot. The reservation counts toward the ceiling while initialization is in
+progress. Startup shares the fixed path's affinity acknowledgment, initializer, failure handling
+and retained join handles. New workers use the latest group mask.
+
+Growth is checked on submission and at the transition into busy execution. The latter handles
+work queued during startup without introducing polling or callbacks on completion. A failed
+growth startup closes admission, then uses the pool-wide poison path after releasing worker
+registration so every queue is drained before the original panic resumes. Eager scaling
+construction validates and seeds the same membership masks as fixed construction but creates no
+workers. Policy invocation has no dedicated unwind boundary; callbacks must not panic or change
+the calling thread's affinity.
+The `vicinal/policy_dispatch/scaling` Criterion cases compare fixed scheduling, scaling at
+the ceiling and scaling below the ceiling with the same actual one-worker capacity. Startup
+is outside measurement. The below-ceiling callback refuses additional workers so differences
+reflect scheduling and growth-check costs rather than extra parallelism.
+
 Cold startup, shared worker membership expansion and handle registration share a pool-level lock
 with the shutdown transition. This lock is absent from submissions made on known processors.
 Task allocation precedes the cold transaction, so another processor cannot overtake the

@@ -11,6 +11,8 @@ use crate::{GroupId, SubmissionTarget};
 /// to a destination, or during construction with [`PoolBuilder::eager`][crate::PoolBuilder::eager],
 /// and persist until shutdown. Counts are not limited by the number of processors, allowing
 /// oversubscription for blocking work.
+/// With [`PoolBuilder::scaling_policy`][crate::PoolBuilder::scaling_policy], counts instead
+/// limit one-worker-at-a-time growth; construction starts no workers, including eager builds.
 ///
 /// Locality requires task code to preserve worker affinity. It does not bind allocations,
 /// move data or guarantee cache hits. Policies do not enforce processor-time quotas.
@@ -21,9 +23,10 @@ pub struct WorkerPolicy {
 }
 
 impl WorkerPolicy {
-    /// Uses a fixed number of workers pinned to each active processor.
+    /// Configures the worker count for each active processor.
     ///
     /// Each task is routed to the logical processor sampled during its submission.
+    /// The count is fixed unless [`crate::PoolBuilder::scaling_policy`] enables bounded growth.
     #[must_use]
     pub fn per_processor(count: NonZero<u32>) -> Self {
         Self {
@@ -32,13 +35,16 @@ impl WorkerPolicy {
         }
     }
 
-    /// Uses a fixed worker count per memory region.
+    /// Configures the worker count per memory region.
+    ///
+    /// The count is fixed unless [`crate::PoolBuilder::scaling_policy`] enables bounded growth.
     ///
     /// Each task is routed to its submitting processor's [`many_cpus::MemoryRegionId`].
     /// Workers may run only on processors in that region selected by
     /// [`PoolBuilder::eager`][crate::PoolBuilder::eager] or that have submitted accepted work.
-    /// Without eager selection, the first submission starts the workers on its processor.
-    /// New submitting processors expand the permitted set without adding workers.
+    /// Without eager selection, the first submission starts the fixed worker count on its
+    /// processor. With a scaling policy, it only requests the first worker. New submitting
+    /// processors expand the permitted set without adding workers.
     ///
     /// Workers refresh affinity at task boundaries. A running task may finish with the
     /// previous narrower set and may migrate within that set. Membership is cumulative:
@@ -73,13 +79,16 @@ impl WorkerPolicy {
         }
     }
 
-    /// Uses a fixed worker count.
+    /// Configures the system-wide worker count.
+    ///
+    /// The count is fixed unless [`crate::PoolBuilder::scaling_policy`] enables bounded growth.
     ///
     /// Workers may run only on processors selected by
     /// [`PoolBuilder::eager`][crate::PoolBuilder::eager] or that have submitted accepted work,
     /// regardless of memory region. Without eager selection, the first submission starts the
-    /// workers on its processor; new submitting processors expand affinity without adding workers.
-    /// Separate pools have independent worker counts and permitted processor sets.
+    /// fixed worker count on its processor; with a scaling policy, it only requests the first
+    /// worker. New submitting processors expand affinity without adding workers. Separate pools
+    /// have independent worker counts and permitted processor sets.
     ///
     /// Workers refresh affinity at task boundaries. A running task may finish with the
     /// previous narrower set and may migrate within that set, including across memory regions.
