@@ -72,6 +72,7 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             }));
 
             assert_eq!(spawned, WORKERS);
+            inner.runtime.wait_for_workers();
             let worker_count = inner.runtime.active_workers();
             assert_eq!(worker_count, 0);
 

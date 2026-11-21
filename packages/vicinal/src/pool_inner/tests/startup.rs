@@ -206,6 +206,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
 
         assert_eq!(attempts, 2);
         assert_eq!(inner.worker_handles.lock().unwrap().len(), 1);
+        inner.runtime.wait_for_workers();
         assert_eq!(inner.runtime.active_workers(), 0);
         assert_eq!(state.startup.get(), Some(&Err(())));
 

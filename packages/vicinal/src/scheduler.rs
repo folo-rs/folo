@@ -229,6 +229,10 @@ impl Scheduler {
                 pool_id = self.inner.pool_id,
                 "abandoned task during shutdown"
             );
+            drop(
+                task.take()
+                    .expect("shutdown submission consumes its task once"),
+            );
             return;
         }
 
@@ -364,6 +368,7 @@ mod tests {
 
         assert!(pool.inner.runtime.is_poisoned());
         assert!(pool.inner.runtime.is_shutdown());
+        pool.inner.runtime.wait_for_workers();
         assert_eq!(pool.inner.runtime.active_workers(), 0);
     }
 

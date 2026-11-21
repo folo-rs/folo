@@ -124,17 +124,16 @@ impl WorkerGroup {
     /// by the pool. The policy remains responsible for thread creation and for applying
     /// the intended affinity before calling this method.
     pub fn execute_worker(&self) {
-        self.execute_worker_with(
+        if !self.runtime.begin_worker() {
+            return;
+        }
+        self.run_worker(
             ProcessorSet::pin_current_thread_to,
             self.state.affinity_revision.load(Ordering::Acquire),
         );
     }
 
-    fn execute_worker_with(&self, pin: impl FnMut(&ProcessorSet) + Send, applied_revision: usize) {
-        if !self.runtime.begin_worker() {
-            return;
-        }
-
+    fn run_worker(&self, pin: impl FnMut(&ProcessorSet) + Send, applied_revision: usize) {
         let mut initialized = false;
         let mut pin = pin;
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -320,7 +319,7 @@ impl WorkerGroup {
             }
             if self.runtime.is_poisoned() {
                 drop(progress);
-                self.runtime.resume_failure();
+                panic!("worker pool failed before readiness");
             }
             if self.runtime.is_shutdown() {
                 return;
@@ -341,6 +340,20 @@ impl WorkerGroup {
             .startup
             .set(Ok(()))
             .expect("a worker group starts once");
+    }
+
+    /// Waits until `count` workers complete their initialization callbacks.
+    ///
+    /// Custom eager policies call this after spawning their workers. The count is a
+    /// completion target; this method does not create workers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pool fails before the requested workers initialize.
+    #[must_use]
+    pub fn wait_until_initialized(&self, count: NonZero<usize>) -> &Self {
+        self.wait_for_workers(count.get(), true);
+        self
     }
 
     #[cfg(test)]
@@ -385,12 +398,16 @@ impl WorkerGroup {
                 let affinity = affinity.clone();
                 let pin = pin.clone();
                 move || {
+                    if !group.runtime.begin_worker() {
+                        return;
+                    }
                     let result = panic::catch_unwind(AssertUnwindSafe(|| pin(&affinity)));
                     if let Err(payload) = result {
                         group.runtime.fail(payload);
+                        group.runtime.end_worker();
                         return;
                     }
-                    group.execute_worker_with(pin, applied_revision);
+                    group.run_worker(pin, applied_revision);
                 }
             });
             let builder = thread::Builder::new().name(format!(

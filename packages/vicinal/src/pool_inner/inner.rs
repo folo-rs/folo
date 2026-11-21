@@ -14,7 +14,7 @@ use tracing::error;
 
 use crate::{
     ErasedTaskHandle, NEVER_POISONED, PoolRuntime, ThreadInit, WorkerGroups, WorkerPolicy,
-    WorkerPolicyContext, discard_panic, extract_panic_message,
+    WorkerPolicyContext, discard_panic, extract_panic_message, validate_eager_processors,
 };
 #[cfg(test)]
 use crate::{SubmissionTarget, WorkerEntry};
@@ -47,6 +47,9 @@ impl PoolInner {
     ) -> Self {
         let runtime = PoolRuntime::new(pool_id, pool_name.clone(), thread_init);
         let groups = WorkerGroups::new(Arc::clone(&runtime));
+        if let Some(processors) = eager {
+            validate_eager_processors(hardware, processors);
+        }
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             policy.prepare(WorkerPolicyContext::new(
                 hardware, eager, &groups, &pool_name,

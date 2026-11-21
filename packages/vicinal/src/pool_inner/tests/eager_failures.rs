@@ -5,7 +5,7 @@ use std::{panic, thread};
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
-use testing::with_watchdog;
+use testing::{assert_panics, with_watchdog};
 
 use crate::{Pool, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext};
 
@@ -15,6 +15,26 @@ struct StartupFailurePolicy {
     group: OnceLock<WorkerGroupId>,
     worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
     ready: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+struct EagerCustomPolicy {
+    group: OnceLock<WorkerGroupId>,
+}
+
+impl WorkerPolicy for EagerCustomPolicy {
+    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+        let group = context.groups().add();
+        self.group.set(group.id()).unwrap();
+        thread::spawn({
+            let group = group.clone();
+            move || group.execute_worker()
+        });
+        group.wait_until_initialized(std::num::NonZero::new(1).unwrap());
+    }
+
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        *self.group.get().unwrap()
+    }
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
@@ -77,5 +97,43 @@ fn eager_initializer_failure_reaches_builder() {
         .unwrap_err();
 
         assert!(payload.is::<InitializationFailure>());
+    });
+}
+
+/// A custom policy receives eager selections only after pool-level provenance validation.
+#[test]
+fn custom_policy_rejects_foreign_eager_hardware() {
+    let first = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+    let foreign = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+
+    assert_panics(|| {
+        _ = Pool::builder()
+            .hardware(first)
+            .eager(foreign.all_processors())
+            .worker_policy(StartupFailurePolicy {
+                group: OnceLock::new(),
+                worker_observer: Arc::new(Mutex::new(None)),
+                ready: Mutex::new(None),
+            })
+            .build();
+    });
+}
+
+#[test]
+fn custom_policy_can_wait_for_eager_initialization() {
+    with_watchdog(|| {
+        let initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pool = Pool::builder()
+            .worker_policy(EagerCustomPolicy {
+                group: OnceLock::new(),
+            })
+            .thread_init({
+                let initialized = Arc::clone(&initialized);
+                move || initialized.store(true, std::sync::atomic::Ordering::Release)
+            })
+            .build();
+
+        assert!(initialized.load(std::sync::atomic::Ordering::Acquire));
+        drop(pool);
     });
 }

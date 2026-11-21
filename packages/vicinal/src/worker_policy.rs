@@ -62,7 +62,9 @@ pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// The default implementation does nothing. If [`WorkerPolicyContext::eager`] is
     /// present, a policy that honors eager construction creates and initializes the
     /// corresponding workers before returning. The method may clone the supplied
-    /// [`WorkerGroups`] to support later asynchronous group creation.
+    /// [`WorkerGroups`] to support later asynchronous group creation. After spawning
+    /// its eager workers, a policy can call [`WorkerGroup::wait_until_initialized`] for
+    /// each group to wait for their initialization callbacks.
     fn prepare(&mut self, _context: WorkerPolicyContext<'_>) {}
 
     /// Selects the group for one submitted task.
@@ -178,6 +180,20 @@ pub struct DefaultWorkerPolicy {
     kind: PolicyKind,
     count: NonZero<u32>,
     prepared: Option<PreparedPolicy>,
+}
+
+pub(crate) fn validate_eager_processors(hardware: &SystemHardware, processors: &ProcessorSet) {
+    let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
+    let backing_processors = processors
+        .to_builder()
+        .take_all()
+        .expect("a nonempty selection retains candidates on its backing hardware");
+    assert!(
+        processors
+            .iter()
+            .chain(backing_processors.iter())
+            .all(|processor| eligible.contains(processor))
+    );
 }
 
 impl DefaultWorkerPolicy {
@@ -686,17 +702,7 @@ fn eager_groups(
     policy: PolicyKind,
     processors: ProcessorSet,
 ) -> Vec<(GroupId, ProcessorSet)> {
-    let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
-    let backing_processors = processors
-        .to_builder()
-        .take_all()
-        .expect("a nonempty selection retains candidates on its backing hardware");
-    assert!(
-        processors
-            .iter()
-            .chain(backing_processors.iter())
-            .all(|processor| eligible.contains(processor))
-    );
+    validate_eager_processors(hardware, &processors);
 
     match policy {
         PolicyKind::Processor => {
