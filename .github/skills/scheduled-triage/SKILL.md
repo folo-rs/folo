@@ -1,6 +1,6 @@
 ---
 name: scheduled-triage
-description: Triage only actual scheduled validation run failures from the repository's Deep validation workflow on main, including manual dispatches of that workflow, into actionable GitHub issues. Not a general-purpose issue or CI triage skill; failures of other workflows, such as benchmark history or releases, are out of scope. Verify the reported workflow run before claiming issues or applying scheduled-finding.
+description: Use only for a verified failure from `.github/workflows/deep-validation.yml` on `main`, including scheduled and manual dispatches. Do not invoke for generic issue or workflow-failure triage, unverified provenance, standalone PR/push CI, benchmark-history or release failures, or other workflows. Turn verified failures into actionable GitHub issues.
 ---
 
 # Scope
@@ -13,9 +13,13 @@ validation, benchmark history, releases and local failures are not. Another
 workflow running on a schedule does not make it scheduled validation.
 
 A generic request to "triage this issue" does not by itself establish applicability.
-Verify the reported run before using this skill's ownership, labeling or closure
-rules. Ordinary triage, when requested, is a separate task and must not import the
-scheduled-remediation conventions.
+Neither does a generic request to triage a workflow failure. Do not select this
+skill for either kind of request unless the target is already verified as an
+unsuccessful run of `.github/workflows/deep-validation.yml` on `main`, triggered
+by its schedule or manual dispatch. If provenance is unverified, leave this
+specialized skill unselected; ordinary triage is a separate task and must not
+import the scheduled-remediation conventions. Verify the linked run and attempt
+before using its ownership, labeling or closure rules.
 
 Run in the personally funded Local Copilot App session selected by the operator.
 Read repository instructions and [scheduled validation](../../../docs/scheduled-validation.md).
