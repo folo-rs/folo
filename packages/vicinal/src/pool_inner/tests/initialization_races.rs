@@ -53,7 +53,7 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             let mut spawned = 0_u32;
 
             // Admission may observe the concurrent failure or finish before poisoning is published.
-            let _submission = panic::catch_unwind(AssertUnwindSafe(|| {
+            let submission = panic::catch_unwind(AssertUnwindSafe(|| {
                 inner.enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
                     inner.start_workers(
                         target,
@@ -76,7 +76,15 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             let worker_count = inner.runtime.active_workers();
             assert_eq!(worker_count, 0);
 
-            drop(pool);
+            if submission.is_err() {
+                // The startup call consumed and propagated the original infrastructure
+                // failure, leaving clean pool destruction to perform terminal cleanup.
+                drop(pool);
+            } else {
+                // Startup reached readiness before failure publication, so the original
+                // retained failure is propagated by pool destruction instead.
+                assert_panics(|| drop(pool));
+            }
             let initialized = initialized.load(Ordering::Relaxed);
             assert!((1..=WORKERS as usize).contains(&initialized));
             assert_eq!(inner.runtime.active_workers(), 0);
