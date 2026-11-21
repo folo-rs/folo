@@ -352,6 +352,10 @@ impl WorkerGroup {
     /// Panics if the pool fails before the requested workers initialize.
     pub fn wait_until_initialized(&self, count: NonZero<usize>) {
         self.wait_for_workers(count.get(), true);
+        assert!(
+            self.state.initialized_workers.load(Ordering::Acquire) >= count.get(),
+            "worker pool shut down before the requested workers initialized"
+        );
     }
 
     #[cfg(test)]
