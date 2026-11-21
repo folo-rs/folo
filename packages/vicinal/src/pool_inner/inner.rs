@@ -5,8 +5,6 @@ use std::collections::VecDeque;
 #[cfg(test)]
 use std::io;
 use std::panic::{self, AssertUnwindSafe};
-#[cfg(test)]
-use std::sync::Mutex as WorkerHandleMutex;
 use std::sync::{Arc, Mutex};
 use std::thread::Result as ThreadResult;
 use std::{fmt, thread};
@@ -33,7 +31,7 @@ pub(crate) struct PoolInner {
     #[cfg(test)]
     pub(crate) hardware: SystemHardware,
     #[cfg(test)]
-    pub(crate) worker_handles: WorkerHandleMutex<Vec<thread::JoinHandle<()>>>,
+    pub(crate) worker_handles: Mutex<Vec<thread::JoinHandle<()>>>,
     pub(crate) policy: Box<dyn WorkerPolicy>,
     pub(crate) runtime: Arc<PoolRuntime>,
 }
@@ -70,7 +68,7 @@ impl PoolInner {
             #[cfg(test)]
             hardware: hardware.clone(),
             #[cfg(test)]
-            worker_handles: WorkerHandleMutex::new(Vec::new()),
+            worker_handles: Mutex::new(Vec::new()),
             policy,
             runtime,
         }
@@ -142,7 +140,7 @@ impl PoolInner {
     }
 
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn join_all_workers(&self) {
+    pub(crate) fn shutdown_and_wait_for_workers(&self) {
         self.runtime.stop_workers();
 
         let mut failure = self.runtime.take_failure().map_or(Ok(()), |payload| {

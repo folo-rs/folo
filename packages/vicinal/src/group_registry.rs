@@ -1,11 +1,14 @@
 //! Dynamic registry and copyable routing identities for worker groups.
 
+use std::any::type_name;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{GroupId, GroupState, NEVER_POISONED, PoolRuntime, WorkerGroup, WorkerGroupId};
 
+// Identity values need uniqueness only; the registry-specific validation supplies the
+// synchronization relationship.
 static NEXT_REGISTRY_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A cloneable collection of worker groups owned by one pool.
@@ -47,7 +50,6 @@ impl WorkerGroups {
 
     fn add_inner(&self, destination: Option<GroupId>) -> WorkerGroup {
         let group = WorkerGroup::new(Arc::clone(&self.inner.runtime), destination);
-        self.inner.runtime.register_group(group.state());
 
         let mut groups = self.inner.groups.lock().expect(NEVER_POISONED);
         groups.push(group.clone());
@@ -152,7 +154,7 @@ impl WorkerGroups {
 impl fmt::Debug for WorkerGroups {
     #[cfg_attr(coverage_nightly, coverage(off))]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WorkerGroups")
+        f.debug_struct(type_name::<Self>())
             .field("len", &self.len())
             .finish_non_exhaustive()
     }

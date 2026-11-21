@@ -1,9 +1,10 @@
+use std::any::type_name;
 use std::collections::BTreeSet;
-use std::iter;
 use std::num::NonZero;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{fmt, iter};
 
 use many_cpus::{MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware};
 
@@ -38,8 +39,10 @@ use crate::{GroupId, NEVER_POISONED, SubmissionTarget, WorkerGroup, WorkerGroupI
 ///     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
 ///         *self.group.get_or_init(|| {
 ///             let group = groups.add();
-///             let worker = group.clone();
-///             thread::spawn(move || worker.execute_worker());
+///             thread::spawn({
+///                 let group = group.clone();
+///                 move || group.execute_worker()
+///             });
 ///             group.id()
 ///         })
 ///     }
@@ -98,12 +101,27 @@ pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
 }
 
 /// Final pool configuration made available while a policy is prepared.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct WorkerPolicyContext<'a> {
     hardware: &'a SystemHardware,
     eager: Option<&'a ProcessorSet>,
     groups: &'a WorkerGroups,
     pool_name: &'a str,
+}
+
+impl fmt::Debug for WorkerPolicyContext<'_> {
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("pool_name", &self.pool_name)
+            .field("eager_processor_count", &self.eager.map(ProcessorSet::len))
+            .field("worker_group_count", &self.groups.len())
+            .field(
+                "hardware_processor_count",
+                &self.hardware.all_processors().len(),
+            )
+            .finish()
+    }
 }
 
 impl WorkerPolicyContext<'_> {
@@ -225,10 +243,6 @@ impl DefaultWorkerPolicy {
 
 impl Clone for DefaultWorkerPolicy {
     fn clone(&self) -> Self {
-        assert!(
-            self.prepared.is_none(),
-            "prepared worker policies cannot be cloned between pools"
-        );
         Self::new(self.kind, self.count)
     }
 }
@@ -348,6 +362,7 @@ impl PreparedPolicy {
         prepared
     }
 
+    /// Seeds all eager destinations before starting and waiting for their workers.
     fn prepare_eager(
         &self,
         registry: &WorkerGroups,
@@ -434,6 +449,7 @@ impl PreparedPolicy {
         }
     }
 
+    /// Creates a lazily selected destination and starts its full default worker count.
     fn create_group(
         &self,
         registry: &WorkerGroups,
@@ -475,17 +491,25 @@ impl PreparedPolicy {
         let (_, member) = members
             .get(member)
             .expect("binary search identifies an eligible processor");
-        if member.swap(true, Ordering::AcqRel) {
+        if member.load(Ordering::Acquire) {
             return;
         }
 
         let state = registry.resolve(id);
+        #[cfg(test)]
+        if let Some(before_lock) = state.before_membership_lock.get() {
+            before_lock();
+        }
         let mut current = state.affinity.write().expect(NEVER_POISONED);
+        if member.load(Ordering::Acquire) {
+            return;
+        }
         if current.as_ref().is_some_and(|current| {
             current
                 .iter()
                 .any(|processor| processor.id() == target.processor)
         }) {
+            member.store(true, Ordering::Release);
             return;
         }
 
@@ -498,12 +522,20 @@ impl PreparedPolicy {
             .to_builder()
             .filter(|processor| {
                 target.group.contains(processor)
-                    && membership(members, processor.id()).load(Ordering::Acquire)
+                    && (processor.id() == target.processor
+                        || membership(members, processor.id()).load(Ordering::Acquire))
             })
             .take_all()
             .expect("the sampled processor belongs to its selected destination");
         *current = Some(affinity);
         state.affinity_revision.fetch_add(1, Ordering::Release);
+        #[cfg(test)]
+        if let Some(before_publish) = state.before_membership_publish.get() {
+            before_publish();
+        }
+        // This Release publication is the readiness bit for the lock-free Acquire fast path:
+        // observing it certifies that the matching affinity mask and revision are present.
+        member.store(true, Ordering::Release);
         drop(current);
         state.wake_event.notify(usize::MAX);
     }
@@ -519,6 +551,7 @@ impl PreparedPolicy {
             .affinity_revision
             .fetch_add(1, Ordering::Release);
         for processor in affinity {
+            // The mask and revision above are published before this readiness flag.
             membership(self.members(), processor.id()).store(true, Ordering::Release);
         }
     }
@@ -622,9 +655,9 @@ impl PreparedPolicy {
     }
 }
 
-impl std::fmt::Debug for PreparedPolicy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("PreparedPolicy")
+impl fmt::Debug for PreparedPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(type_name::<Self>())
     }
 }
 
@@ -689,4 +722,20 @@ fn eager_groups(
             .collect(),
         PolicyKind::System => vec![(GroupId::System, processors)],
     }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(
+        WorkerPolicyContext<'static>: Copy,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 }

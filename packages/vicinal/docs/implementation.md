@@ -18,6 +18,11 @@ reference-count changes happen only through explicit `WorkerGroups` or `WorkerGr
 Group addition is serialized and cold. The registry never relocates or removes a live group.
 The public APIs do not expose mutable queue or registry state.
 
+The runtime separately retains a strong snapshot of each group state for terminal signaling
+and failure cleanup. Group state does not retain the runtime, so these registrations cannot
+form a strong cycle. Cleanup may clone registered group-state handles, but ordinary task
+routing resolves IDs to registry-owned state without changing a reference count.
+
 The default configuration uses two workers per processor, an internal tuning choice rather
 than a numeric API promise. Thread names use `p` or `r` before the destination ID to identify
 the policy compactly: `{pool_name}-p{processor_id}-{worker_index}` or

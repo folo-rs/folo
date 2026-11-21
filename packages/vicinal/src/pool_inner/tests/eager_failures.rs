@@ -1,23 +1,30 @@
-use std::sync::OnceLock;
+use std::any::Any;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::{panic, thread};
 
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
-use testing::{assert_panics, with_watchdog};
+use testing::with_watchdog;
 
-use crate::{Pool, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext};
+use crate::{Pool, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext};
+
+struct PreparationFailure;
 
 struct StartupFailurePolicy {
     group: OnceLock<WorkerGroupId>,
+    worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
+    ready: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
     fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
+        *self.worker_observer.lock().unwrap() = Some(group.clone());
         thread::spawn(move || group.execute_worker());
-        panic!("injected eager policy preparation failure");
+        self.ready.lock().unwrap().take().unwrap().recv().unwrap();
+        panic::panic_any(PreparationFailure);
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
@@ -28,13 +35,27 @@ impl WorkerPolicy for StartupFailurePolicy {
 #[test]
 fn policy_preparation_failure_stops_started_workers() {
     with_watchdog(|| {
-        assert_panics(|| {
+        let observer = Arc::new(Mutex::new(None));
+        let (ready, worker_ready) = mpsc::channel();
+        let payload: Box<dyn Any + Send> = panic::catch_unwind(|| {
             _ = Pool::builder()
                 .worker_policy(StartupFailurePolicy {
                     group: OnceLock::new(),
+                    worker_observer: Arc::clone(&observer),
+                    ready: Mutex::new(Some(worker_ready)),
                 })
+                .thread_init(move || ready.send(()).unwrap())
                 .build();
-        });
+        })
+        .unwrap_err();
+
+        assert!(payload.is::<PreparationFailure>());
+        let group = observer
+            .lock()
+            .unwrap()
+            .take()
+            .expect("preparation retained the created group for observation");
+        assert!(group.is_empty());
     });
 }
 

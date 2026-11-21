@@ -119,8 +119,10 @@ hardware instance. The setter starts no workers. `build()` starts the configured
 every selected processor, represented region or the system, according to the worker policy.
 It waits for initial affinity and every configured `thread_init` callback to complete.
 Initialization effects are visible when construction returns, and the calling thread's affinity
-remains unchanged. Startup failure stops and waits for participating workers before construction
-panics.
+remains unchanged. For a custom policy, eager readiness means whichever workers its
+`prepare()` implementation creates and initializes before returning. Startup failure stops and
+waits for participating workers before construction panics; it does not join policy-owned
+operating-system threads after they leave `execute_worker()`.
 
 Callbacks run once per worker, may overlap, and must preserve affinity. They must not wait for
 same-pool work, shut down their pool or depend on eager construction returning. In particular,

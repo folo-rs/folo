@@ -32,7 +32,9 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// # Lifetime
 ///
 /// Dropping the pool stops accepting work, cancels queued tasks and waits for executing tasks
-/// and worker threads to finish. Cancelled joined tasks return a
+/// and worker participation in [`WorkerGroup::execute_worker()`][crate::WorkerGroup::execute_worker]
+/// to finish. Policy-owned operating-system threads may perform cleanup after leaving that
+/// method; the pool does not join them. Cancelled joined tasks return a
 /// [`TaskError`][crate::TaskError] that retains the original body for recovery;
 /// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
 /// submissions after clean shutdown as well.
@@ -94,7 +96,7 @@ impl Default for Pool {
 impl Drop for Pool {
     #[cfg_attr(test, mutants::skip)] // Removing shutdown strands sleeping workers.
     fn drop(&mut self) {
-        self.inner.join_all_workers();
+        self.inner.shutdown_and_wait_for_workers();
     }
 }
 
@@ -241,7 +243,8 @@ impl PoolBuilder {
     /// # Panics
     ///
     /// Panics if eager worker creation, affinity setup or initialization fails.
-    /// Started workers are joined before the panic propagates.
+    /// Participating workers leave the worker loop before the panic propagates. The pool does
+    /// not join policy-owned operating-system threads after they leave `execute_worker()`.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Omitting eager startup can strand initializer coordination.
     pub fn build(self) -> Pool {

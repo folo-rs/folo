@@ -353,6 +353,21 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
     }
 }
 
+/// A rejected group registration must not poison the terminal registry mutex.
+#[test]
+fn post_failure_group_registration_does_not_poison_cleanup() {
+    let pool = Pool::builder().build();
+    let inner = Arc::clone(&pool.inner);
+    inner.stop_admission();
+
+    assert_panics(|| {
+        _ = inner.groups.add();
+    });
+    drop(pool);
+
+    assert_eq!(inner.runtime.active_workers(), 0);
+}
+
 /// Clean shutdown cannot add system members, retain new work or restart the shared group.
 #[test]
 fn system_post_shutdown_submissions_do_not_expand_or_restart() {

@@ -43,6 +43,7 @@ fn main() {
     second_arrival
         .recv()
         .expect("the additional worker enters the queued task");
+    // `second_arrival` completes after the second worker increments the counter above.
     assert_eq!(worker_count.load(Ordering::Acquire), 2);
 
     release_first
@@ -90,11 +91,16 @@ impl WorkerPolicy for GrowingPolicy {
 }
 
 fn spawn_worker(group: &WorkerGroup, worker_count: &Arc<AtomicUsize>) {
-    let group = group.clone();
-    let worker_count = Arc::clone(worker_count);
-    _ = thread::spawn(move || {
-        worker_count.fetch_add(1, Ordering::Release);
-        group.execute_worker();
+    _ = thread::spawn({
+        let group = group.clone();
+        let worker_count = Arc::clone(worker_count);
+        move || {
+            // The task handshakes below establish that this increment happened before the
+            // assertion. Release/Acquire only describes the counter update; it is not a
+            // substitute for waiting for the worker to enter task execution.
+            worker_count.fetch_add(1, Ordering::Release);
+            group.execute_worker();
+        }
     });
 }
 

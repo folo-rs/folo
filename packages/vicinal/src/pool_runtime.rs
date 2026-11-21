@@ -2,7 +2,6 @@
 
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
-use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
@@ -22,7 +21,7 @@ pub(crate) struct PoolRuntime {
     thread_init: Option<ThreadInit>,
     shutdown: AtomicBool,
     poisoned: AtomicBool,
-    groups: Mutex<Vec<NonNull<WorkerGroupState>>>,
+    groups: Mutex<Vec<Arc<WorkerGroupState>>>,
     workers: Mutex<WorkerLifecycle>,
     workers_changed: Condvar,
     failure: Mutex<Option<Box<dyn Any + Send>>>,
@@ -83,35 +82,22 @@ impl PoolRuntime {
         self.poisoned.load(Ordering::Acquire)
     }
 
-    pub(crate) fn register_group(&self, group: &WorkerGroupState) {
+    pub(crate) fn register_group(&self, group: &Arc<WorkerGroupState>) {
         let mut groups = self.groups.lock().expect(NEVER_POISONED);
-        assert!(
-            !self.is_poisoned(),
-            "worker groups cannot be added after pool failure"
-        );
+        if self.is_poisoned() {
+            drop(groups);
+            panic!("worker groups cannot be added after pool failure");
+        }
 
-        groups.push(NonNull::from(group));
-        group.mark_registered();
+        groups.push(Arc::clone(group));
         if self.is_shutdown() {
             group.signal_shutdown();
         }
     }
 
-    pub(crate) fn unregister_group(&self, group: &WorkerGroupState) {
-        if !group.take_registered() {
-            return;
-        }
-
-        let mut groups = self.groups.lock().expect(NEVER_POISONED);
-        let address = NonNull::from(group);
-        let index = groups
-            .iter()
-            .position(|candidate| *candidate == address)
-            .expect("every live worker group is registered with its pool");
-        groups.swap_remove(index);
-    }
-
     pub(crate) fn begin_worker(&self) -> bool {
+        // The worker mutex synchronizes participation with the shutdown waiter. Checking
+        // shutdown while holding it prevents a worker from entering after the last wait ends.
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         if self.is_shutdown() {
             return false;
@@ -125,6 +111,8 @@ impl PoolRuntime {
     }
 
     pub(crate) fn end_worker(&self) {
+        // Releases the shutdown participation barrier; every successful begin has one end.
+        // The notification can satisfy wait_for_workers only after failure cleanup completed.
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         workers.active = workers
             .active
@@ -134,20 +122,17 @@ impl PoolRuntime {
     }
 
     #[cfg_attr(test, mutants::skip)]
+    /// Publishes pool shutdown and wakes every registered group to leave its worker loop.
     pub(crate) fn stop_workers(&self) {
+        // Release publishes the pool-wide terminal transition before the per-group wakeups.
         let groups = self.groups.lock().expect(NEVER_POISONED);
         self.shutdown.store(true, Ordering::Release);
 
         for group in groups.iter() {
-            // Holding the group registry lock prevents group destruction while these
-            // addresses are borrowed.
-            // SAFETY: The group registry lock prevents unregistering and dropping this
-            // address for the entire borrow.
-            let group = unsafe { group.as_ref() };
             group.signal_shutdown();
             group.notify_initialization_failure();
             #[cfg(test)]
-            group.mark_startup_failed_if_started();
+            group.mark_startup_failed_if_started(self.is_poisoned());
         }
     }
 
@@ -157,6 +142,7 @@ impl PoolRuntime {
     }
 
     pub(crate) fn wait_for_workers(&self) {
+        // This is the pool-owned barrier, not a join of policy-owned OS threads.
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         while workers.active != 0 {
             workers = self.workers_changed.wait(workers).expect(NEVER_POISONED);
@@ -168,7 +154,14 @@ impl PoolRuntime {
         self.workers.lock().expect(NEVER_POISONED).active
     }
 
+    #[cfg(test)]
+    pub(crate) fn publish_shutdown_without_group_signals(&self) {
+        self.shutdown.store(true, Ordering::Release);
+    }
+
     pub(crate) fn fail(&self, payload: Box<dyn Any + Send>) {
+        // The first payload is retained under the mutex. Later cleanup failures are
+        // contained separately so they cannot replace the original infrastructure failure.
         {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
             if failure.is_none() {
@@ -192,13 +185,10 @@ impl PoolRuntime {
         self.drain_groups();
     }
 
+    /// Drains every registered queue outside the registry lock after failure publication.
     fn drain_groups(&self) {
         let groups = self.groups.lock().expect(NEVER_POISONED).clone();
         for group in groups {
-            // Registered groups remain alive through the pool that owns this runtime.
-            // SAFETY: The pool or an active worker owns every registered Arc group while
-            // failure cleanup runs, and the registered address is never relocated.
-            let group = unsafe { group.as_ref() };
             drain_queue(&group.urgent_queue);
             drain_queue(&group.regular_queue);
         }
@@ -218,14 +208,6 @@ impl PoolRuntime {
         self.failure.lock().expect(NEVER_POISONED).take()
     }
 }
-
-// SAFETY: The runtime stores stable addresses only while holding the registry's
-// group-lifetime lock. Each address remains allocated until its registration is
-// removed under that same lock.
-unsafe impl Send for PoolRuntime {}
-// SAFETY: Every shared state access is synchronized; raw pointers are dereferenced only
-// while their registration and group lifetime are protected.
-unsafe impl Sync for PoolRuntime {}
 
 struct WorkerLifecycle {
     active: usize,

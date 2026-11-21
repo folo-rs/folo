@@ -150,6 +150,46 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
     });
 }
 
+/// A shared worker applies expansion published while its initializer is blocked.
+#[test]
+fn shared_worker_refreshes_affinity_expanded_during_initialization() {
+    with_watchdog(|| {
+        let hardware = hardware();
+        pin(&hardware, 0);
+        let (entered, initializer_arrival) = mpsc::channel();
+        let (release, wait_for_release) = mpsc::channel();
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .thread_init({
+                let wait_for_release = Mutex::new(wait_for_release);
+                move || {
+                    entered.send(()).unwrap();
+                    wait_for_release.lock().unwrap().recv().unwrap();
+                }
+            })
+            .build();
+        let scheduler = pool.scheduler();
+
+        let first = scheduler.spawn({
+            let hardware = hardware.clone();
+            move || affinity(&hardware)
+        });
+        initializer_arrival.recv().unwrap();
+
+        pin(&hardware, 1);
+        let second = scheduler.spawn({
+            let hardware = hardware;
+            move || affinity(&hardware)
+        });
+        release.send(()).unwrap();
+
+        let expected = BTreeSet::from([0, 1]);
+        assert_eq!(block_on(first).unwrap(), expected);
+        assert_eq!(block_on(second).unwrap(), expected);
+    });
+}
+
 /// A callback can submit to its own destination without waiting on its startup acknowledgment.
 #[test]
 fn initializer_can_submit_to_its_pool() {

@@ -27,7 +27,7 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
                 let state = inner.registry.get_or_init(destination);
                 assert!(inner.runtime.is_shutdown());
                 assert!(!inner.runtime.is_poisoned());
-                assert!(state.shutdown_flag.load(Ordering::Acquire));
+                assert!(!state.shutdown_flag.load(Ordering::Acquire));
                 drop(state.regular_queue.try_lock().unwrap());
                 drop(state.affinity.try_read().unwrap());
                 dropped.store(true, Ordering::Release);
@@ -35,17 +35,17 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
         }));
 
         let pins = Cell::new(0);
-        worker_loop_with(state, 0, 0, |_| {
+        worker_loop_with(&pool.inner.runtime, state, 0, 0, |_| {
             pins.set(pins.get() + 1);
             let queued = state.regular_queue.lock().unwrap().len();
             assert_eq!(queued, 1);
             // The outer stop check has passed, but this iteration has not dequeued its task.
             // A pending revision makes an unnecessary post-stop refresh observable.
             publish_expansion(&pool, destination);
-            pool.inner.runtime.stop_workers();
+            pool.inner.runtime.publish_shutdown_without_group_signals();
         });
 
-        pool.inner.join_all_workers();
+        pool.inner.shutdown_and_wait_for_workers();
         assert_eq!(pins.get(), 1);
         assert!(dropped.load(Ordering::Acquire));
         assert!(state.task_pool.lock().unwrap().is_empty());
@@ -74,7 +74,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
         }));
 
         let pins = Cell::new(0);
-        worker_loop_with(state, 0, 0, |set| {
+        worker_loop_with(&pool.inner.runtime, state, 0, 0, |set| {
             pins.set(pins.get() + 1);
             match pins.get() {
                 1 => {
@@ -86,8 +86,8 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
                 2 => {
                     assert_eq!(set.len(), 2);
                     assert!(state.urgent_queue.lock().unwrap().is_empty());
-                    // Leave the group signal untouched: only the post-refresh global check
-                    // can prevent this already-dequeued task from executing.
+                    // The pool and group are both stopping, but this task has already been
+                    // dequeued; the post-refresh global check must still prevent execution.
                     pool.inner.runtime.stop_workers();
                 }
                 _ => panic!("the worker must exit after abandoning the dequeued task"),
@@ -132,7 +132,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
 
         let pins = Cell::new(0);
         let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-            worker_loop_with(state, 0, 0, |set| {
+            worker_loop_with(&pool.inner.runtime, state, 0, 0, |set| {
                 pins.set(pins.get() + 1);
                 match pins.get() {
                     1 => {

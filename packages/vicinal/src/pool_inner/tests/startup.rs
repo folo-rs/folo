@@ -213,7 +213,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
             inner.enqueue(state, probe(state, || {}), false);
         });
 
-        inner.join_all_workers();
+        inner.shutdown_and_wait_for_workers();
         assert_eq!(inner.runtime.active_workers(), 0);
     });
 }
@@ -253,7 +253,7 @@ fn affinity_failure_is_reported_before_admission() {
             inner.enqueue(state, probe(state, || {}), false);
         });
 
-        inner.join_all_workers();
+        inner.shutdown_and_wait_for_workers();
         assert_eq!(inner.runtime.active_workers(), 0);
         assert!(!initialized.load(Ordering::Relaxed));
     });

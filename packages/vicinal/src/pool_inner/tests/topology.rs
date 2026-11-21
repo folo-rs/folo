@@ -1,8 +1,8 @@
 //! Exact affinity, group sharing and wake notification coverage.
 
 use std::collections::{BTreeSet, HashSet};
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Barrier, mpsc};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 
 use futures::FutureExt;
@@ -298,6 +298,91 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
     assert_concurrent_additions(DefaultWorkerPolicy::per_memory_region(nz!(1)), [1, 2]);
 }
 
+/// First-time submissions from one processor cannot bypass affinity publication.
+#[test]
+fn concurrent_same_processor_submissions_wait_for_membership_publication() {
+    with_watchdog(|| {
+        let hardware = regional_hardware();
+        pin(&hardware, 0);
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .build();
+        let scheduler = pool.scheduler();
+
+        let initial = scheduler.spawn({
+            let hardware = hardware.clone();
+            move || affinity(&hardware)
+        });
+        assert_eq!(block_on(initial).unwrap(), BTreeSet::from([0]));
+        let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
+
+        let lock_attempts = Arc::new(AtomicUsize::new(0));
+        let (second_at_lock, second_lock_arrival) = mpsc::channel();
+        assert!(
+            state
+                .before_membership_lock
+                .set(Box::new({
+                    let lock_attempts = Arc::clone(&lock_attempts);
+                    move || {
+                        if lock_attempts.fetch_add(1, Ordering::Acquire) == 1 {
+                            second_at_lock.send(()).unwrap();
+                        }
+                    }
+                }))
+                .is_ok()
+        );
+
+        let first_publisher = Arc::new(AtomicBool::new(true));
+        let (publishing, publication) = mpsc::channel();
+        let (release_publication, wait_for_release) = mpsc::channel();
+        let wait_for_release = Mutex::new(wait_for_release);
+        assert!(
+            state
+                .before_membership_publish
+                .set(Box::new({
+                    let first_publisher = Arc::clone(&first_publisher);
+                    move || {
+                        if first_publisher.swap(false, Ordering::AcqRel) {
+                            publishing.send(()).unwrap();
+                            wait_for_release.lock().unwrap().recv().unwrap();
+                        }
+                    }
+                }))
+                .is_ok()
+        );
+
+        let first = thread::spawn({
+            let scheduler = scheduler.clone();
+            let hardware = hardware.clone();
+            move || {
+                pin(&hardware, 1);
+                scheduler.spawn(move || affinity(&hardware))
+            }
+        });
+        publication.recv().unwrap();
+        let (returned, returns) = mpsc::channel();
+        let second = {
+            let scheduler = scheduler;
+            let hardware = hardware;
+            thread::spawn(move || {
+                pin(&hardware, 1);
+                let task = scheduler.spawn(move || affinity(&hardware));
+                returned.send(()).unwrap();
+                task
+            })
+        };
+        second_lock_arrival.recv().unwrap();
+        assert_eq!(returns.try_recv().unwrap_err(), mpsc::TryRecvError::Empty);
+        release_publication.send(()).unwrap();
+
+        for task in [first.join().unwrap(), second.join().unwrap()] {
+            assert_eq!(block_on(task).unwrap(), BTreeSet::from([0, 1]));
+        }
+        assert_eq!(state.affinity_revision.load(Ordering::Acquire), 2);
+    });
+}
+
 /// Cross-region additions must preserve the same fixed capacity and task-boundary refresh.
 #[test]
 fn system_concurrent_additions_preserve_busy_workers_and_fixed_count() {
@@ -474,6 +559,7 @@ fn assert_idle_workers_refresh(policy: DefaultWorkerPolicy, next_processor: u32)
 #[test]
 fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     let hardware = regional_hardware();
+    pin(&hardware, 0);
     let pool = Pool::builder()
         .hardware(hardware)
         .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
@@ -493,7 +579,10 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
 
     let first = state.wake_event.listen();
     let second = state.wake_event.listen();
-    pool.inner.enqueue(state, allocate(), false);
+    let selected = pool.inner.policy.select_group(&pool.inner.groups);
+    let selected_state = pool.inner.groups.resolve(selected);
+    assert!(std::ptr::eq(state, selected_state));
+    pool.inner.enqueue(selected_state, allocate(), false);
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), None);
 
@@ -502,7 +591,10 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     let first = state.wake_event.listen();
     let second = state.wake_event.listen();
 
-    pool.inner.enqueue(state, allocate(), false);
+    let selected = pool.inner.policy.select_group(&pool.inner.groups);
+    let selected_state = pool.inner.groups.resolve(selected);
+    assert!(std::ptr::eq(state, selected_state));
+    pool.inner.enqueue(selected_state, allocate(), false);
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), None);
     assert_eq!(state.affinity_revision.load(Ordering::Acquire), revision);

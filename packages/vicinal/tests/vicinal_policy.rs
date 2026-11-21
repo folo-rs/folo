@@ -21,8 +21,10 @@ impl WorkerPolicy for LazySingleGroupPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get_or_init(|| {
             let group = groups.add();
-            let worker = group.clone();
-            thread::spawn(move || worker.execute_worker());
+            thread::spawn({
+                let group = group.clone();
+                move || group.execute_worker()
+            });
             group.id()
         })
     }

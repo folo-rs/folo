@@ -7,15 +7,17 @@ use many_cpus::ProcessorSet;
 use tracing::trace;
 
 use crate::pool_inner::POOL_LOG_TARGET;
-use crate::{IterationResult, NEVER_POISONED, WorkerCore, WorkerGroupState};
+use crate::{IterationResult, NEVER_POISONED, PoolRuntime, WorkerCore, WorkerGroupState};
 
+// A stripped or nonblocking worker loop can strand accepted work indefinitely.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn worker_loop_with(
+    runtime: &PoolRuntime,
     state: &WorkerGroupState,
     worker_index: u32,
     mut revision: usize,
     pin: impl FnMut(&ProcessorSet),
 ) {
-    let runtime = state.runtime();
     let core = WorkerCore::new(
         &state.urgent_queue,
         &state.regular_queue,
@@ -66,6 +68,9 @@ pub(crate) fn worker_loop_with(
             IterationResult::WaitingForWork => {
                 listener!(state.wake_event => listener);
 
+                // A change between the worker core's empty observation and listener
+                // registration cannot notify this listener. Recheck every possible change
+                // after registration; only an unchanged state is allowed to sleep.
                 if !state.urgent_queue.lock().expect(NEVER_POISONED).is_empty()
                     || !state.regular_queue.lock().expect(NEVER_POISONED).is_empty()
                     || state.shutdown_flag.load(Ordering::Acquire)
@@ -97,6 +102,8 @@ pub(crate) fn refresh_affinity(
 
     let (affinity, latest) = {
         let affinity = state.affinity.read().expect(NEVER_POISONED);
+        // This clone occurs only when a published revision changes. Affinity snapshots stay
+        // owned values so worker-group coordination introduces no Arc or Weak reference count.
         (
             affinity
                 .as_ref()
