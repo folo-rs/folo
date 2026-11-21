@@ -17,7 +17,7 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use testing::DefaultAllocator;
 use threadpool::ThreadPool;
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::{DefaultWorkerPolicy, Pool};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
@@ -94,7 +94,8 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
         let builder = || {
             // Fix the destination capacity to match the dispatch comparison, independently
             // of future changes to the library default. No application initializer is installed.
-            let builder = Pool::builder().worker_policy(WorkerPolicy::per_processor(nz!(2_u32)));
+            let builder =
+                Pool::builder().worker_policy(DefaultWorkerPolicy::per_processor(nz!(2_u32)));
             if eager {
                 builder.eager(one_processor.clone())
             } else {
@@ -607,8 +608,8 @@ fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &Tim
     // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
     // tasks. This benchmark count does not track future changes to the pool's default.
     for (policy_name, policy) in [
-        ("processor", WorkerPolicy::per_processor(nz!(2_u32))),
-        ("region", WorkerPolicy::per_memory_region(nz!(2_u32))),
+        ("processor", DefaultWorkerPolicy::per_processor(nz!(2_u32))),
+        ("region", DefaultWorkerPolicy::per_memory_region(nz!(2_u32))),
     ] {
         // The low case isolates dispatch; the high case exercises shared queue/slot reuse.
         for batch_size in [1, TASK_BATCH_SIZE] {
@@ -666,7 +667,7 @@ fn region_contention(criterion: &mut Criterion, caller: &ProcessorSet) {
             // Use the same fixed destination capacity as policy_dispatch so contention is
             // measured without changing the amount of worker parallelism.
             let pool = Pool::builder()
-                .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+                .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(2_u32)))
                 .build();
             let scheduler = pool.scheduler();
 

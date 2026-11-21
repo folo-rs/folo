@@ -19,7 +19,7 @@ use testing::{assert_panics, with_watchdog};
 use super::helpers::{
     OnDrop, PanickingPayload, assert_retained_scheduler, hardware, pin, probe, regional_hardware,
 };
-use crate::{GroupId, JoinHandle, Pool, Scheduler, SubmissionTarget, WorkerPolicy};
+use crate::{DefaultWorkerPolicy, GroupId, JoinHandle, Pool, Scheduler, SubmissionTarget};
 
 /// A ready group without workers keeps both priority queues deterministic until shutdown.
 #[test]
@@ -32,6 +32,10 @@ fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
         .build();
     let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
     state.startup.set(Ok(())).unwrap();
+    pool.inner.install_test_group(SubmissionTarget {
+        group: GroupId::Processor(0),
+        processor: 0,
+    });
 
     let scheduler = pool.scheduler();
     let dropped = Arc::new(AtomicUsize::new(0));
@@ -95,6 +99,10 @@ fn completion_waker_can_drop_handles_and_submit() {
             .build();
         let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
         state.startup.set(Ok(())).unwrap();
+        pool.inner.install_test_group(SubmissionTarget {
+            group: GroupId::Processor(0),
+            processor: 0,
+        });
 
         let scheduler = pool.scheduler();
         let mut handle = scheduler.spawn(|| {});
@@ -132,7 +140,7 @@ fn completion_waker_can_drop_handles_and_submit() {
 fn shutdown_before_lazy_state_creation_starts_no_workers() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
@@ -146,7 +154,7 @@ fn shutdown_before_lazy_state_creation_starts_no_workers() {
     inner.enqueue_with(target, state, probe(state, || {}), false, |_| panic!());
 
     assert!(state.startup.get().is_none());
-    assert!(inner.worker_handles.lock().unwrap().is_empty());
+    assert_eq!(inner.runtime.active_workers(), 0);
 }
 
 /// Holds an allocated task across shutdown; its destructor probes every relevant lock.
@@ -170,15 +178,7 @@ fn shutdown_racing_enqueue_drops_outside_locks() {
     });
 
     drop(pool);
-    inner.enqueue(
-        SubmissionTarget {
-            group: destination,
-            processor: 0,
-        },
-        state,
-        task,
-        false,
-    );
+    inner.enqueue(state, task, false);
 
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.regular_queue.lock().unwrap().is_empty());
@@ -236,7 +236,7 @@ fn shutdown_contains_secondary_payload_destruction() {
     assert!(payload.is::<FirstFailure>());
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.task_pool.lock().unwrap().is_empty());
-    assert!(inner.poisoned.load(Ordering::Acquire));
+    assert!(inner.runtime.is_poisoned());
 }
 
 /// Suppressing cleanup failure during an outer unwind must also contain its payload destructor.
@@ -262,8 +262,8 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
         .unwrap_err();
 
         assert!(payload.is::<OuterFailure>());
-        assert!(inner.worker_handles.lock().unwrap().is_empty());
-        assert!(inner.poisoned.load(Ordering::Acquire));
+        assert_eq!(inner.runtime.active_workers(), 0);
+        assert!(inner.runtime.is_poisoned());
     });
 }
 
@@ -273,7 +273,7 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
             .build();
 
         // Keep the submitter on one region throughout the shutdown scenario.
@@ -325,9 +325,9 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
 #[test]
 fn poisoned_pool_rejects_submissions_even_after_drop() {
     for policy in [
-        WorkerPolicy::per_processor(nz!(1)),
-        WorkerPolicy::per_memory_region(nz!(1)),
-        WorkerPolicy::per_system(nz!(1)),
+        DefaultWorkerPolicy::per_processor(nz!(1)),
+        DefaultWorkerPolicy::per_memory_region(nz!(1)),
+        DefaultWorkerPolicy::per_system(nz!(1)),
     ] {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let destination = policy.destination(&hardware);
@@ -361,7 +361,7 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_system(nz!(1)))
+            .worker_policy(DefaultWorkerPolicy::per_system(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         block_on(scheduler.spawn(|| {})).unwrap();
@@ -376,13 +376,9 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 1);
         assert!(state.regular_queue.lock().unwrap().is_empty());
         assert!(state.urgent_queue.lock().unwrap().is_empty());
-        assert!(inner.worker_handles.lock().unwrap().is_empty());
+        assert_eq!(inner.runtime.active_workers(), 0);
         assert_eq!(
-            inner
-                .member_processors
-                .iter()
-                .map(|(id, submitted)| (*id, submitted.load(Ordering::Acquire)))
-                .collect::<Vec<_>>(),
+            inner.policy.membership_snapshot(),
             [(0, true), (1, false), (3, false)]
         );
     });
@@ -395,7 +391,7 @@ fn post_shutdown_submissions_do_not_expand_or_activate() {
     pin(&hardware, 0);
     let pool = Pool::builder()
         .hardware(hardware.clone())
-        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let scheduler = pool.scheduler();
     block_on(scheduler.spawn(|| {})).unwrap();
@@ -414,5 +410,5 @@ fn post_shutdown_submissions_do_not_expand_or_activate() {
     let unused = inner.registry.get_or_init(GroupId::MemoryRegion(5));
     assert!(unused.startup.get().is_none());
     assert_eq!(unused.affinity_revision.load(Ordering::Acquire), 0);
-    assert!(inner.worker_handles.lock().unwrap().is_empty());
+    assert_eq!(inner.runtime.active_workers(), 0);
 }

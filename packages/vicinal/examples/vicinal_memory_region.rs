@@ -4,7 +4,7 @@ use futures::executor::block_on;
 use many_cpus::SystemHardware;
 use new_zealand::nz;
 use ohno::AppError;
-use vicinal::{Pool, TaskError, WorkerPolicy};
+use vicinal::{DefaultWorkerPolicy, Pool, TaskError};
 
 fn main() -> Result<(), AppError> {
     let hardware = SystemHardware::current();
@@ -13,7 +13,7 @@ fn main() -> Result<(), AppError> {
     let submitters = hardware.processors();
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(2_u32)))
         .build();
     let scheduler = pool.scheduler();
     let callers = submitters.spawn_threads(move |processor| -> Result<(), AppError> {

@@ -10,31 +10,50 @@ the set of processors on which a worker is permitted to run.
 
 ## Worker policies
 
-`WorkerPolicy` is an opaque configuration value. Constructors select a fixed worker count
-per processor, per memory region or per system, without a policy trait or generic pool and
-scheduler types. Counts and processor membership are independent for each pool.
-Additional constructors can extend configuration without exposing its representation.
+`WorkerPolicy` is the interface for assigning tasks to groups and for deciding when groups
+and workers are created. `DefaultWorkerPolicy` supplies the processor, memory-region and
+system policies. The pool does not expose a generic type parameter for either its policy or
+scheduler, so changing policies does not change the rest of the application API.
 
 The default is processor-local scheduling. Applications configure explicit counts through
-`WorkerPolicy` and the builder's `worker_policy(...)` setter. Each call replaces the selected
-policy, so the last setter wins. A built pool's policy is immutable.
+`DefaultWorkerPolicy` and the builder's `worker_policy(...)` setter. Custom policy values
+also use this setter. Each call replaces the selected policy, so the last setter wins.
+A built pool's policy is immutable.
 
 ```rust
 use new_zealand::nz;
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::{DefaultWorkerPolicy, Pool};
 
 let processor_pool = Pool::builder()
-    .worker_policy(WorkerPolicy::per_processor(nz!(2_u32)))
+    .worker_policy(DefaultWorkerPolicy::per_processor(nz!(2_u32)))
     .build();
 let regional_pool = Pool::builder()
-    .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+    .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(2_u32)))
     .build();
 let system_pool = Pool::builder()
-    .worker_policy(WorkerPolicy::per_system(nz!(2_u32)))
+    .worker_policy(DefaultWorkerPolicy::per_system(nz!(2_u32)))
     .build();
 ```
 
-A task is assigned using one processor observation during submission; regional routing
+The pool calls a custom policy's `prepare()` once with the final hardware, eager selection,
+worker groups and name. `select_group()` runs for every submission and returns a copyable
+`WorkerGroupId`. The scheduler resolves that ID by borrowing the group; established task
+submission neither clones `WorkerGroups` nor `WorkerGroup`.
+
+A policy may add groups during preparation or selection and may clone a `WorkerGroups`
+handle to add groups later. Adding a worker clones its `WorkerGroup`, moves that clone into
+the new thread and calls the blocking `execute_worker()` method. The policy applies the
+thread's intended affinity before calling `execute_worker()`. Vicinal then owns task
+execution, worker initialization, failure containment and participation through shutdown.
+
+A policy may retain a `WorkerGroup` handle and inspect its participating worker count with
+`len()` or its combined urgent/regular backlog with `queue_len()`. These are instantaneous
+observations rather than reservations. Selection runs before the incoming task is admitted,
+so `queue_len()` does not include that task. The stand-alone `vicinal_growing_pool` example
+uses this boundary to add a worker whenever a later submission observes existing backlog.
+It deliberately starts with one worker, grows without a maximum and never removes workers.
+
+The default policy assigns a task using one processor observation during submission; regional routing
 derives the `many_cpus` memory region from that same processor. Processor-policy workers
 are pinned to the sampled processor. Regional workers share work from every submitting
 processor in the selected region. System workers share work from every submitting processor
@@ -60,10 +79,12 @@ processor count, supporting blocking workloads.
 
 ## Eager construction
 
-`PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` to move worker startup
-and initialization into construction. It records the selection without starting workers.
+`PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` and passes it to the
+selected policy during `prepare()`. It records the selection without starting workers.
 Repeated calls replace the selection; `build()` uses the final policy, hardware, name
-and initialization callback regardless of setter order.
+and initialization callback regardless of setter order. A custom policy decides how its
+eager selection maps to groups. Its preparation must finish the required worker readiness
+before returning.
 
 The selection must belong to the pool's hardware instance. The pool validates the complete
 selection before starting workers, including hardware identity rather than only numeric CPU IDs.
@@ -75,13 +96,14 @@ the selected processors in that region. System pools start their count once with
 set as affinity. Shared workers may use selected processors before those processors submit work.
 The pool respects the exact selection without independently applying a quota or widening regions.
 
-A successful eager construction means every selected worker has applied affinity and completed
-its initialization callback. The callback's effects are visible to the constructing thread.
+A successful eager construction means every worker required by the policy has applied
+affinity and completed its initialization callback. The callback's effects are visible
+to the constructing thread.
 This prepares workers, not task-specific storage, application caches or a guaranteed sleeping state.
 
 Selection seeds membership rather than restricting future submissions. Submissions from other
 eligible processors create missing destinations lazily or expand existing shared groups.
-Workers and membership are never removed during the pool's lifetime.
+The default policy never removes workers or membership during the pool's lifetime.
 
 ## Worker thread names
 
@@ -167,12 +189,14 @@ the pool does not forcibly terminate threads. Every later submission panics sync
 even after the pool is dropped. Task panics retain their separate behavior and do not
 poison the pool.
 
-Worker startup establishes the full configured count and initial affinity before
+Default-policy startup establishes the full configured count and initial affinity before
 accepting work for a destination. Eager construction failures, including initializer panics,
-propagate on the constructing call after stopping and joining every created worker; no partial
-pool is returned. User initialization side effects are not reversible, and the pool cannot
-forcibly terminate a callback that does not return.
+propagate on the constructing call after stopping and waiting for every participating worker;
+no partial pool is returned. User initialization side effects are not reversible, and the
+pool cannot forcibly terminate a callback that does not return.
 Failures detected during submission, including thread
 creation and initial affinity setup, panic on the submitting call. A later affinity
 refresh failure occurs on a worker, so the triggering submission may already have returned.
-Dropping the pool joins every worker and propagates worker failures after cleanup.
+Dropping the pool waits for every participating worker and propagates worker failures
+after cleanup. A custom policy owns the operating-system thread handles, if it needs them,
+while `execute_worker()` supplies the pool's participation and failure boundaries.

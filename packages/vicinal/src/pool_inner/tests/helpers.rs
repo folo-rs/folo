@@ -10,7 +10,7 @@ use futures::FutureExt;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
-use crate::{ErasedTaskHandle, Scheduler, VicinalTask, WorkerGroup, init_task};
+use crate::{ErasedTaskHandle, Scheduler, VicinalTask, WorkerGroupState, init_task};
 
 /// Sparse regions with multiple eligible CPUs and a quota that excludes some of them.
 pub(crate) fn hardware() -> SystemHardware {
@@ -62,7 +62,7 @@ impl VicinalTask for OnDrop {
 
 /// Places a probe between allocation and admission without injecting production-only branches.
 pub(crate) fn probe(
-    state: &WorkerGroup,
+    state: &WorkerGroupState,
     callback: impl FnOnce() + Send + 'static,
 ) -> ErasedTaskHandle {
     let slot = state.task_pool.lock().unwrap().alloc_uninit_box();

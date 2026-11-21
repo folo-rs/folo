@@ -10,7 +10,7 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{NoopTask, OnDrop, hardware, pin};
-use crate::{Pool, WorkerPolicy, init_task};
+use crate::{DefaultWorkerPolicy, Pool, init_task};
 
 /// Initializer failure cannot lose a sibling's handle while startup still owns registration.
 #[test]
@@ -20,13 +20,15 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
 
     with_watchdog(|| {
         for policy in [
-            WorkerPolicy::per_processor(nz!(WORKERS)),
-            WorkerPolicy::per_memory_region(nz!(WORKERS)),
+            DefaultWorkerPolicy::per_processor(nz!(WORKERS)),
+            DefaultWorkerPolicy::per_memory_region(nz!(WORKERS)),
         ] {
+            let hardware = hardware();
+            let target = policy.destination(&hardware);
             let initialized = Arc::new(AtomicUsize::new(0));
             let (failed, failure) = mpsc::channel();
             let pool = Pool::builder()
-                .hardware(hardware())
+                .hardware(hardware)
                 .worker_policy(policy)
                 .thread_init({
                     let initialized = Arc::clone(&initialized);
@@ -45,7 +47,6 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             assert_eq!(pool.inner.policy.count().get(), WORKERS);
             let inner = Arc::clone(&pool.inner);
             let scheduler = pool.scheduler();
-            let target = inner.policy.destination(&inner.hardware);
             let state = inner.registry.get_or_init(target.group);
             let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
             let mut spawned = 0_u32;
@@ -70,14 +71,15 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             }));
 
             assert_eq!(spawned, WORKERS);
-            let worker_count = inner.worker_handles.lock().unwrap().len();
-            assert_eq!(worker_count, WORKERS as usize);
+            let worker_count = inner.runtime.active_workers();
+            assert_eq!(worker_count, 0);
 
-            assert_panics(|| drop(pool));
-            assert_eq!(initialized.load(Ordering::Relaxed), WORKERS as usize);
-            assert!(inner.worker_handles.lock().unwrap().is_empty());
+            drop(pool);
+            let initialized = initialized.load(Ordering::Relaxed);
+            assert!((1..=WORKERS as usize).contains(&initialized));
+            assert_eq!(inner.runtime.active_workers(), 0);
             assert!(state.task_pool.lock().unwrap().is_empty());
-            assert!(inner.poisoned.load(Ordering::Acquire));
+            assert!(inner.runtime.is_poisoned());
             assert_panics(|| scheduler.spawn(|| {}));
         }
     });
@@ -88,8 +90,8 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
 fn shutdown_waits_for_initialization_and_cancels_queued_work() {
     with_watchdog(|| {
         for policy in [
-            WorkerPolicy::per_processor(nz!(1)),
-            WorkerPolicy::per_memory_region(nz!(1)),
+            DefaultWorkerPolicy::per_processor(nz!(1)),
+            DefaultWorkerPolicy::per_memory_region(nz!(1)),
         ] {
             // Pin to the first fake processor so both tasks share one initializer.
             let hardware = hardware();
@@ -126,8 +128,8 @@ fn shutdown_waits_for_initialization_and_cancels_queued_work() {
             drop(pool);
 
             assert!(finished.load(Ordering::Acquire));
-            assert!(inner.worker_handles.lock().unwrap().is_empty());
-            assert!(!inner.poisoned.load(Ordering::Acquire));
+            assert_eq!(inner.runtime.active_workers(), 0);
+            assert!(!inner.runtime.is_poisoned());
             assert!(block_on(task).unwrap_err().is_cancel());
         }
     });
