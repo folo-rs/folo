@@ -350,10 +350,8 @@ impl WorkerGroup {
     /// # Panics
     ///
     /// Panics if the pool fails before the requested workers initialize.
-    #[must_use]
-    pub fn wait_until_initialized(&self, count: NonZero<usize>) -> &Self {
+    pub fn wait_until_initialized(&self, count: NonZero<usize>) {
         self.wait_for_workers(count.get(), true);
-        self
     }
 
     #[cfg(test)]

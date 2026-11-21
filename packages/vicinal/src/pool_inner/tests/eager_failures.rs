@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::{panic, thread};
 
@@ -122,18 +123,18 @@ fn custom_policy_rejects_foreign_eager_hardware() {
 #[test]
 fn custom_policy_can_wait_for_eager_initialization() {
     with_watchdog(|| {
-        let initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let initialized = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
             .worker_policy(EagerCustomPolicy {
                 group: OnceLock::new(),
             })
             .thread_init({
                 let initialized = Arc::clone(&initialized);
-                move || initialized.store(true, std::sync::atomic::Ordering::Release)
+                move || initialized.store(true, Ordering::Release)
             })
             .build();
 
-        assert!(initialized.load(std::sync::atomic::Ordering::Acquire));
+        assert!(initialized.load(Ordering::Acquire));
         drop(pool);
     });
 }
