@@ -1,5 +1,4 @@
 mod admission;
-mod eager;
 mod inner;
 mod worker_loop;
 

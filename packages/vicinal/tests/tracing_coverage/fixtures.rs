@@ -5,10 +5,10 @@ use std::panic;
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::{DefaultWorkerPolicy, Pool};
 
 /// Provides deterministic simulated destinations for locality scenarios without real OS affinity.
-pub(crate) fn pool(policy: WorkerPolicy, name: &str) -> Pool {
+pub(crate) fn pool(policy: DefaultWorkerPolicy, name: &str) -> Pool {
     let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     Pool::builder()
         .hardware(hardware)

@@ -13,7 +13,7 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{NoopTask, OnDrop, PanickingPayload, affinity, hardware, probe};
-use crate::{GroupId, PolicyKind, Pool, SubmissionTarget, WorkerPolicy, init_task};
+use crate::{DefaultWorkerPolicy, GroupId, PolicyKind, Pool, SubmissionTarget, init_task};
 
 /// Processor-local startup must serialize concurrent first submitters.
 #[test]
@@ -40,9 +40,11 @@ fn assert_concurrent_startup(kind: PolicyKind) {
 
     with_watchdog(move || {
         let (policy, destination) = match kind {
-            PolicyKind::Processor => (WorkerPolicy::per_processor(nz!(WORKERS)), "p0"),
-            PolicyKind::MemoryRegion => (WorkerPolicy::per_memory_region(nz!(WORKERS)), "r0"),
-            PolicyKind::System => (WorkerPolicy::per_system(nz!(WORKERS)), "s"),
+            PolicyKind::Processor => (DefaultWorkerPolicy::per_processor(nz!(WORKERS)), "p0"),
+            PolicyKind::MemoryRegion => {
+                (DefaultWorkerPolicy::per_memory_region(nz!(WORKERS)), "r0")
+            }
+            PolicyKind::System => (DefaultWorkerPolicy::per_system(nz!(WORKERS)), "s"),
         };
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let pool = Pool::builder()
@@ -97,7 +99,7 @@ fn assert_concurrent_startup(kind: PolicyKind) {
                 .map(|i| format!("workers-{destination}-{i}"))
                 .collect()
         );
-        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, WORKERS as usize);
 
         for release in releases {
@@ -108,7 +110,7 @@ fn assert_concurrent_startup(kind: PolicyKind) {
         }
 
         block_on(scheduler.spawn(|| {})).unwrap();
-        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, WORKERS as usize);
     });
 }
@@ -119,7 +121,7 @@ fn shutdown_accounts_for_in_progress_startup() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
             .build();
         let inner = Arc::clone(&pool.inner);
         let (entered, arrivals) = mpsc::channel();
@@ -151,15 +153,13 @@ fn shutdown_accounts_for_in_progress_startup() {
         });
 
         arrivals.recv().unwrap();
-        // Startup retains the registration lock until every handle is accounted for.
-        _ = inner.worker_handles.try_lock().unwrap_err();
         let shutdown = thread::spawn(move || drop(pool));
         resume.send(()).unwrap();
         starter.join().unwrap();
         shutdown.join().unwrap();
 
-        assert!(inner.shutdown.load(Ordering::Acquire));
-        assert!(inner.worker_handles.lock().unwrap().is_empty());
+        assert!(inner.runtime.is_shutdown());
+        assert_eq!(inner.runtime.active_workers(), 0);
         assert!(
             inner
                 .registry
@@ -176,7 +176,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_processor(nz!(2)))
+            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(2)))
             .build();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
@@ -205,16 +205,17 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
         });
 
         assert_eq!(attempts, 2);
-        let worker_count = inner.worker_handles.lock().unwrap().len();
-        assert_eq!(worker_count, 1);
+        assert_eq!(inner.worker_handles.lock().unwrap().len(), 1);
+        inner.runtime.wait_for_workers();
+        assert_eq!(inner.runtime.active_workers(), 0);
         assert_eq!(state.startup.get(), Some(&Err(())));
 
         assert_panics(|| {
-            inner.enqueue(destination, state, probe(state, || {}), false);
+            inner.enqueue(state, probe(state, || {}), false);
         });
 
-        inner.join_all_workers();
-        assert!(inner.worker_handles.lock().unwrap().is_empty());
+        inner.shutdown_and_wait_for_workers();
+        assert_eq!(inner.runtime.active_workers(), 0);
     });
 }
 
@@ -225,7 +226,7 @@ fn affinity_failure_is_reported_before_admission() {
         let initialized = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
             .thread_init({
                 let initialized = Arc::clone(&initialized);
                 move || initialized.store(true, Ordering::Relaxed)
@@ -250,11 +251,11 @@ fn affinity_failure_is_reported_before_admission() {
         assert_eq!(state.get_tasks_spawned(), 0);
 
         assert_panics(|| {
-            inner.enqueue(destination, state, probe(state, || {}), false);
+            inner.enqueue(state, probe(state, || {}), false);
         });
 
-        inner.join_all_workers();
-        assert!(inner.worker_handles.lock().unwrap().is_empty());
+        inner.shutdown_and_wait_for_workers();
+        assert_eq!(inner.runtime.active_workers(), 0);
         assert!(!initialized.load(Ordering::Relaxed));
     });
 }
@@ -284,19 +285,18 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     .unwrap_err();
 
     assert!(payload.is::<StartupFailure>());
-    assert!(inner.poisoned.load(Ordering::Acquire));
+    assert!(inner.runtime.is_poisoned());
     assert!(state.task_pool.lock().unwrap().is_empty());
 
     assert_panics(|| {
         inner.enqueue(
-            target,
             state,
             probe(state, || panic::panic_any(PanickingPayload)),
             true,
         );
     });
     assert!(state.task_pool.lock().unwrap().is_empty());
-    assert!(inner.worker_handles.lock().unwrap().is_empty());
+    assert_eq!(inner.runtime.active_workers(), 0);
 }
 
 /// Sparse topology holes must fail instead of selecting an unrelated processor.
@@ -304,7 +304,7 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
 fn empty_region_never_starts_unpinned_workers() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
         .build();
 
     // The sparse index space contains this ID, but no eligible processor belongs to it.
@@ -313,11 +313,15 @@ fn empty_region_never_starts_unpinned_workers() {
             group: GroupId::MemoryRegion(4),
             processor: 0,
         };
-        let state = pool.inner.registry.get_or_init(target.group);
-        pool.inner
-            .enqueue(target, state, probe(state, || {}), false);
+        _ = pool.inner.registry.get_or_init(target.group);
+        pool.inner.start_workers(
+            target,
+            &mut Vec::new(),
+            thread::Builder::spawn,
+            ProcessorSet::pin_current_thread_to,
+        );
     });
-    assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+    assert_eq!(pool.inner.runtime.active_workers(), 0);
 }
 
 /// Queue abandonment in another group releases its blocked worker during startup poisoning.
@@ -325,8 +329,8 @@ fn empty_region_never_starts_unpinned_workers() {
 fn startup_failure_stops_every_group() {
     with_watchdog(|| {
         for policy in [
-            WorkerPolicy::per_processor(nz!(1)),
-            WorkerPolicy::per_memory_region(nz!(1)),
+            DefaultWorkerPolicy::per_processor(nz!(1)),
+            DefaultWorkerPolicy::per_memory_region(nz!(1)),
         ] {
             let hardware = hardware();
             let other_region = hardware

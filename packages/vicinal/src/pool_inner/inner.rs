@@ -1,101 +1,93 @@
-//! Shared pool ownership, worker startup and terminal cleanup.
+//! Shared pool ownership, policy preparation and terminal cleanup.
 
 use std::any::{Any, type_name};
 use std::collections::VecDeque;
+#[cfg(test)]
+use std::io;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle as ThreadJoinHandle, Result as ThreadResult};
-use std::{fmt, io, mem};
+use std::thread::Result as ThreadResult;
+use std::{fmt, thread};
 
-use many_cpus::{ProcessorId, ProcessorSet, SystemHardware};
-use tracing::{debug, error};
+use many_cpus::{ProcessorSet, SystemHardware};
+use tracing::error;
 
-use crate::pool_inner::worker_loop;
 use crate::{
-    ErasedTaskHandle, GroupId, GroupRegistry, NEVER_POISONED, SubmissionTarget, ThreadInit,
-    WorkerGroup, WorkerPolicy, discard_panic, extract_panic_message,
+    ErasedTaskHandle, NEVER_POISONED, PoolRuntime, ThreadInit, WorkerGroups, WorkerPolicy,
+    WorkerPolicyContext, discard_panic, extract_panic_message, validate_eager_processors,
 };
+#[cfg(test)]
+use crate::{SubmissionTarget, WorkerEntry};
 
-/// Groups pool lifecycle diagnostics under their owner, including admission and execution.
 pub(crate) const POOL_LOG_TARGET: &str = module_path!();
 
 /// Keeps schedulers' shared storage alive while the owning pool controls worker lifetime.
 pub(crate) struct PoolInner {
     pub(crate) pool_id: u64,
     pub(crate) pool_name: String,
+    pub(crate) groups: WorkerGroups,
+    #[cfg(test)]
+    pub(crate) registry: WorkerGroups,
+    #[cfg(test)]
     pub(crate) hardware: SystemHardware,
-    pub(crate) registry: GroupRegistry,
-    pub(crate) policy: WorkerPolicy,
-    thread_init: Option<ThreadInit>,
-
-    /// Serializes cold startup and handle registration with the shutdown transition.
-    pub(crate) worker_handles: Mutex<Vec<ThreadJoinHandle<()>>>,
-
-    pub(crate) shutdown: AtomicBool,
-    /// Infrastructure failure is permanent and distinct from clean shutdown abandonment.
-    pub(crate) poisoned: AtomicBool,
-
-    /// Initial selections and accepted submitters share membership, independent of ID gaps.
-    pub(crate) member_processors: Box<[(ProcessorId, AtomicBool)]>,
+    #[cfg(test)]
+    pub(crate) worker_handles: Mutex<Vec<thread::JoinHandle<()>>>,
+    pub(crate) policy: Box<dyn WorkerPolicy>,
+    pub(crate) runtime: Arc<PoolRuntime>,
 }
 
 impl PoolInner {
     pub(crate) fn new(
         pool_id: u64,
         pool_name: String,
-        hardware: SystemHardware,
-        policy: WorkerPolicy,
+        hardware: &SystemHardware,
+        mut policy: Box<dyn WorkerPolicy>,
         thread_init: Option<ThreadInit>,
+        eager: Option<&ProcessorSet>,
     ) -> Self {
-        let member_processors = if policy.shares_processors() {
-            let mut processors = hardware
-                .all_processors()
-                .iter()
-                .map(|processor| (processor.id(), AtomicBool::new(false)))
-                .collect::<Vec<_>>();
-            processors.sort_unstable_by_key(|(id, _)| *id);
+        let runtime = PoolRuntime::new(pool_id, pool_name.clone(), thread_init);
+        let groups = WorkerGroups::new(Arc::clone(&runtime));
+        if let Some(processors) = eager {
+            validate_eager_processors(hardware, processors);
+        }
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            policy.prepare(WorkerPolicyContext::new(
+                hardware, eager, &groups, &pool_name,
+            ));
+        }));
 
-            processors.into_boxed_slice()
-        } else {
-            Box::default()
-        };
+        if let Err(payload) = result {
+            runtime.fail(payload);
+            runtime.wait_for_workers();
+            runtime.resume_failure();
+        }
 
         Self {
             pool_id,
             pool_name,
-            registry: GroupRegistry::new(&hardware, &policy),
-            hardware,
-            policy,
-            thread_init,
+            groups: groups.clone(),
+            #[cfg(test)]
+            registry: groups,
+            #[cfg(test)]
+            hardware: hardware.clone(),
+            #[cfg(test)]
             worker_handles: Mutex::new(Vec::new()),
-            shutdown: AtomicBool::new(false),
-            poisoned: AtomicBool::new(false),
-            member_processors,
+            policy,
+            runtime,
         }
     }
 
-    /// Publishes the affinity-startup outcome while the caller serializes worker registration.
-    #[cfg_attr(test, mutants::skip)] // Missing startup publication can start duplicate workers.
-    pub(crate) fn start_group(state: &WorkerGroup, start: impl FnOnce()) {
-        let result = panic::catch_unwind(AssertUnwindSafe(start));
-        state
-            .startup
-            .set(if result.is_ok() { Ok(()) } else { Err(()) })
-            .expect("startup is published once under the worker handle lock");
-
-        result.unwrap_or_else(|payload| panic::resume_unwind(payload));
+    #[cfg_attr(test, mutants::skip)]
+    pub(crate) fn stop_admission(&self) {
+        self.runtime.stop_admission();
     }
 
-    /// Pins every new worker to the first submitter before admitting any work.
-    // Thread/acknowledgment mutations can block startup indefinitely.
-    #[cfg_attr(test, mutants::skip)]
+    #[cfg(test)]
     pub(crate) fn start_workers(
         self: &Arc<Self>,
         target: SubmissionTarget,
-        handles: &mut Vec<ThreadJoinHandle<()>>,
-        spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
+        handles: &mut Vec<thread::JoinHandle<()>>,
+        spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<thread::JoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
     ) {
         let destination = target.group;
@@ -108,157 +100,80 @@ impl PoolInner {
             })
             .take_all()
             .unwrap_or_else(|| panic!("no eligible processors for worker group {destination:?}"));
-        let affinity = Arc::new(affinity);
-
-        // Lazy admission waits only for affinity; completion receivers are needed by eager builds.
-        self.start_workers_on(destination, &affinity, handles, spawn, pin, drop);
+        let group = self.registry.group(destination);
+        self.policy
+            .install_test_group(&self.registry, &group, &affinity);
+        group.start_workers_with(
+            destination,
+            &affinity,
+            self.policy.count(),
+            handles,
+            spawn,
+            pin,
+        );
     }
 
-    /// Shares worker entry and affinity readiness between lazy and eager group startup.
-    ///
-    /// Passes each completion receiver to the caller after consuming its affinity message.
-    /// Disconnection leaves the worker's panic in its registered handle.
-    #[cfg_attr(test, mutants::skip)] // Broken acknowledgments or registration can strand workers.
-    pub(crate) fn start_workers_on(
-        self: &Arc<Self>,
-        destination: GroupId,
-        affinity: &Arc<ProcessorSet>,
-        handles: &mut Vec<ThreadJoinHandle<()>>,
-        mut spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<ThreadJoinHandle<()>>,
-        pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
-        mut completion: impl FnMut(Receiver<ThreadResult<()>>),
-    ) {
-        // Startup owns registration, so this revision describes the supplied initial mask.
-        // Acquiring pairs with eager snapshot publication before threads are spawned.
-        let revision = self
-            .registry
-            .get_or_init(destination)
-            .affinity_revision
-            .load(Ordering::Acquire);
-        for worker_index in 0..self.policy.count().get() {
-            // The buffer permits initialization to finish without waiting for the constructor.
-            // Affinity and initialization share the channel, in that order.
-            let (ready, receiver) = sync_channel(1);
-            let entry: WorkerEntry = Box::new({
-                let inner = Arc::clone(self);
-                let affinity = Arc::clone(affinity);
-                let pin = pin.clone();
-                move || {
-                    let result = panic::catch_unwind(AssertUnwindSafe(|| pin(&affinity)));
-                    let pinned = result.is_ok();
-                    if ready.send(result).is_err() || !pinned {
-                        return;
-                    }
-
-                    inner.run_worker(destination, worker_index, revision, ready, &pin);
-                }
+    #[cfg(test)]
+    pub(crate) fn install_test_group(&self, target: SubmissionTarget) {
+        let affinity = self
+            .hardware
+            .all_processors()
+            .to_builder()
+            .filter(|processor| {
+                processor.id() == target.processor && target.group.contains(processor)
+            })
+            .take_all()
+            .unwrap_or_else(|| {
+                panic!("no eligible processors for worker group {:?}", target.group)
             });
-            let builder = thread::Builder::new()
-                .name(format!("{}-{destination}-{worker_index}", self.pool_name));
-            let handle = spawn(builder, entry).unwrap_or_else(|error| {
-                panic!("failed to start worker in {destination:?}: {error}")
-            });
-            handles.push(handle);
-
-            match receiver.recv() {
-                Ok(Ok(())) => {}
-                Ok(Err(payload)) => panic::resume_unwind(payload),
-                Err(error) => panic!("worker in {destination:?} exited before readiness: {error}"),
-            }
-            completion(receiver);
-        }
+        let group = self.registry.group(target.group);
+        self.policy
+            .install_test_group(&self.registry, &group, &affinity);
     }
 
-    /// Contains initialization and the task loop within the worker's infrastructure boundary.
-    // Omitting initialization or failure propagation can strand accepted work.
-    #[cfg_attr(test, mutants::skip)]
-    fn run_worker(
-        &self,
-        destination: GroupId,
-        worker_index: u32,
-        revision: usize,
-        ready: SyncSender<ThreadResult<()>>,
-        pin: impl Fn(&ProcessorSet),
-    ) {
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            debug!(
-                pool_name = self.pool_name.as_str(),
-                pool_id = self.pool_id,
-                group = ?destination,
-                worker_index,
-                "worker thread started"
-            );
-
-            // Affinity is already acknowledged, so initialization can submit work without
-            // waiting on its own startup transaction. See docs/implementation.md.
-            if let Some(thread_init) = &self.thread_init {
-                (thread_init.0)();
-            }
-
-            _ = ready.send(Ok(()));
-            drop(ready);
-            worker_loop(self, destination, worker_index, revision, &pin);
-
-            debug!(
-                pool_name = self.pool_name.as_str(),
-                pool_id = self.pool_id,
-                group = ?destination,
-                worker_index,
-                "worker thread exiting"
-            );
-        }));
-
-        if let Err(payload) = result {
-            self.poison(payload);
-        }
-    }
-
-    /// Publishes failure before cleanup can invoke reentrant task destructors, without callbacks.
-    // Mutating terminal state can admit work to workers that are exiting after failure.
-    #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn stop_admission(&self) {
-        self.poisoned.store(true, Ordering::Release);
-        self.shutdown.store(true, Ordering::Release);
-    }
-
-    /// Stops every group without joining the reporting worker or dropping captures under locks.
-    // Missing terminal cleanup can strand workers and joined handles.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
-        self.stop_admission();
-        error!(
-            pool_id = self.pool_id,
-            message = extract_panic_message(&payload),
-            "worker pool infrastructure failed"
-        );
-
-        // Wait for any in-progress startup to register all handles before scanning groups.
-        // Handles stay registered: a failing worker cannot join itself.
-        drop(self.worker_handles.lock().expect(NEVER_POISONED));
-
-        let mut failure = Err(payload);
+        self.runtime.fail(payload);
+        let mut failure = Err(self
+            .runtime
+            .take_failure()
+            .expect("newly recorded infrastructure failure remains available"));
         self.stop_groups(&mut failure);
-
-        panic::resume_unwind(failure.expect_err("pool failure retains its original panic"));
+        panic::resume_unwind(failure.expect_err("pool failure retains its original panic"))
     }
 
-    /// Stops admission and releases abandoned tasks even when schedulers retain the storage.
-    // Removing shutdown/join can leave sleeping workers forever.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn join_all_workers(&self) {
-        let handles = {
-            let mut handles = self.worker_handles.lock().expect(NEVER_POISONED);
-            self.shutdown.store(true, Ordering::Release);
-            // No new handles can be registered after this terminal transition. Reentrant
-            // submissions cannot add work, so the detached list cannot become stale.
-            mem::take(&mut *handles)
-        };
+    pub(crate) fn shutdown_and_wait_for_workers(&self) {
+        self.runtime.stop_workers();
 
-        let mut failure = Ok(());
+        let mut failure = self.runtime.take_failure().map_or(Ok(()), |payload| {
+            error!(
+                message = extract_panic_message(&payload),
+                "failure during worker pool cleanup"
+            );
+            Err(payload)
+        });
         self.stop_groups(&mut failure);
+        self.runtime.wait_for_workers();
 
-        for handle in handles {
-            record_failure(&mut failure, handle.join(), &self.poisoned);
+        #[cfg(test)]
+        {
+            let handles = std::mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
+            for handle in handles {
+                record_failure(&mut failure, handle.join(), &self.runtime);
+            }
+        }
+
+        if let Some(payload) = self.runtime.take_failure() {
+            error!(
+                message = extract_panic_message(&payload),
+                "failure during worker pool cleanup"
+            );
+            if failure.is_ok() {
+                failure = Err(payload);
+            } else {
+                discard_panic(payload);
+            }
         }
 
         if let Err(payload) = failure {
@@ -274,17 +189,15 @@ impl PoolInner {
         }
     }
 
-    /// Wakes every group before capture destruction can block or re-enter the stopped pool.
-    // Missing terminal cleanup can strand workers and joined handles.
     #[cfg_attr(test, mutants::skip)]
     fn stop_groups(&self, failure: &mut ThreadResult<()>) {
-        for state in self.registry.initialized() {
-            state.signal_shutdown();
+        let groups = self.groups.snapshot();
+        for group in &groups {
+            group.state().signal_shutdown();
         }
-
-        for state in self.registry.initialized() {
-            discard_queue(&state.urgent_queue, failure, &self.poisoned);
-            discard_queue(&state.regular_queue, failure, &self.poisoned);
+        for group in groups {
+            discard_queue(&group.state().urgent_queue, failure, &self.runtime);
+            discard_queue(&group.state().regular_queue, failure, &self.runtime);
         }
     }
 }
@@ -295,21 +208,16 @@ impl fmt::Debug for PoolInner {
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
             .field("pool_name", &self.pool_name)
-            .field("policy", &self.policy)
             .finish_non_exhaustive()
     }
 }
 
-/// The standard thread adapter and failure-injection tests share this entry-point boundary.
-pub(crate) type WorkerEntry = Box<dyn FnOnce() + Send>;
-
 /// Drains the live queue without running user destructors under a lock.
-// Skipping cleanup leaves abandoned receivers pending.
 #[cfg_attr(test, mutants::skip)]
 fn discard_queue(
     queue: &Mutex<VecDeque<ErasedTaskHandle>>,
     failure: &mut ThreadResult<()>,
-    poisoned: &AtomicBool,
+    runtime: &PoolRuntime,
 ) {
     loop {
         let task = queue.lock().expect(NEVER_POISONED).pop_front();
@@ -320,15 +228,14 @@ fn discard_queue(
         record_failure(
             failure,
             panic::catch_unwind(AssertUnwindSafe(|| drop(task))),
-            poisoned,
+            runtime,
         );
     }
 }
 
-/// Preserves the first failure while ensuring all remaining resources are cleaned up.
-fn record_failure(first: &mut ThreadResult<()>, result: ThreadResult<()>, poisoned: &AtomicBool) {
+fn record_failure(first: &mut ThreadResult<()>, result: ThreadResult<()>, runtime: &PoolRuntime) {
     if let Err(payload) = result {
-        poisoned.store(true, Ordering::Release);
+        runtime.stop_admission();
         error!(
             message = extract_panic_message(&payload),
             "failure during worker pool cleanup"

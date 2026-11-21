@@ -11,8 +11,9 @@
 //! A caller submits a task through one of a pool's [`Scheduler`] spawn methods. The pool samples
 //! the calling thread's current logical processor; this is the task's submitting processor.
 //! Tasks execute synchronously on that processor by default.
-//! [`WorkerPolicy`] can instead share workers across the caller's memory region or across
-//! the system. Each policy starts its fixed worker count on first use of a destination by default.
+//! [`DefaultWorkerPolicy`] can instead share workers across the caller's memory region or across
+//! the system. Custom [`WorkerPolicy`] implementations can select and create their own worker
+//! groups. Each default-policy destination starts its fixed worker count on first use.
 //! [`PoolBuilder::eager`] initializes selected destinations during construction instead.
 //!
 //! # Quick start
@@ -45,12 +46,12 @@
 //! memory modules. A memory region represents one such locality group; many systems have only one.
 //! Regions are identified by [`many_cpus::MemoryRegionId`], not by a task's allocations or data.
 //!
-//! With a regional [`WorkerPolicy`], submissions from processors in the same region share one
+//! With a regional [`DefaultWorkerPolicy`], submissions from processors in the same region share one
 //! configured worker count. Eager construction or the first submission activates those workers;
 //! further submissions from that region do not add workers. Each pool accounts for its regions
 //! independently, and scheduler clones share their pool's workers.
 //!
-//! With [`WorkerPolicy::per_system`], all submitting processors share one configured
+//! With [`DefaultWorkerPolicy::per_system`], all submitting processors share one configured
 //! worker count per pool, regardless of memory region. Workers may move across regions but
 //! remain limited to eagerly selected processors and those that have submitted accepted work.
 //!
@@ -142,6 +143,7 @@ mod join_handle;
 mod metrics;
 mod pool;
 mod pool_inner;
+mod pool_runtime;
 mod scheduler;
 mod task;
 mod task_error;
@@ -152,16 +154,20 @@ mod worker_policy;
 
 pub(crate) use constants::NEVER_POISONED;
 pub(crate) use group_id::*;
-pub(crate) use group_registry::*;
+pub use group_registry::WorkerGroups;
 pub use join_handle::*;
 pub use pool::*;
 pub(crate) use pool_inner::PoolInner;
+pub(crate) use pool_runtime::*;
 pub use scheduler::*;
 pub(crate) use task::*;
 pub use task_error::*;
 pub(crate) use task_panic::*;
 pub(crate) use worker::*;
-pub(crate) use worker_group::*;
+#[cfg(test)]
+pub(crate) use worker_group::WorkerEntry;
+pub(crate) use worker_group::{GroupState, WorkerGroupState};
+pub use worker_group::{WorkerGroup, WorkerGroupId};
 pub use worker_policy::*;
 
 #[cfg(test)]

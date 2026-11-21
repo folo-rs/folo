@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 
-use crate::{PoolInner, Scheduler, WorkerPolicy};
+use crate::{DefaultWorkerPolicy, PoolInner, Scheduler, WorkerPolicy};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -21,8 +21,9 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// A synchronous worker pool with configurable processor affinity.
 ///
 /// By default, tasks execute on the processor sampled during submission.
-/// [`WorkerPolicy`] can instead share a fixed worker count across each
-/// submitting memory region or across the system. Workers start on first submission unless
+/// [`DefaultWorkerPolicy`] can instead share a fixed worker count across each
+/// submitting memory region or across the system. A custom [`WorkerPolicy`] can select and
+/// create groups independently. Default-policy workers start on first submission unless
 /// [`PoolBuilder::eager`] initializes their destinations during construction.
 /// Shared workers use the initial selection plus processors that submitted accepted work
 /// to their pool and destination, refreshing affinity at task boundaries without adding workers.
@@ -31,7 +32,9 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// # Lifetime
 ///
 /// Dropping the pool stops accepting work, cancels queued tasks and waits for executing tasks
-/// and worker threads to finish. Cancelled joined tasks return a
+/// and worker participation in [`WorkerGroup::execute_worker()`][crate::WorkerGroup::execute_worker]
+/// to finish. Policy-owned operating-system threads may perform cleanup after leaving that
+/// method; the pool does not join them. Cancelled joined tasks return a
 /// [`TaskError`][crate::TaskError] that retains the original body for recovery;
 /// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
 /// submissions after clean shutdown as well.
@@ -61,7 +64,8 @@ pub struct Pool {
 impl Pool {
     /// Creates a pool with default settings and lazily started processor-local workers.
     ///
-    /// Use [`Self::builder`] and [`WorkerPolicy`] to configure worker counts explicitly.
+    /// Use [`Self::builder`] and [`DefaultWorkerPolicy`] to configure default worker counts,
+    /// or install a custom [`WorkerPolicy`].
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -92,14 +96,14 @@ impl Default for Pool {
 impl Drop for Pool {
     #[cfg_attr(test, mutants::skip)] // Removing shutdown strands sleeping workers.
     fn drop(&mut self) {
-        self.inner.join_all_workers();
+        self.inner.shutdown_and_wait_for_workers();
     }
 }
 
 /// Builder for configuring a [`Pool`].
 pub struct PoolBuilder {
     name: Option<String>,
-    policy: WorkerPolicy,
+    policy: Box<dyn WorkerPolicy>,
     hardware: Option<SystemHardware>,
     thread_init: Option<ThreadInit>,
     eager: Option<ProcessorSet>,
@@ -109,7 +113,9 @@ impl PoolBuilder {
     fn new() -> Self {
         Self {
             name: None,
-            policy: WorkerPolicy::per_processor(DEFAULT_WORKERS_PER_PROCESSOR),
+            policy: Box::new(DefaultWorkerPolicy::per_processor(
+                DEFAULT_WORKERS_PER_PROCESSOR,
+            )),
             hardware: None,
             thread_init: None,
             eager: None,
@@ -125,26 +131,32 @@ impl PoolBuilder {
         self
     }
 
-    /// Sets the pool's worker count and locality policy.
+    /// Sets the policy that assigns tasks and creates worker groups.
     ///
-    /// Replaces any previously selected policy; the last setter wins.
+    /// Replaces any previously selected policy; the last setter wins. Policies are boxed
+    /// internally, so `Pool` and `Scheduler` remain non-generic.
+    ///
+    /// The builder calls [`WorkerPolicy::prepare`] once with the final settings. Subsequent
+    /// submissions call [`WorkerPolicy::select_group`].
     #[must_use]
-    pub fn worker_policy(mut self, policy: WorkerPolicy) -> Self {
-        self.policy = policy;
+    pub fn worker_policy(mut self, policy: impl WorkerPolicy) -> Self {
+        self.policy = Box::new(policy);
         self
     }
 
     /// Initializes workers for the selected processors during construction.
     ///
-    /// [`Self::build`] waits for every selected worker to apply its initial affinity and finish
-    /// [`Self::thread_init`]. The effects of initialization are visible when construction returns.
-    /// The setter itself starts no workers and takes ownership of the nonempty processor set.
-    /// Repeated calls replace the selection; construction uses the final builder settings.
+    /// The final selection is passed to [`WorkerPolicy::prepare`]. A custom policy decides how
+    /// it maps the selection to groups and is responsible for waiting for required worker
+    /// readiness before preparation returns. The setter itself starts no workers and takes
+    /// ownership of the nonempty processor set. Repeated calls replace the selection;
+    /// construction uses the final builder settings.
     ///
-    /// With a per-processor policy, each selected processor gets its configured worker count.
-    /// With a regional policy, each represented region gets its count, with affinity limited to
-    /// selected processors in that region. A system policy starts its count once, with affinity
-    /// covering the entire selection. The constructing thread's affinity remains unchanged.
+    /// With a per-processor default policy, each selected processor gets its configured worker
+    /// count. With a regional default policy, each represented region gets its count, with
+    /// affinity limited to selected processors in that region. A system default policy starts
+    /// its count once, with affinity covering the entire selection. The constructing thread's
+    /// affinity remains unchanged.
     ///
     /// This is an initial selection, not a permanent restriction. Later submissions from other
     /// eligible processors start missing destinations lazily or expand shared-worker affinity.
@@ -231,7 +243,8 @@ impl PoolBuilder {
     /// # Panics
     ///
     /// Panics if eager worker creation, affinity setup or initialization fails.
-    /// Started workers are joined before the panic propagates.
+    /// Participating workers leave the worker loop before the panic propagates. The pool does
+    /// not join policy-owned operating-system threads after they leave `execute_worker()`.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Omitting eager startup can strand initializer coordination.
     pub fn build(self) -> Pool {
@@ -243,31 +256,30 @@ impl PoolBuilder {
 
         // Establish the shutdown owner before spawning: workers retain their own inner references.
         // Ref: docs/implementation.md, "Eager construction".
-        let pool = Pool {
+        Pool {
             inner: Arc::new(PoolInner::new(
                 pool_id,
                 pool_name,
-                hardware,
+                &hardware,
                 self.policy,
                 self.thread_init,
+                self.eager.as_ref(),
             )),
-        };
-        if let Some(processors) = self.eager {
-            pool.inner.start_eager(processors);
         }
-        pool
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for PoolBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let policy = std::any::type_name_of_val(&*self.policy);
         f.debug_struct(type_name::<Self>())
             .field("name", &self.name)
-            .field("policy", &self.policy)
+            .field("has_worker_policy", &true)
             .field("hardware", &self.hardware)
             .field("has_thread_init", &self.thread_init.is_some())
             .field("eager", &self.eager)
+            .field("policy", &policy)
             .finish()
     }
 }
@@ -287,8 +299,6 @@ mod tests {
     use static_assertions::assert_impl_all;
 
     use super::*;
-    use crate::GroupId;
-
     assert_impl_all!(Pool: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PoolBuilder: UnwindSafe, RefUnwindSafe);
 
@@ -298,30 +308,23 @@ mod tests {
         let default = Pool::builder().hardware(hardware.clone()).build();
         let region = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_processor(nz!(3)))
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(3)))
+            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let processor = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_system(nz!(1)))
-            .worker_policy(WorkerPolicy::per_processor(nz!(3)))
+            .worker_policy(DefaultWorkerPolicy::per_system(nz!(1)))
+            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(3)))
             .build();
         let system = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
-            .worker_policy(WorkerPolicy::per_system(nz!(3)))
+            .hardware(hardware)
+            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(DefaultWorkerPolicy::per_system(nz!(3)))
             .build();
 
-        for (pool, destination, count) in [
-            (&default, GroupId::Processor(0), nz!(2)),
-            (&region, GroupId::MemoryRegion(0), nz!(1)),
-            (&processor, GroupId::Processor(0), nz!(3)),
-            (&system, GroupId::System, nz!(3)),
-        ] {
-            assert_eq!(pool.inner.policy.destination(&hardware).group, destination);
-            assert_eq!(pool.inner.policy.count(), count);
+        for pool in [&default, &region, &processor, &system] {
             assert_eq!(pool.inner.registry.initialized().count(), 0);
-            assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+            assert_eq!(pool.inner.runtime.active_workers(), 0);
         }
     }
 

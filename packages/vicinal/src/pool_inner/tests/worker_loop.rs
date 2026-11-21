@@ -10,8 +10,8 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{hardware, pin, probe};
-use crate::pool_inner::worker_loop;
-use crate::{GroupId, Pool, WorkerGroup, WorkerPolicy};
+use crate::pool_inner::worker_loop_with;
+use crate::{DefaultWorkerPolicy, GroupId, Pool, WorkerGroupState};
 
 /// The pool-wide stop must abandon dequeued work even before its group receives a stop signal.
 #[test]
@@ -25,26 +25,27 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
             let dropped = Arc::clone(&dropped);
             move || {
                 let state = inner.registry.get_or_init(destination);
-                assert!(inner.shutdown.load(Ordering::Acquire));
-                assert!(!inner.poisoned.load(Ordering::Acquire));
+                assert!(inner.runtime.is_shutdown());
+                assert!(!inner.runtime.is_poisoned());
                 assert!(!state.shutdown_flag.load(Ordering::Acquire));
                 drop(state.regular_queue.try_lock().unwrap());
-                drop(state.affinity.try_lock().unwrap());
+                drop(state.affinity.try_read().unwrap());
                 dropped.store(true, Ordering::Release);
             }
         }));
 
         let pins = Cell::new(0);
-        worker_loop(&pool.inner, destination, 0, 0, |_| {
+        worker_loop_with(&pool.inner.runtime, state, 0, 0, |_| {
             pins.set(pins.get() + 1);
             let queued = state.regular_queue.lock().unwrap().len();
             assert_eq!(queued, 1);
             // The outer stop check has passed, but this iteration has not dequeued its task.
             // A pending revision makes an unnecessary post-stop refresh observable.
             publish_expansion(&pool, destination);
-            pool.inner.shutdown.store(true, Ordering::Release);
+            pool.inner.runtime.publish_shutdown_without_group_signals();
         });
 
+        pool.inner.shutdown_and_wait_for_workers();
         assert_eq!(pins.get(), 1);
         assert!(dropped.load(Ordering::Acquire));
         assert!(state.task_pool.lock().unwrap().is_empty());
@@ -63,17 +64,17 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
             let dropped = Arc::clone(&dropped);
             move || {
                 let state = inner.registry.get_or_init(destination);
-                assert!(inner.shutdown.load(Ordering::Acquire));
-                assert!(!inner.poisoned.load(Ordering::Acquire));
-                assert!(!state.shutdown_flag.load(Ordering::Acquire));
+                assert!(inner.runtime.is_shutdown());
+                assert!(!inner.runtime.is_poisoned());
+                assert!(state.shutdown_flag.load(Ordering::Acquire));
                 drop(state.urgent_queue.try_lock().unwrap());
-                drop(state.affinity.try_lock().unwrap());
+                drop(state.affinity.try_read().unwrap());
                 dropped.store(true, Ordering::Release);
             }
         }));
 
         let pins = Cell::new(0);
-        worker_loop(&pool.inner, destination, 0, 0, |set| {
+        worker_loop_with(&pool.inner.runtime, state, 0, 0, |set| {
             pins.set(pins.get() + 1);
             match pins.get() {
                 1 => {
@@ -85,9 +86,9 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
                 2 => {
                     assert_eq!(set.len(), 2);
                     assert!(state.urgent_queue.lock().unwrap().is_empty());
-                    // Leave the group signal untouched: only the post-refresh global check
-                    // can prevent this already-dequeued task from executing.
-                    pool.inner.shutdown.store(true, Ordering::Release);
+                    // The pool and group are both stopping, but this task has already been
+                    // dequeued; the post-refresh global check must still prevent execution.
+                    pool.inner.runtime.stop_workers();
                 }
                 _ => panic!("the worker must exit after abandoning the dequeued task"),
             }
@@ -95,7 +96,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
 
         assert_eq!(pins.get(), 2);
         assert!(dropped.load(Ordering::Acquire));
-        assert!(!pool.inner.poisoned.load(Ordering::Acquire));
+        assert!(!pool.inner.runtime.is_poisoned());
         assert!(state.task_pool.lock().unwrap().is_empty());
     });
 }
@@ -115,10 +116,10 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
             let rejected = Arc::clone(&rejected);
             move || {
                 let state = inner.registry.get_or_init(destination);
-                assert!(inner.poisoned.load(Ordering::Acquire));
-                assert!(inner.shutdown.load(Ordering::Acquire));
+                assert!(inner.runtime.is_poisoned());
+                assert!(inner.runtime.is_shutdown());
                 drop(state.regular_queue.try_lock().unwrap());
-                drop(state.affinity.try_lock().unwrap());
+                drop(state.affinity.try_read().unwrap());
                 drop(inner.worker_handles.try_lock().unwrap());
                 assert_panics(|| scheduler.spawn(|| {}));
                 assert_panics(|| scheduler.spawn_urgent(|| {}));
@@ -131,7 +132,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
 
         let pins = Cell::new(0);
         let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-            worker_loop(&pool.inner, destination, 0, 0, |set| {
+            worker_loop_with(&pool.inner.runtime, state, 0, 0, |set| {
                 pins.set(pins.get() + 1);
                 match pins.get() {
                     1 => {
@@ -154,7 +155,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
         assert!(payload.is::<AffinityFailure>());
         assert_eq!(pins.get(), 2);
         assert!(rejected.load(Ordering::Acquire));
-        assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+        assert_eq!(pool.inner.runtime.active_workers(), 0);
         assert!(state.task_pool.lock().unwrap().is_empty());
     });
 }
@@ -163,11 +164,11 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
 fn regional_pool() -> (Pool, GroupId) {
     let hardware = hardware();
     pin(&hardware, 0);
+    let target = DefaultWorkerPolicy::per_memory_region(nz!(1)).destination(&hardware);
     let pool = Pool::builder()
         .hardware(hardware.clone())
-        .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
         .build();
-    let target = pool.inner.policy.destination(&hardware);
     let state = pool.inner.registry.get_or_init(target.group);
 
     publish_affinity(
@@ -198,8 +199,8 @@ fn publish_expansion(pool: &Pool, destination: GroupId) {
 }
 
 /// Publishes snapshots without task admission so tests control the loop's exact queue contents.
-fn publish_affinity(state: &WorkerGroup, set: ProcessorSet) {
-    let mut affinity = state.affinity.lock().unwrap();
-    *affinity = Some(Arc::new(set));
+fn publish_affinity(state: &WorkerGroupState, set: ProcessorSet) {
+    let mut affinity = state.affinity.write().unwrap();
+    *affinity = Some(set);
     state.affinity_revision.fetch_add(1, Ordering::Release);
 }
