@@ -1,5 +1,7 @@
 //! Built-in policies for routing work to fixed worker counts.
 
+#[cfg(test)]
+mod tests;
 mod workers_per_memory_region;
 mod workers_per_processor;
 mod workers_per_system;

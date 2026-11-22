@@ -41,16 +41,19 @@ impl WorkerPolicy for WorkersPerMemoryRegion {
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn count(&self) -> NonZero<u32> {
         WorkerPolicy::count(&self.policy)
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn membership_snapshot(&self) -> Vec<(ProcessorId, bool)> {
         WorkerPolicy::membership_snapshot(&self.policy)
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn install_test_group(
         &self,
         groups: &WorkerGroups,
