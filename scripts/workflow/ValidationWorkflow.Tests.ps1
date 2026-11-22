@@ -20,6 +20,8 @@ BeforeAll {
     $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
     $script:publicApiPublisher = Get-Content -LiteralPath (
         Join-Path $root '.github/workflows/public-api-diff-publish.yml') -Raw
+    $script:publicApiProducer = Get-Content -LiteralPath (
+        Join-Path $root '.github/workflows/public-api-diff.yml') -Raw
     $script:benchmarkWorkflows = @(
         foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
             Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
@@ -286,6 +288,24 @@ Describe 'Shared environment preparation order' {
 }
 
 Describe 'Public API diff publisher trust boundary' {
+    It 'binds the read-only producer name and artifact to its trusted consumer' {
+        $name = [regex]::Match($publicApiProducer, '(?m)^name: (?<name>[^\r\n]+)').Groups['name'].Value
+        $publicApiPublisher | Should -Match ([regex]::Escape("- $name"))
+        @(Get-WorkflowEvent $publicApiProducer) | Should -Be @('pull_request')
+        $publicApiProducer | Should -Match '(?m)^  contents: read\r?$'
+        $publicApiProducer | Should -Not -Match '(?m)^\s+[a-z-]+: write\r?$'
+        $job = Get-WorkflowJob $publicApiProducer 'generate'
+        $job | Should -Match 'ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}'
+        $job | Should -Match 'fetch-depth: 0'
+        $job | Should -Match 'persist-credentials: false'
+        $job | Should -Match 'BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}'
+        $job | Should -Match 'HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}'
+        $job | Should -Match 'name: public-api-diff-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}'
+        $job | Should -Match 'if: always\(\)'
+        $job | Should -Match 'public-api-diff/public-api-diff\.json'
+        $publicApiPublisher | Should -Match 'public-api-diff/public-api-diff\.json'
+    }
+
     It 'runs from workflow completion with comment-only default-branch authority' {
         @(Get-WorkflowEvent $publicApiPublisher) | Should -Be @('workflow_run')
         $publicApiPublisher | Should -Match '(?m)^  actions: read\r?$'

@@ -135,7 +135,8 @@ Clippy already guarantees.
 Public API review uses a sticky PR comment generated after every head update. The
 unprivileged `pull_request` producer may compile and inspect PR source but receives no
 write permission. It publishes a bounded, structured JSON artifact and never invokes
-GitHub comment APIs.
+GitHub comment APIs. It compares affected publishable libraries from the event's merge
+base to its frozen head and records package-level failures rather than hiding them.
 
 A separate `workflow_run` workflow is the only comment writer. GitHub runs it from the
 trusted default branch, not from the completed run's head. Before writing, its PowerShell

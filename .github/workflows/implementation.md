@@ -507,6 +507,19 @@ does not replace declared dependencies.
 
 ### Public API diff publication
 
+`public-api-diff.yml` checks out the immutable PR head with full history and uses the
+event base and head to compute the merge base. The existing Cargo delta analysis selects
+affected packages against that commit. Live Cargo metadata limits the report to publishable
+workspace libraries. The pinned nightly and `cargo-public-api` compare each selected
+package with simplified output and all features. Its in-place commit checkouts require
+temporary output files outside the checkout. The producer continues after package errors,
+writes their reports and then fails the job. Setup and selection failures leave no report,
+which the publisher reports as an incomplete run.
+
+The PowerShell producer shares the publisher's failure-reporting boundary: it must record
+individual Rust tool failures without depending on compiling another Rust helper. Its pure
+selection and report-shaping functions accept test data without Git or Cargo.
+
 `public-api-diff-publish.yml` listens only for completed `Public API diff` workflow
 runs. Its job accepts only pull-request runs, checks out
 `github.event.repository.default_branch` and requests Actions-read plus Pull-requests-write.
