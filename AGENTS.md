@@ -67,6 +67,12 @@ directly:
   version changes.
   Follow [docs/git-workflow.md](docs/git-workflow.md#versionrelease-plan-section) and
   [docs/release-versioning.md](docs/release-versioning.md#on-a-pull-request).
+* **Show public API changes in every PR.** Include a **Public API diff** section in
+  every submitted PR description. For public API changes, include simplified
+  `cargo-public-api` output from the PR merge-base to its final head, with blanket,
+  auto-trait and auto-derived noise omitted. For no public API changes, state that
+  explicitly. Follow
+  [docs/git-workflow.md](docs/git-workflow.md#public-api-diff-section).
 * **Run the repository-specific extension after version planning.** After
   `increment-versions`, including after reassessment, run
   [`pair-action-releases`](.github/skills/pair-action-releases/SKILL.md).
