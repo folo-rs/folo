@@ -26,6 +26,14 @@ Added items to the public API
 }
 
 Describe 'Public API producer' {
+    It 'binds delta Git change detection to the same merge base as its snapshot' {
+        $config = "[git]`nremote_branch = `"origin/main`"`n"
+        $sha = 'b' * 40
+        $result = Get-PublicApiDeltaConfig -Config $config -MergeBaseSha $sha
+        $result | Should -Match ([regex]::Escape("remote_branch = `"$sha`""))
+        { Get-PublicApiDeltaConfig -Config '[git]' -MergeBaseSha $sha } | Should -Throw
+    }
+
     It 'selects only affected publishable workspace libraries' {
         $metadata = @{
             workspace_members = @('a', 'b', 'c', 'd')

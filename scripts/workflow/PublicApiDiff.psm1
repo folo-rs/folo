@@ -7,6 +7,25 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
+function Get-PublicApiDeltaConfig {
+    # Delta's snapshots do not set its Git comparison ref; both inputs must use the same
+    # merge base or an inherited trip wire can select the wrong packages for a stacked PR.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Config,
+        [Parameter(Mandatory)][string] $MergeBaseSha
+    )
+
+    if ($MergeBaseSha -cnotmatch '^[0-9a-f]{40}([0-9a-f]{24})?$') {
+        throw 'Expected a full merge-base commit ID.'
+    }
+    $pattern = '(?m)^remote_branch\s*=\s*"[^"\r\n]*"\s*$'
+    if ([regex]::Matches($Config, $pattern).Count -ne 1) {
+        throw 'Delta configuration must contain exactly one remote_branch setting.'
+    }
+    return [regex]::Replace($Config, $pattern, "remote_branch = `"$MergeBaseSha`"")
+}
+
 function Select-PublicApiPackage {
     # Cargo metadata supplies current workspace membership, publication policy and target kinds.
     [CmdletBinding()]
@@ -105,4 +124,5 @@ function Get-PublicApiReport {
     }
 }
 
-Export-ModuleMember -Function Select-PublicApiPackage, ConvertTo-PublicApiPackageReport, Get-PublicApiReport
+Export-ModuleMember -Function Get-PublicApiDeltaConfig, Select-PublicApiPackage, `
+    ConvertTo-PublicApiPackageReport, Get-PublicApiReport

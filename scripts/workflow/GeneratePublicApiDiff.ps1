@@ -26,7 +26,15 @@ foreach ($sha in @($BaseSha, $HeadSha)) {
 }
 if ((git rev-parse HEAD) -cne $HeadSha) { throw 'Checkout does not match the event head.' }
 $mergeBase = git merge-base $BaseSha $HeadSha
-$affected = @(Invoke-CargoDelta -SkipFetch -BaselineRevision $mergeBase)
+$deltaConfig = Join-Path ([IO.Path]::GetTempPath()) "public-api-delta-$([guid]::NewGuid()).toml"
+try {
+    $config = Get-PublicApiDeltaConfig -Config ([IO.File]::ReadAllText((Resolve-Path 'delta.toml'))) `
+        -MergeBaseSha $mergeBase
+    [IO.File]::WriteAllText($deltaConfig, $config, [Text.UTF8Encoding]::new($false))
+    $affected = @(Invoke-CargoDelta -SkipFetch -BaselineRevision $mergeBase -ConfigPath $deltaConfig)
+} finally {
+    Remove-Item -LiteralPath $deltaConfig -Force -ErrorAction SilentlyContinue
+}
 $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json -AsHashtable
 $packages = @(Select-PublicApiPackage -Affected $affected -Metadata $metadata)
 $constants = Read-DotEnvFile -Path 'constants.env'

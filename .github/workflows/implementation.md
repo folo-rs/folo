@@ -510,7 +510,9 @@ does not replace declared dependencies.
 `public-api-diff.yml` checks out the immutable PR head with full history and uses the
 event base and head to compute the merge base. The existing Cargo delta analysis selects
 affected packages against that commit. Live Cargo metadata limits the report to publishable
-workspace libraries. The pinned nightly and `cargo-public-api` compare each selected
+workspace libraries. A temporary delta configuration binds its Git change detection to the
+same commit as the baseline snapshot, independent of the default `origin/main` setting.
+The pinned nightly and `cargo-public-api` compare each selected
 package with simplified output and all features. Its in-place commit checkouts require
 temporary output files outside the checkout. The producer continues after package errors,
 writes their reports and then fails the job. Setup and selection failures leave no report,
