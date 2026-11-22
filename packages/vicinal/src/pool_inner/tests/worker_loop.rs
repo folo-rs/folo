@@ -11,7 +11,7 @@ use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{hardware, pin, probe};
 use crate::pool_inner::worker_loop_with;
-use crate::{DefaultWorkerPolicy, GroupId, Pool, WorkerGroupState};
+use crate::{BuiltInWorkerPolicy, GroupId, Pool, WorkerGroupState};
 
 /// The pool-wide stop must abandon dequeued work even before its group receives a stop signal.
 #[test]
@@ -164,10 +164,10 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
 fn regional_pool() -> (Pool, GroupId) {
     let hardware = hardware();
     pin(&hardware, 0);
-    let target = DefaultWorkerPolicy::per_memory_region(nz!(1)).destination(&hardware);
+    let target = BuiltInWorkerPolicy::per_memory_region(nz!(1)).destination(&hardware);
     let pool = Pool::builder()
         .hardware(hardware.clone())
-        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let state = pool.inner.registry.get_or_init(target.group);
 

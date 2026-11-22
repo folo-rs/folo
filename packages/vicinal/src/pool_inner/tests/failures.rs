@@ -9,7 +9,7 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{CountOnDrop, NoopTask, PanickingPayload, hardware, pin, regional_hardware};
-use crate::{DefaultWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
+use crate::{BuiltInWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
 
 /// Submission failures stop admission, whereas caught user-task panics leave it operational.
 #[test]
@@ -17,7 +17,7 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         assert!(
@@ -47,7 +47,7 @@ fn disconnected_joined_panic_does_not_poison_pool() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
             .build();
         pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
@@ -72,7 +72,7 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
             .build();
         pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
@@ -93,7 +93,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let target = hardware.with_current_processor(|processor| SubmissionTarget {
             group: GroupId::MemoryRegion(processor.memory_region_id()),

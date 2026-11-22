@@ -11,7 +11,7 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{NoopTask, OnDrop, hardware, pin};
-use crate::{DefaultWorkerPolicy, Pool, init_task};
+use crate::{BuiltInWorkerPolicy, Pool, init_task};
 
 /// Initializer failure cannot lose a sibling's handle while startup still owns registration.
 #[test]
@@ -21,8 +21,8 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
 
     with_watchdog(|| {
         for policy in [
-            DefaultWorkerPolicy::per_processor(nz!(WORKERS)),
-            DefaultWorkerPolicy::per_memory_region(nz!(WORKERS)),
+            BuiltInWorkerPolicy::per_processor(nz!(WORKERS)),
+            BuiltInWorkerPolicy::per_memory_region(nz!(WORKERS)),
         ] {
             let hardware = hardware();
             let target = policy.destination(&hardware);
@@ -103,7 +103,7 @@ fn shutdown_waits_for_failure_publication_to_finish() {
     with_watchdog(|| {
         let hardware = hardware();
         pin(&hardware, 0);
-        let policy = DefaultWorkerPolicy::per_processor(nz!(1));
+        let policy = BuiltInWorkerPolicy::per_processor(nz!(1));
         let target = policy.destination(&hardware);
         let (initializer_entered, initializer_arrival) = mpsc::channel();
         let (release_initializer, wait_for_release) = mpsc::channel();
@@ -175,8 +175,8 @@ fn shutdown_waits_for_failure_publication_to_finish() {
 fn shutdown_waits_for_initialization_and_cancels_queued_work() {
     with_watchdog(|| {
         for policy in [
-            DefaultWorkerPolicy::per_processor(nz!(1)),
-            DefaultWorkerPolicy::per_memory_region(nz!(1)),
+            BuiltInWorkerPolicy::per_processor(nz!(1)),
+            BuiltInWorkerPolicy::per_memory_region(nz!(1)),
         ] {
             // Pin to the first fake processor so both tasks share one initializer.
             let hardware = hardware();

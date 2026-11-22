@@ -32,7 +32,7 @@ Default pool names include an incrementing pool counter. Only the inclusion of a
 chosen name is contractual; its position and the rest of the naming scheme are
 implementation details.
 
-The default policy maintains indexed routes to copyable IDs. A typed internal destination
+The built-in policy implementations share indexed routes to copyable IDs. A typed internal destination
 distinguishes logical processors, memory regions and the system. Each submission samples one
 processor and derives its regional destination from the same topology entry. Custom policies
 may maintain any mapping, add groups during selection and retain cloned collections for later
@@ -43,7 +43,8 @@ participation state. Workers consume only their group's queues.
 Processor groups use direct indexed lookup. Regional groups use compact slots for the
 populated regions, with binary search over sorted IDs; storage does not scale with the
 highest region ID. Regions without eligible processors have no slot. System pools have a
-single group, independent of processor and region counts. Default-policy lookups require neither a global map lock nor topology filtering.
+single group, independent of processor and region counts. Built-in policy lookups require
+neither a global map lock nor topology filtering.
 
 ## Task storage
 
@@ -91,12 +92,12 @@ therefore runs without any group-state lock held.
 Each enqueue wakes an additional sleeping worker: notification coalescing must not leave
 idle workers asleep while an already notified worker enters a blocking task.
 
-Policy selection happens before queue admission. On the default policy's cold processor path,
+Policy selection happens before queue admission. On the built-in processor policy's cold path,
 the route's `OnceLock` serializes group creation, thread spawning and initial pin readiness.
 That lock is absent from established routes. Shared-policy membership uses sorted atomic
 membership entries so a known submitting processor takes no registry lock and builds no mask.
 
-Default-policy pinning happens in each newly spawned thread before `execute_worker()`.
+Built-in policy pinning happens in each newly spawned thread before `execute_worker()`.
 `execute_worker()` registers participation, runs initialization and then enters the worker
 loop. Lazy startup waits for affinity readiness but not for `thread_init` completion. Eager
 startup waits for initialization too. A custom policy owns its operating-system thread handles,
@@ -125,9 +126,10 @@ time. It constructs the runtime and worker-group registry before calling policy 
 If preparation unwinds, the runtime stops every registered group and waits for participating
 workers before resuming the failure.
 
-Default eager preparation validates both supplied processor handles and processors rebuilt through the
-selection's backing hardware against the pool's eligible set. Full processor equality includes
-hardware-instance identity; supplied handles alone do not establish the backend used for pinning.
+Built-in eager preparation validates both supplied processor handles and processors rebuilt
+through the selection's backing hardware against the pool's eligible set. Full processor equality
+includes hardware-instance identity; supplied handles alone do not establish the backend used for
+pinning.
 It partitions the selection into
 singletons for distinct processors, distinct regions or one system mask according to the policy.
 Repeated entries never create additional worker groups. Group masks and shared
@@ -145,7 +147,7 @@ Unselected processors retain the ordinary lazy-startup and cumulative-expansion 
 
 ### Affinity and failure coordination
 
-Lazy default-policy workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
+Lazy built-in workers start with a singleton selected from `SystemHardware::all_processors()`, retaining
 hard operating-system restrictions independently of processor-time quotas. Eager workers start
 with the selected destination mask. Processor groups
 keep that affinity. Regional and system groups publish an immutable shared affinity snapshot and

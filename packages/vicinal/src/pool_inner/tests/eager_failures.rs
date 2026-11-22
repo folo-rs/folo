@@ -91,7 +91,7 @@ fn eager_initializer_failure_reaches_builder() {
             _ = Pool::builder()
                 .hardware(hardware)
                 .eager(processors)
-                .worker_policy(crate::DefaultWorkerPolicy::per_system(nz!(2)))
+                .worker_policy(crate::BuiltInWorkerPolicy::per_system(nz!(2)))
                 .thread_init(|| panic::panic_any(InitializationFailure))
                 .build();
         })

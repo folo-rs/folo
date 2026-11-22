@@ -10,7 +10,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 
-use crate::{DefaultWorkerPolicy, PoolInner, Scheduler, WorkerPolicy};
+#[cfg(test)]
+use crate::BuiltInWorkerPolicy;
+use crate::policies::WorkersPerProcessor;
+use crate::{PoolInner, Scheduler, WorkerPolicy};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -21,9 +24,11 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// A synchronous worker pool with configurable processor affinity.
 ///
 /// By default, tasks execute on the processor sampled during submission.
-/// [`DefaultWorkerPolicy`] can instead share a fixed worker count across each
-/// submitting memory region or across the system. A custom [`WorkerPolicy`] can select and
-/// create groups independently. Default-policy workers start on first submission unless
+/// [`policies::WorkersPerMemoryRegion`][crate::policies::WorkersPerMemoryRegion] and
+/// [`policies::WorkersPerSystem`][crate::policies::WorkersPerSystem] can instead share a fixed
+/// worker count across each submitting memory region or across the system. A custom
+/// [`WorkerPolicy`] can select and create groups independently. Built-in workers start on first
+/// submission unless
 /// [`PoolBuilder::eager`] initializes their destinations during construction.
 /// Shared workers use the initial selection plus processors that submitted accepted work
 /// to their pool and destination, refreshing affinity at task boundaries without adding workers.
@@ -64,8 +69,8 @@ pub struct Pool {
 impl Pool {
     /// Creates a pool with default settings and lazily started processor-local workers.
     ///
-    /// Use [`Self::builder`] and [`DefaultWorkerPolicy`] to configure default worker counts,
-    /// or install a custom [`WorkerPolicy`].
+    /// Use [`Self::builder`] with one of the [`policies`][crate::policies] types to configure
+    /// built-in worker counts, or install a custom [`WorkerPolicy`].
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -113,9 +118,7 @@ impl PoolBuilder {
     fn new() -> Self {
         Self {
             name: None,
-            policy: Box::new(DefaultWorkerPolicy::per_processor(
-                DEFAULT_WORKERS_PER_PROCESSOR,
-            )),
+            policy: Box::new(WorkersPerProcessor::new(DEFAULT_WORKERS_PER_PROCESSOR)),
             hardware: None,
             thread_init: None,
             eager: None,
@@ -152,11 +155,13 @@ impl PoolBuilder {
     /// ownership of the nonempty processor set. Repeated calls replace the selection;
     /// construction uses the final builder settings.
     ///
-    /// With a per-processor default policy, each selected processor gets its configured worker
-    /// count. With a regional default policy, each represented region gets its count, with
-    /// affinity limited to selected processors in that region. A system default policy starts
-    /// its count once, with affinity covering the entire selection. The constructing thread's
-    /// affinity remains unchanged.
+    /// With [`policies::WorkersPerProcessor`][crate::policies::WorkersPerProcessor], each selected
+    /// processor gets its configured worker count. With
+    /// [`policies::WorkersPerMemoryRegion`][crate::policies::WorkersPerMemoryRegion], each
+    /// represented region gets its count, with affinity limited to selected processors in that
+    /// region. [`policies::WorkersPerSystem`][crate::policies::WorkersPerSystem] starts its count
+    /// once, with affinity covering the entire selection. The constructing thread's affinity
+    /// remains unchanged.
     ///
     /// This is an initial selection, not a permanent restriction. Later submissions from other
     /// eligible processors start missing destinations lazily or expand shared-worker affinity.
@@ -308,18 +313,18 @@ mod tests {
         let default = Pool::builder().hardware(hardware.clone()).build();
         let region = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(3)))
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(3)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let processor = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_system(nz!(1)))
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(3)))
+            .worker_policy(BuiltInWorkerPolicy::per_system(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(3)))
             .build();
         let system = Pool::builder()
             .hardware(hardware)
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
-            .worker_policy(DefaultWorkerPolicy::per_system(nz!(3)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_system(nz!(3)))
             .build();
 
         for pool in [&default, &region, &processor, &system] {

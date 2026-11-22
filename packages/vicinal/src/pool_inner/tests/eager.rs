@@ -14,7 +14,7 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{affinity, assert_retained_scheduler, hardware, pin, regional_hardware};
-use crate::{DefaultWorkerPolicy, GroupId, PolicyKind, Pool, WorkerGroup};
+use crate::{BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, WorkerGroup};
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
@@ -230,7 +230,7 @@ fn eager_setters_replace_configuration_without_starting_workers() {
                 nz!(1),
             )))
             .eager(hardware.all_processors())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(2)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(2)))
             .thread_init(|| panic!("replaced callback"))
             .eager(
                 hardware
@@ -238,7 +238,7 @@ fn eager_setters_replace_configuration_without_starting_workers() {
                     .filter(|processor| processor.id() == 3)
                     .unwrap(),
             )
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .hardware(hardware.clone())
             .thread_init({
                 let initialized = Arc::clone(&initialized);
@@ -331,7 +331,7 @@ fn eager_unused_pool_without_initializer_joins_workers() {
         // Idle siblings exercise cleanup independently of task execution and initializer callbacks.
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_system(nz!(2)))
+            .worker_policy(BuiltInWorkerPolicy::per_system(nz!(2)))
             .eager(hardware.all_processors())
             .build();
         let inner = Arc::clone(&pool.inner);
@@ -364,7 +364,7 @@ fn eager_initializers_overlap_across_groups() {
         let initialized = Arc::new(AtomicUsize::new(0));
         let pool = Pool::builder()
             .hardware(hardware)
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .eager(processors)
             .thread_init({
                 let initialized = Arc::clone(&initialized);
@@ -381,11 +381,11 @@ fn eager_initializers_overlap_across_groups() {
     });
 }
 
-/// Keeps each policy's concurrency explicit without coupling fixtures to the default count.
-fn policy(kind: PolicyKind, count: NonZero<u32>) -> DefaultWorkerPolicy {
+/// Keeps each policy's concurrency explicit without coupling fixtures to the pool default.
+fn policy(kind: PolicyKind, count: NonZero<u32>) -> BuiltInWorkerPolicy {
     match kind {
-        PolicyKind::Processor => DefaultWorkerPolicy::per_processor(count),
-        PolicyKind::MemoryRegion => DefaultWorkerPolicy::per_memory_region(count),
-        PolicyKind::System => DefaultWorkerPolicy::per_system(count),
+        PolicyKind::Processor => BuiltInWorkerPolicy::per_processor(count),
+        PolicyKind::MemoryRegion => BuiltInWorkerPolicy::per_memory_region(count),
+        PolicyKind::System => BuiltInWorkerPolicy::per_system(count),
     }
 }

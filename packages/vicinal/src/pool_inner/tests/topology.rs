@@ -14,7 +14,7 @@ use testing::with_watchdog;
 
 use super::helpers::{NoopTask, affinity, hardware, pin, probe, regional_hardware};
 use crate::pool_inner::refresh_affinity;
-use crate::{DefaultWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
+use crate::{BuiltInWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
 
 /// Sparse IDs need one membership entry per eligible CPU, without registering absent submitters.
 #[test]
@@ -30,7 +30,7 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
         );
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
 
         let membership = || pool.inner.policy.membership_snapshot();
@@ -78,7 +78,7 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
 fn processor_policy_does_not_allocate_submission_membership() {
     let pool = Pool::builder()
         .hardware(hardware())
-        .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+        .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
         .build();
     assert!(pool.inner.policy.membership_snapshot().is_empty());
 }
@@ -93,7 +93,7 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
         let hardware = regional_hardware();
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_system(nz!(WORKERS)))
+            .worker_policy(BuiltInWorkerPolicy::per_system(nz!(WORKERS)))
             .build();
 
         assert_eq!(pool.inner.registry.initialized().count(), 0);
@@ -159,7 +159,7 @@ fn system_pools_keep_processor_membership_independent() {
         let build = || {
             Pool::builder()
                 .hardware(hardware.clone())
-                .worker_policy(DefaultWorkerPolicy::per_system(nz!(1)))
+                .worker_policy(BuiltInWorkerPolicy::per_system(nz!(1)))
                 .build()
         };
         let first = build();
@@ -194,7 +194,7 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
         assert!(hardware.processors().len() < processors.len());
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
 
@@ -222,7 +222,7 @@ fn every_submission_variant_grows_the_region_mask() {
         let hardware = regional_hardware();
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         let mut expected = BTreeSet::new();
@@ -263,7 +263,7 @@ fn membership_is_isolated_by_pool_and_region() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
         block_on(scheduler.spawn(|| {})).unwrap();
@@ -271,7 +271,7 @@ fn membership_is_isolated_by_pool_and_region() {
         pin(&hardware, 3);
         let independent = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
         assert_eq!(
             block_on(independent.scheduler().spawn({
@@ -295,7 +295,7 @@ fn membership_is_isolated_by_pool_and_region() {
 /// Blocking all workers lets concurrent submitters widen one group before execution resumes.
 #[test]
 fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
-    assert_concurrent_additions(DefaultWorkerPolicy::per_memory_region(nz!(1)), [1, 2]);
+    assert_concurrent_additions(BuiltInWorkerPolicy::per_memory_region(nz!(1)), [1, 2]);
 }
 
 /// First-time submissions from one processor cannot bypass affinity publication.
@@ -306,7 +306,7 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
         pin(&hardware, 0);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
         let scheduler = pool.scheduler();
 
@@ -386,11 +386,11 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
 /// Cross-region additions must preserve the same fixed capacity and task-boundary refresh.
 #[test]
 fn system_concurrent_additions_preserve_busy_workers_and_fixed_count() {
-    assert_concurrent_additions(DefaultWorkerPolicy::per_system(nz!(1)), [1, 8]);
+    assert_concurrent_additions(BuiltInWorkerPolicy::per_system(nz!(1)), [1, 8]);
 }
 
 /// Exercises shared worker expansion without depending on which submitting thread runs first.
-fn assert_concurrent_additions(policy: DefaultWorkerPolicy, processors: [u32; 2]) {
+fn assert_concurrent_additions(policy: BuiltInWorkerPolicy, processors: [u32; 2]) {
     with_watchdog(move || {
         let hardware = regional_hardware();
         pin(&hardware, 0);
@@ -450,17 +450,17 @@ fn assert_concurrent_additions(policy: DefaultWorkerPolicy, processors: [u32; 2]
 /// Pin acknowledgments prove idle workers refresh without needing one task per worker.
 #[test]
 fn idle_workers_refresh_even_without_a_task_for_each_worker() {
-    assert_idle_workers_refresh(DefaultWorkerPolicy::per_memory_region(nz!(2)), 1);
+    assert_idle_workers_refresh(BuiltInWorkerPolicy::per_memory_region(nz!(2)), 1);
 }
 
 /// System workers must also refresh when an idle worker receives no task after expansion.
 #[test]
 fn system_idle_workers_refresh_even_without_a_task_for_each_worker() {
-    assert_idle_workers_refresh(DefaultWorkerPolicy::per_system(nz!(2)), 8);
+    assert_idle_workers_refresh(BuiltInWorkerPolicy::per_system(nz!(2)), 8);
 }
 
 /// Expands affinity while each worker holds a fresh registered wait at the initial revision.
-fn assert_idle_workers_refresh(policy: DefaultWorkerPolicy, next_processor: u32) {
+fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32) {
     // Sibling workers expose whether expansion wakes workers without queued tasks.
     const WORKERS: u32 = 2;
 
@@ -562,7 +562,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     pin(&hardware, 0);
     let pool = Pool::builder()
         .hardware(hardware)
-        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
         .build();
     let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
     pool.inner.install_test_group(SubmissionTarget {

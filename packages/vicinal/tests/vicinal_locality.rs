@@ -10,7 +10,8 @@ use futures::executor::block_on;
 use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use testing::with_watchdog;
-use vicinal::{DefaultWorkerPolicy, Pool};
+use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
+use vicinal::{Pool, WorkerPolicy};
 
 testing::init_tracing!();
 
@@ -46,28 +47,28 @@ fn tasks_execute_on_spawning_processor() {
 
 #[test]
 fn regional_tasks_use_only_submitting_processors() {
-    assert_submitting_processor_affinity(DefaultWorkerPolicy::per_memory_region(nz!(2_u32)), true);
+    assert_submitting_processor_affinity(WorkersPerMemoryRegion::new(nz!(2_u32)), true);
 }
 
 #[test]
 fn system_tasks_use_only_submitting_processors() {
-    assert_submitting_processor_affinity(DefaultWorkerPolicy::per_system(nz!(2_u32)), false);
+    assert_submitting_processor_affinity(WorkersPerSystem::new(nz!(2_u32)), false);
 }
 
 /// Eager initializers observe the exact selected regional mask through the real OS adapter.
 #[test]
 fn eager_regional_initializers_have_selected_affinity() {
-    assert_eager_affinity(DefaultWorkerPolicy::per_memory_region(nz!(1)), true);
+    assert_eager_affinity(WorkersPerMemoryRegion::new(nz!(1)), true);
 }
 
 /// System startup applies its full selection before invoking any user initialization.
 #[test]
 fn eager_system_initializers_have_selected_affinity() {
-    assert_eager_affinity(DefaultWorkerPolicy::per_system(nz!(1)), false);
+    assert_eager_affinity(WorkersPerSystem::new(nz!(1)), false);
 }
 
 /// Bounded native coverage complements simulated sparse/multi-region unit tests.
-fn assert_eager_affinity(policy: DefaultWorkerPolicy, regional: bool) {
+fn assert_eager_affinity(policy: impl WorkerPolicy, regional: bool) {
     with_watchdog(move || {
         let hardware = SystemHardware::current();
         // A small selection tests multi-CPU affinity without creating machine-sized pools.
@@ -116,7 +117,7 @@ fn assert_eager_affinity(policy: DefaultWorkerPolicy, regional: bool) {
 }
 
 /// Verifies actual OS affinity, including cross-region masks on multi-region machines.
-fn assert_submitting_processor_affinity(policy: DefaultWorkerPolicy, regional: bool) {
+fn assert_submitting_processor_affinity(policy: impl WorkerPolicy, regional: bool) {
     with_watchdog(move || {
         let hardware = SystemHardware::current();
         let processors = hardware.all_processors();

@@ -17,7 +17,8 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use testing::DefaultAllocator;
 use threadpool::ThreadPool;
-use vicinal::{DefaultWorkerPolicy, Pool};
+use vicinal::Pool;
+use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerProcessor};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
@@ -94,8 +95,7 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
         let builder = || {
             // Fix the destination capacity to match the dispatch comparison, independently
             // of future changes to the library default. No application initializer is installed.
-            let builder =
-                Pool::builder().worker_policy(DefaultWorkerPolicy::per_processor(nz!(2_u32)));
+            let builder = Pool::builder().worker_policy(WorkersPerProcessor::new(nz!(2_u32)));
             if eager {
                 builder.eager(one_processor.clone())
             } else {
@@ -607,10 +607,9 @@ fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &Tim
 
     // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
     // tasks. This benchmark count does not track future changes to the pool's default.
-    for (policy_name, policy) in [
-        ("processor", DefaultWorkerPolicy::per_processor(nz!(2_u32))),
-        ("region", DefaultWorkerPolicy::per_memory_region(nz!(2_u32))),
-    ] {
+    for policy_case in [PolicyCase::Processor, PolicyCase::MemoryRegion] {
+        let policy_name = policy_case.name();
+
         // The low case isolates dispatch; the high case exercises shared queue/slot reuse.
         for batch_size in [1, TASK_BATCH_SIZE] {
             let name = format!("{policy_name}/{batch_size}");
@@ -618,7 +617,7 @@ fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &Tim
             let time = times.operation(format!("vicinal/policy_dispatch/{name}"));
 
             group.bench_function(name, |b| {
-                let pool = Pool::builder().worker_policy(policy.clone()).build();
+                let pool = policy_case.pool();
                 let scheduler = pool.scheduler();
                 block_on(scheduler.spawn(|| {})).unwrap();
                 let mut handles = Vec::with_capacity(batch_size);
@@ -647,6 +646,37 @@ fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &Tim
     group.finish();
 }
 
+/// Identifies the built-in policies compared by the dispatch benchmark.
+#[derive(Clone, Copy)]
+enum PolicyCase {
+    Processor,
+    MemoryRegion,
+}
+
+impl PolicyCase {
+    /// Returns the stable benchmark label for this policy.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Processor => "processor",
+            Self::MemoryRegion => "region",
+        }
+    }
+
+    /// Builds an otherwise equivalent pool for the selected policy.
+    fn pool(self) -> Pool {
+        let count = nz!(2_u32);
+
+        match self {
+            Self::Processor => Pool::builder()
+                .worker_policy(WorkersPerProcessor::new(count))
+                .build(),
+            Self::MemoryRegion => Pool::builder()
+                .worker_policy(WorkersPerMemoryRegion::new(count))
+                .build(),
+        }
+    }
+}
+
 /// Measures competing submitters sharing a region; thread creation and affinity are untimed.
 ///
 /// The workspace has no `bench_on_threadpool` helper. A scoped-thread harness runs both
@@ -667,7 +697,7 @@ fn region_contention(criterion: &mut Criterion, caller: &ProcessorSet) {
             // Use the same fixed destination capacity as policy_dispatch so contention is
             // measured without changing the amount of worker parallelism.
             let pool = Pool::builder()
-                .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(2_u32)))
+                .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
                 .build();
             let scheduler = pool.scheduler();
 

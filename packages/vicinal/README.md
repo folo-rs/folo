@@ -24,7 +24,8 @@ The example uses `ohno::AppError`; enable the `app-err` feature on `ohno`.
 use many_cpus::SystemHardware;
 use new_zealand::nz;
 use ohno::AppError;
-use vicinal::{DefaultWorkerPolicy, Pool, TaskError};
+use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
+use vicinal::{Pool, TaskError};
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -56,7 +57,7 @@ async fn memory_region_local() -> Result<(), AppError> {
     let processors = SystemHardware::current().processors();
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
-        .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(2_u32)))
+        .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
         .eager(processors)
         .build();
 
@@ -74,7 +75,7 @@ async fn memory_region_local() -> Result<(), AppError> {
 async fn system_wide() -> Result<(), AppError> {
     // Illustrative concurrency shared across every submitting processor in this pool.
     let pool = Pool::builder()
-        .worker_policy(DefaultWorkerPolicy::per_system(nz!(2_u32)))
+        .worker_policy(WorkersPerSystem::new(nz!(2_u32)))
         .build();
 
     assert_eq!(
@@ -97,9 +98,10 @@ Membership is per pool and cumulative.
 Workers refresh affinity at task boundaries, without preempting running tasks. They may
 move within their permitted set even during one task. Regional workers never steal work from
 other regions; system workers share all regions' work.
-Configure default concurrency with `DefaultWorkerPolicy`; counts may exceed processor
-counts for blocking work. Implement `WorkerPolicy` and use the same builder setter for custom
-group selection or thread-pinning strategies.
+Configure fixed worker counts with `WorkersPerProcessor`, `WorkersPerMemoryRegion` or
+`WorkersPerSystem`; counts may exceed processor counts for blocking work. Implement
+`WorkerPolicy` and use the same builder setter for custom group selection or thread-pinning
+strategies.
 Each pool counts workers independently, while scheduler clones share their pool's workers.
 Regions describe processor locality, not the task's allocations or data.
 

@@ -11,27 +11,30 @@ the set of processors on which a worker is permitted to run.
 ## Worker policies
 
 `WorkerPolicy` is the interface for assigning tasks to groups and for deciding when groups
-and workers are created. `DefaultWorkerPolicy` supplies the processor, memory-region and
-system policies. The pool does not expose a generic type parameter for either its policy or
+and workers are created. The `policies` module supplies processor, memory-region and system
+implementations. The pool does not expose a generic type parameter for either its policy or
 scheduler, so changing policies does not change the rest of the application API.
 
 The default is processor-local scheduling. Applications configure explicit counts through
-`DefaultWorkerPolicy` and the builder's `worker_policy(...)` setter. Custom policy values
-also use this setter. Each call replaces the selected policy, so the last setter wins.
-A built pool's policy is immutable.
+`WorkersPerProcessor`, `WorkersPerMemoryRegion` or `WorkersPerSystem` and the builder's
+`worker_policy(...)` setter. Custom policy values also use this setter. Each call replaces
+the selected policy, so the last setter wins. A built pool's policy is immutable.
 
 ```rust
 use new_zealand::nz;
-use vicinal::{DefaultWorkerPolicy, Pool};
+use vicinal::policies::{
+    WorkersPerMemoryRegion, WorkersPerProcessor, WorkersPerSystem,
+};
+use vicinal::Pool;
 
 let processor_pool = Pool::builder()
-    .worker_policy(DefaultWorkerPolicy::per_processor(nz!(2_u32)))
+    .worker_policy(WorkersPerProcessor::new(nz!(2_u32)))
     .build();
 let regional_pool = Pool::builder()
-    .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(2_u32)))
+    .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
     .build();
 let system_pool = Pool::builder()
-    .worker_policy(DefaultWorkerPolicy::per_system(nz!(2_u32)))
+    .worker_policy(WorkersPerSystem::new(nz!(2_u32)))
     .build();
 ```
 
@@ -53,11 +56,11 @@ so `queue_len()` does not include that task. The stand-alone `vicinal_growing_po
 uses this boundary to add a worker whenever a later submission observes existing backlog.
 It deliberately starts with one worker, grows without a maximum and never removes workers.
 
-The default policy assigns a task using one processor observation during submission; regional routing
-derives the `many_cpus` memory region from that same processor. Processor-policy workers
-are pinned to the sampled processor. Regional workers share work from every submitting
-processor in the selected region. System workers share work from every submitting processor
-in the pool, treating the whole system as one locality group.
+The built-in policies assign a task using one processor observation during submission;
+regional routing derives the `many_cpus` memory region from that same processor.
+Processor-policy workers are pinned to the sampled processor. Regional workers share work
+from every submitting processor in the selected region. System workers share work from every
+submitting processor in the pool, treating the whole system as one locality group.
 
 Each shared worker destination starts with an optional eager processor selection and accumulates
 the processors that submitted accepted work. Without eager selection, first use starts workers
@@ -103,7 +106,7 @@ This prepares workers, not task-specific storage, application caches or a guaran
 
 Selection seeds membership rather than restricting future submissions. Submissions from other
 eligible processors create missing destinations lazily or expand existing shared groups.
-The default policy never removes workers or membership during the pool's lifetime.
+Built-in policies never remove workers or membership during the pool's lifetime.
 
 ## Worker thread names
 
@@ -189,7 +192,7 @@ the pool does not forcibly terminate threads. Every later submission panics sync
 even after the pool is dropped. Task panics retain their separate behavior and do not
 poison the pool.
 
-Default-policy startup establishes the full configured count and initial affinity before
+Built-in policy startup establishes the full configured count and initial affinity before
 accepting work for a destination. Eager construction failures, including initializer panics,
 propagate on the constructing call after stopping and waiting for every participating worker;
 no partial pool is returned. User initialization side effects are not reversible, and the

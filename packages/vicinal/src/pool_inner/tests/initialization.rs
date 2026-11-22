@@ -11,7 +11,7 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{affinity, hardware, pin};
-use crate::{DefaultWorkerPolicy, PolicyKind, Pool, Scheduler};
+use crate::{BuiltInWorkerPolicy, PolicyKind, Pool, Scheduler};
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
@@ -43,9 +43,9 @@ fn assert_lazy_initialization(kind: PolicyKind) {
     with_watchdog(move || {
         let hardware = hardware();
         let policy = match kind {
-            PolicyKind::Processor => DefaultWorkerPolicy::per_processor(nz!(WORKERS)),
-            PolicyKind::MemoryRegion => DefaultWorkerPolicy::per_memory_region(nz!(WORKERS)),
-            PolicyKind::System => DefaultWorkerPolicy::per_system(nz!(WORKERS)),
+            PolicyKind::Processor => BuiltInWorkerPolicy::per_processor(nz!(WORKERS)),
+            PolicyKind::MemoryRegion => BuiltInWorkerPolicy::per_memory_region(nz!(WORKERS)),
+            PolicyKind::System => BuiltInWorkerPolicy::per_system(nz!(WORKERS)),
         };
         let (initialized, observations) = mpsc::channel();
         let pool = Pool::builder()
@@ -123,7 +123,7 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
         let executed = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(WORKERS)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(WORKERS)))
             .thread_init({
                 let release = Arc::clone(&release);
                 move || {
@@ -160,7 +160,7 @@ fn shared_worker_refreshes_affinity_expanded_during_initialization() {
         let (release, wait_for_release) = mpsc::channel();
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .thread_init({
                 let wait_for_release = Mutex::new(wait_for_release);
                 move || {
@@ -198,7 +198,7 @@ fn initializer_can_submit_to_its_pool() {
         let (result, received) = mpsc::channel();
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
             .thread_init({
                 // A weak capture avoids retaining a scheduler through its own pool.
                 let scheduler = Arc::downgrade(&scheduler);
@@ -230,7 +230,7 @@ fn initialization_panic_stops_the_pool() {
         let (release, wait) = mpsc::channel();
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
             .thread_init({
                 let wait = Mutex::new(wait);
                 move || {

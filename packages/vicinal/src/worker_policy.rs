@@ -78,21 +78,21 @@ pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
 
     #[cfg(test)]
     #[doc(hidden)]
-    /// Returns the configured default worker count for white-box tests.
+    /// Returns the configured built-in worker count for white-box tests.
     fn count(&self) -> NonZero<u32> {
-        panic!("custom test policy does not expose a default worker count")
+        panic!("custom test policy does not expose a built-in worker count")
     }
 
     #[cfg(test)]
     #[doc(hidden)]
-    /// Returns a test snapshot of default-policy processor membership.
+    /// Returns a test snapshot of built-in-policy processor membership.
     fn membership_snapshot(&self) -> Vec<(ProcessorId, bool)> {
         Vec::new()
     }
 
     #[cfg(test)]
     #[doc(hidden)]
-    /// Installs an internally constructed group into a default policy's route.
+    /// Installs an internally constructed group into a built-in policy's route.
     fn install_test_group(
         &self,
         _groups: &WorkerGroups,
@@ -162,7 +162,7 @@ impl WorkerPolicyContext<'_> {
         self.groups
     }
 
-    /// Returns the identifier included in default worker thread names.
+    /// Returns the identifier included in built-in worker thread names.
     #[must_use]
     #[inline]
     pub fn pool_name(&self) -> &str {
@@ -170,13 +170,9 @@ impl WorkerPolicyContext<'_> {
     }
 }
 
-/// Configures the default processor-, memory-region- or system-local worker policy.
-///
-/// This is the policy installed by [`Pool::builder()`][crate::Pool::builder]. Custom
-/// policies can implement [`WorkerPolicy`] and replace it with
-/// [`PoolBuilder::worker_policy`][crate::PoolBuilder::worker_policy].
+/// Shares the implementation used by the public built-in policy facades.
 #[derive(Debug)]
-pub struct DefaultWorkerPolicy {
+pub(crate) struct BuiltInWorkerPolicy {
     kind: PolicyKind,
     count: NonZero<u32>,
     prepared: Option<PreparedPolicy>,
@@ -196,7 +192,7 @@ pub(crate) fn validate_eager_processors(hardware: &SystemHardware, processors: &
     );
 }
 
-impl DefaultWorkerPolicy {
+impl BuiltInWorkerPolicy {
     #[cfg(test)]
     pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
         match self.kind {
@@ -224,7 +220,7 @@ impl DefaultWorkerPolicy {
     ///
     /// Each task is routed to the logical processor sampled once during submission.
     #[must_use]
-    pub fn per_processor(count: NonZero<u32>) -> Self {
+    pub(crate) fn per_processor(count: NonZero<u32>) -> Self {
         Self::new(PolicyKind::Processor, count)
     }
 
@@ -234,7 +230,7 @@ impl DefaultWorkerPolicy {
     /// expands cumulatively as processors in that region submit accepted work. Adding
     /// a processor changes affinity without adding workers.
     #[must_use]
-    pub fn per_memory_region(count: NonZero<u32>) -> Self {
+    pub(crate) fn per_memory_region(count: NonZero<u32>) -> Self {
         Self::new(PolicyKind::MemoryRegion, count)
     }
 
@@ -244,7 +240,7 @@ impl DefaultWorkerPolicy {
     /// cumulatively across memory-region boundaries. The count is per pool rather than
     /// per processor or memory region.
     #[must_use]
-    pub fn per_system(count: NonZero<u32>) -> Self {
+    pub(crate) fn per_system(count: NonZero<u32>) -> Self {
         Self::new(PolicyKind::System, count)
     }
 
@@ -257,13 +253,13 @@ impl DefaultWorkerPolicy {
     }
 }
 
-impl Clone for DefaultWorkerPolicy {
+impl Clone for BuiltInWorkerPolicy {
     fn clone(&self) -> Self {
         Self::new(self.kind, self.count)
     }
 }
 
-impl WorkerPolicy for DefaultWorkerPolicy {
+impl WorkerPolicy for BuiltInWorkerPolicy {
     fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
         self.prepared = Some(PreparedPolicy::new(
             context.hardware(),
@@ -308,7 +304,7 @@ impl WorkerPolicy for DefaultWorkerPolicy {
     }
 }
 
-/// Keeps default policy variants private so future choices need not become exhaustive APIs.
+/// Keeps built-in policy variants private so future choices need not become exhaustive APIs.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PolicyKind {
     Processor,
@@ -465,7 +461,7 @@ impl PreparedPolicy {
         }
     }
 
-    /// Creates a lazily selected destination and starts its full default worker count.
+    /// Creates a lazily selected destination and starts its full worker count.
     fn create_group(
         &self,
         registry: &WorkerGroups,

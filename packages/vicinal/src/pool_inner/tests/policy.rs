@@ -9,7 +9,7 @@ use new_zealand::nz;
 use testing::with_watchdog;
 
 use crate::{
-    DefaultWorkerPolicy, Pool, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext,
+    BuiltInWorkerPolicy, Pool, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext,
 };
 
 #[derive(Debug)]
@@ -49,13 +49,13 @@ fn custom_policy_selects_owned_group_without_cloning() {
 }
 
 #[test]
-fn last_default_policy_setter_wins() {
+fn last_built_in_policy_setter_wins() {
     with_watchdog(|| {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(2), nz!(1)));
         let pool = Pool::builder()
             .hardware(hardware)
-            .worker_policy(DefaultWorkerPolicy::per_system(NonZero::new(3).unwrap()))
-            .worker_policy(DefaultWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_system(NonZero::new(3).unwrap()))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
 
         assert_eq!(block_on(pool.scheduler().spawn(|| 7)).unwrap(), 7);

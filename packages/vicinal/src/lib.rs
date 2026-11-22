@@ -11,9 +11,10 @@
 //! A caller submits a task through one of a pool's [`Scheduler`] spawn methods. The pool samples
 //! the calling thread's current logical processor; this is the task's submitting processor.
 //! Tasks execute synchronously on that processor by default.
-//! [`DefaultWorkerPolicy`] can instead share workers across the caller's memory region or across
-//! the system. Custom [`WorkerPolicy`] implementations can select and create their own worker
-//! groups. Each default-policy destination starts its fixed worker count on first use.
+//! [`policies::WorkersPerMemoryRegion`] can share workers across the caller's memory region, and
+//! [`policies::WorkersPerSystem`] can share them across the system. Custom [`WorkerPolicy`]
+//! implementations can select and create their own worker groups. Each built-in-policy destination
+//! starts its fixed worker count on first use.
 //! [`PoolBuilder::eager`] initializes selected destinations during construction instead.
 //!
 //! # Quick start
@@ -46,14 +47,14 @@
 //! memory modules. A memory region represents one such locality group; many systems have only one.
 //! Regions are identified by [`many_cpus::MemoryRegionId`], not by a task's allocations or data.
 //!
-//! With a regional [`DefaultWorkerPolicy`], submissions from processors in the same region share one
-//! configured worker count. Eager construction or the first submission activates those workers;
+//! With [`policies::WorkersPerMemoryRegion`], submissions from processors in the same region share
+//! one configured worker count. Eager construction or the first submission activates those workers;
 //! further submissions from that region do not add workers. Each pool accounts for its regions
 //! independently, and scheduler clones share their pool's workers.
 //!
-//! With [`DefaultWorkerPolicy::per_system`], all submitting processors share one configured
-//! worker count per pool, regardless of memory region. Workers may move across regions but
-//! remain limited to eagerly selected processors and those that have submitted accepted work.
+//! With [`policies::WorkersPerSystem`], all submitting processors share one configured worker
+//! count per pool, regardless of memory region. Workers may move across regions but remain limited
+//! to eagerly selected processors and those that have submitted accepted work.
 //!
 //! Worker placement is tracked separately from concurrency. The permitted set starts with the eager
 //! selection or the first submitting processor and grows when another processor in the destination
@@ -141,6 +142,7 @@ mod group_id;
 mod group_registry;
 mod join_handle;
 mod metrics;
+pub mod policies;
 mod pool;
 mod pool_inner;
 mod pool_runtime;
@@ -168,6 +170,7 @@ pub(crate) use worker::*;
 pub(crate) use worker_group::WorkerEntry;
 pub(crate) use worker_group::{GroupState, WorkerGroupState};
 pub use worker_group::{WorkerGroup, WorkerGroupId};
+pub(crate) use worker_policy::BuiltInWorkerPolicy;
 pub use worker_policy::*;
 
 #[cfg(test)]

@@ -14,8 +14,9 @@ use crate::{
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
 /// Each task uses its submitting processor according to the pool's
-/// [`DefaultWorkerPolicy`][crate::DefaultWorkerPolicy]: that processor by default, or its memory
-/// region for a regional policy, or all submitting processors for a system policy.
+/// [`policies::WorkersPerProcessor`][crate::policies::WorkersPerProcessor]: that processor by
+/// default, or its memory region for a regional policy, or all submitting processors for a
+/// system policy.
 /// Shared worker affinity includes the pool's eager selection and accumulates the processors
 /// that submit accepted work to this pool and destination. All submission methods use the same policy.
 /// Tasks execute synchronously and must preserve worker affinity.
@@ -291,7 +292,7 @@ mod tests {
 
     use crate::metrics::CLOCK;
     use crate::pool_inner::{OnDrop, PanickingPayload};
-    use crate::{DefaultWorkerPolicy, Pool, Scheduler};
+    use crate::{BuiltInWorkerPolicy, Pool, Scheduler};
 
     assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
 
@@ -301,7 +302,7 @@ mod tests {
                 nz!(1),
                 nz!(1),
             )))
-            .worker_policy(DefaultWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
             .build()
     }
 
