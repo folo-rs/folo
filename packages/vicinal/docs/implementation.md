@@ -187,7 +187,9 @@ its task; worker entry then signals groups, drains queued work and propagates th
 Task wrappers separately catch user-task panics, keeping them out of the
 infrastructure boundary. Cleanup failures also poison the pool while cleanup continues.
 Failure diagnostics run after terminal publication and outside the retained-failure lock;
-subscriber panics cannot interrupt queue draining or release of worker participation.
+submission threads can reserve ownership of the original payload before diagnostics. Reentrant
+pool destruction therefore cannot consume that payload; subscriber panics cannot interrupt
+queue draining or release of worker participation.
 Workers check the pool-wide stop flag before task execution, rather than waiting for the
 group signal scan to reach their group.
 

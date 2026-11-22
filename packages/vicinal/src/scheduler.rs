@@ -279,8 +279,8 @@ fn allocate_task<T: VicinalTask>(
 mod tests {
     use std::panic;
     use std::panic::{RefUnwindSafe, UnwindSafe};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use events_once::EventPool;
     use futures::executor::block_on;
@@ -288,13 +288,48 @@ mod tests {
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
     use static_assertions::assert_impl_all;
-    use testing::{assert_panics, with_watchdog};
+    use testing::{assert_panics, assert_panics_with, with_watchdog};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
 
     use crate::metrics::CLOCK;
-    use crate::pool_inner::{OnDrop, PanickingPayload};
+    use crate::pool_inner::{OnDrop, POOL_LOG_TARGET, PanickingPayload};
     use crate::{BuiltInWorkerPolicy, Pool, Scheduler};
 
     assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
+
+    /// Drops a captured pool when it receives the infrastructure-failure diagnostic.
+    struct PoolDroppingSubscriber {
+        pool: Mutex<Option<Pool>>,
+        dropped: Arc<AtomicUsize>,
+    }
+
+    impl Subscriber for PoolDroppingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            if event.metadata().target() == POOL_LOG_TARGET
+                && let Some(pool) = self.pool.lock().unwrap().take()
+            {
+                drop(pool);
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
 
     fn fake_pool() -> Pool {
         Pool::builder()
@@ -402,6 +437,41 @@ mod tests {
                 pool.inner.runtime.wait_for_workers();
                 assert_eq!(pool.inner.runtime.active_workers(), 0);
             }
+        });
+    }
+
+    #[test]
+    fn failure_diagnostic_can_drop_pool_on_submitting_thread() {
+        with_watchdog(|| {
+            let pool = fake_pool();
+            let scheduler = pool.scheduler();
+            let group = pool.inner.policy.select_group(&pool.inner.groups);
+            let state = pool.inner.groups.resolve(group);
+
+            assert_panics(|| {
+                let _guard = state.task_pool.lock().unwrap();
+                panic!("injected allocator lock failure");
+            });
+
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let subscriber = PoolDroppingSubscriber {
+                pool: Mutex::new(Some(pool)),
+                dropped: Arc::clone(&dropped),
+            };
+
+            tracing::subscriber::with_default(subscriber, || {
+                assert_panics_with(
+                    || {
+                        _ = scheduler.spawn(|| 42);
+                    },
+                    |message| assert!(message.contains("we never panic while holding this lock")),
+                );
+            });
+
+            assert_eq!(dropped.load(Ordering::Relaxed), 1);
+            assert!(scheduler.inner.runtime.is_poisoned());
+            scheduler.inner.runtime.wait_for_workers();
+            assert_eq!(scheduler.inner.runtime.active_workers(), 0);
         });
     }
 

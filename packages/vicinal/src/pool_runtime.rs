@@ -1,6 +1,7 @@
 //! Pool-wide terminal state shared by every policy-created worker group.
 
 use std::any::Any;
+use std::mem;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -24,7 +25,7 @@ pub(crate) struct PoolRuntime {
     groups: Mutex<Vec<Arc<WorkerGroupState>>>,
     workers: Mutex<WorkerLifecycle>,
     workers_changed: Condvar,
-    failure: Mutex<Option<Box<dyn Any + Send>>>,
+    failure: Mutex<FailureState>,
     pub(crate) result_channel_pool: EventLake,
 }
 
@@ -44,7 +45,7 @@ impl PoolRuntime {
             groups: Mutex::new(Vec::new()),
             workers: Mutex::new(WorkerLifecycle { active: 0 }),
             workers_changed: Condvar::new(),
-            failure: Mutex::new(None),
+            failure: Mutex::new(FailureState::Vacant),
             result_channel_pool: EventLake::new(),
         })
     }
@@ -163,13 +164,17 @@ impl PoolRuntime {
         let mut payload = Some(payload);
         let message = {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
-            if failure.is_none() {
+            if matches!(*failure, FailureState::Vacant) {
                 let message = extract_panic_message(
                     payload
                         .as_ref()
                         .expect("the first failure retains its original payload"),
                 );
-                *failure = payload.take();
+                *failure = FailureState::Retained(
+                    payload
+                        .take()
+                        .expect("the first failure moves its retained payload"),
+                );
                 Some(message)
             } else {
                 None
@@ -185,8 +190,35 @@ impl PoolRuntime {
             return;
         };
 
+        self.complete_failure(&message);
+    }
+
+    /// Publishes a failure whose submitting thread owns the payload through diagnostic reentry.
+    pub(crate) fn fail_for_submission(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
+        let (message, retained) = {
+            let mut failure = self.failure.lock().expect(NEVER_POISONED);
+            match mem::replace(&mut *failure, FailureState::Unavailable) {
+                FailureState::Vacant => (Some(extract_panic_message(&payload)), None),
+                FailureState::Retained(payload) => (None, Some(payload)),
+                FailureState::Unavailable => (None, None),
+            }
+        };
+
+        if let Some(retained) = retained {
+            discard_panic(payload);
+            return retained;
+        }
+
+        if let Some(message) = message {
+            self.complete_failure(&message);
+        }
+
+        payload
+    }
+
+    fn complete_failure(&self, message: &str) {
         // Terminal state must be visible before diagnostics can re-enter the pool.
-        // The retained-failure mutex is no longer held while tracing invokes subscribers.
+        // The failure-state mutex is no longer held while tracing invokes subscribers.
         self.stop_admission();
         report_diagnostic(|| {
             error!(
@@ -210,17 +242,30 @@ impl PoolRuntime {
 
     pub(crate) fn resume_failure(&self) -> ! {
         let payload = self
-            .failure
-            .lock()
-            .expect(NEVER_POISONED)
-            .take()
+            .take_failure()
             .expect("poisoned pool retains its original infrastructure failure");
         panic::resume_unwind(payload)
     }
 
     pub(crate) fn take_failure(&self) -> Option<Box<dyn Any + Send>> {
-        self.failure.lock().expect(NEVER_POISONED).take()
+        let mut failure = self.failure.lock().expect(NEVER_POISONED);
+        let previous = mem::replace(&mut *failure, FailureState::Unavailable);
+        match previous {
+            FailureState::Retained(payload) => Some(payload),
+            FailureState::Vacant => {
+                *failure = FailureState::Vacant;
+                None
+            }
+            FailureState::Unavailable => None,
+        }
     }
+}
+
+/// Tracks whether infrastructure-failure ownership remains in runtime or an active caller.
+enum FailureState {
+    Vacant,
+    Retained(Box<dyn Any + Send>),
+    Unavailable,
 }
 
 struct WorkerLifecycle {

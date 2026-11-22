@@ -134,11 +134,8 @@ impl PoolInner {
 
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
-        self.runtime.fail(payload);
-        let mut failure = Err(self
-            .runtime
-            .take_failure()
-            .expect("newly recorded infrastructure failure remains available"));
+        let payload = self.runtime.fail_for_submission(payload);
+        let mut failure = Err(payload);
         self.stop_groups(&mut failure);
         panic::resume_unwind(failure.expect_err("pool failure retains its original panic"))
     }
