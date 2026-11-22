@@ -11,7 +11,7 @@ use tracing::error;
 use crate::pool_inner::POOL_LOG_TARGET;
 use crate::{
     ErasedTaskHandle, NEVER_POISONED, ThreadInit, WorkerGroupState, discard_panic,
-    extract_panic_message,
+    extract_panic_message, report_diagnostic,
 };
 
 pub(crate) struct PoolRuntime {
@@ -160,28 +160,42 @@ impl PoolRuntime {
     }
 
     pub(crate) fn fail(&self, payload: Box<dyn Any + Send>) {
-        // The first payload is retained under the mutex. Later cleanup failures are
-        // contained separately so they cannot replace the original infrastructure failure.
-        {
+        let mut payload = Some(payload);
+        let message = {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
             if failure.is_none() {
-                error!(
-                    target: POOL_LOG_TARGET,
-                    pool_id = self.pool_id,
-                    message = extract_panic_message(&payload),
-                    "worker pool infrastructure failed"
+                let message = extract_panic_message(
+                    payload
+                        .as_ref()
+                        .expect("the first failure retains its original payload"),
                 );
-                *failure = Some(payload);
+                *failure = payload.take();
+                Some(message)
             } else {
-                // Keep the first infrastructure failure so later cleanup panics do not
-                // replace the root cause.
-                drop(failure);
-                discard_panic(payload);
-                return;
+                None
             }
-        }
+        };
 
+        let Some(message) = message else {
+            // Keep the first infrastructure failure so later cleanup panics cannot
+            // replace the root cause.
+            discard_panic(
+                payload.expect("an already-recorded failure leaves this payload for disposal"),
+            );
+            return;
+        };
+
+        // Terminal state must be visible before diagnostics can re-enter the pool.
+        // The retained-failure mutex is no longer held while tracing invokes subscribers.
         self.stop_admission();
+        report_diagnostic(|| {
+            error!(
+                target: POOL_LOG_TARGET,
+                pool_id = self.pool_id,
+                message,
+                "worker pool infrastructure failed"
+            );
+        });
         self.drain_groups();
     }
 
@@ -221,11 +235,84 @@ fn drain_queue(queue: &Mutex<std::collections::VecDeque<ErasedTaskHandle>>) {
         };
 
         if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
-            error!(
-                message = extract_panic_message(&payload),
-                "failure during worker pool cleanup"
-            );
+            report_diagnostic(|| {
+                error!(
+                    message = extract_panic_message(&payload),
+                    "failure during worker pool cleanup"
+                );
+            });
             discard_panic(payload);
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::any::Any;
+    use std::panic;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    use super::*;
+
+    /// Verifies failure state before a tracing callback attempts to re-enter runtime access.
+    struct InspectingSubscriber {
+        runtime: Arc<PoolRuntime>,
+        state_was_ready: Arc<AtomicBool>,
+    }
+
+    impl Subscriber for InspectingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, _event: &Event<'_>) {
+            self.state_was_ready.store(
+                self.runtime.is_shutdown()
+                    && self.runtime.is_poisoned()
+                    && self.runtime.failure.try_lock().is_ok(),
+                Ordering::Release,
+            );
+            panic::panic_any("failure subscriber panicked");
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    #[test]
+    fn failure_state_precedes_panicking_diagnostics() {
+        struct OriginalFailure;
+
+        let runtime = PoolRuntime::new(1, "test".to_string(), None);
+        let state_was_ready = Arc::new(AtomicBool::new(false));
+        let subscriber = InspectingSubscriber {
+            runtime: Arc::clone(&runtime),
+            state_was_ready: Arc::clone(&state_was_ready),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            let failure: Box<dyn Any + Send> = Box::new(OriginalFailure);
+            runtime.fail(failure);
+        });
+
+        assert!(state_was_ready.load(Ordering::Acquire));
+        let failure = runtime
+            .take_failure()
+            .expect("diagnostic panic does not replace the infrastructure failure");
+        assert!(failure.is::<OriginalFailure>());
     }
 }

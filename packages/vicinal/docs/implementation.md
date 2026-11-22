@@ -186,6 +186,8 @@ The worker's dequeued-task boundary publishes the same pool-wide failure state b
 its task; worker entry then signals groups, drains queued work and propagates the original failure.
 Task wrappers separately catch user-task panics, keeping them out of the
 infrastructure boundary. Cleanup failures also poison the pool while cleanup continues.
+Failure diagnostics run after terminal publication and outside the retained-failure lock;
+subscriber panics cannot interrupt queue draining or release of worker participation.
 Workers check the pool-wide stop flag before task execution, rather than waiting for the
 group signal scan to reach their group.
 

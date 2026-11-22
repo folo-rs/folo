@@ -45,27 +45,40 @@ pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
     }
 }
 
+/// Emits a failure diagnostic without allowing a subscriber panic to interrupt cleanup.
+pub(crate) fn report_diagnostic(report: impl FnOnce()) {
+    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(report)) {
+        // A subscriber panic is an unrelated diagnostic failure. Its payload may have a
+        // panicking destructor, so retaining it is the only bounded cleanup path.
+        mem::forget(payload);
+    }
+}
+
 /// Disposes of a suppressed failure without allowing its destructor to interrupt pool cleanup.
 pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
     if let Err(replacement) = panic::catch_unwind(AssertUnwindSafe(|| drop(payload))) {
         // A replacement can itself have a panicking destructor. Retain it rather than
         // recursively disposing of arbitrary user payloads; see docs/implementation.md.
         mem::forget(replacement);
-        error!(
-            target: TASK_LOG_TARGET,
-            "panic payload destruction failed; replacement payload retained"
-        );
+        report_diagnostic(|| {
+            error!(
+                target: TASK_LOG_TARGET,
+                "panic payload destruction failed; replacement payload retained"
+            );
+        });
     }
 }
 
 /// Releases task captures outside an active unwind while preserving an earlier failure.
 pub(crate) fn discard_task_after_failure<T>(task: T) {
     if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
-        error!(
-            target: TASK_LOG_TARGET,
-            message = extract_panic_message(&payload),
-            "task cleanup failed while handling an infrastructure failure"
-        );
+        report_diagnostic(|| {
+            error!(
+                target: TASK_LOG_TARGET,
+                message = extract_panic_message(&payload),
+                "task cleanup failed while handling an infrastructure failure"
+            );
+        });
         discard_panic(payload);
     }
 }

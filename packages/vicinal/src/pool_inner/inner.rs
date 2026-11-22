@@ -14,7 +14,8 @@ use tracing::error;
 
 use crate::{
     ErasedTaskHandle, NEVER_POISONED, PoolRuntime, ThreadInit, WorkerGroups, WorkerPolicy,
-    WorkerPolicyContext, discard_panic, extract_panic_message, validate_eager_processors,
+    WorkerPolicyContext, discard_panic, extract_panic_message, report_diagnostic,
+    validate_eager_processors,
 };
 #[cfg(test)]
 use crate::{SubmissionTarget, WorkerEntry};
@@ -147,10 +148,12 @@ impl PoolInner {
         self.runtime.stop_workers();
 
         let mut failure = self.runtime.take_failure().map_or(Ok(()), |payload| {
-            error!(
-                message = extract_panic_message(&payload),
-                "failure during worker pool cleanup"
-            );
+            report_diagnostic(|| {
+                error!(
+                    message = extract_panic_message(&payload),
+                    "failure during worker pool cleanup"
+                );
+            });
             Err(payload)
         });
         self.stop_groups(&mut failure);
@@ -165,10 +168,12 @@ impl PoolInner {
         }
 
         if let Some(payload) = self.runtime.take_failure() {
-            error!(
-                message = extract_panic_message(&payload),
-                "failure during worker pool cleanup"
-            );
+            report_diagnostic(|| {
+                error!(
+                    message = extract_panic_message(&payload),
+                    "failure during worker pool cleanup"
+                );
+            });
             if failure.is_ok() {
                 failure = Err(payload);
             } else {
@@ -178,10 +183,12 @@ impl PoolInner {
 
         if let Err(payload) = failure {
             if thread::panicking() {
-                error!(
-                    pool_id = self.pool_id,
-                    "worker or task cleanup panicked during unwinding"
-                );
+                report_diagnostic(|| {
+                    error!(
+                        pool_id = self.pool_id,
+                        "worker or task cleanup panicked during unwinding"
+                    );
+                });
                 discard_panic(payload);
             } else {
                 panic::resume_unwind(payload);
@@ -236,15 +243,17 @@ fn discard_queue(
 fn record_failure(first: &mut ThreadResult<()>, result: ThreadResult<()>, runtime: &PoolRuntime) {
     if let Err(payload) = result {
         runtime.stop_admission();
-        error!(
-            message = extract_panic_message(&payload),
-            "failure during worker pool cleanup"
-        );
+        report_diagnostic(|| {
+            error!(
+                message = extract_panic_message(&payload),
+                "failure during worker pool cleanup"
+            );
+        });
 
         if first.is_ok() {
             *first = Err(payload);
         } else {
-            error!("additional panic while shutting down worker pool");
+            report_diagnostic(|| error!("additional panic while shutting down worker pool"));
             discard_panic(payload);
         }
     }

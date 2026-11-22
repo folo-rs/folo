@@ -138,6 +138,14 @@ impl WorkerGroup {
         let mut pin = pin;
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let worker_index = self.state.next_worker_index.fetch_add(1, Ordering::Relaxed);
+            // Startup tracing can re-enter submission on this same route. Participation
+            // must already satisfy the lazy startup waiter before the subscriber runs so
+            // it can finish the route's OnceLock initialization.
+            self.mark_worker_participating();
+            #[cfg(test)]
+            if let Some(before_startup_trace) = self.state.before_startup_trace.get() {
+                before_startup_trace();
+            }
             if let Some(group) = self.state.destination {
                 debug!(
                     target: POOL_LOG_TARGET,
@@ -157,7 +165,6 @@ impl WorkerGroup {
                 );
             }
 
-            self.mark_worker_participating();
             if let Some(thread_init) = self.runtime.thread_init() {
                 (thread_init.0)();
             }
@@ -464,6 +471,9 @@ pub(crate) struct WorkerGroupState {
     #[cfg(test)]
     pub(crate) startup: OnceLock<Result<(), ()>>,
     #[cfg(test)]
+    pub(crate) before_startup_trace:
+        OnceLock<Box<dyn Fn() + Send + Sync + panic::UnwindSafe + panic::RefUnwindSafe>>,
+    #[cfg(test)]
     pub(crate) before_wait:
         OnceLock<Box<dyn Fn(u32, usize) + Send + Sync + panic::UnwindSafe + panic::RefUnwindSafe>>,
     #[cfg(test)]
@@ -497,6 +507,8 @@ impl WorkerGroupState {
             initialized_workers: AtomicUsize::new(0),
             #[cfg(test)]
             startup: OnceLock::new(),
+            #[cfg(test)]
+            before_startup_trace: OnceLock::new(),
             #[cfg(test)]
             before_wait: OnceLock::new(),
             #[cfg(test)]
