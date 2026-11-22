@@ -288,7 +288,7 @@ mod tests {
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
     use static_assertions::assert_impl_all;
-    use testing::assert_panics;
+    use testing::{assert_panics, with_watchdog};
 
     use crate::metrics::CLOCK;
     use crate::pool_inner::{OnDrop, PanickingPayload};
@@ -376,30 +376,33 @@ mod tests {
     /// A poisoned allocation lock forces failure after wrapping but before task storage exists.
     #[test]
     fn allocation_failure_contains_wrapped_capture() {
-        for joined in [false, true] {
-            let pool = fake_pool();
-            let scheduler = pool.scheduler();
-            let group = pool.inner.policy.select_group(&pool.inner.groups);
-            let state = pool.inner.groups.resolve(group);
+        with_watchdog(|| {
+            for joined in [false, true] {
+                let pool = fake_pool();
+                let scheduler = pool.scheduler();
+                let group = pool.inner.policy.select_group(&pool.inner.groups);
+                let state = pool.inner.groups.resolve(group);
 
-            assert_panics(|| {
-                let _guard = state.task_pool.lock().unwrap();
-                panic!("injected allocator lock failure");
-            });
+                assert_panics(|| {
+                    let _guard = state.task_pool.lock().unwrap();
+                    panic!("injected allocator lock failure");
+                });
 
-            let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
-            assert_panics(|| {
-                if joined {
-                    _ = scheduler.spawn(move || drop(capture));
-                } else {
-                    scheduler.spawn_and_forget(move || drop(capture));
-                }
-            });
+                let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+                assert_panics(|| {
+                    if joined {
+                        _ = scheduler.spawn(move || drop(capture));
+                    } else {
+                        scheduler.spawn_and_forget(move || drop(capture));
+                    }
+                });
 
-            assert!(pool.inner.runtime.is_poisoned());
-            assert!(pool.inner.runtime.is_shutdown());
-            assert_eq!(pool.inner.runtime.active_workers(), 0);
-        }
+                assert!(pool.inner.runtime.is_poisoned());
+                assert!(pool.inner.runtime.is_shutdown());
+                pool.inner.runtime.wait_for_workers();
+                assert_eq!(pool.inner.runtime.active_workers(), 0);
+            }
+        });
     }
 
     #[test]
