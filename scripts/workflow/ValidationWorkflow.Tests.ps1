@@ -18,6 +18,8 @@ BeforeAll {
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
     $script:release = Get-Content -LiteralPath (Join-Path $root '.github/workflows/release.yml') -Raw
     $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
+    $script:publicApiPublisher = Get-Content -LiteralPath (
+        Join-Path $root '.github/workflows/public-api-diff-publish.yml') -Raw
     $script:benchmarkWorkflows = @(
         foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
             Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
@@ -280,6 +282,30 @@ Describe 'Shared environment preparation order' {
         $cache.Count | Should -Be 1
         [array]::IndexOf($steps, $preparation[0]) |
             Should -BeLessThan ([array]::IndexOf($steps, $cache[0]))
+    }
+}
+
+Describe 'Public API diff publisher trust boundary' {
+    It 'runs from workflow completion with comment-only default-branch authority' {
+        @(Get-WorkflowEvent $publicApiPublisher) | Should -Be @('workflow_run')
+        $publicApiPublisher | Should -Match '(?m)^  actions: read\r?$'
+        $publicApiPublisher | Should -Match '(?m)^  pull-requests: write\r?$'
+        $publicApiPublisher | Should -Not -Match '(?m)^  (contents|issues): write\r?$'
+    }
+
+    It 'checks out the trusted default branch and never executes producer files' {
+        $job = Get-WorkflowJob $publicApiPublisher 'publish'
+        $job | Should -Match 'ref: \$\{\{ github\.event\.repository\.default_branch \}\}'
+        $job | Should -Not -Match 'github\.event\.workflow_run\.(head_sha|head_branch).*checkout'
+        $job | Should -Match 'actions/download-artifact@v8'
+        $job | Should -Match 'PublishPublicApiComment\.ps1'
+    }
+
+    It 'binds the publisher to the immutable producer run identity' {
+        $job = Get-WorkflowJob $publicApiPublisher 'publish'
+        $job | Should -Match 'name: public-api-diff-\$\{\{ github\.event\.workflow_run\.id \}\}-\$\{\{ github\.event\.workflow_run\.run_attempt \}\}'
+        $job | Should -Match 'run-id: \$\{\{ github\.event\.workflow_run\.id \}\}'
+        $job | Should -Match "-HeadSha '\$\{\{ github\.event\.workflow_run\.head_sha \}\}'"
     }
 }
 

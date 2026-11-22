@@ -130,6 +130,28 @@ prerequisites and evidence capture. Clippy stands in for a bare `cargo check` he
 prerequisite to linting it, so a standalone `check` job would only re-prove what a green
 Clippy already guarantees.
 
+## Public API diff publication
+
+Public API review uses a sticky PR comment generated after every head update. The
+unprivileged `pull_request` producer may compile and inspect PR source but receives no
+write permission. It publishes a bounded, structured JSON artifact and never invokes
+GitHub comment APIs.
+
+A separate `workflow_run` workflow is the only comment writer. GitHub runs it from the
+trusted default branch, not from the completed run's head. Before writing, its PowerShell
+publisher validates the artifact schema and workflow identity, verifies the live PR still
+has the completed run's head SHA, and renders only validated fields and tool output. A
+hidden marker identifies one owned comment; duplicate ownership fails visibly rather
+than selecting an arbitrary copy. Older runs cannot replace results for a newer head,
+and ambiguous writes are reconciled by reading the comment back instead of blindly
+retrying.
+
+Producer failure or cancellation leaves a useful failure notice for the affected head.
+A successful producer that omits or invalidates its artifact fails the publisher after
+posting the contract diagnostic, keeping the trust boundary visible in Actions checks.
+Oversized diffs link to the complete workflow artifact instead of exceeding GitHub's
+comment-body limit.
+
 ## Selective validation
 
 Package-scoped jobs consume Cargo dependency impact, so a one-package PR does not rebuild

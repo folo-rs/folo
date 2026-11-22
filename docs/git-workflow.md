@@ -11,25 +11,6 @@ When creating PRs with `gh pr create`, do not pass the `--body` flag with an
 inline string because PowerShell mangles backticks and special characters.
 Instead, write the PR body to a temporary file and use `--body-file path/to/file.md`.
 
-### Public API diff section
-
-Every submitted PR description must contain a clearly identified **Public API diff**
-section. Run `cargo public-api` from the standard development toolchain and show a
-simplified, text-only diff for each affected public library package. Generate the diff
-from the merge-base of the PR's base and head to the final head commit:
-
-```text
-git merge-base <base-ref> HEAD
-cargo public-api -sss --all-features --color never -p <package> diff <merge-base>..HEAD
-```
-
-Compute `<merge-base>` from the current PR base ref and `HEAD`; do not diff against a
-published release or another arbitrary anchor. The `-sss` mode omits blanket
-implementations, auto-trait implementations and auto-derived implementations from the
-review output. Include the command output in fenced text and preserve separate output
-for each affected package. If the PR does not change any public API, state
-`No public API changes.` in the section.
-
 ## Check waiting and merge-queue readiness
 
 Distinguish required checks from optional advisory checks using the applicable
