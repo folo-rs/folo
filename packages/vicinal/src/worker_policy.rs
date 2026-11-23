@@ -26,7 +26,7 @@ use crate::{GroupId, NEVER_POISONED, SubmissionTarget, WorkerGroup, WorkerGroupI
 /// ```
 /// # use std::error::Error;
 /// use std::sync::OnceLock;
-/// use std::thread;
+/// use std::thread::spawn;
 ///
 /// use vicinal::{Pool, WorkerGroupId, WorkerGroups, WorkerPolicy};
 /// # use futures::executor::block_on;
@@ -40,7 +40,7 @@ use crate::{GroupId, NEVER_POISONED, SubmissionTarget, WorkerGroup, WorkerGroupI
 ///     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
 ///         *self.group.get_or_init(|| {
 ///             let group = groups.add();
-///             thread::spawn({
+///             spawn({
 ///                 let group = group.clone();
 ///                 move || group.execute_worker()
 ///             });

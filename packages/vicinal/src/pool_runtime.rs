@@ -6,6 +6,8 @@ use std::ops::ControlFlow;
 #[cfg(test)]
 use std::panic::panic_any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+#[cfg(test)]
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
@@ -32,6 +34,9 @@ pub(crate) struct PoolRuntime {
     groups: Mutex<Vec<Arc<WorkerGroupState>>>,
     workers: Mutex<WorkerLifecycle>,
     workers_changed: Condvar,
+    #[cfg(test)]
+    pub(crate) before_worker_wait:
+        OnceLock<Box<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     failure: Mutex<FailureState>,
     pub(crate) result_channel_pool: EventLake,
 }
@@ -52,6 +57,8 @@ impl PoolRuntime {
             groups: Mutex::new(Vec::new()),
             workers: Mutex::new(WorkerLifecycle { active: 0 }),
             workers_changed: Condvar::new(),
+            #[cfg(test)]
+            before_worker_wait: OnceLock::new(),
             failure: Mutex::new(FailureState::Vacant),
             result_channel_pool: EventLake::new(),
         })
@@ -162,6 +169,10 @@ impl PoolRuntime {
         // This is the pool-owned barrier, not a join of policy-owned OS threads.
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         while workers.active != 0 {
+            #[cfg(test)]
+            if let Some(before_wait) = self.before_worker_wait.get() {
+                before_wait();
+            }
             workers = self.workers_changed.wait(workers).expect(NEVER_POISONED);
         }
     }

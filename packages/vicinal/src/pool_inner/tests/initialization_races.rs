@@ -151,15 +151,26 @@ fn shutdown_waits_for_failure_publication_to_finish() {
         assert!(inner.runtime.is_poisoned());
         assert_eq!(inner.runtime.active_workers(), 1);
 
-        let (shutdown_entered, shutdown_arrival) = channel();
+        let (shutdown_waiting, shutdown_wait) = channel();
+        let notified_shutdown_wait = AtomicBool::new(false);
+        assert!(
+            inner
+                .runtime
+                .before_worker_wait
+                .set(Box::new(move || {
+                    if !notified_shutdown_wait.swap(true, Ordering::Release) {
+                        shutdown_waiting.send(()).unwrap();
+                    }
+                }))
+                .is_ok()
+        );
         let (shutdown_done, shutdown_completion) = channel();
         let shutdown = spawn(move || {
-            shutdown_entered.send(()).unwrap();
             let result = catch_unwind(AssertUnwindSafe(|| drop(pool)));
             shutdown_done.send(()).unwrap();
             result
         });
-        shutdown_arrival.recv().unwrap();
+        shutdown_wait.recv().unwrap();
         assert_eq!(shutdown_completion.try_recv(), Err(TryRecvError::Empty));
 
         release_failure.send(()).unwrap();

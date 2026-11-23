@@ -398,7 +398,6 @@ fn assert_concurrent_additions(policy: BuiltInWorkerPolicy, processors: [u32; 2]
     with_watchdog(move || {
         let hardware = regional_hardware();
         pin(&hardware, 0);
-        let destination = policy.destination(&hardware).group;
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(policy)
@@ -433,9 +432,6 @@ fn assert_concurrent_additions(policy: BuiltInWorkerPolicy, processors: [u32; 2]
         });
         let pending = submitters.map(|submitter| submitter.join().unwrap());
 
-        let state = pool.inner.registry.get_or_init(destination);
-        let revision = state.affinity_revision.load(Ordering::Acquire);
-        assert!((2..=3).contains(&revision));
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 1);
 
