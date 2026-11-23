@@ -183,6 +183,8 @@ recovered body is dropped, or the recovered body executes. Fire-and-forget cance
 captures during shutdown.
 Submissions through retained schedulers after clean shutdown are immediately cancelled without
 execution. Submission returns normally; a joined submission yields a recoverable cancellation.
+Callbacks running on a worker thread, including tracing subscribers handling worker diagnostics,
+must not synchronously drop the pool. They must defer shutdown to another thread.
 
 ## Infrastructure failures
 

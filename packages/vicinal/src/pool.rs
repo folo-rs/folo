@@ -43,6 +43,9 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// [`TaskError`][crate::TaskError] that retains the original body for recovery;
 /// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
 /// submissions after clean shutdown as well.
+/// Do not synchronously drop the pool from a callback running on one of its workers,
+/// including a tracing subscriber handling a worker diagnostic; defer shutdown to another
+/// thread.
 /// An infrastructure failure stops and permanently poisons the entire pool; all further
 /// submissions then panic synchronously, even after the pool is dropped.
 ///
