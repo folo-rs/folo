@@ -182,11 +182,14 @@ impl Scheduler {
                 pool_id = self.inner.pool_id,
                 "abandoned task during shutdown"
             );
+            // Read the fallible clock before moving ownership out of the task option. If it
+            // panics, submit's cleanup boundary can still contain and release the capture.
+            let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
             let (sender, receiver) = self.inner.runtime.result_channel_pool.rent();
             drop(wrap_task(
                 task.take().expect("submission consumes its task once"),
                 sender,
-                CLOCK.with_borrow_mut(fast_time::Clock::now),
+                spawn_time,
             ));
             return JoinHandle::new(receiver);
         }
@@ -407,6 +410,24 @@ mod tests {
         assert!(pool.inner.runtime.is_shutdown());
         pool.inner.runtime.wait_for_workers();
         assert_eq!(pool.inner.runtime.active_workers(), 0);
+    }
+
+    /// Shutdown-time clock failure must still retain the unconsumed task for cleanup.
+    #[test]
+    fn shutdown_preparation_failure_contains_unwrapped_capture() {
+        let pool = fake_pool();
+        let scheduler = pool.scheduler();
+        drop(pool);
+        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+
+        CLOCK.with_borrow_mut(|_| {
+            assert_panics(|| scheduler.spawn(move || drop(capture)));
+        });
+
+        assert!(scheduler.inner.runtime.is_poisoned());
+        assert!(scheduler.inner.runtime.is_shutdown());
+        scheduler.inner.runtime.wait_for_workers();
+        assert_eq!(scheduler.inner.runtime.active_workers(), 0);
     }
 
     /// A poisoned allocation lock forces failure after wrapping but before task storage exists.

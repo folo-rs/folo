@@ -146,6 +146,7 @@ fn completion_waker_can_drop_handles_and_submit() {
 fn shutdown_before_lazy_state_creation_starts_no_workers() {
     let selected = Arc::new(AtomicUsize::new(0));
     let pool = Pool::builder()
+        .hardware(hardware())
         .worker_policy(RecordingPolicy {
             selected: Arc::clone(&selected),
         })
