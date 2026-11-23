@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Barrier, Mutex, mpsc};
+use std::sync::{Arc, Barrier, Mutex, OnceLock, mpsc};
 use std::{io, thread};
 
 use futures::executor::block_on;
@@ -21,7 +21,9 @@ use crate::{
 /// Pauses policy selection after a test worker reaches the ordinary participation boundary.
 struct GatedSelectionPolicy {
     inner: TestPolicy,
+    worker_started: OnceLock<()>,
     entered: mpsc::Sender<()>,
+    exited: mpsc::Sender<()>,
     release: Mutex<mpsc::Receiver<()>>,
 }
 
@@ -32,7 +34,18 @@ impl WorkerPolicy for GatedSelectionPolicy {
 
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         let id = self.inner.select_group(groups);
-        self.inner.group().wait_until_initialized(nz!(1_usize));
+        self.worker_started.get_or_init(|| {
+            let group = self.inner.group();
+            _ = thread::spawn({
+                let group = group.clone();
+                let exited = self.exited.clone();
+                move || {
+                    group.execute_worker();
+                    exited.send(()).unwrap();
+                }
+            });
+            group.wait_until_initialized(nz!(1_usize));
+        });
         self.entered.send(()).unwrap();
         self.release.lock().unwrap().recv().unwrap();
         id
@@ -159,11 +172,14 @@ fn assert_concurrent_startup(kind: PolicyKind) {
 fn shutdown_accounts_for_in_progress_startup() {
     with_watchdog(|| {
         let (entered, selection_entered) = mpsc::channel();
+        let (exited, worker_exited) = mpsc::channel();
         let (release, selection_release) = mpsc::channel();
         let pool = Pool::builder()
             .worker_policy(GatedSelectionPolicy {
-                inner: TestPolicy::new(1),
+                inner: TestPolicy::new(0),
+                worker_started: OnceLock::new(),
                 entered,
+                exited,
                 release: Mutex::new(selection_release),
             })
             .build();
@@ -173,6 +189,7 @@ fn shutdown_accounts_for_in_progress_startup() {
 
         selection_entered.recv().unwrap();
         let shutdown = thread::spawn(move || drop(pool));
+        worker_exited.recv().unwrap();
         release.send(()).unwrap();
         assert!(starter.join().unwrap().is_cancel());
         shutdown.join().unwrap();
