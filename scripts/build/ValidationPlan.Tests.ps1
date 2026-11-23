@@ -303,7 +303,8 @@ Describe 'Explicit Pester scope' {
         @($paths | ForEach-Object { [System.IO.Path]::GetFullPath($_) }) |
             Should -Be @((Join-Path (Split-Path $PSScriptRoot -Parent) 'workflow'))
         $tests = @(Get-ChildItem -LiteralPath $paths -Filter '*.Tests.ps1' -Recurse -File)
-        $tests.Name | Should -Be @('ValidationWorkflow.Tests.ps1')
+        @($tests.Name | Sort-Object) |
+            Should -Be @('PublicApiComment.Tests.ps1', 'ValidationWorkflow.Tests.ps1')
     }
 
     It 'resolves and deduplicates selected suites and rejects unknown or empty domains' {

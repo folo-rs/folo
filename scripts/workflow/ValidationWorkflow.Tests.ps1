@@ -305,7 +305,9 @@ Describe 'Public API diff publisher trust boundary' {
         $job = Get-WorkflowJob $publicApiPublisher 'publish'
         $job | Should -Match 'name: public-api-diff-\$\{\{ github\.event\.workflow_run\.id \}\}-\$\{\{ github\.event\.workflow_run\.run_attempt \}\}'
         $job | Should -Match 'run-id: \$\{\{ github\.event\.workflow_run\.id \}\}'
-        $job | Should -Match "-HeadSha '\$\{\{ github\.event\.workflow_run\.head_sha \}\}'"
+        $job | Should -Match 'PUBLIC_API_HEAD_SHA: \$\{\{ github\.event\.workflow_run\.head_sha \}\}'
+        $job | Should -Match 'PUBLIC_API_HEAD_REPOSITORY: \$\{\{ github\.event\.workflow_run\.head_repository\.full_name \}\}'
+        $job | Should -Not -Match 'pull_requests\[0\]'
     }
 }
 

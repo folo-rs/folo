@@ -8,7 +8,8 @@
 param(
     [Parameter(Mandatory)][string] $ArtifactPath,
     [Parameter(Mandatory)][string] $Repository,
-    [Parameter(Mandatory)][long] $PullRequest,
+    [Parameter(Mandatory)][string] $HeadRepository,
+    [Parameter(Mandatory)][string] $HeadBranch,
     [Parameter(Mandatory)][long] $RunId,
     [Parameter(Mandatory)][long] $RunAttempt,
     [Parameter(Mandatory)][string] $HeadSha,
@@ -22,5 +23,5 @@ $VerbosePreference = 'Continue'
 
 Import-Module (Join-Path $PSScriptRoot 'PublicApiComment.psm1') -Force
 $null = Publish-PublicApiComment -ArtifactPath $ArtifactPath -Repository $Repository `
-    -PullRequest $PullRequest -RunId $RunId -RunAttempt $RunAttempt -HeadSha $HeadSha `
+    -HeadRepository $HeadRepository -HeadBranch $HeadBranch -RunId $RunId -RunAttempt $RunAttempt -HeadSha $HeadSha `
     -Conclusion $Conclusion

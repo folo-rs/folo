@@ -197,6 +197,7 @@ function ConvertTo-PublicApiComment {
         [Parameter(Mandatory)][hashtable] $Artifact,
         [Parameter(Mandatory)][long] $RunId,
         [Parameter(Mandatory)][long] $RunAttempt,
+        [Parameter(Mandatory)][string] $Conclusion,
         [long] $MaximumBytes = $script:MaximumCommentBytes
     )
 
@@ -236,24 +237,34 @@ function ConvertTo-PublicApiComment {
             }
         }
     }
+    if ($Conclusion -cne 'success') {
+        $lines.Add('')
+        $lines.Add(
+            "The producer workflow concluded with ``$Conclusion``. " +
+            'This report may be incomplete and is not authoritative.')
+    }
 
     $body = $lines -join "`n"
     if ([Text.Encoding]::UTF8.GetByteCount($body) -le $MaximumBytes) {
         return $body
     }
 
-    # GitHub caps comment bodies. Preserve the ownership marker, scope and authoritative run
-    # link rather than risking a rejected write or silently dropping package evidence.
-    $packageList = @($changed | ForEach-Object { "``$($_.name)``" }) -join ', '
-    if ([string]::IsNullOrEmpty($packageList)) { $packageList = 'none' }
-    return @(
+    # GitHub caps comment bodies. Counts keep the fallback bounded even when a hostile but
+    # schema-valid artifact contains many package names near the per-name limit.
+    $fallback = @(
         $script:PublicApiCommentMarker
         '## Public API diff'
         ''
         "Generated for commit [``$($Artifact.head_sha.Substring(0, 12))``]($commitUrl) by [Public API diff]($runUrl)."
         ''
-        "The complete diff exceeds the GitHub comment size limit. View the workflow artifact. Changed packages: $packageList."
-    ) -join "`n"
+        "The complete diff exceeds the GitHub comment size limit. View the workflow artifact. " +
+            "Changed packages: $($changed.Count). Incomplete packages: $($errors.Count)."
+    )
+    if ($Conclusion -cne 'success') {
+        $fallback += ''
+        $fallback += "The producer workflow concluded with ``$Conclusion``; this report is not authoritative."
+    }
+    return $fallback -join "`n"
 }
 
 function ConvertTo-PublicApiFailureComment {
@@ -342,6 +353,72 @@ function Get-PublicApiGitHubCollection {
     )
 }
 
+function Resolve-PublicApiPullRequest {
+    # workflow_run may omit pull_requests for fork heads. Resolve the unique open PR from
+    # the event's head repository/branch and require its live head SHA, rather than trusting
+    # either the branch name or report content to identify the publication sink.
+    [CmdletBinding()]
+    [OutputType([long])]
+    param(
+        [Parameter(Mandatory)][string] $Repository,
+        [Parameter(Mandatory)][string] $HeadRepository,
+        [Parameter(Mandatory)][string] $HeadBranch,
+        [Parameter(Mandatory)][string] $HeadSha
+    )
+
+    if ($Repository -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or
+        $HeadRepository -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+        throw 'Workflow and head repositories must be owner/name identifiers.'
+    }
+    if ([string]::IsNullOrWhiteSpace($HeadBranch) -or $HeadBranch -cmatch '[\x00-\x1F]') {
+        throw 'Workflow head branch is missing or contains control characters.'
+    }
+    if ($HeadSha -cnotmatch '^[0-9a-f]{40}([0-9a-f]{24})?$') {
+        throw 'Workflow head SHA must be a full Git object ID.'
+    }
+
+    $headOwner = $HeadRepository.Split('/', 2)[0]
+    $PSNativeCommandUseErrorActionPreference = $false
+    $arguments = @(
+        'api'
+        "repos/$Repository/pulls"
+        '--method'
+        'GET'
+        '--paginate'
+        '--slurp'
+        '-f'
+        'state=open'
+        '-f'
+        "head=$headOwner`:$HeadBranch"
+        '-f'
+        'per_page=100'
+    )
+    $output = @(& gh @arguments 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "GitHub pull request resolution failed (exit $LASTEXITCODE): $($output -join "`n")"
+    }
+    $text = ($output | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] }) -join "`n"
+    $pages = @($text | ConvertFrom-Json -AsHashtable -NoEnumerate)
+    $pullMatches = @(
+        foreach ($page in $pages) {
+            if ($page -isnot [array]) { throw 'GitHub pull request lookup returned a non-array page.' }
+            foreach ($pull in $page) {
+                if ($pull.state -ceq 'open' -and
+                    $pull.head -is [hashtable] -and
+                    $pull.head.sha -ceq $HeadSha -and
+                    $pull.head.repo -is [hashtable] -and
+                    $pull.head.repo.full_name -ceq $HeadRepository) {
+                    $pull
+                }
+            }
+        }
+    )
+    if ($pullMatches.Count -ne 1) {
+        throw "Expected one open pull request for $HeadRepository@$HeadSha; found $($pullMatches.Count)."
+    }
+    return [long]$pullMatches[0].number
+}
+
 function Assert-PublicApiLiveHead {
     # A completed run can become stale while its publisher waits. Never let an older run replace
     # the comment for the current PR head.
@@ -363,6 +440,19 @@ function Assert-PublicApiLiveHead {
     return $pull
 }
 
+function Test-PublicApiOwnedComment {
+    # A marker alone can be copied by any PR participant. The trusted publisher owns only
+    # comments written by GitHub Actions whose body begins with its versioned marker.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][hashtable] $Comment)
+
+    return $Comment.body -is [string] -and
+        $Comment.body.StartsWith($script:PublicApiCommentMarker, [StringComparison]::Ordinal) -and
+        $Comment.user -is [hashtable] -and
+        $Comment.user.login -ceq 'github-actions[bot]'
+}
+
 function Publish-PublicApiPullRequestComment {
     # Marker ownership makes the write idempotent without searching PR descriptions or history.
     # A duplicate marker is an ambiguous repository state, not permission to overwrite one copy.
@@ -381,7 +471,7 @@ function Publish-PublicApiPullRequestComment {
     $null = Assert-PublicApiLiveHead -Repository $Repository -PullRequest $PullRequest -HeadSha $HeadSha
     $endpoint = "repos/$Repository/issues/$PullRequest/comments"
     $comments = @(Get-PublicApiGitHubCollection $endpoint)
-    $owned = @($comments | Where-Object { $_.body -is [string] -and $_.body.Contains($script:PublicApiCommentMarker) })
+    $owned = @($comments | Where-Object { Test-PublicApiOwnedComment $_ })
     if ($owned.Count -gt 1) {
         throw "Pull request $Repository#$PullRequest has multiple public API diff marker comments."
     }
@@ -404,9 +494,8 @@ function Publish-PublicApiPullRequestComment {
         $writeFailure = $_
         # Reconcile a potentially committed but ambiguous request by reading the marker comment.
         try {
-            $persisted = @(Get-PublicApiGitHubCollection $endpoint | Where-Object {
-                    $_.body -is [string] -and $_.body.Contains($script:PublicApiCommentMarker)
-                })
+            $persisted = @(Get-PublicApiGitHubCollection $endpoint |
+                Where-Object { Test-PublicApiOwnedComment $_ })
             if ($persisted.Count -eq 1 -and $persisted[0].body -ceq $Body) { return $persisted[0] }
         } catch {
             throw [InvalidOperationException]::new(
@@ -426,15 +515,21 @@ function Publish-PublicApiComment {
     param(
         [Parameter(Mandatory)][string] $ArtifactPath,
         [Parameter(Mandatory)][string] $Repository,
-        [Parameter(Mandatory)][long] $PullRequest,
+        [Parameter(Mandatory)][string] $HeadRepository,
+        [Parameter(Mandatory)][string] $HeadBranch,
         [Parameter(Mandatory)][long] $RunId,
         [Parameter(Mandatory)][long] $RunAttempt,
         [Parameter(Mandatory)][string] $HeadSha,
         [Parameter(Mandatory)][string] $Conclusion
     )
 
-    Assert-PublicApiEventIdentity -Repository $Repository -PullRequest $PullRequest `
+    $pullRequest = Resolve-PublicApiPullRequest -Repository $Repository `
+        -HeadRepository $HeadRepository -HeadBranch $HeadBranch -HeadSha $HeadSha
+    Assert-PublicApiEventIdentity -Repository $Repository -PullRequest $pullRequest `
         -RunId $RunId -RunAttempt $RunAttempt -HeadSha $HeadSha
+    if ($Conclusion -cnotmatch '^[a-z_]+$') {
+        throw 'Workflow conclusion must be a GitHub conclusion identifier.'
+    }
     $contractFailure = $null
     if (-not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) {
         if ($Conclusion -eq 'success') {
@@ -446,9 +541,9 @@ function Publish-PublicApiComment {
     } else {
         try {
             $artifact = Read-PublicApiArtifact -Path $ArtifactPath -Repository $Repository `
-                -PullRequest $PullRequest -RunId $RunId -RunAttempt $RunAttempt -HeadSha $HeadSha
+                -PullRequest $pullRequest -RunId $RunId -RunAttempt $RunAttempt -HeadSha $HeadSha
             $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId $RunId `
-                -RunAttempt $RunAttempt
+                -RunAttempt $RunAttempt -Conclusion $Conclusion
         } catch {
             $contractFailure = $_.Exception
             $body = ConvertTo-PublicApiFailureComment -Repository $Repository -RunId $RunId `
@@ -456,7 +551,7 @@ function Publish-PublicApiComment {
         }
     }
 
-    $comment = Publish-PublicApiPullRequestComment -Repository $Repository -PullRequest $PullRequest `
+    $comment = Publish-PublicApiPullRequestComment -Repository $Repository -PullRequest $pullRequest `
         -HeadSha $HeadSha -Body $body
     if ($null -ne $contractFailure) { throw $contractFailure }
     return $comment
@@ -468,4 +563,5 @@ Export-ModuleMember -Function @(
     'Publish-PublicApiComment'
     'Read-PublicApiArtifact'
     'Publish-PublicApiPullRequestComment'
+    'Resolve-PublicApiPullRequest'
 )

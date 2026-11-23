@@ -516,10 +516,15 @@ directory and never checks out or executes the producer head.
 `scripts/workflow/PublicApiComment.psm1` owns the version-one artifact contract:
 repository, PR number, base/head SHAs, workflow run/attempt and one package list entry
 with `name`, `status` (`changed`, `unchanged` or `error`) and bounded `output`. The
-publisher compares identity fields with immutable workflow inputs and rejects malformed
-text, duplicate package names, stale heads and duplicate marker comments. Tool output is
-rendered through a code fence longer than any backtick sequence it contains. Runs larger
-than the comment limit retain scope and links to the authoritative artifact.
+publisher does not depend on `workflow_run.pull_requests`, which may be empty for forks.
+It resolves the one open PR whose live head repository and SHA match the completed run.
+The module compares artifact identity fields with immutable workflow inputs and rejects
+malformed text, duplicate package names, stale heads and duplicate publisher-owned marker
+comments. A marker qualifies as owned only when the body begins with it and
+`github-actions[bot]` authored the comment. Tool output is rendered through a code fence
+longer than any backtick sequence it contains. Runs larger than the comment limit retain
+bounded scope counts and links to the authoritative artifact; unsuccessful producers keep
+any valid evidence but qualify it as non-authoritative.
 
 `PublishPublicApiComment.ps1` is the thin workflow entry point. GitHub CLI owns the
 paginated API reads and single create/update write; a failed ambiguous write is

@@ -139,18 +139,21 @@ GitHub comment APIs.
 
 A separate `workflow_run` workflow is the only comment writer. GitHub runs it from the
 trusted default branch, not from the completed run's head. Before writing, its PowerShell
-publisher validates the artifact schema and workflow identity, verifies the live PR still
-has the completed run's head SHA, and renders only validated fields and tool output. A
-hidden marker identifies one owned comment; duplicate ownership fails visibly rather
-than selecting an arbitrary copy. Older runs cannot replace results for a newer head,
-and ambiguous writes are reconciled by reading the comment back instead of blindly
-retrying.
+publisher resolves the unique open PR from the completed run's head repository, branch
+and SHA, which also covers fork runs whose `workflow_run.pull_requests` array is empty.
+It validates the artifact schema and workflow identity, verifies the live PR still has
+the completed run's head SHA, and renders only validated fields and tool output. A hidden
+marker at the start of a `github-actions[bot]` comment identifies publisher ownership;
+user-authored marker copies are ignored, while duplicate publisher ownership fails
+visibly. Older runs cannot replace results for a newer head, and ambiguous writes are
+reconciled by reading the owned comment back instead of blindly retrying.
 
 Producer failure or cancellation leaves a useful failure notice for the affected head.
-A successful producer that omits or invalidates its artifact fails the publisher after
-posting the contract diagnostic, keeping the trust boundary visible in Actions checks.
-Oversized diffs link to the complete workflow artifact instead of exceeding GitHub's
-comment-body limit.
+A valid artifact from an unsuccessful run retains its available diff but qualifies it as
+non-authoritative. A successful producer that omits or invalidates its artifact fails the
+publisher after posting the contract diagnostic, keeping the trust boundary visible in
+Actions checks. Oversized diffs link to the complete workflow artifact and retain bounded
+changed/incomplete package counts instead of exceeding GitHub's comment-body limit.
 
 ## Selective validation
 
