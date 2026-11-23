@@ -78,13 +78,6 @@ pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
 
     #[cfg(test)]
     #[doc(hidden)]
-    /// Returns the configured built-in worker count for white-box tests.
-    fn count(&self) -> NonZero<u32> {
-        panic!("custom test policy does not expose a built-in worker count")
-    }
-
-    #[cfg(test)]
-    #[doc(hidden)]
     /// Returns a test snapshot of built-in-policy processor membership.
     fn membership_snapshot(&self) -> Vec<(ProcessorId, bool)> {
         Vec::new()
@@ -275,11 +268,6 @@ impl WorkerPolicy for BuiltInWorkerPolicy {
             .as_ref()
             .expect("the builder prepares a policy before scheduling")
             .select_group(groups, self.count)
-    }
-
-    #[cfg(test)]
-    fn count(&self) -> NonZero<u32> {
-        self.count
     }
 
     #[cfg(test)]

@@ -293,8 +293,8 @@ mod tests {
     use tracing::{Event, Metadata, Subscriber};
 
     use crate::metrics::CLOCK;
-    use crate::pool_inner::{OnDrop, POOL_LOG_TARGET, PanickingPayload};
-    use crate::{BuiltInWorkerPolicy, Pool, Scheduler};
+    use crate::pool_inner::{OnDrop, POOL_LOG_TARGET, PanickingPayload, TestPolicy};
+    use crate::{Pool, Scheduler};
 
     assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
 
@@ -337,7 +337,7 @@ mod tests {
                 nz!(1),
                 nz!(1),
             )))
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(TestPolicy::new(1))
             .build()
     }
 

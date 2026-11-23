@@ -10,4 +10,4 @@ pub(crate) use worker_loop::*;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::helpers::{OnDrop, PanickingPayload};
+pub(crate) use tests::helpers::{OnDrop, PanickingPayload, TestPolicy};

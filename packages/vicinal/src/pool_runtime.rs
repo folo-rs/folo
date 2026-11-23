@@ -339,6 +339,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "subscriber panic payload retention intentionally leaks arbitrary callback state"
+    )]
     fn failure_state_precedes_panicking_diagnostics() {
         struct OriginalFailure;
 

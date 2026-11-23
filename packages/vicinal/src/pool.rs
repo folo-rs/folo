@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 
-#[cfg(test)]
-use crate::BuiltInWorkerPolicy;
 use crate::policies::WorkersPerProcessor;
+#[cfg(test)]
+use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
 use crate::{PoolInner, Scheduler, WorkerPolicy};
 
 /// Experimentally determined as providing good throughput under
@@ -313,18 +313,18 @@ mod tests {
         let default = Pool::builder().hardware(hardware.clone()).build();
         let region = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(3)))
-            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(WorkersPerProcessor::new(nz!(3)))
+            .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
             .build();
         let processor = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(BuiltInWorkerPolicy::per_system(nz!(1)))
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(3)))
+            .worker_policy(WorkersPerSystem::new(nz!(1)))
+            .worker_policy(WorkersPerProcessor::new(nz!(3)))
             .build();
         let system = Pool::builder()
             .hardware(hardware)
-            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-            .worker_policy(BuiltInWorkerPolicy::per_system(nz!(3)))
+            .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
+            .worker_policy(WorkersPerSystem::new(nz!(3)))
             .build();
 
         for pool in [&default, &region, &processor, &system] {

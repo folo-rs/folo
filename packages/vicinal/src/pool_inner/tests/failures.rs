@@ -8,7 +8,9 @@ use futures::executor::block_on;
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use super::helpers::{CountOnDrop, NoopTask, PanickingPayload, hardware, pin, regional_hardware};
+use super::helpers::{
+    CountOnDrop, NoopTask, PanickingPayload, TestPolicy, hardware, pin, regional_hardware,
+};
 use crate::{BuiltInWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
 
 /// Submission failures stop admission, whereas caught user-task panics leave it operational.
@@ -17,7 +19,7 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(TestPolicy::new(1))
             .build();
         let scheduler = pool.scheduler();
         assert!(
@@ -47,9 +49,8 @@ fn disconnected_joined_panic_does_not_poison_pool() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(TestPolicy::new(1))
             .build();
-        pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
         let (release, wait) = mpsc::channel();
 
@@ -72,9 +73,8 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(TestPolicy::new(1))
             .build();
-        pin(&pool.inner.hardware, 0);
         let scheduler = pool.scheduler();
 
         let completed = scheduler.spawn(|| panic::panic_any(PanickingPayload));
@@ -105,7 +105,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         pool.inner
             .enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
                 pool.inner
-                    .start_workers(target, handles, thread::Builder::spawn, |set| {
+                    .start_workers(target, nz!(1), handles, thread::Builder::spawn, |set| {
                         assert_eq!(set.len(), 1);
                         set.pin_current_thread_to();
                     });

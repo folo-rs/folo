@@ -10,7 +10,7 @@ use many_cpus::ProcessorSet;
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use super::helpers::{NoopTask, OnDrop, hardware, pin};
+use super::helpers::{NoopTask, OnDrop, TestPolicy, hardware, pin};
 use crate::{BuiltInWorkerPolicy, Pool, init_task};
 
 /// Initializer failure cannot lose a sibling's handle while startup still owns registration.
@@ -45,7 +45,6 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
                 })
                 .build();
 
-            assert_eq!(pool.inner.policy.count().get(), WORKERS);
             let inner = Arc::clone(&pool.inner);
             let scheduler = pool.scheduler();
             let state = inner.registry.get_or_init(target.group);
@@ -57,6 +56,7 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
                 inner.enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
                     inner.start_workers(
                         target,
+                        nz!(WORKERS),
                         handles,
                         |builder, entry| {
                             spawned = spawned.checked_add(1).unwrap();
@@ -103,13 +103,12 @@ fn shutdown_waits_for_failure_publication_to_finish() {
     with_watchdog(|| {
         let hardware = hardware();
         pin(&hardware, 0);
-        let policy = BuiltInWorkerPolicy::per_processor(nz!(1));
-        let target = policy.destination(&hardware);
+        let policy = TestPolicy::new(0);
         let (initializer_entered, initializer_arrival) = mpsc::channel();
         let (release_initializer, wait_for_release) = mpsc::channel();
         let pool = Pool::builder()
             .hardware(hardware)
-            .worker_policy(policy)
+            .worker_policy(policy.clone())
             .thread_init({
                 let initializer_entered = initializer_entered;
                 let wait_for_release = Mutex::new(wait_for_release);
@@ -121,8 +120,8 @@ fn shutdown_waits_for_failure_publication_to_finish() {
             })
             .build();
         let inner = Arc::clone(&pool.inner);
-        let state = inner.registry.get_or_init(target.group);
-        inner.install_test_group(target);
+        let group = policy.group();
+        let state = group.state();
 
         let (failure_entered, failure_arrival) = mpsc::channel();
         let (release_failure, wait_for_failure_release) = mpsc::channel();
@@ -137,12 +136,10 @@ fn shutdown_waits_for_failure_publication_to_finish() {
                 .is_ok()
         );
 
-        inner.start_workers(
-            target,
-            &mut inner.worker_handles.lock().unwrap(),
-            thread::Builder::spawn,
-            ProcessorSet::pin_current_thread_to,
-        );
+        let worker = thread::spawn({
+            let group = group.clone();
+            move || group.execute_worker()
+        });
         initializer_arrival.recv().unwrap();
 
         let scheduler = pool.scheduler();
@@ -165,6 +162,7 @@ fn shutdown_waits_for_failure_publication_to_finish() {
 
         release_failure.send(()).unwrap();
         shutdown.join().unwrap_err();
+        worker.join().unwrap();
         assert_panics(|| block_on(pending).unwrap());
         assert_eq!(inner.runtime.active_workers(), 0);
     });
@@ -174,48 +172,35 @@ fn shutdown_waits_for_failure_publication_to_finish() {
 #[test]
 fn shutdown_waits_for_initialization_and_cancels_queued_work() {
     with_watchdog(|| {
-        for policy in [
-            BuiltInWorkerPolicy::per_processor(nz!(1)),
-            BuiltInWorkerPolicy::per_memory_region(nz!(1)),
-        ] {
-            // Pin to the first fake processor so both tasks share one initializer.
-            let hardware = hardware();
-            pin(&hardware, 0);
+        let finished = Arc::new(AtomicBool::new(false));
+        let (entered, arrival) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let pool = Pool::builder()
+            .worker_policy(TestPolicy::new(1))
+            .thread_init({
+                let finished = Arc::clone(&finished);
+                let wait = Mutex::new(wait);
+                move || {
+                    entered.send(()).unwrap();
+                    wait.lock().unwrap().recv().unwrap();
+                    finished.store(true, Ordering::Release);
+                }
+            })
+            .build();
 
-            let finished = Arc::new(AtomicBool::new(false));
-            let (entered, arrival) = mpsc::channel();
-            let (release, wait) = mpsc::channel();
-            let pool = Pool::builder()
-                .hardware(hardware)
-                .worker_policy(policy)
-                .thread_init({
-                    let finished = Arc::clone(&finished);
-                    let wait = Mutex::new(wait);
-                    move || {
-                        entered.send(()).unwrap();
-                        wait.lock().unwrap().recv().unwrap();
-                        finished.store(true, Ordering::Release);
-                    }
-                })
-                .build();
+        let inner = Arc::clone(&pool.inner);
+        let capture = OnDrop(Some(Box::new(move || release.send(()).unwrap())));
+        let scheduler = pool.scheduler();
+        scheduler.spawn_and_forget(move || drop(capture));
+        let task = scheduler
+            .spawn(|| panic!("queued work must not execute before initialization finishes"));
 
-            // The fire-and-forget capture releases exactly one initializer.
-            assert_eq!(pool.inner.policy.count(), nz!(1));
-            let inner = Arc::clone(&pool.inner);
-            let capture = OnDrop(Some(Box::new(move || release.send(()).unwrap())));
-            let scheduler = pool.scheduler();
-            scheduler.spawn_and_forget(move || drop(capture));
-            let task = scheduler.spawn(|| {
-                panic!("queued work must not execute before initialization finishes");
-            });
+        arrival.recv().unwrap();
+        drop(pool);
 
-            arrival.recv().unwrap();
-            drop(pool);
-
-            assert!(finished.load(Ordering::Acquire));
-            assert_eq!(inner.runtime.active_workers(), 0);
-            assert!(!inner.runtime.is_poisoned());
-            assert!(block_on(task).unwrap_err().is_cancel());
-        }
+        assert!(finished.load(Ordering::Acquire));
+        assert_eq!(inner.runtime.active_workers(), 0);
+        assert!(!inner.runtime.is_poisoned());
+        assert!(block_on(task).unwrap_err().is_cancel());
     });
 }

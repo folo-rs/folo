@@ -1,16 +1,77 @@
 //! Shared fake topology, affinity observations and destructor probes for lifecycle tests.
 
 use std::collections::BTreeSet;
-use std::panic;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::{panic, thread};
 
 use futures::FutureExt;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
-use crate::{ErasedTaskHandle, Scheduler, VicinalTask, WorkerGroupState, init_task};
+use crate::{
+    ErasedTaskHandle, Scheduler, VicinalTask, WorkerGroup, WorkerGroupId, WorkerGroupState,
+    WorkerGroups, WorkerPolicy, WorkerPolicyContext, init_task,
+};
+
+/// Provides one stable group for tests unrelated to built-in topology routing.
+#[derive(Clone, Debug)]
+pub(crate) struct TestPolicy {
+    state: Arc<TestPolicyState>,
+}
+
+/// Retains the prepared group and startup state shared with the test controller.
+#[derive(Debug)]
+struct TestPolicyState {
+    group: OnceLock<WorkerGroup>,
+    started: OnceLock<()>,
+    workers: usize,
+}
+
+impl TestPolicy {
+    /// Creates a test policy with a fixed worker count and no processor-affinity setup.
+    pub(crate) fn new(workers: usize) -> Self {
+        Self {
+            state: Arc::new(TestPolicyState {
+                group: OnceLock::new(),
+                started: OnceLock::new(),
+                workers,
+            }),
+        }
+    }
+
+    /// Returns the group created while the pool prepared this policy.
+    pub(crate) fn group(&self) -> WorkerGroup {
+        self.state
+            .group
+            .get()
+            .expect("the builder prepares a test policy before inspection")
+            .clone()
+    }
+}
+
+impl WorkerPolicy for TestPolicy {
+    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+        self.state
+            .group
+            .set(context.groups().add())
+            .expect("a test policy is prepared once");
+    }
+
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        let group = self.group();
+        self.state.started.get_or_init(|| {
+            for _ in 0..self.state.workers {
+                _ = thread::spawn({
+                    let group = group.clone();
+                    move || group.execute_worker()
+                });
+            }
+        });
+        group.id()
+    }
+}
 
 /// Sparse regions with multiple eligible CPUs and a quota that excludes some of them.
 pub(crate) fn hardware() -> SystemHardware {

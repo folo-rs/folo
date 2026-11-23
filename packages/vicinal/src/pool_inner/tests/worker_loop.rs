@@ -6,25 +6,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use many_cpus::ProcessorSet;
-use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use super::helpers::{hardware, pin, probe};
+use super::helpers::{TestPolicy, hardware, probe};
 use crate::pool_inner::worker_loop_with;
-use crate::{BuiltInWorkerPolicy, GroupId, Pool, WorkerGroupState};
+use crate::{Pool, WorkerGroup, WorkerGroupState};
 
 /// The pool-wide stop must abandon dequeued work even before its group receives a stop signal.
 #[test]
 fn shutdown_before_dequeue_abandons_without_another_refresh() {
     with_watchdog(|| {
-        let (pool, destination) = regional_pool();
-        let state = pool.inner.registry.get_or_init(destination);
+        let (pool, group) = group_pool();
+        let state = group.state();
         let dropped = Arc::new(AtomicBool::new(false));
         state.regular_queue.lock().unwrap().push_back(probe(state, {
             let inner = Arc::clone(&pool.inner);
             let dropped = Arc::clone(&dropped);
+            let group = group.clone();
             move || {
-                let state = inner.registry.get_or_init(destination);
+                let state = group.state();
                 assert!(inner.runtime.is_shutdown());
                 assert!(!inner.runtime.is_poisoned());
                 assert!(!state.shutdown_flag.load(Ordering::Acquire));
@@ -41,7 +41,7 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
             assert_eq!(queued, 1);
             // The outer stop check has passed, but this iteration has not dequeued its task.
             // A pending revision makes an unnecessary post-stop refresh observable.
-            publish_expansion(&pool, destination);
+            publish_expansion(&pool, &group);
             pool.inner.runtime.publish_shutdown_without_group_signals();
         });
 
@@ -56,14 +56,15 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
 #[test]
 fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
     with_watchdog(|| {
-        let (pool, destination) = regional_pool();
-        let state = pool.inner.registry.get_or_init(destination);
+        let (pool, group) = group_pool();
+        let state = group.state();
         let dropped = Arc::new(AtomicBool::new(false));
         state.urgent_queue.lock().unwrap().push_back(probe(state, {
             let inner = Arc::clone(&pool.inner);
             let dropped = Arc::clone(&dropped);
+            let group = group.clone();
             move || {
-                let state = inner.registry.get_or_init(destination);
+                let state = group.state();
                 assert!(inner.runtime.is_shutdown());
                 assert!(!inner.runtime.is_poisoned());
                 assert!(state.shutdown_flag.load(Ordering::Acquire));
@@ -81,7 +82,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
                     assert_eq!(set.len(), 1);
                     let queued = state.urgent_queue.lock().unwrap().len();
                     assert_eq!(queued, 1);
-                    publish_expansion(&pool, destination);
+                    publish_expansion(&pool, &group);
                 }
                 2 => {
                     assert_eq!(set.len(), 2);
@@ -107,15 +108,16 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
     struct AffinityFailure;
 
     with_watchdog(|| {
-        let (pool, destination) = regional_pool();
-        let state = pool.inner.registry.get_or_init(destination);
+        let (pool, group) = group_pool();
+        let state = group.state();
         let rejected = Arc::new(AtomicBool::new(false));
         state.regular_queue.lock().unwrap().push_back(probe(state, {
             let scheduler = pool.scheduler();
             let inner = Arc::clone(&pool.inner);
             let rejected = Arc::clone(&rejected);
+            let group = group.clone();
             move || {
-                let state = inner.registry.get_or_init(destination);
+                let state = group.state();
                 assert!(inner.runtime.is_poisoned());
                 assert!(inner.runtime.is_shutdown());
                 drop(state.regular_queue.try_lock().unwrap());
@@ -139,7 +141,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
                         assert_eq!(set.len(), 1);
                         let queued = state.regular_queue.lock().unwrap().len();
                         assert_eq!(queued, 1);
-                        publish_expansion(&pool, destination);
+                        publish_expansion(&pool, &group);
                     }
                     2 => {
                         assert_eq!(set.len(), 2);
@@ -161,38 +163,38 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
 }
 
 /// Starts the loop with a singleton revision, without background workers racing the test.
-fn regional_pool() -> (Pool, GroupId) {
+fn group_pool() -> (Pool, WorkerGroup) {
     let hardware = hardware();
-    pin(&hardware, 0);
-    let target = BuiltInWorkerPolicy::per_memory_region(nz!(1)).destination(&hardware);
+    let policy = TestPolicy::new(0);
     let pool = Pool::builder()
         .hardware(hardware.clone())
-        .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(policy.clone())
         .build();
-    let state = pool.inner.registry.get_or_init(target.group);
+    let group = policy.group();
+    let state = group.state();
 
     publish_affinity(
         state,
         hardware
             .all_processors()
             .to_builder()
-            .filter(|processor| processor.id() == target.processor)
+            .filter(|processor| processor.id() == 0)
             .take_all()
             .unwrap(),
     );
 
-    (pool, target.group)
+    (pool, group)
 }
 
 /// Models admission while pinning a copied snapshot, forcing a refresh after dequeueing.
-fn publish_expansion(pool: &Pool, destination: GroupId) {
+fn publish_expansion(pool: &Pool, group: &WorkerGroup) {
     publish_affinity(
-        pool.inner.registry.get_or_init(destination),
+        group.state(),
         pool.inner
             .hardware
             .all_processors()
             .to_builder()
-            .filter(|processor| destination.contains(processor))
+            .filter(|processor| processor.id() < 2)
             .take_all()
             .unwrap(),
     );

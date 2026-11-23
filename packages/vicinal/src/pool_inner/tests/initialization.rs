@@ -10,7 +10,7 @@ use futures::executor::block_on;
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use super::helpers::{affinity, hardware, pin};
+use super::helpers::{TestPolicy, affinity, hardware, pin};
 use crate::{BuiltInWorkerPolicy, PolicyKind, Pool, Scheduler};
 
 thread_local! {
@@ -122,8 +122,7 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
         let release = Arc::new(Barrier::new(WORKERS as usize + 1));
         let executed = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
-            .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(WORKERS)))
+            .worker_policy(TestPolicy::new(WORKERS as usize))
             .thread_init({
                 let release = Arc::clone(&release);
                 move || {
@@ -133,8 +132,6 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
             })
             .build();
 
-        // Reject count mutations before starting callbacks with a fixed participant count.
-        assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let task = pool.scheduler().spawn({
             let executed = Arc::clone(&executed);
             move || {
@@ -197,8 +194,7 @@ fn initializer_can_submit_to_its_pool() {
         let scheduler = Arc::new(OnceLock::<Scheduler>::new());
         let (result, received) = mpsc::channel();
         let pool = Pool::builder()
-            .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(TestPolicy::new(1))
             .thread_init({
                 // A weak capture avoids retaining a scheduler through its own pool.
                 let scheduler = Arc::downgrade(&scheduler);
@@ -229,8 +225,7 @@ fn initialization_panic_stops_the_pool() {
     with_watchdog(|| {
         let (release, wait) = mpsc::channel();
         let pool = Pool::builder()
-            .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(TestPolicy::new(1))
             .thread_init({
                 let wait = Mutex::new(wait);
                 move || {
@@ -240,8 +235,6 @@ fn initialization_panic_stops_the_pool() {
             })
             .build();
 
-        // The controller releases exactly one initializer.
-        assert_eq!(pool.inner.policy.count(), nz!(1));
         let scheduler = pool.scheduler();
         let executed = Arc::new(AtomicBool::new(false));
         let task = scheduler.spawn({

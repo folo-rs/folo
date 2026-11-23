@@ -4,6 +4,8 @@ use std::any::{Any, type_name};
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::io;
+#[cfg(test)]
+use std::num::NonZero;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 use std::thread::Result as ThreadResult;
@@ -87,6 +89,7 @@ impl PoolInner {
     pub(crate) fn start_workers(
         self: &Arc<Self>,
         target: SubmissionTarget,
+        count: NonZero<u32>,
         handles: &mut Vec<thread::JoinHandle<()>>,
         spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<thread::JoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
@@ -104,14 +107,7 @@ impl PoolInner {
         let group = self.registry.group(destination);
         self.policy
             .install_test_group(&self.registry, &group, &affinity);
-        group.start_workers_with(
-            destination,
-            &affinity,
-            self.policy.count(),
-            handles,
-            spawn,
-            pin,
-        );
+        group.start_workers_with(destination, &affinity, count, handles, spawn, pin);
     }
 
     #[cfg(test)]

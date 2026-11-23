@@ -473,8 +473,6 @@ fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32)
             .worker_policy(policy)
             .build();
 
-        // Validate capacity before waiting for an acknowledgment from every worker.
-        assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let state = pool.inner.registry.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
 
@@ -504,6 +502,7 @@ fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32)
         let (refreshed, updates) = mpsc::channel();
         pool.inner.start_workers(
             target,
+            nz!(WORKERS),
             &mut pool.inner.worker_handles.lock().unwrap(),
             thread::Builder::spawn,
             move |set| {

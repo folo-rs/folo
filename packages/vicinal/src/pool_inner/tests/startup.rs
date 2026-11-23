@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Barrier, mpsc};
+use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::{io, thread};
 
 use futures::executor::block_on;
@@ -12,8 +12,49 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use super::helpers::{NoopTask, OnDrop, PanickingPayload, affinity, hardware, probe};
-use crate::{BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, SubmissionTarget, init_task};
+use super::helpers::{OnDrop, PanickingPayload, TestPolicy, affinity, hardware, probe};
+use crate::{
+    BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, SubmissionTarget, WorkerGroupId, WorkerGroups,
+    WorkerPolicy, WorkerPolicyContext,
+};
+
+/// Pauses policy selection after a test worker reaches the ordinary participation boundary.
+struct GatedSelectionPolicy {
+    inner: TestPolicy,
+    entered: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl WorkerPolicy for GatedSelectionPolicy {
+    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+        self.inner.prepare(context);
+    }
+
+    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
+        let id = self.inner.select_group(groups);
+        self.inner.group().wait_until_initialized(nz!(1_usize));
+        self.entered.send(()).unwrap();
+        self.release.lock().unwrap().recv().unwrap();
+        id
+    }
+}
+
+/// Fails exactly at the custom policy boundary after pool preparation.
+struct PanickingSelectionPolicy {
+    inner: TestPolicy,
+}
+
+impl WorkerPolicy for PanickingSelectionPolicy {
+    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+        self.inner.prepare(context);
+    }
+
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        panic::panic_any(StartupFailure);
+    }
+}
+
+struct StartupFailure;
 
 /// Processor-local startup must serialize concurrent first submitters.
 #[test]
@@ -53,8 +94,6 @@ fn assert_concurrent_startup(kind: PolicyKind) {
             .worker_policy(policy)
             .build();
 
-        // Validate capacity before waiting for a task on every worker.
-        assert_eq!(pool.inner.policy.count().get(), WORKERS);
         let scheduler = pool.scheduler();
         let start = Arc::new(Barrier::new(WORKERS as usize));
         let (entered, arrivals) = mpsc::channel();
@@ -119,54 +158,27 @@ fn assert_concurrent_startup(kind: PolicyKind) {
 #[test]
 fn shutdown_accounts_for_in_progress_startup() {
     with_watchdog(|| {
+        let (entered, selection_entered) = mpsc::channel();
+        let (release, selection_release) = mpsc::channel();
         let pool = Pool::builder()
-            .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(GatedSelectionPolicy {
+                inner: TestPolicy::new(1),
+                entered,
+                release: Mutex::new(selection_release),
+            })
             .build();
         let inner = Arc::clone(&pool.inner);
-        let (entered, arrivals) = mpsc::channel();
-        let (resume, wait) = mpsc::channel();
+        let scheduler = pool.scheduler();
+        let starter = thread::spawn(move || block_on(scheduler.spawn(|| 42)).unwrap_err());
 
-        let starter = thread::spawn({
-            let inner = Arc::clone(&inner);
-            move || {
-                let target = SubmissionTarget {
-                    group: GroupId::Processor(0),
-                    processor: 0,
-                };
-                let state = inner.registry.get_or_init(target.group);
-                let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
-                let task = init_task(slot, NoopTask);
-
-                inner.enqueue_with(target, state, task, false, |handles| {
-                    inner.start_workers(
-                        target,
-                        handles,
-                        thread::Builder::spawn,
-                        ProcessorSet::pin_current_thread_to,
-                    );
-
-                    entered.send(()).unwrap();
-                    wait.recv().unwrap();
-                });
-            }
-        });
-
-        arrivals.recv().unwrap();
+        selection_entered.recv().unwrap();
         let shutdown = thread::spawn(move || drop(pool));
-        resume.send(()).unwrap();
-        starter.join().unwrap();
+        release.send(()).unwrap();
+        assert!(starter.join().unwrap().is_cancel());
         shutdown.join().unwrap();
 
         assert!(inner.runtime.is_shutdown());
         assert_eq!(inner.runtime.active_workers(), 0);
-        assert!(
-            inner
-                .registry
-                .get_or_init(GroupId::Processor(0))
-                .shutdown_flag
-                .load(Ordering::Acquire)
-        );
     });
 }
 
@@ -190,6 +202,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
             inner.enqueue_with(destination, state, probe(state, || {}), false, |handles| {
                 inner.start_workers(
                     destination,
+                    nz!(2),
                     handles,
                     |builder, entry| {
                         attempts = attempts.checked_add(1).unwrap();
@@ -241,7 +254,7 @@ fn affinity_failure_is_reported_before_admission() {
 
         assert_panics(|| {
             inner.enqueue_with(destination, state, probe(state, || {}), false, |handles| {
-                inner.start_workers(destination, handles, thread::Builder::spawn, |_| {
+                inner.start_workers(destination, nz!(1), handles, thread::Builder::spawn, |_| {
                     panic!("injected affinity failure")
                 });
             });
@@ -263,24 +276,20 @@ fn affinity_failure_is_reported_before_admission() {
 /// Unadmitted captures stay outside startup's unwind and later poisoned fast-path rejection.
 #[test]
 fn startup_failure_contains_unadmitted_capture_destruction() {
-    struct StartupFailure;
-
-    let pool = Pool::builder().hardware(hardware()).build();
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder()
+        .worker_policy(PanickingSelectionPolicy {
+            inner: policy.clone(),
+        })
+        .build();
     let inner = &pool.inner;
-    let target = SubmissionTarget {
-        group: GroupId::Processor(0),
-        processor: 0,
-    };
-    let state = inner.registry.get_or_init(target.group);
+    let group = policy.group();
+    let state = group.state();
+    let scheduler = pool.scheduler();
 
     let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-        inner.enqueue_with(
-            target,
-            state,
-            probe(state, || panic::panic_any(PanickingPayload)),
-            false,
-            |_| panic::panic_any(StartupFailure),
-        );
+        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+        scheduler.spawn_and_forget(move || drop(capture));
     }))
     .unwrap_err();
 
@@ -288,13 +297,7 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     assert!(inner.runtime.is_poisoned());
     assert!(state.task_pool.lock().unwrap().is_empty());
 
-    assert_panics(|| {
-        inner.enqueue(
-            state,
-            probe(state, || panic::panic_any(PanickingPayload)),
-            true,
-        );
-    });
+    assert_panics(|| scheduler.spawn(|| panic::panic_any(PanickingPayload)));
     assert!(state.task_pool.lock().unwrap().is_empty());
     assert_eq!(inner.runtime.active_workers(), 0);
 }
@@ -316,6 +319,7 @@ fn empty_region_never_starts_unpinned_workers() {
         _ = pool.inner.registry.get_or_init(target.group);
         pool.inner.start_workers(
             target,
+            nz!(1),
             &mut Vec::new(),
             thread::Builder::spawn,
             ProcessorSet::pin_current_thread_to,

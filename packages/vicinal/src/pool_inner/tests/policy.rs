@@ -8,9 +8,10 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use testing::with_watchdog;
 
+use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
 use crate::{
-    BuiltInWorkerPolicy, GroupId, Pool, Scheduler, WorkerGroup, WorkerGroupId, WorkerGroups,
-    WorkerPolicy, WorkerPolicyContext,
+    GroupId, Pool, Scheduler, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
+    WorkerPolicyContext,
 };
 
 #[derive(Debug)]
@@ -126,8 +127,8 @@ fn last_built_in_policy_setter_wins() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(2), nz!(1)));
         let pool = Pool::builder()
             .hardware(hardware)
-            .worker_policy(BuiltInWorkerPolicy::per_system(NonZero::new(3).unwrap()))
-            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(WorkersPerSystem::new(NonZero::new(3).unwrap()))
+            .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
             .build();
 
         assert_eq!(block_on(pool.scheduler().spawn(|| 7)).unwrap(), 7);

@@ -17,25 +17,31 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{
-    OnDrop, PanickingPayload, assert_retained_scheduler, hardware, pin, probe, regional_hardware,
+    OnDrop, PanickingPayload, TestPolicy, assert_retained_scheduler, hardware, pin, probe,
+    regional_hardware,
 };
-use crate::{BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, Scheduler, SubmissionTarget};
+use crate::{
+    BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, Scheduler, WorkerGroupId, WorkerGroups,
+    WorkerPolicy,
+};
+
+/// Records whether terminal admission ever reaches custom policy selection.
+struct RecordingPolicy {
+    selected: Arc<AtomicUsize>,
+}
+
+impl WorkerPolicy for RecordingPolicy {
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        self.selected.fetch_add(1, Ordering::Release);
+        panic!("shutdown must prevent policy selection")
+    }
+}
 
 /// A ready group without workers keeps both priority queues deterministic until shutdown.
 #[test]
 fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
-    let pool = Pool::builder()
-        .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
-            nz!(1),
-            nz!(1),
-        )))
-        .build();
-    let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
-    state.startup.set(Ok(())).unwrap();
-    pool.inner.install_test_group(SubmissionTarget {
-        group: GroupId::Processor(0),
-        processor: 0,
-    });
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder().worker_policy(policy).build();
 
     let scheduler = pool.scheduler();
     let dropped = Arc::new(AtomicUsize::new(0));
@@ -91,18 +97,10 @@ fn completion_waker_can_drop_handles_and_submit() {
     }
 
     for cancel in [false, true] {
-        let pool = Pool::builder()
-            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
-                nz!(1),
-                nz!(1),
-            )))
-            .build();
-        let state = pool.inner.registry.get_or_init(GroupId::Processor(0));
-        state.startup.set(Ok(())).unwrap();
-        pool.inner.install_test_group(SubmissionTarget {
-            group: GroupId::Processor(0),
-            processor: 0,
-        });
+        let policy = TestPolicy::new(0);
+        let pool = Pool::builder().worker_policy(policy.clone()).build();
+        let group = policy.group();
+        let state = group.state();
 
         let scheduler = pool.scheduler();
         let mut handle = scheduler.spawn(|| {});
@@ -138,38 +136,37 @@ fn completion_waker_can_drop_handles_and_submit() {
 /// Late registry initialization cannot escape the shutdown transition's startup gate.
 #[test]
 fn shutdown_before_lazy_state_creation_starts_no_workers() {
+    let selected = Arc::new(AtomicUsize::new(0));
     let pool = Pool::builder()
-        .hardware(hardware())
-        .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+        .worker_policy(RecordingPolicy {
+            selected: Arc::clone(&selected),
+        })
         .build();
+    let scheduler = pool.scheduler();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
 
-    let target = SubmissionTarget {
-        group: GroupId::MemoryRegion(2),
-        processor: 0,
-    };
-    let state = inner.registry.get_or_init(target.group);
-
-    inner.enqueue_with(target, state, probe(state, || {}), false, |_| panic!());
-
-    assert!(state.startup.get().is_none());
+    let error = scheduler.spawn(|| {}).now_or_never().unwrap().unwrap_err();
+    assert!(error.is_cancel());
+    assert_eq!(selected.load(Ordering::Acquire), 0);
     assert_eq!(inner.runtime.active_workers(), 0);
 }
 
 /// Holds an allocated task across shutdown; its destructor probes every relevant lock.
 #[test]
 fn shutdown_racing_enqueue_drops_outside_locks() {
-    let pool = Pool::builder().hardware(hardware()).build();
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder().worker_policy(policy.clone()).build();
     let inner = Arc::clone(&pool.inner);
-    let destination = GroupId::Processor(0);
-    let state = inner.registry.get_or_init(destination);
+    let group = policy.group();
+    let state = group.state();
     let dropped = Arc::new(AtomicUsize::new(0));
     let task = probe(state, {
         let inner = Arc::clone(&inner);
         let dropped = Arc::clone(&dropped);
+        let group = group.clone();
         move || {
-            let state = inner.registry.get_or_init(destination);
+            let state = group.state();
             drop(state.regular_queue.try_lock().unwrap());
             drop(state.task_pool.try_lock().unwrap());
             drop(inner.worker_handles.try_lock().unwrap());
@@ -187,9 +184,10 @@ fn shutdown_racing_enqueue_drops_outside_locks() {
 /// An urgent capture's destructor failure must not prevent normal-queue resource release.
 #[test]
 fn shutdown_drains_both_queues_despite_a_destructor_panic() {
-    let pool = Pool::builder().hardware(hardware()).build();
-    let inner = Arc::clone(&pool.inner);
-    let state = inner.registry.get_or_init(GroupId::Processor(0));
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder().worker_policy(policy.clone()).build();
+    let group = policy.group();
+    let state = group.state();
     state
         .urgent_queue
         .lock()
@@ -215,9 +213,11 @@ fn shutdown_drains_both_queues_despite_a_destructor_panic() {
 fn shutdown_contains_secondary_payload_destruction() {
     struct FirstFailure;
 
-    let pool = Pool::builder().hardware(hardware()).build();
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder().worker_policy(policy.clone()).build();
+    let group = policy.group();
+    let state = group.state();
     let inner = Arc::clone(&pool.inner);
-    let state = inner.registry.get_or_init(GroupId::Processor(0));
     state.urgent_queue.lock().unwrap().extend([
         probe(state, || panic::panic_any(FirstFailure)),
         probe(state, || panic::panic_any(PanickingPayload)),
@@ -271,19 +271,7 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
 #[test]
 fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
     with_watchdog(|| {
-        let pool = Pool::builder()
-            .hardware(hardware())
-            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-            .build();
-
-        // Keep the submitter on one region throughout the shutdown scenario.
-        let processors = pool.inner.hardware.all_processors();
-        processors
-            .to_builder()
-            .filter(|p| p.id() == 0)
-            .take_all()
-            .unwrap()
-            .pin_current_thread_to();
+        let pool = Pool::builder().worker_policy(TestPolicy::new(1)).build();
 
         let scheduler = pool.scheduler();
         let (entered, arrivals) = mpsc::channel();
@@ -324,33 +312,19 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
 /// Retaining a scheduler must preserve failure precedence after the pool owner is destroyed.
 #[test]
 fn poisoned_pool_rejects_submissions_even_after_drop() {
-    for policy in [
-        BuiltInWorkerPolicy::per_processor(nz!(1)),
-        BuiltInWorkerPolicy::per_memory_region(nz!(1)),
-        BuiltInWorkerPolicy::per_system(nz!(1)),
-    ] {
-        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let destination = policy.destination(&hardware);
-        let pool = Pool::builder()
-            .hardware(hardware)
-            .worker_policy(policy)
-            .build();
-        let scheduler = pool.scheduler();
+    let pool = Pool::builder().worker_policy(TestPolicy::new(0)).build();
+    let scheduler = pool.scheduler();
 
-        assert_panics(|| {
-            let state = pool.inner.registry.get_or_init(destination.group);
-            pool.inner
-                .enqueue_with(destination, state, probe(state, || {}), false, |_| {
-                    panic!("injected startup failure")
-                });
-        });
+    assert_panics(|| {
+        pool.inner
+            .submit((), |_| panic!("injected infrastructure failure"));
+    });
 
-        drop(pool);
-        assert_panics(|| scheduler.spawn(|| {}));
-        assert_panics(|| scheduler.spawn_urgent(|| {}));
-        assert_panics(|| scheduler.spawn_and_forget(|| {}));
-        assert_panics(|| scheduler.spawn_urgent_and_forget(|| {}));
-    }
+    drop(pool);
+    assert_panics(|| scheduler.spawn(|| {}));
+    assert_panics(|| scheduler.spawn_urgent(|| {}));
+    assert_panics(|| scheduler.spawn_and_forget(|| {}));
+    assert_panics(|| scheduler.spawn_urgent_and_forget(|| {}));
 }
 
 /// A rejected group registration must not poison the terminal registry mutex.
@@ -371,8 +345,9 @@ fn post_failure_group_registration_does_not_poison_cleanup() {
 /// Readiness waiting cannot report success after clean shutdown prevented initialization.
 #[test]
 fn readiness_wait_rejects_incomplete_clean_shutdown() {
-    let pool = Pool::builder().build();
-    let group = pool.inner.groups.add();
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder().worker_policy(policy.clone()).build();
+    let group = policy.group();
     drop(pool);
 
     assert_panics(|| {
