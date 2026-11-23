@@ -2,14 +2,18 @@
 
 use std::any::{Any, type_name};
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 #[cfg(test)]
 use std::io;
 #[cfg(test)]
+use std::mem::take;
+#[cfg(test)]
 use std::num::NonZero;
-use std::panic::{self, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Arc, Mutex};
-use std::thread::Result as ThreadResult;
-use std::{fmt, thread};
+#[cfg(test)]
+use std::thread::{Builder, JoinHandle};
+use std::thread::{Result as ThreadResult, panicking};
 
 use many_cpus::{ProcessorSet, SystemHardware};
 use tracing::error;
@@ -34,7 +38,7 @@ pub(crate) struct PoolInner {
     #[cfg(test)]
     pub(crate) hardware: SystemHardware,
     #[cfg(test)]
-    pub(crate) worker_handles: Mutex<Vec<thread::JoinHandle<()>>>,
+    pub(crate) worker_handles: Mutex<Vec<JoinHandle<()>>>,
     pub(crate) policy: Box<dyn WorkerPolicy>,
     pub(crate) runtime: Arc<PoolRuntime>,
 }
@@ -53,7 +57,7 @@ impl PoolInner {
         if let Some(processors) = eager {
             validate_eager_processors(hardware, processors);
         }
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
             policy.prepare(WorkerPolicyContext::new(
                 hardware, eager, &groups, &pool_name,
             ));
@@ -61,6 +65,13 @@ impl PoolInner {
 
         if let Err(payload) = result {
             runtime.fail(payload);
+            runtime.wait_for_workers();
+            runtime.resume_failure();
+        }
+        // Custom preparation can return after a participating worker independently records
+        // a failure. Construction must propagate that published failure rather than returning
+        // an already-poisoned pool.
+        if runtime.is_poisoned() {
             runtime.wait_for_workers();
             runtime.resume_failure();
         }
@@ -90,8 +101,8 @@ impl PoolInner {
         self: &Arc<Self>,
         target: SubmissionTarget,
         count: NonZero<u32>,
-        handles: &mut Vec<thread::JoinHandle<()>>,
-        spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<thread::JoinHandle<()>>,
+        handles: &mut Vec<JoinHandle<()>>,
+        spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<JoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
     ) {
         let destination = target.group;
@@ -128,14 +139,21 @@ impl PoolInner {
             .install_test_group(&self.registry, &group, &affinity);
     }
 
+    /// Terminates admission for a submission-owned failure and resumes its original payload.
+    ///
+    /// Ref: docs/implementation.md, "Task storage" and "Affinity and failure coordination".
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
         let payload = self.runtime.fail_for_submission(payload);
         let mut failure = Err(payload);
         self.stop_groups(&mut failure);
-        panic::resume_unwind(failure.expect_err("pool failure retains its original panic"))
+        resume_unwind(failure.expect_err("pool failure retains its original panic"))
     }
 
+    /// Publishes shutdown, contains queue cleanup and waits for all participating workers.
+    ///
+    /// This owns pool destruction cleanup; policy-owned operating-system threads may perform
+    /// cleanup after leaving `execute_worker()`.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn shutdown_and_wait_for_workers(&self) {
         self.runtime.stop_workers();
@@ -154,7 +172,7 @@ impl PoolInner {
 
         #[cfg(test)]
         {
-            let handles = std::mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
+            let handles = take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
             for handle in handles {
                 record_failure(&mut failure, handle.join(), &self.runtime);
             }
@@ -175,7 +193,7 @@ impl PoolInner {
         }
 
         if let Err(payload) = failure {
-            if thread::panicking() {
+            if panicking() {
                 report_diagnostic(|| {
                     error!(
                         pool_id = self.pool_id,
@@ -184,11 +202,12 @@ impl PoolInner {
                 });
                 discard_panic(payload);
             } else {
-                panic::resume_unwind(payload);
+                resume_unwind(payload);
             }
         }
     }
 
+    /// Signals all groups before draining their queues outside registry and queue locks.
     #[cfg_attr(test, mutants::skip)]
     fn stop_groups(&self, failure: &mut ThreadResult<()>) {
         let groups = self.groups.snapshot();
@@ -203,8 +222,8 @@ impl PoolInner {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for PoolInner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for PoolInner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
             .field("pool_name", &self.pool_name)
@@ -227,12 +246,13 @@ fn discard_queue(
 
         record_failure(
             failure,
-            panic::catch_unwind(AssertUnwindSafe(|| drop(task))),
+            catch_unwind(AssertUnwindSafe(|| drop(task))),
             runtime,
         );
     }
 }
 
+/// Records the first cleanup failure and preserves later diagnostics without interrupting cleanup.
 fn record_failure(first: &mut ThreadResult<()>, result: ThreadResult<()>, runtime: &PoolRuntime) {
     if let Err(payload) = result {
         runtime.stop_admission();

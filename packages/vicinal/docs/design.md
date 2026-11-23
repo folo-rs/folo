@@ -63,9 +63,9 @@ from every submitting processor in the selected region. System workers share wor
 submitting processor in the pool, treating the whole system as one locality group.
 
 Each shared worker destination starts with an optional eager processor selection and accumulates
-the processors that submitted accepted work. Without eager selection, first use starts workers
-with the submitting processor's singleton affinity. A new submitting
-processor expands the permitted set without adding workers. Repeated submissions from
+processors when their submissions reach the built-in policy selection step. Without eager
+selection, first use starts workers with the submitting processor's singleton affinity. A new
+submitting processor expands the permitted set without adding workers. Repeated submissions from
 known processors do not change the set. Processors are never removed.
 
 Workers refresh their affinity at task boundaries; executing tasks may finish with the
@@ -73,8 +73,9 @@ previous narrower mask. Migration within the permitted mask is allowed even duri
 but is not required. Regional work never moves to another region to obtain an idle worker.
 System workers may move between permitted processors in different memory regions.
 
-Each destination starts its configured worker count once, on first use or during eager
-construction. Construction starts no workers by default. Workers persist until shutdown.
+Each built-in destination starts its configured worker count once, on first use or during eager
+construction. The default policy starts no workers during construction unless eager selection is
+configured; a custom policy controls its own preparation-time startup. Workers persist until shutdown.
 Shared worker counts are not multiplied
 by the number of submitting processors; a system count is also independent of the number
 of submitting regions. Counts must be nonzero but may exceed the

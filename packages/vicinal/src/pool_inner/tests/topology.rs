@@ -325,6 +325,8 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
                 .set(Box::new({
                     let lock_attempts = Arc::clone(&lock_attempts);
                     move || {
+                        // The channel below orders this hook with the competing submitter; the
+                        // atomic only elects which callback must send.
                         if lock_attempts.fetch_add(1, Ordering::Acquire) == 1 {
                             second_at_lock.send(()).unwrap();
                         }
@@ -343,6 +345,8 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
                 .set(Box::new({
                     let first_publisher = Arc::clone(&first_publisher);
                     move || {
+                        // The channel rendezvous supplies ordering; swap elects one callback
+                        // to hold publication open while the other waits.
                         if first_publisher.swap(false, Ordering::AcqRel) {
                             publishing.send(()).unwrap();
                             wait_for_release.lock().unwrap().recv().unwrap();
@@ -579,21 +583,23 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     let first = state.wake_event.listen();
     let second = state.wake_event.listen();
     let selected = pool.inner.policy.select_group(&pool.inner.groups);
-    let selected_state = pool.inner.groups.resolve(selected);
-    assert!(std::ptr::eq(state, selected_state));
-    pool.inner.enqueue(selected_state, allocate(), false);
+    let selected = pool.inner.groups.resolve(selected);
+    assert!(std::ptr::eq(state, selected));
+    pool.inner.enqueue(selected, allocate(), false);
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), None);
 
+    // Two writers may publish separately or serialize into one inherited mask/revision;
+    // the contract here is that final affinity and worker count are correct.
     let revision = state.affinity_revision.load(Ordering::Acquire);
     let snapshot = state.affinity.read().unwrap().as_ref().unwrap().clone();
     let first = state.wake_event.listen();
     let second = state.wake_event.listen();
 
     let selected = pool.inner.policy.select_group(&pool.inner.groups);
-    let selected_state = pool.inner.groups.resolve(selected);
-    assert!(std::ptr::eq(state, selected_state));
-    pool.inner.enqueue(selected_state, allocate(), false);
+    let selected = pool.inner.groups.resolve(selected);
+    assert!(std::ptr::eq(state, selected));
+    pool.inner.enqueue(selected, allocate(), false);
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), None);
     assert_eq!(state.affinity_revision.load(Ordering::Acquire), revision);

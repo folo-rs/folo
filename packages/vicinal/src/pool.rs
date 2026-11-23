@@ -30,8 +30,8 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// [`WorkerPolicy`] can select and create groups independently. Built-in workers start on first
 /// submission unless
 /// [`PoolBuilder::eager`] initializes their destinations during construction.
-/// Shared workers use the initial selection plus processors that submitted accepted work
-/// to their pool and destination, refreshing affinity at task boundaries without adding workers.
+/// Shared workers use the initial selection plus processors included by policy selection in
+/// their pool and destination, refreshing affinity at task boundaries without adding workers.
 /// A pool's policy does not change after construction.
 ///
 /// # Lifetime
@@ -185,9 +185,10 @@ impl PoolBuilder {
     /// Sets a function to run when each worker thread starts.
     ///
     /// The function runs once on each worker, after its initial affinity is set and before
-    /// it executes any tasks. Workers start lazily by default; [`Self::eager`] initializes selected
-    /// workers during construction. Calls on different workers may overlap, without a guaranteed
-    /// order. Submission does not wait for initialization; eager construction does.
+    /// it executes any tasks. Built-in workers start lazily unless [`Self::eager`] initializes
+    /// selected destinations during construction; a custom [`WorkerPolicy`] controls its own
+    /// startup and readiness waits. Calls on different workers may overlap, without a
+    /// guaranteed order. Built-in lazy submission does not wait for initialization.
     ///
     /// The function must preserve worker affinity. It may submit work to the same pool,
     /// but must not wait for that work to complete or shut down the pool.
@@ -242,8 +243,8 @@ impl PoolBuilder {
 
     /// Builds the pool with the configured worker policy and initialization.
     ///
-    /// By default, construction starts no workers. With [`Self::eager`], it waits for the selected
-    /// workers' affinity setup and initialization. Other destinations remain lazy.
+    /// The default policy starts no workers during construction unless [`Self::eager`] selects
+    /// eager destinations. A custom policy may create or wait for workers during `prepare()`.
     ///
     /// # Panics
     ///
@@ -259,7 +260,8 @@ impl PoolBuilder {
         let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
         let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
 
-        // Establish the shutdown owner before spawning: workers retain their own inner references.
+        // Policy preparation can start participating workers before the outer Pool exists.
+        // PoolInner::new therefore owns preparation failure cleanup through the runtime barrier.
         // Ref: docs/implementation.md, "Eager construction".
         Pool {
             inner: Arc::new(PoolInner::new(

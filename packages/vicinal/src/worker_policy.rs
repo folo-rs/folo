@@ -1,10 +1,11 @@
 use std::any::type_name;
 use std::collections::BTreeSet;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::iter::repeat_with;
 use std::num::NonZero;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{fmt, iter};
 
 use many_cpus::{MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware};
 
@@ -104,9 +105,9 @@ pub struct WorkerPolicyContext<'a> {
     pool_name: &'a str,
 }
 
-impl fmt::Debug for WorkerPolicyContext<'_> {
+impl Debug for WorkerPolicyContext<'_> {
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("pool_name", &self.pool_name)
             .field("eager_processor_count", &self.eager.map(ProcessorSet::len))
@@ -171,20 +172,6 @@ pub(crate) struct BuiltInWorkerPolicy {
     prepared: Option<PreparedPolicy>,
 }
 
-pub(crate) fn validate_eager_processors(hardware: &SystemHardware, processors: &ProcessorSet) {
-    let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
-    let backing_processors = processors
-        .to_builder()
-        .take_all()
-        .expect("a nonempty selection retains candidates on its backing hardware");
-    assert!(
-        processors
-            .iter()
-            .chain(backing_processors.iter())
-            .all(|processor| eligible.contains(processor))
-    );
-}
-
 impl BuiltInWorkerPolicy {
     #[cfg(test)]
     pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
@@ -220,8 +207,8 @@ impl BuiltInWorkerPolicy {
     /// Uses a fixed worker count per submitting memory region.
     ///
     /// A region's worker mask starts with its eager processors or first submitter and
-    /// expands cumulatively as processors in that region submit accepted work. Adding
-    /// a processor changes affinity without adding workers.
+    /// expands cumulatively when processors in that region reach policy selection.
+    /// Adding a processor changes affinity without adding workers.
     #[must_use]
     pub(crate) fn per_memory_region(count: NonZero<u32>) -> Self {
         Self::new(PolicyKind::MemoryRegion, count)
@@ -230,11 +217,15 @@ impl BuiltInWorkerPolicy {
     /// Uses one fixed worker count across the system's submitting processors.
     ///
     /// The worker mask starts with eager processors or the first submitter and expands
-    /// cumulatively across memory-region boundaries. The count is per pool rather than
-    /// per processor or memory region.
+    /// cumulatively when processors reach selection across memory-region boundaries. The
+    /// count is per pool rather than per processor or memory region.
     #[must_use]
     pub(crate) fn per_system(count: NonZero<u32>) -> Self {
         Self::new(PolicyKind::System, count)
+    }
+
+    pub(crate) fn worker_count(&self) -> NonZero<u32> {
+        self.count
     }
 
     fn new(kind: PolicyKind, count: NonZero<u32>) -> Self {
@@ -292,6 +283,21 @@ impl WorkerPolicy for BuiltInWorkerPolicy {
     }
 }
 
+/// Verifies eager handles against both selected and backing hardware identities.
+pub(crate) fn validate_eager_processors(hardware: &SystemHardware, processors: &ProcessorSet) {
+    let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
+    let backing_processors = processors
+        .to_builder()
+        .take_all()
+        .expect("a nonempty selection retains candidates on its backing hardware");
+    assert!(
+        processors
+            .iter()
+            .chain(backing_processors.iter())
+            .all(|processor| eligible.contains(processor))
+    );
+}
+
 /// Keeps built-in policy variants private so future choices need not become exhaustive APIs.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PolicyKind {
@@ -300,6 +306,7 @@ pub(crate) enum PolicyKind {
     System,
 }
 
+/// Stores pool-specific routing slots, hardware and membership publication state.
 enum PreparedPolicy {
     Processor {
         hardware: SystemHardware,
@@ -329,7 +336,7 @@ impl PreparedPolicy {
         let prepared = match kind {
             PolicyKind::Processor => Self::Processor {
                 hardware: hardware.clone(),
-                groups: iter::repeat_with(OnceLock::new)
+                groups: repeat_with(OnceLock::new)
                     .take(hardware.max_processor_count())
                     .collect(),
             },
@@ -343,7 +350,7 @@ impl PreparedPolicy {
                     .collect::<Box<[_]>>();
                 Self::MemoryRegion {
                     hardware: hardware.clone(),
-                    groups: iter::repeat_with(OnceLock::new).take(ids.len()).collect(),
+                    groups: repeat_with(OnceLock::new).take(ids.len()).collect(),
                     ids,
                     members: member_processors(hardware),
                 }
@@ -370,7 +377,7 @@ impl PreparedPolicy {
         count: NonZero<u32>,
         processors: ProcessorSet,
     ) {
-        let groups = eager_groups(self.hardware(), kind, processors)
+        let groups = eager_groups(kind, processors)
             .into_iter()
             .map(|(destination, affinity)| {
                 let group = registry.add_for(destination);
@@ -478,6 +485,8 @@ impl PreparedPolicy {
         group.id()
     }
 
+    // Omitting expansion can leave tests waiting on hooks that no producer will invoke.
+    #[cfg_attr(test, mutants::skip)]
     fn expand_if_needed(
         &self,
         registry: &WorkerGroups,
@@ -485,12 +494,7 @@ impl PreparedPolicy {
         target: SubmissionTarget,
         id: WorkerGroupId,
     ) {
-        let member = members
-            .binary_search_by_key(&target.processor, |(processor, _)| *processor)
-            .expect("a submitting processor belongs to the eligible topology");
-        let (_, member) = members
-            .get(member)
-            .expect("binary search identifies an eligible processor");
+        let member = membership(members, target.processor);
         if member.load(Ordering::Acquire) {
             return;
         }
@@ -513,9 +517,8 @@ impl PreparedPolicy {
             return;
         }
 
-        // Build while holding the publication lock. An overlapping admission may have set
-        // another membership flag before waiting on this lock; the lock handoff publishes
-        // that prior store so the final snapshot cannot overwrite a concurrently added CPU.
+        // The publication lock serializes mask/revision construction with membership readiness.
+        // The current processor is included explicitly before its flag is released-published.
         let affinity = self
             .hardware()
             .all_processors()
@@ -655,8 +658,8 @@ impl PreparedPolicy {
     }
 }
 
-impl fmt::Debug for PreparedPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for PreparedPolicy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str(type_name::<Self>())
     }
 }
@@ -681,13 +684,7 @@ fn membership(members: &[(ProcessorId, AtomicBool)], processor: ProcessorId) -> 
         .1
 }
 
-fn eager_groups(
-    hardware: &SystemHardware,
-    policy: PolicyKind,
-    processors: ProcessorSet,
-) -> Vec<(GroupId, ProcessorSet)> {
-    validate_eager_processors(hardware, &processors);
-
+fn eager_groups(policy: PolicyKind, processors: ProcessorSet) -> Vec<(GroupId, ProcessorSet)> {
     match policy {
         PolicyKind::Processor => {
             let mut destinations = BTreeSet::new();

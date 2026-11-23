@@ -1,8 +1,11 @@
 //! Pool-wide terminal state shared by every policy-created worker group.
 
 use std::any::Any;
-use std::mem;
-use std::panic::{self, AssertUnwindSafe};
+use std::mem::replace;
+use std::ops::ControlFlow;
+#[cfg(test)]
+use std::panic::panic_any;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
@@ -15,6 +18,10 @@ use crate::{
     extract_panic_message, report_diagnostic,
 };
 
+/// Coordinates terminal state, group registration, failure ownership and worker participation.
+///
+/// It is shared by the pool, schedulers and every policy-created worker. Ref:
+/// docs/implementation.md, "Ownership and coordination" and "Affinity and failure coordination".
 pub(crate) struct PoolRuntime {
     pool_id: u64,
     pool_name: String,
@@ -76,10 +83,13 @@ impl PoolRuntime {
     }
 
     pub(crate) fn is_shutdown(&self) -> bool {
+        // Acquisition observes terminal state published by stop_workers.
         self.shutdown.load(Ordering::Acquire)
     }
 
     pub(crate) fn is_poisoned(&self) -> bool {
+        // Poison is only an admission/terminal signal; failure payload ownership is separately
+        // protected by the failure mutex and FailureState.
         self.poisoned.load(Ordering::Acquire)
     }
 
@@ -96,21 +106,23 @@ impl PoolRuntime {
         }
     }
 
-    pub(crate) fn begin_worker(&self) -> bool {
+    pub(crate) fn begin_worker(&self) -> ControlFlow<()> {
         // The worker mutex synchronizes participation with the shutdown waiter. Checking
         // shutdown while holding it prevents a worker from entering after the last wait ends.
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         if self.is_shutdown() {
-            return false;
+            return ControlFlow::Break(());
         }
 
         workers.active = workers
             .active
             .checked_add(1)
             .expect("worker count cannot exceed addressable memory");
-        true
+        ControlFlow::Continue(())
     }
 
+    // Omitting this decrement can leave the shutdown barrier waiting forever.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn end_worker(&self) {
         // Releases the shutdown participation barrier; every successful begin has one end.
         // The notification can satisfy wait_for_workers only after failure cleanup completed.
@@ -138,10 +150,14 @@ impl PoolRuntime {
     }
 
     pub(crate) fn stop_admission(&self) {
+        // Release/Acquire publishes only permanent rejection. Failure payload ownership uses
+        // the mutex-protected FailureState independently.
         self.poisoned.store(true, Ordering::Release);
         self.stop_workers();
     }
 
+    // A false predicate can wait forever after the last worker has already exited.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn wait_for_workers(&self) {
         // This is the pool-owned barrier, not a join of policy-owned OS threads.
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
@@ -160,6 +176,9 @@ impl PoolRuntime {
         self.shutdown.store(true, Ordering::Release);
     }
 
+    /// Retains the first worker/runtime failure and contains later cleanup failures.
+    ///
+    /// Ref: docs/implementation.md, "Affinity and failure coordination".
     pub(crate) fn fail(&self, payload: Box<dyn Any + Send>) {
         let mut payload = Some(payload);
         let message = {
@@ -197,7 +216,7 @@ impl PoolRuntime {
     pub(crate) fn fail_for_submission(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
         let (message, retained) = {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
-            match mem::replace(&mut *failure, FailureState::Unavailable) {
+            match replace(&mut *failure, FailureState::Unavailable) {
                 FailureState::Vacant => (Some(extract_panic_message(&payload)), None),
                 FailureState::Retained(payload) => (None, Some(payload)),
                 FailureState::Unavailable => (None, None),
@@ -244,12 +263,16 @@ impl PoolRuntime {
         let payload = self
             .take_failure()
             .expect("poisoned pool retains its original infrastructure failure");
-        panic::resume_unwind(payload)
+        resume_unwind(payload)
     }
 
+    /// Transfers a runtime-retained failure exactly once to the current cleanup owner.
+    ///
+    /// An unavailable submission-owned payload remains unavailable so reentrant shutdown
+    /// cannot consume it.
     pub(crate) fn take_failure(&self) -> Option<Box<dyn Any + Send>> {
         let mut failure = self.failure.lock().expect(NEVER_POISONED);
-        let previous = mem::replace(&mut *failure, FailureState::Unavailable);
+        let previous = replace(&mut *failure, FailureState::Unavailable);
         match previous {
             FailureState::Retained(payload) => Some(payload),
             FailureState::Vacant => {
@@ -279,7 +302,7 @@ fn drain_queue(queue: &Mutex<std::collections::VecDeque<ErasedTaskHandle>>) {
             return;
         };
 
-        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(task))) {
             report_diagnostic(|| {
                 error!(
                     message = extract_panic_message(&payload),
@@ -295,7 +318,6 @@ fn drain_queue(queue: &Mutex<std::collections::VecDeque<ErasedTaskHandle>>) {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::any::Any;
-    use std::panic;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -324,13 +346,15 @@ mod tests {
         fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
 
         fn event(&self, _event: &Event<'_>) {
+            // The callback runs synchronously in with_default; this flag communicates the
+            // observation back to the same thread, not a cross-thread lifecycle barrier.
             self.state_was_ready.store(
                 self.runtime.is_shutdown()
                     && self.runtime.is_poisoned()
                     && self.runtime.failure.try_lock().is_ok(),
                 Ordering::Release,
             );
-            panic::panic_any("failure subscriber panicked");
+            panic_any("failure subscriber panicked");
         }
 
         fn enter(&self, _span: &Id) {}

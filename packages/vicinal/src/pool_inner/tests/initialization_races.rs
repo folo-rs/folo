@@ -1,9 +1,10 @@
 //! Controlled initializer failures and shutdown at worker-registration boundaries.
 
-use std::panic::{self, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
+use std::sync::mpsc::{TryRecvError, channel};
+use std::sync::{Arc, Mutex};
+use std::thread::spawn;
 
 use futures::executor::block_on;
 use many_cpus::ProcessorSet;
@@ -27,7 +28,7 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             let hardware = hardware();
             let target = policy.destination(&hardware);
             let initialized = Arc::new(AtomicUsize::new(0));
-            let (failed, failure) = mpsc::channel();
+            let (failed, failure) = channel();
             let pool = Pool::builder()
                 .hardware(hardware)
                 .worker_policy(policy)
@@ -52,7 +53,7 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
             let mut spawned = 0_u32;
 
             // Admission may observe the concurrent failure or finish before poisoning is published.
-            let submission = panic::catch_unwind(AssertUnwindSafe(|| {
+            let submission = catch_unwind(AssertUnwindSafe(|| {
                 inner.enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
                     inner.start_workers(
                         target,
@@ -104,8 +105,8 @@ fn shutdown_waits_for_failure_publication_to_finish() {
         let hardware = hardware();
         pin(&hardware, 0);
         let policy = TestPolicy::new(0);
-        let (initializer_entered, initializer_arrival) = mpsc::channel();
-        let (release_initializer, wait_for_release) = mpsc::channel();
+        let (initializer_entered, initializer_arrival) = channel();
+        let (release_initializer, wait_for_release) = channel();
         let pool = Pool::builder()
             .hardware(hardware)
             .worker_policy(policy.clone())
@@ -115,7 +116,7 @@ fn shutdown_waits_for_failure_publication_to_finish() {
                 move || {
                     initializer_entered.send(()).unwrap();
                     wait_for_release.lock().unwrap().recv().unwrap();
-                    panic::panic_any(InitializationFailure);
+                    panic_any(InitializationFailure);
                 }
             })
             .build();
@@ -123,8 +124,8 @@ fn shutdown_waits_for_failure_publication_to_finish() {
         let group = policy.group();
         let state = group.state();
 
-        let (failure_entered, failure_arrival) = mpsc::channel();
-        let (release_failure, wait_for_failure_release) = mpsc::channel();
+        let (failure_entered, failure_arrival) = channel();
+        let (release_failure, wait_for_failure_release) = channel();
         let wait_for_failure_release = Mutex::new(wait_for_failure_release);
         assert!(
             state
@@ -136,7 +137,7 @@ fn shutdown_waits_for_failure_publication_to_finish() {
                 .is_ok()
         );
 
-        let worker = thread::spawn({
+        let worker = spawn({
             let group = group.clone();
             move || group.execute_worker()
         });
@@ -150,18 +151,19 @@ fn shutdown_waits_for_failure_publication_to_finish() {
         assert!(inner.runtime.is_poisoned());
         assert_eq!(inner.runtime.active_workers(), 1);
 
-        let (shutdown_entered, shutdown_arrival) = mpsc::channel();
-        let (shutdown_done, shutdown_completion) = mpsc::channel();
-        let shutdown = thread::spawn(move || {
+        let (shutdown_entered, shutdown_arrival) = channel();
+        let (shutdown_done, shutdown_completion) = channel();
+        let shutdown = spawn(move || {
             shutdown_entered.send(()).unwrap();
-            drop(pool);
+            let result = catch_unwind(AssertUnwindSafe(|| drop(pool)));
             shutdown_done.send(()).unwrap();
+            result
         });
         shutdown_arrival.recv().unwrap();
-        assert!(shutdown_completion.try_recv().is_err());
+        assert_eq!(shutdown_completion.try_recv(), Err(TryRecvError::Empty));
 
         release_failure.send(()).unwrap();
-        shutdown.join().unwrap_err();
+        assert!(shutdown.join().unwrap().is_err());
         worker.join().unwrap();
         assert_panics(|| block_on(pending).unwrap());
         assert_eq!(inner.runtime.active_workers(), 0);
@@ -173,9 +175,10 @@ fn shutdown_waits_for_failure_publication_to_finish() {
 fn shutdown_waits_for_initialization_and_cancels_queued_work() {
     with_watchdog(|| {
         let finished = Arc::new(AtomicBool::new(false));
-        let (entered, arrival) = mpsc::channel();
-        let (release, wait) = mpsc::channel();
+        let (entered, arrival) = channel();
+        let (release, wait) = channel();
         let pool = Pool::builder()
+            .hardware(hardware())
             .worker_policy(TestPolicy::new(1))
             .thread_init({
                 let finished = Arc::clone(&finished);

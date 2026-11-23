@@ -1,10 +1,11 @@
 //! Shared fake topology, affinity observations and destructor probes for lifecycle tests.
 
 use std::collections::BTreeSet;
+use std::panic::resume_unwind;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::{panic, thread};
+use std::thread::spawn;
 
 use futures::FutureExt;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
@@ -63,7 +64,7 @@ impl WorkerPolicy for TestPolicy {
         let group = self.group();
         self.state.started.get_or_init(|| {
             for _ in 0..self.state.workers {
-                _ = thread::spawn({
+                _ = spawn({
                     let group = group.clone();
                     move || group.execute_worker()
                 });
@@ -210,6 +211,6 @@ pub(crate) struct PanickingPayload;
 impl Drop for PanickingPayload {
     fn drop(&mut self) {
         // Only unwind containment is under test, not panic-hook output or backtrace collection.
-        panic::resume_unwind(Box::new(()));
+        resume_unwind(Box::new(()));
     }
 }

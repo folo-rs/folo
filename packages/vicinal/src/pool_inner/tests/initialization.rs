@@ -122,6 +122,7 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
         let release = Arc::new(Barrier::new(WORKERS as usize + 1));
         let executed = Arc::new(AtomicBool::new(false));
         let pool = Pool::builder()
+            .hardware(hardware())
             .worker_policy(TestPolicy::new(WORKERS as usize))
             .thread_init({
                 let release = Arc::clone(&release);
@@ -194,6 +195,7 @@ fn initializer_can_submit_to_its_pool() {
         let scheduler = Arc::new(OnceLock::<Scheduler>::new());
         let (result, received) = mpsc::channel();
         let pool = Pool::builder()
+            .hardware(hardware())
             .worker_policy(TestPolicy::new(1))
             .thread_init({
                 // A weak capture avoids retaining a scheduler through its own pool.
@@ -225,6 +227,7 @@ fn initialization_panic_stops_the_pool() {
     with_watchdog(|| {
         let (release, wait) = mpsc::channel();
         let pool = Pool::builder()
+            .hardware(hardware())
             .worker_policy(TestPolicy::new(1))
             .thread_init({
                 let wait = Mutex::new(wait);

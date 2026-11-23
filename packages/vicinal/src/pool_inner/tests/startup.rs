@@ -1,10 +1,12 @@
 //! Worker readiness, exact counts and registration through startup races.
 
 use std::collections::BTreeSet;
-use std::panic::{self, AssertUnwindSafe};
+use std::io;
+use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Barrier, Mutex, OnceLock, mpsc};
-use std::{io, thread};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Barrier, Mutex, OnceLock};
+use std::thread::{Builder, current, spawn};
 
 use futures::executor::block_on;
 use many_cpus::fake::HardwareBuilder;
@@ -22,9 +24,9 @@ use crate::{
 struct GatedSelectionPolicy {
     inner: TestPolicy,
     worker_started: OnceLock<()>,
-    entered: mpsc::Sender<()>,
-    exited: mpsc::Sender<()>,
-    release: Mutex<mpsc::Receiver<()>>,
+    entered: Sender<()>,
+    exited: Sender<()>,
+    release: Mutex<Receiver<()>>,
 }
 
 impl WorkerPolicy for GatedSelectionPolicy {
@@ -36,7 +38,7 @@ impl WorkerPolicy for GatedSelectionPolicy {
         let id = self.inner.select_group(groups);
         self.worker_started.get_or_init(|| {
             let group = self.inner.group();
-            _ = thread::spawn({
+            _ = spawn({
                 let group = group.clone();
                 let exited = self.exited.clone();
                 move || {
@@ -63,7 +65,7 @@ impl WorkerPolicy for PanickingSelectionPolicy {
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        panic::panic_any(StartupFailure);
+        panic_any(StartupFailure);
     }
 }
 
@@ -109,14 +111,14 @@ fn assert_concurrent_startup(kind: PolicyKind) {
 
         let scheduler = pool.scheduler();
         let start = Arc::new(Barrier::new(WORKERS as usize));
-        let (entered, arrivals) = mpsc::channel();
+        let (entered, arrivals) = channel();
         let mut submitters = Vec::new();
         let mut releases = Vec::new();
 
         for _ in 0..WORKERS {
-            let (release, wait) = mpsc::channel();
+            let (release, wait) = channel();
             releases.push(release);
-            submitters.push(thread::spawn({
+            submitters.push(spawn({
                 let start = Arc::clone(&start);
                 let scheduler = scheduler.clone();
                 let entered = entered.clone();
@@ -126,10 +128,7 @@ fn assert_concurrent_startup(kind: PolicyKind) {
 
                     scheduler.spawn(move || {
                         entered
-                            .send((
-                                thread::current().name().unwrap().to_owned(),
-                                affinity(&hardware),
-                            ))
+                            .send((current().name().unwrap().to_owned(), affinity(&hardware)))
                             .unwrap();
                         wait.recv().unwrap();
                     })
@@ -171,10 +170,11 @@ fn assert_concurrent_startup(kind: PolicyKind) {
 #[test]
 fn shutdown_accounts_for_in_progress_startup() {
     with_watchdog(|| {
-        let (entered, selection_entered) = mpsc::channel();
-        let (exited, worker_exited) = mpsc::channel();
-        let (release, selection_release) = mpsc::channel();
+        let (entered, selection_entered) = channel();
+        let (exited, worker_exited) = channel();
+        let (release, selection_release) = channel();
         let pool = Pool::builder()
+            .hardware(hardware())
             .worker_policy(GatedSelectionPolicy {
                 inner: TestPolicy::new(0),
                 worker_started: OnceLock::new(),
@@ -185,10 +185,10 @@ fn shutdown_accounts_for_in_progress_startup() {
             .build();
         let inner = Arc::clone(&pool.inner);
         let scheduler = pool.scheduler();
-        let starter = thread::spawn(move || block_on(scheduler.spawn(|| 42)).unwrap_err());
+        let starter = spawn(move || block_on(scheduler.spawn(|| 42)).unwrap_err());
 
         selection_entered.recv().unwrap();
-        let shutdown = thread::spawn(move || drop(pool));
+        let shutdown = spawn(move || drop(pool));
         worker_exited.recv().unwrap();
         release.send(()).unwrap();
         assert!(starter.join().unwrap().is_cancel());
@@ -271,7 +271,7 @@ fn affinity_failure_is_reported_before_admission() {
 
         assert_panics(|| {
             inner.enqueue_with(destination, state, probe(state, || {}), false, |handles| {
-                inner.start_workers(destination, nz!(1), handles, thread::Builder::spawn, |_| {
+                inner.start_workers(destination, nz!(1), handles, Builder::spawn, |_| {
                     panic!("injected affinity failure")
                 });
             });
@@ -295,6 +295,7 @@ fn affinity_failure_is_reported_before_admission() {
 fn startup_failure_contains_unadmitted_capture_destruction() {
     let policy = TestPolicy::new(0);
     let pool = Pool::builder()
+        .hardware(hardware())
         .worker_policy(PanickingSelectionPolicy {
             inner: policy.clone(),
         })
@@ -304,8 +305,8 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     let state = group.state();
     let scheduler = pool.scheduler();
 
-    let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        let capture = OnDrop(Some(Box::new(|| panic_any(PanickingPayload))));
         scheduler.spawn_and_forget(move || drop(capture));
     }))
     .unwrap_err();
@@ -314,7 +315,7 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     assert!(inner.runtime.is_poisoned());
     assert!(state.task_pool.lock().unwrap().is_empty());
 
-    assert_panics(|| scheduler.spawn(|| panic::panic_any(PanickingPayload)));
+    assert_panics(|| scheduler.spawn(|| panic_any(PanickingPayload)));
     assert!(state.task_pool.lock().unwrap().is_empty());
     assert_eq!(inner.runtime.active_workers(), 0);
 }
@@ -338,7 +339,7 @@ fn empty_region_never_starts_unpinned_workers() {
             target,
             nz!(1),
             &mut Vec::new(),
-            thread::Builder::spawn,
+            Builder::spawn,
             ProcessorSet::pin_current_thread_to,
         );
     });
@@ -366,8 +367,8 @@ fn startup_failure_stops_every_group() {
                 .worker_policy(policy.clone())
                 .build();
             let scheduler = pool.scheduler();
-            let (entered, arrivals) = mpsc::channel();
-            let (release, wait) = mpsc::channel();
+            let (entered, arrivals) = channel();
+            let (release, wait) = channel();
 
             let running = scheduler.spawn(move || {
                 entered.send(()).unwrap();

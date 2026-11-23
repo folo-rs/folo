@@ -9,6 +9,9 @@ use tracing::trace;
 use crate::pool_inner::POOL_LOG_TARGET;
 use crate::{IterationResult, NEVER_POISONED, PoolRuntime, WorkerCore, WorkerGroupState};
 
+/// Runs one worker through affinity refresh, task dispatch and wake/lost-notification handling.
+///
+/// Ref: docs/implementation.md, "Affinity and failure coordination".
 // A stripped or nonblocking worker loop can strand accepted work indefinitely.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn worker_loop_with(
@@ -90,6 +93,10 @@ pub(crate) fn worker_loop_with(
     }
 }
 
+/// Applies a newly published affinity snapshot and advances this worker's local cursor.
+///
+/// The revision/acquire pair establishes the mask to clone; pinning runs after the snapshot
+/// lock is released.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn refresh_affinity(
     state: &WorkerGroupState,

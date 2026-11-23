@@ -139,7 +139,8 @@ subsets. Eager construction prepares workers, not task-specific allocations or a
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
   short-lived so that the pool is often idle.
-- Shared workers stay within eagerly selected processors and accepted submitters. Using one stable,
+- Shared workers stay within eagerly selected processors and submitters included during policy
+  selection. Using one stable,
   quota-appropriate processor set for selection and submissions keeps workers within it.
   Using new processors grows the cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
   quotas and other process work can still cause throttling: operating-system delays after

@@ -27,6 +27,8 @@ use crate::{
 
 /// Records whether terminal admission ever reaches custom policy selection.
 struct RecordingPolicy {
+    // This observes whether selection ran; runtime shutdown ordering is established by the
+    // completed submission result rather than this counter.
     selected: Arc<AtomicUsize>,
 }
 
@@ -41,7 +43,10 @@ impl WorkerPolicy for RecordingPolicy {
 #[test]
 fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
     let policy = TestPolicy::new(0);
-    let pool = Pool::builder().worker_policy(policy).build();
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(policy)
+        .build();
 
     let scheduler = pool.scheduler();
     let dropped = Arc::new(AtomicUsize::new(0));
@@ -98,7 +103,10 @@ fn completion_waker_can_drop_handles_and_submit() {
 
     for cancel in [false, true] {
         let policy = TestPolicy::new(0);
-        let pool = Pool::builder().worker_policy(policy.clone()).build();
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(policy.clone())
+            .build();
         let group = policy.group();
         let state = group.state();
 
@@ -156,7 +164,10 @@ fn shutdown_before_lazy_state_creation_starts_no_workers() {
 #[test]
 fn shutdown_racing_enqueue_drops_outside_locks() {
     let policy = TestPolicy::new(0);
-    let pool = Pool::builder().worker_policy(policy.clone()).build();
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(policy.clone())
+        .build();
     let inner = Arc::clone(&pool.inner);
     let group = policy.group();
     let state = group.state();
@@ -185,7 +196,10 @@ fn shutdown_racing_enqueue_drops_outside_locks() {
 #[test]
 fn shutdown_drains_both_queues_despite_a_destructor_panic() {
     let policy = TestPolicy::new(0);
-    let pool = Pool::builder().worker_policy(policy.clone()).build();
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(policy.clone())
+        .build();
     let group = policy.group();
     let state = group.state();
     state
@@ -214,7 +228,10 @@ fn shutdown_contains_secondary_payload_destruction() {
     struct FirstFailure;
 
     let policy = TestPolicy::new(0);
-    let pool = Pool::builder().worker_policy(policy.clone()).build();
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(policy.clone())
+        .build();
     let group = policy.group();
     let state = group.state();
     let inner = Arc::clone(&pool.inner);
@@ -271,7 +288,10 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
 #[test]
 fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
     with_watchdog(|| {
-        let pool = Pool::builder().worker_policy(TestPolicy::new(1)).build();
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(TestPolicy::new(1))
+            .build();
 
         let scheduler = pool.scheduler();
         let (entered, arrivals) = mpsc::channel();
@@ -312,7 +332,10 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
 /// Retaining a scheduler must preserve failure precedence after the pool owner is destroyed.
 #[test]
 fn poisoned_pool_rejects_submissions_even_after_drop() {
-    let pool = Pool::builder().worker_policy(TestPolicy::new(0)).build();
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(TestPolicy::new(0))
+        .build();
     let scheduler = pool.scheduler();
 
     assert_panics(|| {
@@ -330,7 +353,7 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
 /// A rejected group registration must not poison the terminal registry mutex.
 #[test]
 fn post_failure_group_registration_does_not_poison_cleanup() {
-    let pool = Pool::builder().build();
+    let pool = Pool::builder().hardware(hardware()).build();
     let inner = Arc::clone(&pool.inner);
     inner.stop_admission();
 
@@ -346,7 +369,10 @@ fn post_failure_group_registration_does_not_poison_cleanup() {
 #[test]
 fn readiness_wait_rejects_incomplete_clean_shutdown() {
     let policy = TestPolicy::new(0);
-    let pool = Pool::builder().worker_policy(policy.clone()).build();
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(policy.clone())
+        .build();
     let group = policy.group();
     drop(pool);
 

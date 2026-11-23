@@ -1,5 +1,5 @@
 use std::any::type_name;
-use std::fmt;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
 #[cfg(test)]
@@ -12,7 +12,7 @@ use crate::{BuiltInWorkerPolicy, WorkerGroupId, WorkerGroups, WorkerPolicy, Work
 /// Creates a fixed worker count for each submitting memory region.
 ///
 /// The region's affinity starts with its eager processors or first submitter and expands
-/// cumulatively as processors in that region submit accepted work.
+/// cumulatively when processors in that region reach policy selection.
 #[derive(Clone)]
 pub struct WorkersPerMemoryRegion {
     policy: BuiltInWorkerPolicy,
@@ -58,9 +58,11 @@ impl WorkerPolicy for WorkersPerMemoryRegion {
     }
 }
 
-impl fmt::Debug for WorkersPerMemoryRegion {
+impl Debug for WorkersPerMemoryRegion {
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(type_name::<Self>())
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct(type_name::<Self>())
+            .field("workers", &self.policy.worker_count())
+            .finish()
     }
 }

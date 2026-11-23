@@ -4,15 +4,19 @@
 )]
 
 use std::sync::OnceLock;
-use std::thread;
+use std::thread::spawn;
 
 use futures::executor::block_on;
+use many_cpus::SystemHardware;
+use many_cpus::fake::HardwareBuilder;
+use new_zealand::nz;
 use testing::with_watchdog;
 use vicinal::{Pool, WorkerGroupId, WorkerGroups, WorkerPolicy};
 
 testing::init_tracing!();
 
 #[derive(Debug)]
+/// Lazily creates one route on first public selection to test custom policy startup.
 struct LazySingleGroupPolicy {
     group: OnceLock<WorkerGroupId>,
 }
@@ -21,7 +25,7 @@ impl WorkerPolicy for LazySingleGroupPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get_or_init(|| {
             let group = groups.add();
-            thread::spawn({
+            _ = spawn({
                 let group = group.clone();
                 move || group.execute_worker()
             });
@@ -34,6 +38,10 @@ impl WorkerPolicy for LazySingleGroupPolicy {
 fn custom_policy_lazily_creates_and_runs_worker() {
     with_watchdog(|| {
         let pool = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
             .worker_policy(LazySingleGroupPolicy {
                 group: OnceLock::new(),
             })

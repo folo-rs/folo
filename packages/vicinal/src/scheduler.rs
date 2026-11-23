@@ -13,12 +13,11 @@ use crate::{
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
-/// Each task uses its submitting processor according to the pool's
-/// [`policies::WorkersPerProcessor`][crate::policies::WorkersPerProcessor]: that processor by
-/// default, or its memory region for a regional policy, or all submitting processors for a
-/// system policy.
-/// Shared worker affinity includes the pool's eager selection and accumulates the processors
-/// that submit accepted work to this pool and destination. All submission methods use the same policy.
+/// Each task uses the selected [`WorkerPolicy`][crate::WorkerPolicy] to choose a group before
+/// admission. The built-in processor policy uses the submitting processor, while the regional
+/// and system policies select shared destinations across larger locality scopes.
+/// Built-in shared-worker affinity includes the eager selection and processors that reach
+/// policy selection for that destination. All submission methods use the same policy.
 /// Tasks execute synchronously and must preserve worker affinity.
 ///
 /// # Cloning
@@ -322,6 +321,8 @@ mod tests {
                 && let Some(pool) = self.pool.lock().unwrap().take()
             {
                 drop(pool);
+                // The subscriber call is synchronous; this counter only reports that its
+                // same-thread reentrant action completed.
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }

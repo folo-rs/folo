@@ -1,6 +1,7 @@
 //! Built-in policies for routing work to fixed worker counts.
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests;
 mod workers_per_memory_region;
 mod workers_per_processor;

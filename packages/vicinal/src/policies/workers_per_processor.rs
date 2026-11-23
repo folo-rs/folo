@@ -1,5 +1,5 @@
 use std::any::type_name;
-use std::fmt;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
 #[cfg(test)]
@@ -57,9 +57,11 @@ impl WorkerPolicy for WorkersPerProcessor {
     }
 }
 
-impl fmt::Debug for WorkersPerProcessor {
+impl Debug for WorkersPerProcessor {
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(type_name::<Self>())
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct(type_name::<Self>())
+            .field("workers", &self.policy.worker_count())
+            .finish()
     }
 }

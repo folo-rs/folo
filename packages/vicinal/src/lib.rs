@@ -54,11 +54,11 @@
 //!
 //! With [`policies::WorkersPerSystem`], all submitting processors share one configured worker
 //! count per pool, regardless of memory region. Workers may move across regions but remain limited
-//! to eagerly selected processors and those that have submitted accepted work.
+//! to eagerly selected processors and those included during policy selection.
 //!
 //! Worker placement is tracked separately from concurrency. The permitted set starts with the eager
 //! selection or the first submitting processor and grows when another processor in the destination
-//! submits accepted work. Worker concurrency
+//! reaches policy selection. Worker concurrency
 //! is configured explicitly, rather than calculated from this set or from a processor-time quota.
 //! This controls where tasks run, not where their memory is allocated.
 //!
@@ -81,7 +81,7 @@
 //!
 //! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
 //!   short-lived so that the pool is often idle.
-//! - Shared workers use eagerly selected processors and accepted submitters in their destination.
+//! - Shared workers use eagerly selected processors and submitters included during policy selection.
 //!   Using one stable, quota-appropriate set for selection and submissions keeps workers in it.
 //!   Membership grows if new processors submit work and never shrinks. Quotas do not adjust counts.
 //!   Fractional quotas and other process work can still cause throttling: operating-system

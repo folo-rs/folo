@@ -1,6 +1,6 @@
 use std::num::NonZero;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::thread::spawn;
 
 use futures::executor::block_on;
 use many_cpus::fake::HardwareBuilder;
@@ -15,16 +15,9 @@ use crate::{
 };
 
 #[derive(Debug)]
+/// Prepares one stable ID-only route to verify ownership without cloning on selection.
 struct SingleGroupPolicy {
     group: OnceLock<WorkerGroupId>,
-}
-
-/// Models a startup tracing subscriber that submits through the route still being created.
-struct ReentrantStartupPolicy {
-    group: OnceLock<WorkerGroup>,
-    affinity: OnceLock<ProcessorSet>,
-    started: OnceLock<WorkerGroupId>,
-    scheduler: Arc<Mutex<Option<Scheduler>>>,
 }
 
 impl WorkerPolicy for SingleGroupPolicy {
@@ -34,7 +27,7 @@ impl WorkerPolicy for SingleGroupPolicy {
         self.group.set(id).unwrap();
 
         let affinity = context.hardware().processors();
-        thread::spawn(move || {
+        _ = spawn(move || {
             affinity.pin_current_thread_to();
             group.execute_worker();
         });
@@ -45,21 +38,31 @@ impl WorkerPolicy for SingleGroupPolicy {
     }
 }
 
+/// Models a startup tracing subscriber that submits through the route still being created.
+struct ReentrantStartupPolicy {
+    group: OnceLock<WorkerGroup>,
+    affinity: OnceLock<ProcessorSet>,
+    started: OnceLock<WorkerGroupId>,
+    scheduler: Arc<Mutex<Option<Scheduler>>>,
+}
+
 impl WorkerPolicy for ReentrantStartupPolicy {
     fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
         let group = context.groups().add();
-        let scheduler = Arc::clone(&self.scheduler);
         assert!(
             group
                 .state()
                 .before_startup_trace
-                .set(Box::new(move || {
-                    scheduler
-                        .lock()
-                        .unwrap()
-                        .clone()
-                        .expect("the scheduler is installed before lazy startup")
-                        .spawn_and_forget(|| {});
+                .set(Box::new({
+                    let scheduler = Arc::clone(&self.scheduler);
+                    move || {
+                        scheduler
+                            .lock()
+                            .unwrap()
+                            .clone()
+                            .expect("the scheduler is installed before lazy startup")
+                            .spawn_and_forget(|| {});
+                    }
                 }))
                 .is_ok()
         );

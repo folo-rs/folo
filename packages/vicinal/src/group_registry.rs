@@ -1,7 +1,7 @@
 //! Dynamic registry and copyable routing identities for worker groups.
 
 use std::any::type_name;
-use std::fmt;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -22,7 +22,13 @@ pub struct WorkerGroups {
 
 impl WorkerGroups {
     pub(crate) fn new(runtime: Arc<PoolRuntime>) -> Self {
-        let owner = NEXT_REGISTRY_ID.fetch_add(1, Ordering::Relaxed);
+        // Checked transition preserves the unique-owner premise at the raw-pointer boundary:
+        // exhaustion panics before a retained ID can alias a newly created registry.
+        let owner = NEXT_REGISTRY_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |owner| {
+                owner.checked_add(1)
+            })
+            .expect("worker registry identity space must not wrap");
         runtime.set_registry_owner(owner);
 
         Self {
@@ -44,6 +50,7 @@ impl WorkerGroups {
     /// Panics after the pool has permanently failed. A cleanly shut-down registry can
     /// still be used by a policy to construct and immediately abandon a submission.
     #[must_use]
+    #[inline]
     pub fn add(&self) -> WorkerGroup {
         self.add_inner(None)
     }
@@ -69,6 +76,7 @@ impl WorkerGroups {
 
     /// Returns whether no groups have been added.
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -78,13 +86,9 @@ impl WorkerGroups {
     /// This is a cold/introspection operation and changes reference counts for the
     /// returned handles. Policies should cache [`WorkerGroupId`] values for hot routing.
     #[must_use]
+    #[inline]
     pub fn iter(&self) -> std::vec::IntoIter<WorkerGroup> {
-        self.inner
-            .groups
-            .lock()
-            .expect(NEVER_POISONED)
-            .clone()
-            .into_iter()
+        self.snapshot().into_iter()
     }
 
     pub(crate) fn resolve(&self, group: WorkerGroupId) -> &GroupState {
@@ -95,8 +99,9 @@ impl WorkerGroups {
 
         // IDs contain stable addresses owned by this registry, and group removal is not
         // supported. The returned reference cannot outlive the registry borrow.
-        // SAFETY: IDs can only be created for this registry-owned Arc allocation. Groups are
-        // never removed or relocated, and the returned reference is tied to this registry.
+        // SAFETY: IDs can only be created for this registry-owned Arc allocation. Checked owner
+        // allocation above prevents reuse, groups are never removed or relocated, and the
+        // returned reference is tied to this registry.
         unsafe { group.state.as_ref() }
     }
 
@@ -151,9 +156,9 @@ impl WorkerGroups {
     }
 }
 
-impl fmt::Debug for WorkerGroups {
+impl Debug for WorkerGroups {
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("len", &self.len())
             .finish_non_exhaustive()
@@ -164,6 +169,7 @@ impl IntoIterator for &WorkerGroups {
     type Item = WorkerGroup;
     type IntoIter = std::vec::IntoIter<WorkerGroup>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
@@ -173,11 +179,13 @@ impl IntoIterator for WorkerGroups {
     type Item = WorkerGroup;
     type IntoIter = std::vec::IntoIter<WorkerGroup>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
 }
 
+/// Retains one pool's unique owner, runtime and append-only group storage.
 struct WorkerGroupsInner {
     owner: u64,
     runtime: Arc<PoolRuntime>,
@@ -185,6 +193,7 @@ struct WorkerGroupsInner {
 }
 
 #[cfg(test)]
+/// Iterates copied group identities while retaining the registry borrow that owns their state.
 pub(crate) struct InitializedGroups<'a> {
     groups: &'a WorkerGroups,
     ids: std::vec::IntoIter<WorkerGroupId>,
@@ -204,6 +213,9 @@ impl<'a> Iterator for InitializedGroups<'a> {
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
+    use many_cpus::SystemHardware;
+    use many_cpus::fake::HardwareBuilder;
+    use new_zealand::nz;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::assert_panics;
 
@@ -230,8 +242,9 @@ mod tests {
 
     #[test]
     fn foreign_group_id_is_rejected() {
-        let first = Pool::builder().build();
-        let second = Pool::builder().build();
+        let hardware = || SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+        let first = Pool::builder().hardware(hardware()).build();
+        let second = Pool::builder().hardware(hardware()).build();
         let foreign = first.inner.groups.add().id();
 
         assert_panics(|| second.inner.groups.resolve(foreign));

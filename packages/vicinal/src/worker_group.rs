@@ -2,14 +2,18 @@
 
 use std::any::type_name;
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::io;
 use std::num::NonZero;
-use std::panic::{self, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+#[cfg(test)]
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
-use std::{fmt, io, thread};
+use std::thread::{Builder, JoinHandle};
 
 use event_listener::Event;
 use events_once::EventLake;
@@ -46,9 +50,9 @@ unsafe impl Send for WorkerGroupId {}
 // only the immutable registry address.
 unsafe impl Sync for WorkerGroupId {}
 
-impl fmt::Debug for WorkerGroupId {
+impl Debug for WorkerGroupId {
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("owner", &self.owner)
             .finish_non_exhaustive()
@@ -124,19 +128,25 @@ impl WorkerGroup {
     /// by the pool. The policy remains responsible for thread creation and for applying
     /// the intended affinity before calling this method.
     pub fn execute_worker(&self) {
-        if !self.runtime.begin_worker() {
+        if self.runtime.begin_worker().is_break() {
             return;
         }
-        self.run_worker(
-            ProcessorSet::pin_current_thread_to,
-            self.state.affinity_revision.load(Ordering::Acquire),
-        );
+        // Acquire observes the mask revision that was released before this worker applies its
+        // initial pin; later task-boundary refreshes advance only this worker-local cursor.
+        let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
+        self.run_worker(ProcessorSet::pin_current_thread_to, applied_revision);
     }
 
+    /// Runs one already-registered worker through initialization, work and cleanup.
+    ///
+    /// The runtime participation count remains held until failure containment and group
+    /// accounting finish. Ref: docs/implementation.md, "Affinity and failure coordination".
     fn run_worker(&self, pin: impl FnMut(&ProcessorSet) + Send, applied_revision: usize) {
         let mut initialized = false;
         let mut pin = pin;
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // This counter only assigns diagnostic labels; runtime participation publishes the
+            // worker-count handshake separately.
             let worker_index = self.state.next_worker_index.fetch_add(1, Ordering::Relaxed);
             // Startup tracing can re-enter submission on this same route. Participation
             // must already satisfy the lazy startup waiter before the subscriber runs so
@@ -223,6 +233,9 @@ impl WorkerGroup {
         affinity: &ProcessorSet,
         count: NonZero<u32>,
     ) {
+        // Ref: docs/implementation.md, "Worker initialization".
+        // Lazy startup reserves participation only; initializer completion remains a separate
+        // eager/custom policy target.
         let expected = self
             .state
             .worker_count
@@ -244,6 +257,8 @@ impl WorkerGroup {
         affinity: &ProcessorSet,
         count: NonZero<u32>,
     ) -> usize {
+        // Ref: docs/implementation.md, "Eager construction".
+        // Eager callers consume this initialized-worker target after all workers are spawned.
         let expected = self
             .state
             .initialized_workers
@@ -255,17 +270,18 @@ impl WorkerGroup {
     }
 
     fn spawn_workers(&self, destination: GroupId, affinity: &ProcessorSet, count: NonZero<u32>) {
-        let mut handles = Vec::new();
-        self.spawn_workers_with(
+        self.spawn_workers_with_consumer(
             destination,
             affinity,
             count,
-            &mut handles,
-            thread::Builder::spawn,
+            Builder::spawn,
             ProcessorSet::pin_current_thread_to,
+            |_| {},
         );
     }
 
+    // Omitting the participation publication can leave lazy startup waiting forever.
+    #[cfg_attr(test, mutants::skip)]
     fn mark_worker_participating(&self) {
         // The readiness condition and its notification share the same mutex with the waiter,
         // closing the predicate-check/wait interval.
@@ -279,6 +295,8 @@ impl WorkerGroup {
         drop(progress);
     }
 
+    // Omitting the initializer-completion publication can strand eager waiters indefinitely.
+    #[cfg_attr(test, mutants::skip)]
     fn mark_worker_initialized(&self) {
         // Release publishes completion of thread_init; the waiter acquires while holding the
         // same condition-variable mutex.
@@ -294,6 +312,8 @@ impl WorkerGroup {
         drop(progress);
     }
 
+    // Omitting worker-count removal can make shutdown wait forever for a nonexistent decrement.
+    #[cfg_attr(test, mutants::skip)]
     fn mark_worker_finished(&self) {
         // Participation can terminate only under the readiness mutex so a waiter cannot miss
         // the terminal transition.
@@ -307,7 +327,8 @@ impl WorkerGroup {
         drop(progress);
     }
 
-    // A wrong readiness comparison can require a worker that a fixed-count policy never creates.
+    // A wrong readiness comparison can require a worker that a fixed-count policy never creates,
+    // and a false predicate can make shutdown wait forever without another notification.
     #[cfg_attr(test, mutants::skip)]
     fn wait_for_workers(&self, expected: usize, initialized: bool) {
         let mut progress = self
@@ -356,7 +377,7 @@ impl WorkerGroup {
     ///
     /// # Panics
     ///
-    /// Panics if the pool fails before the requested workers initialize.
+    /// Panics if the pool fails or shuts down before the requested workers initialize.
     pub fn wait_until_initialized(&self, count: NonZero<usize>) {
         self.wait_for_workers(count.get(), true);
         assert!(
@@ -371,8 +392,8 @@ impl WorkerGroup {
         destination: GroupId,
         affinity: &ProcessorSet,
         count: NonZero<u32>,
-        handles: &mut Vec<thread::JoinHandle<()>>,
-        spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<thread::JoinHandle<()>>,
+        handles: &mut Vec<JoinHandle<()>>,
+        spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<JoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
     ) {
         let expected = self
@@ -382,7 +403,9 @@ impl WorkerGroup {
             .checked_add(count.get() as usize)
             .expect("worker reservation is bounded by the topology implementation");
 
-        self.spawn_workers_with(destination, affinity, count, handles, spawn, pin);
+        self.spawn_workers_with_consumer(destination, affinity, count, spawn, pin, |handle| {
+            handles.push(handle);
+        });
 
         self.wait_for_workers(expected, false);
         self.state
@@ -391,14 +414,17 @@ impl WorkerGroup {
             .expect("a worker group starts once");
     }
 
-    fn spawn_workers_with(
+    /// Starts all requested workers while delegating ownership of each OS handle to the caller.
+    ///
+    /// Ref: docs/implementation.md, "Ownership and coordination".
+    fn spawn_workers_with_consumer(
         &self,
         destination: GroupId,
         affinity: &ProcessorSet,
         count: NonZero<u32>,
-        handles: &mut Vec<thread::JoinHandle<()>>,
-        mut spawn: impl FnMut(thread::Builder, WorkerEntry) -> io::Result<thread::JoinHandle<()>>,
+        mut spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<JoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
+        mut consume_handle: impl FnMut(JoinHandle<()>),
     ) {
         let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
         for worker_index in 0..count.get() {
@@ -407,10 +433,10 @@ impl WorkerGroup {
                 let affinity = affinity.clone();
                 let pin = pin.clone();
                 move || {
-                    if !group.runtime.begin_worker() {
+                    if group.runtime.begin_worker().is_break() {
                         return;
                     }
-                    let result = panic::catch_unwind(AssertUnwindSafe(|| pin(&affinity)));
+                    let result = catch_unwind(AssertUnwindSafe(|| pin(&affinity)));
                     if let Err(payload) = result {
                         group.runtime.fail(payload);
                         group.runtime.end_worker();
@@ -419,14 +445,14 @@ impl WorkerGroup {
                     group.run_worker(pin, applied_revision);
                 }
             });
-            let builder = thread::Builder::new().name(format!(
+            let builder = Builder::new().name(format!(
                 "{}-{destination}-{worker_index}",
                 self.runtime.pool_name()
             ));
             let handle = spawn(builder, entry).unwrap_or_else(|error| {
                 panic!("failed to start worker in {destination:?}: {error}")
             });
-            handles.push(handle);
+            consume_handle(handle);
         }
     }
 
@@ -440,9 +466,9 @@ impl WorkerGroup {
     }
 }
 
-impl fmt::Debug for WorkerGroup {
+impl Debug for WorkerGroup {
     #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("id", &self.id())
             .field("workers", &self.len())
@@ -472,19 +498,19 @@ pub(crate) struct WorkerGroupState {
     pub(crate) startup: OnceLock<Result<(), ()>>,
     #[cfg(test)]
     pub(crate) before_startup_trace:
-        OnceLock<Box<dyn Fn() + Send + Sync + panic::UnwindSafe + panic::RefUnwindSafe>>,
+        OnceLock<Box<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     #[cfg(test)]
     pub(crate) before_wait:
-        OnceLock<Box<dyn Fn(u32, usize) + Send + Sync + panic::UnwindSafe + panic::RefUnwindSafe>>,
+        OnceLock<Box<dyn Fn(u32, usize) + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     #[cfg(test)]
     pub(crate) before_failure_exit:
-        OnceLock<Box<dyn Fn() + Send + Sync + panic::UnwindSafe + panic::RefUnwindSafe>>,
+        OnceLock<Box<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     #[cfg(test)]
     pub(crate) before_membership_publish:
-        OnceLock<Box<dyn Fn() + Send + Sync + panic::UnwindSafe + panic::RefUnwindSafe>>,
+        OnceLock<Box<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     #[cfg(test)]
     pub(crate) before_membership_lock:
-        OnceLock<Box<dyn Fn() + Send + Sync + panic::UnwindSafe + panic::RefUnwindSafe>>,
+        OnceLock<Box<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     initialization: Mutex<()>,
     initialization_changed: Condvar,
 }
@@ -560,12 +586,17 @@ impl WorkerGroupState {
 /// Public group handles expose only participation and identity; queue internals stay borrowed.
 pub(crate) type GroupState = WorkerGroupState;
 
+/// Transfers one worker-thread entry closure through test-only spawn adapters.
 pub(crate) type WorkerEntry = Box<dyn FnOnce() + Send>;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::pin::Pin;
+
+    use many_cpus::SystemHardware;
+    use many_cpus::fake::HardwareBuilder;
+    use new_zealand::nz;
 
     use crate::{Pool, VicinalTask, init_task};
 
@@ -577,7 +608,12 @@ mod tests {
 
     #[test]
     fn queue_len_combines_both_priorities() {
-        let pool = Pool::new();
+        let pool = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .build();
         let group = pool.inner.groups.add();
         let urgent = group.state().task_pool.lock().unwrap().alloc_uninit_box();
         let regular = group.state().task_pool.lock().unwrap().alloc_uninit_box();
