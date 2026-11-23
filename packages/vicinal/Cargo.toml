@@ -61,3 +61,7 @@ workspace = true
 [[bench]]
 name = "vicinal"
 harness = false
+
+[[bench]]
+name = "vicinal_policy"
+harness = false

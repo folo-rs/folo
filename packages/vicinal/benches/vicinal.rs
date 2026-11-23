@@ -75,7 +75,6 @@ fn entrypoint(criterion: &mut Criterion) {
     initialization(criterion, &one_processor);
     joined_dispatch(criterion, &allocs, &times, &one_processor);
     fire_and_forget_dispatch(criterion, &allocs, &times);
-    policy_dispatch(criterion, &allocs, &times);
     region_contention(criterion, &one_processor);
 
     // The sessions emit their summaries and JSON after every group has completed.
@@ -599,82 +598,6 @@ fn spawn_and_forget(
             start.elapsed()
         });
     });
-}
-
-/// Compares locality routing with one submission and a short queued batch.
-fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &TimeSession) {
-    let mut group = criterion.benchmark_group("vicinal/policy_dispatch");
-
-    // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
-    // tasks. This benchmark count does not track future changes to the pool's default.
-    for policy_case in [PolicyCase::Processor, PolicyCase::MemoryRegion] {
-        let policy_name = policy_case.name();
-
-        // The low case isolates dispatch; the high case exercises shared queue/slot reuse.
-        for batch_size in [1, TASK_BATCH_SIZE] {
-            let name = format!("{policy_name}/{batch_size}");
-            let allocation = allocs.operation(format!("vicinal/policy_dispatch/{name}"));
-            let time = times.operation(format!("vicinal/policy_dispatch/{name}"));
-
-            group.bench_function(name, |b| {
-                let pool = policy_case.pool();
-                let scheduler = pool.scheduler();
-                block_on(scheduler.spawn(|| {})).unwrap();
-                let mut handles = Vec::with_capacity(batch_size);
-
-                b.iter_custom(|iterations| {
-                    let _allocations = allocation.measure_process().iterations(iterations);
-                    let _time = time.measure_process().iterations(iterations);
-                    let start = Instant::now();
-
-                    for _ in 0..iterations {
-                        for _ in 0..batch_size {
-                            handles.push(scheduler.spawn(|| black_box(simulate_work())));
-                        }
-
-                        #[expect(clippy::iter_with_drain, reason = "reuse the batch vector")]
-                        for handle in handles.drain(..) {
-                            black_box(block_on(handle).unwrap());
-                        }
-                    }
-
-                    start.elapsed()
-                });
-            });
-        }
-    }
-    group.finish();
-}
-
-/// Identifies the built-in policies compared by the dispatch benchmark.
-#[derive(Clone, Copy)]
-enum PolicyCase {
-    Processor,
-    MemoryRegion,
-}
-
-impl PolicyCase {
-    /// Returns the stable benchmark label for this policy.
-    fn name(self) -> &'static str {
-        match self {
-            Self::Processor => "processor",
-            Self::MemoryRegion => "region",
-        }
-    }
-
-    /// Builds an otherwise equivalent pool for the selected policy.
-    fn pool(self) -> Pool {
-        let count = nz!(2_u32);
-
-        match self {
-            Self::Processor => Pool::builder()
-                .worker_policy(WorkersPerProcessor::new(count))
-                .build(),
-            Self::MemoryRegion => Pool::builder()
-                .worker_policy(WorkersPerMemoryRegion::new(count))
-                .build(),
-        }
-    }
 }
 
 /// Measures competing submitters sharing a region; thread creation and affinity are untimed.
