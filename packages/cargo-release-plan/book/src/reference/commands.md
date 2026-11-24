@@ -145,6 +145,18 @@ fail the command as well. Read `completed`, `compared` and `required_impact`,
 not merely the exit code. `completed: true` can include unavailable comparisons;
 read their `not_compared_reason` and retain semantic assessment of every affected package.
 
+For a reviewed case where comparison is unavailable, repeat
+`--exclude-comparison PACKAGE@VERSION=REASON` for each selected package to exclude.
+For example, `--exclude-comparison 'demo@0.5.0=published predecessor has no library'`.
+The version must match the actual selected registry or anticipated-parent baseline.
+Unknown packages, duplicate exceptions, empty reasons and version mismatches fail.
+Evidence records `explicit-exclusion`, the selected version and `exclusion_reason`, not a
+passing comparison or a verified target shape. If every comparison is explicitly excluded,
+the checker is not invoked, but source admission and baseline lookup still apply.
+Keep strict checking for all other packages. Do not exclude unexplained operational failures.
+Require an explicit semantic decision for each excluded package; a new library still needs
+assessment of its complete API and the existing CLI, behavior and feature contracts.
+
 `check-published --plan` validates the resolved target set and fails on a
 never-published or indeterminate publishable target. Non-publishable packages are
 excluded. Without a plan, workspace-wide missing/unknown-package discovery is

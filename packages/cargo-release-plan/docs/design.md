@@ -563,11 +563,23 @@ the skill uses it as a floor while assessing the complete contract.
 
 Affected procedural macros receive explicit unsupported-comparison records, including
 private macros. A supported target without a baseline has a distinct unavailable reason.
-Neither receives a semantic floor. Completion means the supported work finished and
+Strict comparison remains the default. A caller can explicitly exclude a selected package with
+`--exclude-comparison PACKAGE@VERSION=REASON` after reviewing evidence that comparison is
+unavailable, for example a binary-only predecessor. The exception must match the actual selected
+registry or anticipated-parent version; unknown targets, duplicates, empty reasons and baseline
+mismatches fail. `explicit-exclusion` retains the version and reason with `compared: false` and
+no semantic floor. It is a caller assertion, not automatic verification of a predecessor's targets.
+Unexcluded acquisition, metadata and checker failures remain failures, not exceptions.
+The added library API and existing CLI, behavior and feature contracts still require complete
+semantic assessment; a new library is not automatically patch-safe.
+None of these exclusions receives a semantic floor. Completion means the supported work finished and
 exclusions were recorded, not that every package was compared or is compatible.
 If no supported comparisons are selected, the operation needs no checker, registry
 baseline or anticipated-parent checkout. Known exclusions remain in evidence if
 another comparison fails.
+When every supported comparison is explicitly excluded, no checker is required; selected
+baseline acquisition and source admission still apply. The result clearly reports that semantic
+assessment is required rather than claiming compatibility for excluded packages.
 
 ### Check first-publication prerequisites
 

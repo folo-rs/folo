@@ -80,6 +80,7 @@ impl Cli {
                 merge_target: args.merge_target,
                 output: args.output,
                 deny_findings: args.deny_findings,
+                exclude_comparison: args.exclude_comparison,
                 verbose: args.verbose,
             },
             Command::Publish(PublishCommand::Report(args)) => RunInput::PublicationReport {
@@ -377,6 +378,9 @@ struct CompatibilityArgs {
     /// Fail the command when completed comparisons find an insufficient version increment.
     #[arg(long)]
     deny_findings: bool,
+    /// Explicitly exclude PACKAGE@VERSION=REASON; retain unavailable evidence for semantic review.
+    #[arg(long, value_name = "PACKAGE@VERSION=REASON")]
+    exclude_comparison: Vec<String>,
     #[arg(long)]
     verbose: bool,
 }
@@ -852,6 +856,7 @@ mod tests {
             merge_target: None,
             output,
             deny_findings,
+            exclude_comparison,
             verbose,
         } = cli.into_input()
         else {
@@ -863,6 +868,7 @@ mod tests {
         assert!(plan.is_none());
         assert!(release_history.is_none());
         assert!(!deny_findings);
+        assert!(exclude_comparison.is_empty());
         assert!(!verbose);
     }
 
@@ -880,6 +886,10 @@ mod tests {
                 "--output",
                 "new-evidence",
                 "--deny-findings",
+                "--exclude-comparison",
+                "demo@1.0.0=predecessor is binary-only",
+                "--exclude-comparison",
+                "other@2.0.0=reviewed unsupported contract",
                 "--verbose",
             ])
             .unwrap();
@@ -891,6 +901,7 @@ mod tests {
                 merge_target: None,
                 output,
                 deny_findings,
+                exclude_comparison,
                 verbose,
             } = cli.into_input()
             else {
@@ -911,6 +922,13 @@ mod tests {
                 (option == "--release-history").then_some("selected-source")
             );
             assert!(deny_findings);
+            assert_eq!(
+                exclude_comparison,
+                [
+                    "demo@1.0.0=predecessor is binary-only",
+                    "other@2.0.0=reviewed unsupported contract"
+                ]
+            );
             assert!(verbose);
         }
     }

@@ -156,6 +156,13 @@ graphs or version targets. Analysis ordering follows recorded dependencies rathe
 than exact-version grouping. Compatibility selection follows group closure and separates supported consumer contracts
 from unsupported procedural-macro members. The report retains Cargo's target distinction
 independently of consumer policy so artifact-only selection matches execution.
+Compatibility owns explicit comparison exceptions from the CLI. It validates the selected
+package, baseline version and reason without changing target selection, offline classification
+or semantic-decision vocabulary. Exceptions retain baseline acquisition and input admission;
+only nonexcluded packages require checker identity, canary and execution. Registry comparisons
+retain `--baseline-version`; anticipated-parent comparisons retain `--baseline-root`.
+Evidence distinguishes caller-reviewed exclusions from checker output and automatic capability
+exclusions. Operational failures are never translated into an explicit exception.
 Dependency and dependent references must name a reported workspace target; an
 incomplete report cannot silently remove a relationship from release assessment.
 Classification and report validation share the status derivation from anchor,
