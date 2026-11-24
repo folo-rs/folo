@@ -539,7 +539,8 @@ fn check_with_output(
     let targets = targets.comparable;
     let needs_checker = targets.iter().any(|name| !exclusions.contains_key(name));
     if !targets.is_empty() && !needs_checker {
-        outcome.checker = "not invoked: all selected comparisons explicitly excluded".to_owned();
+        "not invoked: all selected comparisons explicitly excluded"
+            .clone_into(&mut outcome.checker);
     }
     let cache = cache_path(&env::temp_dir(), &original_root)?;
     fs::create_dir_all(&cache)?;
@@ -1292,8 +1293,13 @@ mod tests {
                     .is_some()
             );
         }
-        assert!(exclusions(&[values[0].clone(), values[0].clone()], &targets).is_err());
-        assert!(exclusions(&["cli@invalid=reason".to_owned()], &targets).is_err());
+        assert!(
+            exclusions(&[values[0].clone(), values[0].clone()], &targets)
+                .unwrap_err()
+                .find_source::<InvalidComparisonExclusion>()
+                .is_some()
+        );
+        _ = exclusions(&["cli@invalid=reason".to_owned()], &targets).unwrap_err();
     }
 
     #[test]
@@ -1350,8 +1356,9 @@ mod tests {
         assert!(!outcome.completed);
         assert!(!outcome.findings);
         assert_eq!(outcome.packages.len(), 1);
-        assert_eq!(outcome.packages[0].name, "excluded");
-        assert!(!outcome.packages[0].compared);
+        let excluded = outcome.packages.first().unwrap();
+        assert_eq!(excluded.name, "excluded");
+        assert!(!excluded.compared);
         assert_eq!(log, b"build failed");
     }
 
