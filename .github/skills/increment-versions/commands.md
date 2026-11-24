@@ -20,6 +20,10 @@ writes before retrying a failed stage.
 | `PACKAGE` | Package name from a report entry. |
 | `DIFF_PATH` | That entry's `diff_path`: the generated patch filename relative to the directory containing `report.json`; absent when there is no file patch. |
 
+`$ComparisonArguments` is an empty-by-default PowerShell array of reviewed
+`--exclude-comparison` options. Keep the same reviewed inputs available for
+Stages 2, 5 and 7, and recheck their exact selected baselines at each invocation.
+
 For repository-local evidence directories, run this for each path before writing:
 
 ```powershell
@@ -48,8 +52,8 @@ foreach ($Name in $Expected.Keys) {
         throw "Unsupported $Name schema; follow the skill upgrade instructions."
     }
 }
-Get-Command cargo-semver-checks -ErrorAction Stop | Out-Null
 $Branch = (git symbolic-ref --quiet --short HEAD).Trim()
+$ComparisonArguments = @()
 New-Item -ItemType Directory -Path "{{WORK_DIR}}" | Out-Null
 ```
 
@@ -134,22 +138,46 @@ if (-not [string]::IsNullOrWhiteSpace("{{TARGET_COMMIT}}")) {
 }
 & "{{TOOL}}" prepare --manifest-path "{{MANIFEST}}" --release-history "{{HISTORY_COMMIT}}" `
     @TargetArguments --output "{{WORK_DIR}}" --verbose
-& "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" `
-    --prepared "{{WORK_DIR}}\prepared.json" --output "{{WORK_DIR}}\compatibility" --verbose
 ```
 
-Read `report.json`, its `diffs` patches, `prepared.json`, and the compatibility
+Read `report.json`, its `diffs` patches and `prepared.json` before checking compatibility.
+Keep `$ComparisonArguments` empty for strict checking. If exact baseline evidence
+supports an exception, follow the skill's reviewed-exclusion guidance before
+adding it. For example, two independently reviewed exceptions use:
+
+```powershell
+$ComparisonArguments = @(
+    "--exclude-comparison", "demo@0.5.0=published predecessor has no library",
+    "--exclude-comparison", "other@1.0.0=selected predecessor has no library"
+)
+```
+
+These are example identities, not defaults. Each complete identity and reason is
+one argument, including spaces. The command still selects the baseline and rejects
+a mismatch; these arguments do not override selection or bypass operational errors.
+The checker is required only for remaining unexcluded comparisons, including mixed
+selections. Do not install an unnecessary checker for an all-excluded selection.
+
+```powershell
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+& "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" `
+    --prepared "{{WORK_DIR}}\prepared.json" @ComparisonArguments `
+    --output "{{WORK_DIR}}\compatibility" --verbose
+```
+
+Read the compatibility
 evidence in `WORK_DIR`. A consistent lockfile may be installed during preparation;
 the report describes that same source. Compatibility checks require completed
 evidence before semantic assessment.
-Completed evidence can contain explicit exclusions: `not_compared_reason` distinguishes
+Completed evidence can contain packages that were not compared: `not_compared_reason` distinguishes
 `unsupported-proc-macro`, `no-baseline` and `explicit-exclusion`. None implies compatibility.
 An explicit exception uses `--exclude-comparison PACKAGE@VERSION=REASON`, retains its selected
 baseline and reason, and requires source/artifact evidence plus a complete semantic decision.
-For a binary-only predecessor, assess the added library API and existing CLI, behavior and
-feature contracts without a patch default. Never exclude unexplained operational failures.
-Keep these
-packages in the dependency-first assessment; do not substitute the checker target list.
+For a binary-only predecessor, assess the added library API and existing CLI, behavior, formats
+and feature contracts without a patch default. Never exclude unexplained operational failures.
+Keep these packages in the dependency-first assessment; do not substitute the checker target list.
 
 ## Stage 3: Assess in dependency order
 
@@ -186,6 +214,10 @@ the dependency's definitions or generated code.
 
 ## Stage 5: Review resolved effects
 
+Recheck every entry in `$ComparisonArguments` against the preview's actual selected
+package and baseline and its supporting evidence before reusing it. Clear or reassess
+entries when selection changes; do not invent a new baseline to preserve an exception.
+
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -195,12 +227,14 @@ $PSNativeCommandUseErrorActionPreference = $true
 & "{{TOOL}}" preview --manifest-path "{{MANIFEST}}" --prepared "{{WORK_DIR}}\prepared.json" `
     --plan "{{WORK_DIR}}\plan.json" --output "{{WORK_DIR}}\preview" --verbose
 & "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" `
-    --plan "{{WORK_DIR}}\preview\plan.json" --output "{{WORK_DIR}}\preview-compatibility" --verbose
+    --plan "{{WORK_DIR}}\preview\plan.json" @ComparisonArguments `
+    --output "{{WORK_DIR}}\preview-compatibility" --verbose
 ```
 
 Read the complete `preview\report.json`, patches, resolved `preview\plan.json`
 and completed preview compatibility evidence. Repeating this stage requires new
 preview and compatibility output directories; do not overwrite retained evidence.
+Verify that each admitted exception retains the reviewed baseline and reason.
 
 ## Stage 6: Refresh and apply
 
@@ -259,6 +293,10 @@ No publication-readiness gate is added to standalone version edits.
 
 ## Stage 7: Verify and hand off
 
+Recheck `$ComparisonArguments` against the fresh source's selected packages,
+baselines and supporting evidence before reuse. Verify the retained baseline and
+reason in completed evidence; changed applicability requires reassessment.
+
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -275,7 +313,8 @@ if (-not [string]::IsNullOrWhiteSpace("{{TARGET_COMMIT}}")) {
 }
 cargo metadata --manifest-path "{{MANIFEST}}" --locked --format-version 1 > $null
 & "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" `
-    --release-history "{{HISTORY_COMMIT}}" @TargetArguments --output "{{VERIFY_DIR}}" --verbose
+    --release-history "{{HISTORY_COMMIT}}" @TargetArguments @ComparisonArguments `
+    --output "{{VERIFY_DIR}}" --verbose
 & "{{TOOL}}" check --manifest-path "{{MANIFEST}}" --release-history "{{HISTORY_COMMIT}}" `
     @TargetArguments @ConfigArguments --format github --verbose
 ```

@@ -137,7 +137,7 @@ impl CompatibilityOutcome {
         };
         verbose.note(|| {
             format!(
-                "Assessing {name} against baseline {baseline} from the captured source workspace; \
+                "Assessing {name} from the captured source workspace against baseline {baseline}; \
                  unexcluded comparisons use all features."
             )
         });
@@ -253,7 +253,7 @@ impl Comparison {
     }
 }
 
-/// Distinguishes missing comparison data from an unsupported target without claiming compatibility.
+/// Records why a package was not compared, without implying compatibility.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum NotComparedReason {
@@ -263,6 +263,7 @@ enum NotComparedReason {
 }
 
 /// Current compatibility.json layout; independent of the report and plan schemas.
+/// Revisions must update the canonical increment-versions skill's schema admission.
 pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 4;
 
 /// An explicit exception cannot masquerade as checker output.
@@ -271,6 +272,7 @@ enum BaselineComparison {
     Compared(Output),
 }
 
+/// A validated request; exact-baseline admission still occurs after baseline acquisition.
 #[derive(Debug)]
 struct Exclusion {
     baseline: Version,
@@ -309,7 +311,10 @@ fn exclusions(
 impl Exclusion {
     fn admit(&self, name: &str, baseline: Option<&Version>) -> Result<(), AppError> {
         if baseline != Some(&self.baseline) {
-            return Err(ExclusionBaselineMismatch::new(name, self.baseline.to_string()).into());
+            let selected = baseline.map_or_else(|| "none".to_owned(), ToString::to_string);
+            return Err(
+                ExclusionBaselineMismatch::new(name, self.baseline.to_string(), selected).into(),
+            );
         }
         Ok(())
     }
@@ -326,10 +331,13 @@ struct InvalidComparisonExclusion {
 
 /// An exception for one predecessor cannot silently waive comparison with a different one.
 #[ohno::error]
-#[display("comparison exclusion for {name} requires selected baseline {version}")]
+#[display(
+    "comparison exclusion for {name} requests {version}, but selected baseline is {selected}"
+)]
 struct ExclusionBaselineMismatch {
     name: String,
     version: String,
+    selected: String,
 }
 
 /// Persists critical checker evidence while deferring secondary diagnostic-delivery failures.
@@ -539,11 +547,9 @@ fn check_with_output(
     let targets = targets.comparable;
     let needs_checker = targets.iter().any(|name| !exclusions.contains_key(name));
     if !targets.is_empty() && !needs_checker {
-        "not invoked: all selected comparisons explicitly excluded"
+        "not invoked: exclusions requested for all selected comparisons"
             .clone_into(&mut outcome.checker);
     }
-    let cache = cache_path(&env::temp_dir(), &original_root)?;
-    fs::create_dir_all(&cache)?;
     let log = output.join("semver-checks.log");
     let log = fs::File::create(log).map_err(CheckerLogFailed::caused_by)?;
     let mut checker_output = CheckerOutput::new(log, io::stderr());
@@ -577,13 +583,16 @@ fn check_with_output(
         let checker = if !needs_checker {
             None
         } else {
-            Some(resolve_checker()?)
+            let checker = resolve_checker()?;
+            let cache = cache_path(&env::temp_dir(), &original_root)?;
+            fs::create_dir_all(&cache)?;
+            Some((checker, cache))
         };
-        if let Some(checker) = &checker {
-            let identity = invoke(checker, &manifest, &cache, &["--version"])?;
+        if let Some((checker, cache)) = &checker {
+            let identity = invoke(checker, &manifest, cache, &["--version"])?;
             outcome.identify(&identity)?;
-            canary(checker, &cache, &mut checker_output)?;
-            admit_checker_resolution(&manifest, &cache, &mut checker_output)?;
+            canary(checker, cache, &mut checker_output)?;
+            admit_checker_resolution(&manifest, cache, &mut checker_output)?;
         }
         let registry = targets
             .iter()
@@ -613,14 +622,14 @@ fn check_with_output(
                 if let Some(exclusion) = exclusions.get(name) {
                     return Ok(BaselineComparison::Excluded(exclusion.reason.clone()));
                 }
-                let checker = checker
-                    .as_deref()
+                let (checker, cache) = checker
+                    .as_ref()
                     .expect("nonexcluded targets resolved the checker");
                 let command = match parent_baseline(name) {
                     Some((_, root)) => source_comparison_command(checker, &manifest, name, root),
                     None => comparison_command(checker, &manifest, name, baseline),
                 };
-                execute_checker(command, &cache).map(BaselineComparison::Compared)
+                execute_checker(command, cache).map(BaselineComparison::Compared)
             },
             &mut checker_output,
             verbose,
@@ -1270,12 +1279,12 @@ mod tests {
             .admit("cli", Some(&Version::new(0, 5, 0)))
             .unwrap();
         for baseline in [None, Some(Version::new(0, 5, 1))] {
-            assert!(
-                exclusion
-                    .admit("cli", baseline.as_ref())
-                    .unwrap_err()
-                    .find_source::<ExclusionBaselineMismatch>()
-                    .is_some()
+            let error = exclusion.admit("cli", baseline.as_ref()).unwrap_err();
+            let mismatch = error.find_source::<ExclusionBaselineMismatch>().unwrap();
+            assert_eq!(mismatch.version, "0.5.0");
+            assert_eq!(
+                mismatch.selected,
+                baseline.map_or_else(|| "none".to_owned(), |version| version.to_string())
             );
         }
         for value in [

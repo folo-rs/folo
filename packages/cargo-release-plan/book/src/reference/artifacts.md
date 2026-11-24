@@ -164,8 +164,9 @@ Unavailable records also contain `not_compared_reason`: `unsupported-proc-macro`
 for a target the checker cannot compare directly, or `no-baseline` for a supported
 target without a comparison version. Both have a null baseline version.
 `explicit-exclusion` retains the selected baseline version and a caller-supplied
-`exclusion_reason`. It records a reviewed exception, not a tool-verified target shape or a
-checker failure converted to success. Compared records omit these fields.
+`exclusion_reason`. The tool checks its exact selected baseline version, but does not
+verify which Cargo targets that baseline provides or convert checker failures to success.
+Compared records omit `not_compared_reason` and `exclusion_reason`.
 Affected macro records include private packages and macro members of affected version
 groups; unrelated unchanged packages need no record.
 An operational failure can leave only earlier completed records; inspect the
@@ -177,11 +178,12 @@ means no comparison was available, not proof of compatibility.
 `required_impact` is a semantic `breaking` or `nonbreaking` floor; `null`
 establishes no minimum. The author still judges behavioral, CLI, format and
 feature-subset effects.
-For a binary-only predecessor, assess the entire added library API together with the existing
-CLI, behavior and feature contracts. Adding a library is not automatically patch-safe.
 This includes APIs and behavior supplied through re-exports, which are not fully covered
 by the checker, and macro invocation syntax and generated code. See
 [semantic assessment](../concepts/versions.md#external-api-evidence-is-a-floor).
+
+For a binary-only predecessor, assess the entire added library API together with the existing
+CLI, behavior, format and feature contracts. Adding a library is not automatically patch-safe.
 
 Do not confuse a completed comparison with a passing merge gate:
 `--deny-findings` additionally rejects insufficient increments. Source inputs are checked

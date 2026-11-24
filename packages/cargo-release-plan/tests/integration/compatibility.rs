@@ -6,6 +6,7 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::env::consts::EXE_SUFFIX;
+use std::fmt::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ use std::{env, fs, iter};
 use cargo_release_plan::{RunInput, RunOutcome, run};
 use crp_versioning::plan::SCHEMA_VERSION;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::fixture::{Fixture, write_package};
@@ -1063,13 +1065,25 @@ fn added_library_can_explicitly_exclude_its_binary_only_parent_without_claiming_
         resolve_lock(&fixture);
         fixture.commit("child adds a public library alongside the binary");
         let output = TempDir::new().unwrap();
+        let temporary = TempDir::new().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let digest = Sha256::digest(root.as_os_str().as_encoded_bytes());
+        let mut id = String::new();
+        for byte in digest.iter().take(8) {
+            write!(id, "{byte:02x}").unwrap();
+        }
+        let cache = temporary.path().join(format!("crp-semver-{id}"));
+        fs::write(&cache, "cache path is deliberately not a directory").unwrap();
         let evidence = output.path().join("evidence");
         let calls = output.path().join("calls");
         let result = parent_check(&fixture, &history, &evidence, &calls)
             .args([
                 "--exclude-comparison",
-                "library@1.1.0=published predecessor is binary-only",
+                "library@1.1.0=anticipated parent is binary-only",
             ])
+            .env("TMPDIR", temporary.path())
+            .env("TMP", temporary.path())
+            .env("TEMP", temporary.path())
             .env("CRP_FIXTURE_SCENARIO", "identity-failure")
             .output()
             .unwrap();
@@ -1086,13 +1100,14 @@ fn added_library_can_explicitly_exclude_its_binary_only_parent_without_claiming_
             &json!([{
                 "name":"library", "baseline_version":"1.1.0", "compared":false,
                 "required_impact":null, "not_compared_reason":"explicit-exclusion",
-                "exclusion_reason":"published predecessor is binary-only"
+                "exclusion_reason":"anticipated parent is binary-only"
             }])
         );
         assert!(!calls.exists());
+        assert!(cache.is_file());
         assert_eq!(
             outcome.get("checker").unwrap(),
-            "not invoked: all selected comparisons explicitly excluded"
+            "not invoked: exclusions requested for all selected comparisons"
         );
         assert!(
             String::from_utf8_lossy(&result.stdout)
@@ -1175,9 +1190,18 @@ fn explicit_exclusions_cannot_select_unknown_packages_or_a_different_baseline() 
         let (fixture, history, _) = anticipated_parent();
         fixture.write("packages/library/src/lib.rs", "pub fn changed() {}\n");
         let output = TempDir::new().unwrap();
-        for (label, exclusion) in [
-            ("unknown", "other@1.1.0=reviewed exception"),
-            ("wrong-version", "library@1.0.0=reviewed exception"),
+        // A valid historical version is not the selected anticipated parent's final version.
+        for (label, exclusion, diagnostic) in [
+            (
+                "unknown",
+                "other@1.1.0=reviewed exception",
+                "invalid comparison exclusion",
+            ),
+            (
+                "wrong-version",
+                "library@1.0.0=reviewed exception",
+                "selected baseline is",
+            ),
         ] {
             let evidence = output.path().join(label);
             let calls = output.path().join(format!("{label}.calls"));
@@ -1187,6 +1211,12 @@ fn explicit_exclusions_cannot_select_unknown_packages_or_a_different_baseline() 
                 .output()
                 .unwrap();
             assert!(!result.status.success());
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert!(stderr.contains(diagnostic), "{stderr}");
+            let identity = exclusion.split('=').next().unwrap();
+            for part in identity.split('@') {
+                assert!(stderr.contains(part), "{stderr}");
+            }
             assert!(!calls.exists());
             if label == "wrong-version" {
                 let outcome = read_outcome(&evidence);

@@ -378,7 +378,7 @@ struct CompatibilityArgs {
     /// Fail the command when completed comparisons find an insufficient version increment.
     #[arg(long)]
     deny_findings: bool,
-    /// Explicitly exclude PACKAGE@VERSION=REASON; retain unavailable evidence for semantic review.
+    /// Skip this package's comparison against VERSION and record REASON for semantic assessment.
     #[arg(long, value_name = "PACKAGE@VERSION=REASON")]
     exclude_comparison: Vec<String>,
     #[arg(long)]
