@@ -288,9 +288,11 @@ Describe 'Same-run artifact visibility' {
     It 'waits for every discovered book before a pattern download' {
         $deploy = Get-WorkflowJob $book 'deploy'
         @(Get-WorkflowJobDependency $deploy) | Should -Be @('discover', 'build')
+        (Get-WorkflowJob $book 'build') | Should -Match '(?m)^    name: Build book \$\{\{ matrix\.book \}\}'
         $deploy.IndexOf('Wait-GitHubRunArtifact') |
             Should -BeLessThan $deploy.IndexOf('uses: actions/download-artifact@')
-        $deploy | Should -Match '(?m)-Pattern ''book-\*'' -ExpectedCount \$books\.Count'
+        $deploy | Should -Match '(?m)-ExpectedCount \$books\.Count -ProducerJob \$producerJobs'
+        $deploy | Should -Match '(?m)-RunAttempt \$env:GITHUB_RUN_ATTEMPT'
         $deploy | Should -Match '(?m)actions: read'
         $deploy | Should -Match '(?m)^\s+github-token: \$\{\{ github\.token \}\}'
     }

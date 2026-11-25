@@ -70,6 +70,7 @@ jobs:
   # Builds one book per matrix leg and uploads it as an artifact whose contents are rooted at
   # `<book-name>/`, so the deploy job can merge every book into the site without further shuffling.
   build:
+    name: Build book ${{ matrix.book }}
     needs: [discover]
     runs-on: ubuntu-latest
     strategy:
@@ -167,8 +168,13 @@ jobs:
 
           Import-Module ./scripts/workflow/ArtifactVisibility.psm1 -Force
           $books = @(ConvertFrom-Json -InputObject $env:BOOKS)
+          $producerJobs = @{}
+          foreach ($book in $books) {
+            $producerJobs["book-$book"] = "Build book $book"
+          }
           Wait-GitHubRunArtifact -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID `
-            -Pattern 'book-*' -ExpectedCount $books.Count
+            -RunAttempt $env:GITHUB_RUN_ATTEMPT -Pattern 'book-*' `
+            -ExpectedCount $books.Count -ProducerJob $producerJobs
 
       - name: Download book artifacts
         uses: actions/download-artifact@v8

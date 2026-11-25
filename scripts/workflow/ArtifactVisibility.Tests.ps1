@@ -76,6 +76,79 @@ Describe 'Wait-GitHubRunArtifact' {
         Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
+    It 'waits for artifacts newer than producers rerun in the current attempt' {
+        $script:reads = 0
+        Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
+            $script:reads++
+            [pscustomobject]@{
+                id         = 1
+                name       = 'book-alpha'
+                created_at = '2026-11-25T03:00:00Z'
+            }
+            [pscustomobject]@{
+                id         = if ($script:reads -eq 1) { 2 } else { 3 }
+                name       = 'book-beta'
+                created_at = if ($script:reads -eq 1) {
+                    '2026-11-25T03:00:00Z'
+                } else {
+                    '2026-11-25T04:30:00Z'
+                }
+            }
+        }
+        Mock Get-GitHubRunAttemptJob -ModuleName ArtifactVisibility {
+            [pscustomobject]@{
+                run_attempt = 2
+                name        = 'Build book beta'
+                started_at  = '2026-11-25T04:00:00Z'
+            }
+        }
+        $producerJobs = @{
+            'book-alpha' = 'Build book alpha'
+            'book-beta'  = 'Build book beta'
+        }
+
+        {
+            Wait-GitHubRunArtifact -Repository owner/repo -RunId 100 -RunAttempt 2 `
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producerJobs `
+                -Attempt 3 -DelaySeconds 0
+        } | Should -Not -Throw
+        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
+        Should -Invoke Get-GitHubRunAttemptJob -ModuleName ArtifactVisibility -Times 2 -Exactly
+    }
+
+    It 'accepts inherited producers that did not run in the current attempt' {
+        Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
+            [pscustomobject]@{
+                id         = 1
+                name       = 'book-alpha'
+                created_at = '2026-11-25T03:00:00Z'
+            }
+            [pscustomobject]@{
+                id         = 3
+                name       = 'book-beta'
+                created_at = '2026-11-25T04:30:00Z'
+            }
+        }
+        Mock Get-GitHubRunAttemptJob -ModuleName ArtifactVisibility {
+            [pscustomobject]@{
+                run_attempt = 2
+                name        = 'Build book beta'
+                started_at  = '2026-11-25T04:00:00Z'
+            }
+        }
+        $producerJobs = @{
+            'book-alpha' = 'Build book alpha'
+            'book-beta'  = 'Build book beta'
+        }
+
+        {
+            Wait-GitHubRunArtifact -Repository owner/repo -RunId 100 -RunAttempt 2 `
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producerJobs `
+                -Attempt 2 -DelaySeconds 0
+        } | Should -Not -Throw
+        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 1 -Exactly
+    }
+
     It 'fails explicitly after the visibility budget is exhausted' {
         Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility { @() }
 

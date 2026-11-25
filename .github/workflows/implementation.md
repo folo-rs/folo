@@ -130,6 +130,10 @@ artifact. Every repository-owned same-run download first polls the run-artifact 
 The wait helper supports artifact ID, exact name and wildcard-pattern selectors. Pattern consumers
 state the complete producer count, and the helper counts distinct artifact names so duplicate
 results from reruns cannot authorize a partial download.
+When a workflow reruns, pattern consumers can map each expected artifact name to its producer job.
+The helper queries the current attempt's jobs and requires its latest visible artifact to have
+been created after that producer started. Producers that did not rerun retain their earlier valid
+artifacts, so failed-job reruns do not rebuild successful matrix legs.
 The helper retries only missing inventory entries and recognized transient query failures for a
 bounded interval. Authentication, malformed requests and other permanent query failures fail on
 the first attempt; an exhausted visibility budget fails explicitly. The download action remains
