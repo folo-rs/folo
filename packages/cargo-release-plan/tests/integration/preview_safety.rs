@@ -166,6 +166,7 @@ fn excluded_outputs_retain_applicable_evidence() {
             merge_target: None,
             output: output.join("compatibility"),
             deny_findings: true,
+            exclude_comparison: Vec::new(),
             verbose: false,
         })
         .unwrap();

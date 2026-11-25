@@ -5,7 +5,12 @@ different distribution lifecycles. Upgrade them as a tested combination rather
 than assuming equal version numbers.
 
 The walkthrough and copied skill use report/plan/prepared schema `8`,
-semantic-decision schema `2`, compatibility schema `3`, and release-context schema `2`.
+semantic-decision schema `2`, compatibility schema `4`, and release-context schema `2`.
+
+Compatibility schema `4` adds `explicit-exclusion` for a caller-reviewed comparison exception.
+Unlike other unavailable comparisons, this record retains the selected baseline version and
+an `exclusion_reason`. Consumers must keep excluded packages in semantic assessment;
+this exception supplies neither a passing API comparison nor an automatic patch decision.
 `cargo release-plan version` reports these revisions as JSON.
 `ACTION_REVISION` in workflow examples must be replaced with the verified
 immutable commit of a tested published action release selecting that interface.

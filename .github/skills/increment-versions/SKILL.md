@@ -31,14 +31,16 @@ instructions.
 
 # Prerequisites
 
-Git, the selected Cargo/Rust toolchain, `cargo-release-plan`, and
-`cargo-semver-checks` must be available. Do not install or upgrade tools without
+Git, the selected Cargo/Rust toolchain and `cargo-release-plan` must be available.
+`cargo-semver-checks` is required only when at least one selected comparison is
+not explicitly excluded; let `check-compatibility` enforce that prerequisite.
+Do not install or upgrade tools without
 the caller's applicable permission. Fetching a private configured repository also
 requires GitHub CLI authentication.
 
 Check the schema revisions reported by `cargo release-plan version` before
 modifying source. This skill consumes plan/report/prepared schema `8`,
-semantic-decision schema `2` and compatibility schema `3`. Configured mode also
+semantic-decision schema `2` and compatibility schema `4`. Configured mode also
 consumes release-context schema `2`. Matching package version numbers are not a prerequisite.
 
 If schemas differ, update the installed skill from the complete
@@ -178,6 +180,16 @@ Read `not_compared_reason` for unavailable comparisons. `unsupported-proc-macro`
 means the checker cannot compare that Cargo target directly; `no-baseline` means
 a supported target lacks a comparison version. Neither removes a package from
 assessment or justifies a `patch` default.
+
+`explicit-exclusion` records a caller-reviewed exception. The tool checks its exact selected
+baseline version, but does not verify which Cargo targets that baseline provides.
+Use `--exclude-comparison PACKAGE@VERSION=REASON` only with evidence supporting the
+exception for that exact selected baseline, such as a published predecessor with no library.
+Do not use it to bypass unexplained registry, network, build or checker failures.
+Retain the recorded `exclusion_reason`, and require an explicit semantic decision for the
+excluded package based on the complete new library API and existing CLI, behavior, formats and
+feature contracts, including re-exported APIs and procedural-macro invocation/generated code.
+No passing comparison or semantic floor is claimed; never default to patch.
 
 Follow the decision guide's [re-export assessment](determining-level.md#re-exported-apis)
 and [procedural-macro assessment](determining-level.md#procedural-macros).

@@ -6,6 +6,7 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::env::consts::EXE_SUFFIX;
+use std::fmt::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ use std::{env, fs, iter};
 use cargo_release_plan::{RunInput, RunOutcome, run};
 use crp_versioning::plan::SCHEMA_VERSION;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::fixture::{Fixture, write_package};
@@ -67,6 +69,7 @@ fn compatibility_uses_caller_output_for_original_and_candidate_inputs() {
             merge_target: None,
             output: output.clone(),
             deny_findings: true,
+            exclude_comparison: Vec::new(),
             verbose: false,
         })
         .unwrap();
@@ -95,6 +98,7 @@ fn unchanged_workspace_needs_no_checker_or_registry_and_keeps_fresh_report() {
         merge_target: None,
         output: path.clone(),
         deny_findings: true,
+        exclude_comparison: Vec::new(),
         verbose: false,
     })
     .unwrap();
@@ -186,6 +190,7 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
                 merge_target: None,
                 output: evidence.clone(),
                 deny_findings: true,
+                exclude_comparison: Vec::new(),
                 verbose: false,
             })
             .unwrap(),
@@ -509,6 +514,7 @@ fn prepared_compatibility_rejects_same_head_source_drift_before_comparison() {
         merge_target: None,
         output: evidence.clone(),
         deny_findings: false,
+        exclude_comparison: Vec::new(),
         verbose: false,
     })
     .unwrap_err();
@@ -548,6 +554,7 @@ fn prepared_check_reclassifies_bound_source_instead_of_trusting_adjacent_report(
         merge_target: None,
         output: evidence.clone(),
         deny_findings: true,
+        exclude_comparison: Vec::new(),
         verbose: true,
     };
     assert!(matches!(
@@ -603,6 +610,7 @@ fn prepared_check_rejects_unknown_schema_and_another_workspace() {
         merge_target: None,
         output: invalid.clone(),
         deny_findings: false,
+        exclude_comparison: Vec::new(),
         verbose: false,
     })
     .unwrap_err();
@@ -619,6 +627,7 @@ fn prepared_check_rejects_unknown_schema_and_another_workspace() {
         merge_target: None,
         output: wrong_source.clone(),
         deny_findings: false,
+        exclude_comparison: Vec::new(),
         verbose: false,
     })
     .unwrap_err();
@@ -645,6 +654,7 @@ fn preview_check_uses_final_source_and_rejects_drift_in_either_workspace() {
         merge_target: None,
         output,
         deny_findings: true,
+        exclude_comparison: Vec::new(),
         verbose: true,
     };
     let original_manifest = fixture.read("packages/library/Cargo.toml");
@@ -707,6 +717,7 @@ fn compatibility_requires_resolved_plan_evidence() {
         merge_target: None,
         output: evidence.clone(),
         deny_findings: false,
+        exclude_comparison: Vec::new(),
         verbose: false,
     })
     .unwrap_err();
@@ -1038,6 +1049,89 @@ fn anticipated_parent_final_api_is_the_child_baseline_without_registry_access() 
 #[test]
 #[cfg_attr(
     miri,
+    ignore = "Acquires an anticipated baseline and writes explicit exception evidence"
+)]
+fn added_library_can_explicitly_exclude_its_binary_only_parent_without_claiming_compatibility() {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+        let (fixture, history, _) = anticipated_parent();
+        fixture.git(&["checkout", "anticipated-parent"]);
+        fs::remove_file(fixture.path().join("packages/library/src/lib.rs")).unwrap();
+        fixture.write("packages/library/src/main.rs", "fn main() {}\n");
+        resolve_lock(&fixture);
+        fixture.commit("binary-only anticipated parent");
+        fixture.git(&["checkout", "-b", "library-child"]);
+        write_package(&fixture, "library", "1.1.1", "");
+        fixture.write("packages/library/src/lib.rs", "pub fn execute() {}\n");
+        resolve_lock(&fixture);
+        fixture.commit("child adds a public library alongside the binary");
+        let output = TempDir::new().unwrap();
+        let temporary = TempDir::new().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let digest = Sha256::digest(root.as_os_str().as_encoded_bytes());
+        let mut id = String::new();
+        for byte in digest.iter().take(8) {
+            write!(id, "{byte:02x}").unwrap();
+        }
+        let cache = temporary.path().join(format!("crp-semver-{id}"));
+        fs::write(&cache, "cache path is deliberately not a directory").unwrap();
+        let evidence = output.path().join("evidence");
+        let calls = output.path().join("calls");
+        let result = parent_check(&fixture, &history, &evidence, &calls)
+            .args([
+                "--exclude-comparison",
+                "library@1.1.0=anticipated parent is binary-only",
+            ])
+            .env("TMPDIR", temporary.path())
+            .env("TMP", temporary.path())
+            .env("TEMP", temporary.path())
+            .env("CRP_FIXTURE_SCENARIO", "identity-failure")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let outcome = read_outcome(&evidence);
+        assert_eq!(outcome.get("completed").unwrap(), true);
+        assert_eq!(outcome.get("findings").unwrap(), false);
+        assert_eq!(
+            outcome.get("packages").unwrap(),
+            &json!([{
+                "name":"library", "baseline_version":"1.1.0", "compared":false,
+                "required_impact":null, "not_compared_reason":"explicit-exclusion",
+                "exclusion_reason":"anticipated parent is binary-only"
+            }])
+        );
+        assert!(!calls.exists());
+        assert!(cache.is_file());
+        assert_eq!(
+            outcome.get("checker").unwrap(),
+            "not invoked: exclusions requested for all selected comparisons"
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stdout)
+                .contains("Explicit exclusions require semantic assessment")
+        );
+        let report: Value =
+            serde_json::from_slice(&fs::read(evidence.join("report.json")).unwrap()).unwrap();
+        assert_eq!(
+            report.pointer("/packages/0/consumer_contract").unwrap(),
+            true
+        );
+        assert_eq!(
+            fixture
+                .git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            1
+        );
+    });
+}
+
+#[test]
+#[cfg_attr(
+    miri,
     ignore = "Compares a relocated member against its original parent workspace"
 )]
 fn anticipated_parent_baseline_uses_workspace_root_for_a_moved_member_manifest() {
@@ -1083,6 +1177,53 @@ fn anticipated_parent_baseline_uses_workspace_root_for_a_moved_member_manifest()
             fs::read_to_string(calls).unwrap(),
             "version\ncanary\ncomparison\n"
         );
+    });
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Acquires selected source and baseline identities through the CLI"
+)]
+fn explicit_exclusions_cannot_select_unknown_packages_or_a_different_baseline() {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+        let (fixture, history, _) = anticipated_parent();
+        fixture.write("packages/library/src/lib.rs", "pub fn changed() {}\n");
+        let output = TempDir::new().unwrap();
+        // A valid historical version is not the selected anticipated parent's final version.
+        for (label, exclusion, diagnostic) in [
+            (
+                "unknown",
+                "other@1.1.0=reviewed exception",
+                "invalid comparison exclusion",
+            ),
+            (
+                "wrong-version",
+                "library@1.0.0=reviewed exception",
+                "selected baseline is",
+            ),
+        ] {
+            let evidence = output.path().join(label);
+            let calls = output.path().join(format!("{label}.calls"));
+            let result = parent_check(&fixture, &history, &evidence, &calls)
+                .args(["--exclude-comparison", exclusion])
+                .env("CRP_FIXTURE_SCENARIO", "identity-failure")
+                .output()
+                .unwrap();
+            assert!(!result.status.success());
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert!(stderr.contains(diagnostic), "{stderr}");
+            let identity = exclusion.split('=').next().unwrap();
+            for part in identity.split('@') {
+                assert!(stderr.contains(part), "{stderr}");
+            }
+            assert!(!calls.exists());
+            if label == "wrong-version" {
+                let outcome = read_outcome(&evidence);
+                assert_eq!(outcome.get("completed").unwrap(), false);
+                assert_eq!(outcome.get("packages").unwrap(), &json!([]));
+            }
+        }
     });
 }
 
@@ -1470,7 +1611,7 @@ fn private_library() -> Fixture {
 pub(crate) fn read_outcome(output: &Path) -> Value {
     let outcome: Value =
         serde_json::from_slice(&fs::read(output.join("compatibility.json")).unwrap()).unwrap();
-    assert_eq!(outcome.get("schema_version").unwrap(), 3);
+    assert_eq!(outcome.get("schema_version").unwrap(), 4);
     outcome
 }
 

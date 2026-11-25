@@ -145,7 +145,7 @@ Each `check-compatibility` invocation uses a new output directory and writes
 The evidence retains checker identity and exact comparison versions. Its linked
 report identifies any anticipated-parent anchor supplying the comparison source.
 
-Compatibility evidence uses schema `3`:
+Compatibility evidence uses schema `4`:
 
 | Field | Meaning |
 | --- | --- |
@@ -159,10 +159,14 @@ Compatibility evidence uses schema `3`:
 Each comparison record contains `name`, `compared`, nullable `baseline_version`,
 and nullable `required_impact`. A compared package uses a published version or its
 anticipated parent's version and final source. An unavailable comparison has
-`compared: false` and no comparison version or required impact.
+`compared: false` and no required impact.
 Unavailable records also contain `not_compared_reason`: `unsupported-proc-macro`
 for a target the checker cannot compare directly, or `no-baseline` for a supported
-target without a comparison version. Compared records omit this field.
+target without a comparison version. Both have a null baseline version.
+`explicit-exclusion` retains the selected baseline version and a caller-supplied
+`exclusion_reason`. The tool checks its exact selected baseline version, but does not
+verify which Cargo targets that baseline provides or convert checker failures to success.
+Compared records omit `not_compared_reason` and `exclusion_reason`.
 Affected macro records include private packages and macro members of affected version
 groups; unrelated unchanged packages need no record.
 An operational failure can leave only earlier completed records; inspect the
@@ -177,6 +181,9 @@ feature-subset effects.
 This includes APIs and behavior supplied through re-exports, which are not fully covered
 by the checker, and macro invocation syntax and generated code. See
 [semantic assessment](../concepts/versions.md#external-api-evidence-is-a-floor).
+
+For a binary-only predecessor, assess the entire added library API together with the existing
+CLI, behavior, format and feature contracts. Adding a library is not automatically patch-safe.
 
 Do not confuse a completed comparison with a passing merge gate:
 `--deny-findings` additionally rejects insufficient increments. Source inputs are checked
