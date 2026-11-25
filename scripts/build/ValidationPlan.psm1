@@ -9,7 +9,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 # Directories are test domains, not independent dependency islands. Shared consumers below
 # supplement the owning directory; unknown script/recipe locations select the full suite.
-$script:ScriptDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility', 'workflow')
+$script:ScriptDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility')
 $script:RecipeDomains = @{
     'just_action_releases.just' = @('release')
     'just_basics.just' = @('build', 'scheduled')
@@ -71,10 +71,7 @@ function Get-ValidationPlan {
             $path -cmatch '^\.github/actions/.+\.ya?ml$' -or
             $path -cin @('.github/actionlint.yaml', '.github/actionlint.yml')) {
             $workflows = $true
-            # Repository-specific relationships supplement actionlint without running unrelated
-            # helper implementations. Ref: .github/workflows/implementation.md#non-cargo-change-planning.
-            $null = $domains.Add('workflow')
-            Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint and relationship tests."
+            Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint."
         }
         if ($path -cmatch '^infra/azure-bench-history-(prod|test)/' -or
             $path -cmatch '^packages/cargo-bench-history/src/azure_bundle/' -or
@@ -100,6 +97,11 @@ function Get-ValidationPlan {
         }
         if ($path -cmatch '^scripts/') {
             if ($path -cmatch '\.ps(m1|d1|1)$') { $analysis = $true }
+            if ($path -cmatch '^scripts/workflow/') {
+                $domains.Add('build') | Out-Null
+                Write-Verbose "'$path' owns workflow publication behavior; selecting build helper tests."
+                continue
+            }
             if ($path -cmatch '^scripts/([^/]+)/' -and $Matches[1] -cin $script:ScriptDomains) {
                 $null = $domains.Add($Matches[1])
                 Write-Verbose "'$path' belongs to script domain '$($Matches[1])'; selecting that domain's tests."
@@ -151,11 +153,11 @@ function Get-ValidationPlan {
         }
     }
 
-    # Scheduled execution and workflow relationship tests import build helpers. Other
-    # cross-domain sharing goes through setup/utility and selects all above.
+    # Scheduled execution tests import build helpers. Other cross-domain sharing goes through
+    # setup/utility and selects all above.
     if ($domains.Contains('build')) {
-        $domains.UnionWith([string[]] @('scheduled', 'workflow'))
-        Write-Verbose 'Scheduled and workflow tests consume build helpers; including those dependent domains.'
+        $null = $domains.Add('scheduled')
+        Write-Verbose 'Scheduled tests consume build helpers; including that dependent domain.'
     }
     Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, Bicep=$bicep, release binary smoke=$releaseBinarySmoke, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
     return @{

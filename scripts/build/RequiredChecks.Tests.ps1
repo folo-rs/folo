@@ -173,7 +173,7 @@ Describe 'Planned tooling results' {
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
-    It 'requires path-selected <_> tests and rejects lost domains' -ForEach @('book', 'workflow') {
+    It 'requires path-selected <_> tests and rejects lost domains' -ForEach @('analyzer', 'book') {
         $plan.script_domains = @($_)
         { Assert-PlannedResult } | Should -Throw
         $needs.prepare.outputs.script_domains = ConvertTo-Json -InputObject @($_) -Compress

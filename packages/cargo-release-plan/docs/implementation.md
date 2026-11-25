@@ -186,12 +186,22 @@ checks of a retained candidate.
 Each compatibility invocation builds its report and target selection from admitted
 source with current provenance. An adjacent report never supplies admission or targets.
 
+Compatibility owns explicit comparison exceptions from the CLI. It validates the selected
+package, baseline version and reason without changing target selection, offline classification
+or semantic-decision vocabulary. Exceptions retain baseline acquisition and input admission;
+only nonexcluded packages require checker identity, compiler cache, canary and execution.
+Registry comparisons retain `--baseline-version`; anticipated-parent comparisons retain
+`--baseline-root`. Evidence distinguishes caller-reviewed exclusions from checker output and
+automatic capability exclusions. Operational failures never become explicit exceptions.
+
 The supported checker performs default full Cargo metadata on its current workspace,
 then resolves and builds separate placeholder projects. Compatibility first admits that
 same default resolution with `cargo metadata --locked`, under the checker environment.
 This prevents an absent or stale assessed lockfile from being installed by the checker's
 metadata invocation. It does not freeze registry observations or the checker's own
 placeholder resolutions. The identical-source canary owns a separate temporary fixture.
+All-excluded runs skip this checker-specific preflight while retaining selected-input
+and exact-baseline admission.
 Read-only stages rely on the stable-input command contract rather than repeating
 source fingerprints around each subprocess. Original admission accepts captured initial
 or completely applied state; candidate admission checks captured final state and supplies

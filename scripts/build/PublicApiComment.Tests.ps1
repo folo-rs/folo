@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot 'PublicApiComment.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..\workflow\PublicApiComment.psm1') -Force
 
     function Write-PublicApiArtifact {
         param(
@@ -86,7 +86,8 @@ Describe 'Public API comment rendering' {
             head_sha = ('a' * 40)
             packages = @()
         }
-        $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId 123 -RunAttempt 1
+        $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId 123 -RunAttempt 1 `
+            -Conclusion success
 
         $body | Should -Match 'No public API changes\.'
         $body | Should -Match '<!-- folo-public-api-diff:v1 -->'
@@ -104,10 +105,43 @@ Describe 'Public API comment rendering' {
                 }
             )
         }
-        $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId 123 -RunAttempt 2
+        $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId 123 -RunAttempt 2 `
+            -Conclusion success
 
         $body | Should -Match '(?m)^`````text$'
         $body | Should -Match '/actions/runs/123/attempts/2'
+    }
+
+    It 'bounds oversized fallback scope and retains incomplete generation status' {
+        $artifact = @{
+            repository = 'example/repository'
+            head_sha = ('a' * 40)
+            packages = @(
+                @{ name = 'changed'; status = 'changed'; output = 'a' * 500 }
+                @{ name = 'broken'; status = 'error'; output = 'failed' }
+            )
+        }
+        $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId 123 -RunAttempt 1 `
+            -Conclusion success -MaximumBytes 100
+
+        $body | Should -Match 'Changed packages: 1'
+        $body | Should -Match 'Incomplete packages: 1'
+        $body | Should -Not -Match '``changed``|``broken``'
+        [Text.Encoding]::UTF8.GetByteCount($body) | Should -BeLessThan 1000
+    }
+
+    It 'qualifies a valid report from an unsuccessful producer' {
+        $artifact = @{
+            repository = 'example/repository'
+            head_sha = ('a' * 40)
+            packages = @()
+        }
+        $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId 123 -RunAttempt 1 `
+            -Conclusion failure
+
+        $body | Should -Match 'No public API changes\.'
+        $body | Should -Match 'concluded with `failure`'
+        $body | Should -Match 'not authoritative'
     }
 }
 
@@ -137,7 +171,11 @@ Describe 'Public API comment reconciliation' {
 
     It 'updates the single existing marker comment' {
         Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment {
-            @(@{ id = 9; body = "$script:marker`nold" })
+            @(@{
+                id = 9
+                body = "$script:marker`nold"
+                user = @{ login = 'github-actions[bot]' }
+            })
         }
         $body = "$script:marker`n## Public API diff"
         $script:publishedBody = $body
@@ -152,8 +190,16 @@ Describe 'Public API comment reconciliation' {
     It 'rejects duplicate marker ownership' {
         Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment {
             @(
-                @{ id = 8; body = "$script:marker`nfirst" }
-                @{ id = 9; body = "$script:marker`nsecond" }
+                @{
+                    id = 8
+                    body = "$script:marker`nfirst"
+                    user = @{ login = 'github-actions[bot]' }
+                }
+                @{
+                    id = 9
+                    body = "$script:marker`nsecond"
+                    user = @{ login = 'github-actions[bot]' }
+                }
             )
         }
 
@@ -163,6 +209,24 @@ Describe 'Public API comment reconciliation' {
         } | Should -Throw '*multiple public API diff marker comments*'
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
             -ParameterFilter { $Method -in @('POST', 'PATCH') }
+    }
+
+    It 'ignores a user-authored copy of the marker' {
+        Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment {
+            @(@{
+                id = 9
+                body = "$script:marker`nquoted by a reviewer"
+                user = @{ login = 'contributor' }
+            })
+        }
+        $body = "$script:marker`n## Public API diff"
+        $script:publishedBody = $body
+
+        Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
+            -HeadSha $script:sha -Body $body
+
+        Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
+            -ParameterFilter { $Method -eq 'POST' -and $Endpoint -eq 'repos/example/repository/issues/42/comments' }
     }
 
     It 'refuses to write an older run over a newer head' {
@@ -195,16 +259,39 @@ Describe 'Public API GitHub collection' {
 
         @($comments.id) | Should -Be @(1, 2, 3)
     }
+
+    It 'resolves a fork pull request from trusted head identity' {
+        Mock gh -ModuleName PublicApiComment {
+            $global:LASTEXITCODE = 0
+            return @'
+[[{
+  "number": 42,
+  "state": "open",
+  "head": {
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "repo": { "full_name": "contributor/repository" }
+  }
+}]]
+'@
+        }
+
+        $number = Resolve-PublicApiPullRequest -Repository example/repository `
+            -HeadRepository contributor/repository -HeadBranch feature -HeadSha ('a' * 40)
+
+        $number | Should -Be 42
+    }
 }
 
 Describe 'Public API publication failure handling' {
     It 'publishes a useful failure comment for an unsuccessful producer without an artifact' {
+        Mock Resolve-PublicApiPullRequest -ModuleName PublicApiComment { 42 }
         Mock Publish-PublicApiPullRequestComment -ModuleName PublicApiComment {
             @{ id = 7; body = $Body }
         }
 
         Publish-PublicApiComment -ArtifactPath (Join-Path $TestDrive 'missing.json') `
-            -Repository example/repository -PullRequest 42 -RunId 123 -RunAttempt 1 `
+            -Repository example/repository -HeadRepository example/fork -HeadBranch feature `
+            -RunId 123 -RunAttempt 1 `
             -HeadSha ('a' * 40) -Conclusion failure
 
         Should -Invoke Publish-PublicApiPullRequestComment -ModuleName PublicApiComment -Times 1 -Exactly `
@@ -212,6 +299,7 @@ Describe 'Public API publication failure handling' {
     }
 
     It 'fails the publisher after reporting an artifact contract violation' {
+        Mock Resolve-PublicApiPullRequest -ModuleName PublicApiComment { 42 }
         $path = Join-Path $TestDrive 'invalid.json'
         '{' | Set-Content -LiteralPath $path -Encoding utf8
         Mock Publish-PublicApiPullRequestComment -ModuleName PublicApiComment {
@@ -220,7 +308,8 @@ Describe 'Public API publication failure handling' {
 
         {
             Publish-PublicApiComment -ArtifactPath $path `
-                -Repository example/repository -PullRequest 42 -RunId 123 -RunAttempt 1 `
+                -Repository example/repository -HeadRepository example/fork -HeadBranch feature `
+                -RunId 123 -RunAttempt 1 `
                 -HeadSha ('a' * 40) -Conclusion success
         } | Should -Throw
         Should -Invoke Publish-PublicApiPullRequestComment -ModuleName PublicApiComment -Times 1 -Exactly `
@@ -228,11 +317,13 @@ Describe 'Public API publication failure handling' {
     }
 
     It 'rejects malformed workflow identity before contacting GitHub' {
+        Mock Resolve-PublicApiPullRequest -ModuleName PublicApiComment { 42 }
         Mock Publish-PublicApiPullRequestComment -ModuleName PublicApiComment {}
 
         {
             Publish-PublicApiComment -ArtifactPath (Join-Path $TestDrive 'missing.json') `
-                -Repository 'owner/repository malicious' -PullRequest 42 -RunId 123 -RunAttempt 1 `
+                -Repository 'owner/repository malicious' -HeadRepository example/fork -HeadBranch feature `
+                -RunId 123 -RunAttempt 1 `
                 -HeadSha ('a' * 40) -Conclusion failure
         } | Should -Throw '*owner/name identifier*'
         Should -Invoke Publish-PublicApiPullRequestComment -ModuleName PublicApiComment -Times 0 -Exactly
