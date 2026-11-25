@@ -472,13 +472,10 @@ Setup, shared utility, planner and fan-in changes select every tooling check. Fi
 their owning tests. Analyzer configuration and script files select static analysis independently
 of the Pester scope.
 
-Workflow/action YAML and actionlint configuration select workflow lint and the `workflow`
-domain, whose `scripts/workflow/ValidationWorkflow.Tests.ps1` checks repository-specific
-relationships. They do not select the `build` or `scheduled` domains merely because a workflow
-calls those helpers. Separate rules still select benchmark helper tests, the hosted benchmark
-canary and release-packaging smoke for their explicit inputs. Changes to build helpers select
-the dependent `scheduled` and `workflow` domains; the relationship suite imports the build
-fan-in helper.
+Workflow/action YAML and actionlint configuration select workflow lint. They do not select the
+`build` or `scheduled` domains merely because a workflow calls those helpers. Separate rules still
+select benchmark helper tests, the hosted benchmark canary and release-packaging smoke for their
+explicit inputs. Changes to build helpers select the dependent `scheduled` domain.
 
 Internal documentation and agent guidance, including `docs/scheduled-validation.md`,
 `.github/skills/scheduled-*/SKILL.md` and
