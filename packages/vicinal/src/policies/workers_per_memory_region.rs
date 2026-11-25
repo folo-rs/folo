@@ -2,11 +2,6 @@ use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
-#[cfg(test)]
-use many_cpus::{ProcessorId, ProcessorSet};
-
-#[cfg(test)]
-use crate::WorkerGroup;
 use crate::{BuiltInWorkerPolicy, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext};
 
 /// Creates a fixed worker count for each submitting memory region.
@@ -38,23 +33,6 @@ impl WorkerPolicy for WorkersPerMemoryRegion {
     #[inline]
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         WorkerPolicy::select_group(&self.policy, groups)
-    }
-
-    #[cfg(test)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    fn membership_snapshot(&self) -> Vec<(ProcessorId, bool)> {
-        WorkerPolicy::membership_snapshot(&self.policy)
-    }
-
-    #[cfg(test)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    fn install_test_group(
-        &self,
-        groups: &WorkerGroups,
-        group: &WorkerGroup,
-        affinity: &ProcessorSet,
-    ) {
-        WorkerPolicy::install_test_group(&self.policy, groups, group, affinity);
     }
 }
 

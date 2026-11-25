@@ -9,7 +9,8 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{
-    CountOnDrop, NoopTask, PanickingPayload, TestPolicy, hardware, pin, regional_hardware,
+    CountOnDrop, NoopTask, PanickingPayload, TestBuiltInPolicy, TestPolicy, hardware, pin,
+    regional_hardware,
 };
 use crate::{BuiltInWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
 
@@ -91,9 +92,10 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
     with_watchdog(|| {
         let hardware = regional_hardware();
         pin(&hardware, 0);
+        let policy = TestBuiltInPolicy::new(BuiltInWorkerPolicy::per_memory_region(nz!(1)));
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(policy.clone())
             .build();
         let target = hardware.with_current_processor(|processor| SubmissionTarget {
             group: GroupId::MemoryRegion(processor.memory_region_id()),
@@ -101,6 +103,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         });
         let state = pool.inner.registry.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
+        policy.install_test_group(&pool.inner.groups, &hardware, target);
 
         pool.inner
             .enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {

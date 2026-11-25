@@ -119,27 +119,7 @@ impl PoolInner {
             .take_all()
             .unwrap_or_else(|| panic!("no eligible processors for worker group {destination:?}"));
         let group = self.registry.group(destination);
-        self.policy
-            .install_test_group(&self.registry, &group, &affinity);
         group.start_workers_with(destination, &affinity, count, handles, spawn, pin);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn install_test_group(&self, target: SubmissionTarget) {
-        let affinity = self
-            .hardware
-            .all_processors()
-            .to_builder()
-            .filter(|processor| {
-                processor.id() == target.processor && target.group.contains(processor)
-            })
-            .take_all()
-            .unwrap_or_else(|| {
-                panic!("no eligible processors for worker group {:?}", target.group)
-            });
-        let group = self.registry.group(target.group);
-        self.policy
-            .install_test_group(&self.registry, &group, &affinity);
     }
 
     /// Terminates admission for a submission-owned failure and resumes its original payload.

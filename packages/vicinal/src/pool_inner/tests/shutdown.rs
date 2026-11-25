@@ -1,6 +1,7 @@
 //! Clean shutdown, retained schedulers and resource-release boundaries.
 
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
@@ -11,8 +12,8 @@ use std::thread;
 
 use futures::FutureExt;
 use futures::executor::block_on;
-use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
+use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
@@ -391,8 +392,16 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
         assert!(state.urgent_queue.lock().unwrap().is_empty());
         assert_eq!(inner.runtime.active_workers(), 0);
         assert_eq!(
-            inner.policy.membership_snapshot(),
-            [(0, true), (1, false), (3, false)]
+            state
+                .affinity
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(Processor::id)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0])
         );
     });
 }

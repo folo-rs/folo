@@ -76,24 +76,6 @@ pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// retain a [`WorkerGroup`] can use [`WorkerGroup::queue_len`] to observe existing
     /// backlog, but selection runs before the incoming task is added to that queue.
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId;
-
-    #[cfg(test)]
-    #[doc(hidden)]
-    /// Returns a test snapshot of built-in-policy processor membership.
-    fn membership_snapshot(&self) -> Vec<(ProcessorId, bool)> {
-        Vec::new()
-    }
-
-    #[cfg(test)]
-    #[doc(hidden)]
-    /// Installs an internally constructed group into a built-in policy's route.
-    fn install_test_group(
-        &self,
-        _groups: &WorkerGroups,
-        _group: &WorkerGroup,
-        _affinity: &ProcessorSet,
-    ) {
-    }
 }
 
 /// Final pool configuration made available while a policy is prepared.
@@ -228,6 +210,14 @@ impl BuiltInWorkerPolicy {
         self.count
     }
 
+    #[cfg(test)]
+    pub(crate) fn install_test_group(&self, group: &WorkerGroup, affinity: &ProcessorSet) {
+        self.prepared
+            .as_ref()
+            .expect("the builder prepares a policy before installation")
+            .install_test_group(group, self.kind, affinity);
+    }
+
     fn new(kind: PolicyKind, count: NonZero<u32>) -> Self {
         Self {
             kind,
@@ -259,27 +249,6 @@ impl WorkerPolicy for BuiltInWorkerPolicy {
             .as_ref()
             .expect("the builder prepares a policy before scheduling")
             .select_group(groups, self.count)
-    }
-
-    #[cfg(test)]
-    fn membership_snapshot(&self) -> Vec<(ProcessorId, bool)> {
-        self.prepared
-            .as_ref()
-            .expect("the builder prepares a policy before inspection")
-            .membership_snapshot()
-    }
-
-    #[cfg(test)]
-    fn install_test_group(
-        &self,
-        _groups: &WorkerGroups,
-        group: &WorkerGroup,
-        affinity: &ProcessorSet,
-    ) {
-        self.prepared
-            .as_ref()
-            .expect("the builder prepares a policy before installation")
-            .install_test_group(group, self.kind, affinity);
     }
 }
 
@@ -580,17 +549,6 @@ impl PreparedPolicy {
         match self {
             Self::MemoryRegion { members, .. } | Self::System { members, .. } => members,
             Self::Processor { .. } => panic!("processor-local policy has no shared membership"),
-        }
-    }
-
-    #[cfg(test)]
-    fn membership_snapshot(&self) -> Vec<(ProcessorId, bool)> {
-        match self {
-            Self::MemoryRegion { members, .. } | Self::System { members, .. } => members
-                .iter()
-                .map(|(id, member)| (*id, member.load(Ordering::Acquire)))
-                .collect(),
-            Self::Processor { .. } => Vec::new(),
         }
     }
 

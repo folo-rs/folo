@@ -12,7 +12,9 @@ use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use testing::with_watchdog;
 
-use super::helpers::{NoopTask, affinity, hardware, pin, probe, regional_hardware};
+use super::helpers::{
+    NoopTask, TestBuiltInPolicy, affinity, hardware, pin, probe, regional_hardware,
+};
 use crate::pool_inner::refresh_affinity;
 use crate::{BuiltInWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
 
@@ -33,12 +35,6 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
             .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .build();
 
-        let membership = || pool.inner.policy.membership_snapshot();
-
-        assert_eq!(
-            membership(),
-            [(3, false), (7, false), (11, false), (19, false)]
-        );
         assert_eq!(pool.inner.registry.initialized().count(), 0);
         let initial_worker_count = pool.inner.runtime.active_workers();
         assert_eq!(initial_worker_count, 0);
@@ -62,25 +58,23 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
             );
         }
 
-        assert_eq!(
-            membership(),
-            [(3, true), (7, true), (11, false), (19, true)]
-        );
         let region = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
         assert_eq!(region.affinity_revision.load(Ordering::Acquire), 2);
+        assert_eq!(
+            region
+                .affinity
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(Processor::id)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([7, 19])
+        );
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 2);
     });
-}
-
-/// Processor-local pools do not need the shared worker submission-membership table.
-#[test]
-fn processor_policy_does_not_allocate_submission_membership() {
-    let pool = Pool::builder()
-        .hardware(hardware())
-        .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
-        .build();
-    assert!(pool.inner.policy.membership_snapshot().is_empty());
 }
 
 /// All submission APIs share a fixed count across regions without admitting unused processors.
@@ -130,15 +124,16 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 4);
         assert_eq!(state.get_tasks_spawned(), 4);
         assert_eq!(
-            pool.inner.policy.membership_snapshot(),
-            [
-                (0, true),
-                (1, false),
-                (2, false),
-                (3, true),
-                (7, true),
-                (8, true)
-            ]
+            state
+                .affinity
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(Processor::id)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0, 3, 7, 8])
         );
 
         // Repeating a known submitter must not publish another revision.
@@ -467,18 +462,19 @@ fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32)
     with_watchdog(move || {
         let hardware = regional_hardware();
         pin(&hardware, 0);
+        let policy = TestBuiltInPolicy::new(policy);
         let target = policy.destination(&hardware);
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(policy)
+            .worker_policy(policy.clone())
             .build();
+        policy.install_test_group(&pool.inner.groups, &hardware, target);
 
         let state = pool.inner.registry.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
 
         // Finish initial admission before starting threads, leaving no earlier notifications
         // that could satisfy the registered waits whose expansion wakeup is under test.
-        pool.inner.install_test_group(target);
         pool.inner
             .enqueue_with(target, state, init_task(slot, NoopTask), false, |_| {});
         let initial_revision = state.affinity_revision.load(Ordering::Acquire);
@@ -537,7 +533,7 @@ fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32)
         }
 
         pin(&hardware, next_processor);
-        let task = pool.scheduler().spawn(|| {});
+        let task = pool.scheduler().spawn(|| ());
         first_resume.send(()).unwrap();
         second_resume.send(()).unwrap();
         block_on(task).unwrap();
@@ -559,15 +555,20 @@ fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32)
 fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     let hardware = regional_hardware();
     pin(&hardware, 0);
+    let policy = TestBuiltInPolicy::new(BuiltInWorkerPolicy::per_memory_region(nz!(1)));
     let pool = Pool::builder()
-        .hardware(hardware)
-        .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+        .hardware(hardware.clone())
+        .worker_policy(policy.clone())
         .build();
     let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
-    pool.inner.install_test_group(SubmissionTarget {
-        group: GroupId::MemoryRegion(2),
-        processor: 0,
-    });
+    policy.install_test_group(
+        &pool.inner.groups,
+        &hardware,
+        SubmissionTarget {
+            group: GroupId::MemoryRegion(2),
+            processor: 0,
+        },
+    );
 
     // Drive admission with no threads so listener notifications are directly observable.
     state.startup.set(Ok(())).unwrap();

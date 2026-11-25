@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::panic::resume_unwind;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::spawn;
 
 use futures::FutureExt;
@@ -12,9 +12,57 @@ use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
 use crate::{
-    ErasedTaskHandle, Scheduler, VicinalTask, WorkerGroup, WorkerGroupId, WorkerGroupState,
-    WorkerGroups, WorkerPolicy, WorkerPolicyContext, init_task,
+    BuiltInWorkerPolicy, ErasedTaskHandle, Scheduler, SubmissionTarget, VicinalTask, WorkerGroup,
+    WorkerGroupId, WorkerGroupState, WorkerGroups, WorkerPolicy, WorkerPolicyContext, init_task,
 };
+
+/// Retains the concrete built-in policy for white-box startup tests.
+#[derive(Clone, Debug)]
+pub(crate) struct TestBuiltInPolicy {
+    policy: Arc<Mutex<BuiltInWorkerPolicy>>,
+}
+
+impl TestBuiltInPolicy {
+    pub(crate) fn new(policy: BuiltInWorkerPolicy) -> Self {
+        Self {
+            policy: Arc::new(Mutex::new(policy)),
+        }
+    }
+
+    pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
+        self.policy.lock().unwrap().destination(hardware)
+    }
+
+    pub(crate) fn install_test_group(
+        &self,
+        groups: &WorkerGroups,
+        hardware: &SystemHardware,
+        target: SubmissionTarget,
+    ) {
+        let affinity = hardware
+            .all_processors()
+            .to_builder()
+            .filter(|processor| {
+                processor.id() == target.processor && target.group.contains(processor)
+            })
+            .take_all()
+            .expect("a test target has one eligible processor");
+        self.policy
+            .lock()
+            .unwrap()
+            .install_test_group(&groups.group(target.group), &affinity);
+    }
+}
+
+impl WorkerPolicy for TestBuiltInPolicy {
+    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+        self.policy.lock().unwrap().prepare(context);
+    }
+
+    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
+        self.policy.lock().unwrap().select_group(groups)
+    }
+}
 
 /// Provides one stable group for tests unrelated to built-in topology routing.
 #[derive(Clone, Debug)]
