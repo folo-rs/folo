@@ -99,9 +99,12 @@ impl WorkerGroups {
 
         // IDs contain stable addresses owned by this registry, and group removal is not
         // supported. The returned reference cannot outlive the registry borrow.
-        // SAFETY: IDs can only be created for this registry-owned Arc allocation. Checked owner
-        // allocation above prevents reuse, groups are never removed or relocated, and the
-        // returned reference is tied to this registry.
+        // SAFETY: The pointer is aligned to an initialized WorkerGroupState in this
+        // registry-owned Arc allocation. Owner validation prevents cross-registry reuse, groups
+        // are never removed or relocated, and the registry borrow outlives the shared reference.
+        // The registry and every WorkerGroup retain the state only through Arc. Their mutable
+        // fields use interior synchronization, so no &mut WorkerGroupState exists while this &T
+        // is borrowed.
         unsafe { group.state.as_ref() }
     }
 
