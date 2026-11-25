@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot 'ArtifactVisibility.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..\workflow\ArtifactVisibility.psm1') -Force
 
     function Get-TestArtifact(
         [long] $Id = 1,
