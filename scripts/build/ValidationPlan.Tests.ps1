@@ -166,7 +166,8 @@ Describe 'Caller integration selection' {
         '.github/fixtures/bench-history-caller/packages/workflow_canary/benches/synthetic.rs',
         '.github/workflows/benchmark-action-canary.yml', '.github/workflows/standard-validation.yml',
         '.github/workflows/deep-validation.yml', 'scripts/bench-history/CallerFixture.psm1',
-        'scripts/bench-history/Assert-BackfillCanary.ps1', '.github/actions/bench-history-setup/action.yml',
+        'scripts/bench-history/Assert-BackfillCanary.ps1',
+        'scripts/workflow/ArtifactVisibility.psm1', '.github/actions/bench-history-setup/action.yml',
         '.cargo/config.toml', 'delta.toml', 'constants.env', 'justfiles/just_quality.just',
         '.github/actions/setup-environment/action.yml', 'scripts/build/Delta.psm1', '.gitignore'
     ) {
@@ -303,7 +304,7 @@ Describe 'Explicit Pester scope' {
         @($paths | ForEach-Object { [System.IO.Path]::GetFullPath($_) }) |
             Should -Be @((Join-Path (Split-Path $PSScriptRoot -Parent) 'workflow'))
         $tests = @(Get-ChildItem -LiteralPath $paths -Filter '*.Tests.ps1' -Recurse -File)
-        $tests.Name | Should -Be @('ValidationWorkflow.Tests.ps1')
+        $tests.Name | Should -Be @('ArtifactVisibility.Tests.ps1', 'ValidationWorkflow.Tests.ps1')
     }
 
     It 'resolves and deduplicates selected suites and rejects unknown or empty domains' {
