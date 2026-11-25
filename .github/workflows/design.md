@@ -147,6 +147,9 @@ marker at the start of a `github-actions[bot]` comment identifies publisher owne
 user-authored marker copies are ignored, while duplicate publisher ownership fails
 visibly. Older runs cannot replace results for a newer head, and ambiguous writes are
 reconciled by reading the owned comment back instead of blindly retrying.
+The publisher uses non-cancelling `queue: max` concurrency so newer runs preserve an
+already-pending publication instead of replacing it. Serialized stale runs can still
+fail their live-head check, but the pending report for the current head remains queued.
 
 Producer failure or cancellation leaves a useful failure notice for the affected head.
 A valid artifact from an unsuccessful run retains its available diff but qualifies it as

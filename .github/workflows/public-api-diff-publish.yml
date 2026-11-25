@@ -8,8 +8,11 @@ on:
       - completed
 
 concurrency:
+  # Retain every completed-producer notification in arrival order. GitHub replaces an
+  # existing pending run without `queue: max`, which can discard the live head's report.
   group: public-api-diff-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   actions: read

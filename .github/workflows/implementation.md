@@ -507,6 +507,9 @@ does not replace declared dependencies.
 `public-api-diff-publish.yml` listens only for completed `Public API diff` workflow
 runs. Its job accepts only pull-request runs, checks out
 `github.event.repository.default_branch` and requests Actions-read plus Pull-requests-write.
+Its head-repository/branch concurrency group uses `queue: max`; completed producer runs
+retain one pending publication while another publisher is running, rather than allowing
+GitHub to replace the pending notification.
 It downloads the run's `public-api-diff-<run>-<attempt>` artifact into the runner temp
 directory and never checks out or executes the producer head.
 
