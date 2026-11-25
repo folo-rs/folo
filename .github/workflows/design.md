@@ -132,28 +132,31 @@ Clippy already guarantees.
 
 ## Public API diff publication
 
-Public API review uses a sticky PR comment generated after every PR head or base update. The
-unprivileged `pull_request` producer may compile and inspect PR source but receives no
-write permission. It publishes a bounded, structured JSON artifact and never invokes
-GitHub comment APIs. It compares affected publishable libraries from the event's merge
-base to its frozen head and records package-level failures rather than hiding them.
+Public API review uses a sticky PR comment generated for each submitted PR and refreshed by
+PR lifecycle events. The unprivileged `pull_request` producer may compile and inspect PR
+source but receives no write permission. It publishes a bounded, structured JSON artifact
+and never invokes GitHub comment APIs. It compares affected publishable libraries from the
+event's merge base to its frozen head and records package-level failures rather than hiding
+them.
 
 A separate `workflow_run` workflow is the only comment writer. GitHub runs it from the
 trusted default branch, not from the completed run's head. Before writing, its PowerShell
 publisher resolves the unique open PR from the completed run's head repository, branch
 and SHA, which also covers fork runs whose `workflow_run.pull_requests` array is empty.
 It validates the artifact schema and workflow identity, verifies the live PR still has
-the completed run's head and base SHAs, and renders only validated fields and tool output. A hidden
+the completed run's head and effective merge base, and renders only validated fields and tool output.
+A base-tip change alone does not invalidate a report when the merge base is unchanged. A hidden
 marker at the start of a `github-actions[bot]` comment identifies publisher ownership;
 user-authored marker copies are ignored, while duplicate publisher ownership fails
-visibly. Older runs cannot replace results for a newer head or base, and ambiguous writes are
+visibly. Older runs cannot replace a newer report, and failures without a verifiable comparison
+cannot replace a newer or unidentifiable report. Ambiguous writes are
 reconciled by reading the owned comment back instead of blindly retrying.
 
 Producer failure or cancellation leaves a useful failure notice for the affected head.
 A valid artifact from an unsuccessful run retains its available diff but qualifies it as
-non-authoritative. A successful producer that omits or invalidates its artifact fails the
-publisher after posting the contract diagnostic, keeping the trust boundary visible in
-Actions checks. Oversized diffs link to the complete workflow artifact and retain bounded
+non-authoritative. A producer that omits or invalidates its artifact fails the publisher;
+it posts a diagnostic only when doing so cannot overwrite a newer or unidentifiable result.
+Oversized diffs link to the complete workflow artifact and retain bounded
 changed/incomplete package counts instead of exceeding GitHub's comment-body limit.
 
 ## Selective validation

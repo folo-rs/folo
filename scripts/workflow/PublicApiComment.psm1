@@ -421,15 +421,15 @@ function Resolve-PublicApiPullRequest {
 }
 
 function Assert-PublicApiLiveHead {
-    # A completed run can become stale while its publisher waits. Never let an older run replace
-    # the comment for the current PR head.
+    # A completed run can become stale while its publisher waits. Compare the effective merge
+    # base, not the base tip, so unrelated target-branch commits do not invalidate this diff.
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)][string] $Repository,
         [Parameter(Mandatory)][long] $PullRequest,
         [Parameter(Mandatory)][string] $HeadSha,
-        [Parameter(Mandatory)][AllowEmptyString()][string] $BaseSha
+        [Parameter(Mandatory)][AllowEmptyString()][string] $MergeBaseSha
     )
 
     $pull = Invoke-PublicApiGitHubJson "repos/$Repository/pulls/$PullRequest"
@@ -439,18 +439,77 @@ function Assert-PublicApiLiveHead {
         $pull.head.sha -cne $HeadSha) {
         throw "Pull request $Repository#$PullRequest has advanced beyond workflow head $HeadSha."
     }
-    if (-not [string]::IsNullOrWhiteSpace($BaseSha)) {
-        $liveBaseSha = if ($pull -is [hashtable] -and $pull.ContainsKey('base') -and
-            $pull.base -is [hashtable] -and $pull.base.ContainsKey('sha')) {
-            $pull.base.sha
+    if (-not [string]::IsNullOrWhiteSpace($MergeBaseSha)) {
+        $liveBaseSha = if ($pull.base -is [hashtable]) { $pull.base.sha } else { $null }
+        if ($liveBaseSha -isnot [string] -or
+            $liveBaseSha -notmatch '^[0-9a-f]{40}([0-9a-f]{24})?$') {
+            throw "Pull request $Repository#$PullRequest has no valid live base SHA."
+        }
+        $comparison = Invoke-PublicApiGitHubJson `
+            "repos/$Repository/compare/$liveBaseSha...$HeadSha"
+        $liveMergeBaseSha = if ($comparison -is [hashtable] -and
+            $comparison.merge_base_commit -is [hashtable]) {
+            $comparison.merge_base_commit.sha
         } else {
             $null
         }
-        if ($liveBaseSha -isnot [string] -or $liveBaseSha -cne $BaseSha) {
-            throw "Pull request $Repository#$PullRequest has changed base since workflow base $BaseSha."
+        if ($liveMergeBaseSha -isnot [string] -or $liveMergeBaseSha -cne $MergeBaseSha) {
+            throw "Pull request $Repository#$PullRequest has changed merge base since " +
+                "workflow comparison $MergeBaseSha."
         }
     }
     return $pull
+}
+
+function Get-PublicApiCommentRunIdentity {
+    # The generated header precedes every artifact-controlled line, so its run link identifies
+    # the trusted publisher execution even when the report body contains arbitrary tool output.
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param([Parameter(Mandatory)][hashtable] $Comment)
+
+    if ($Comment.body -isnot [string]) { return $null }
+    $lines = @($Comment.body -split "`r?`n", 5)
+    if ($lines.Count -lt 4 -or
+        $lines[0] -cne $script:PublicApiCommentMarker -or
+        $lines[1] -cne '## Public API diff' -or
+        $lines[2] -cne '') {
+        return $null
+    }
+
+    if (-not $lines[3].StartsWith('Generated for commit ', [StringComparison]::Ordinal)) {
+        return $null
+    }
+    $pattern = '\[Public API diff\]\(https://github\.com/[^/]+/[^/]+/actions/runs/'
+    $pattern += '(?<run>[1-9][0-9]*)(?:/attempts/(?<attempt>[1-9][0-9]*))?\)\.$'
+    $match = [regex]::Match($lines[3], $pattern)
+    if (-not $match.Success) { return $null }
+
+    [long]$runId = 0
+    [long]$runAttempt = 1
+    if (-not [long]::TryParse($match.Groups['run'].Value, [ref]$runId) -or
+        ($match.Groups['attempt'].Success -and
+            -not [long]::TryParse($match.Groups['attempt'].Value, [ref]$runAttempt))) {
+        return $null
+    }
+    return @{ run_id = $runId; run_attempt = $runAttempt }
+}
+
+function Test-PublicApiCommentIsNewer {
+    # Workflow run IDs increase over time; attempts order reruns of one workflow execution.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][hashtable] $Comment,
+        [Parameter(Mandatory)][long] $RunId,
+        [Parameter(Mandatory)][long] $RunAttempt
+    )
+
+    $identity = Get-PublicApiCommentRunIdentity -Comment $Comment
+    return $null -ne $identity -and (
+        $identity.run_id -gt $RunId -or
+        ($identity.run_id -eq $RunId -and $identity.run_attempt -gt $RunAttempt)
+    )
 }
 
 function Test-PublicApiOwnedComment {
@@ -475,7 +534,9 @@ function Publish-PublicApiPullRequestComment {
         [Parameter(Mandatory)][string] $Repository,
         [Parameter(Mandatory)][long] $PullRequest,
         [Parameter(Mandatory)][string] $HeadSha,
-        [Parameter(Mandatory)][AllowEmptyString()][string] $BaseSha,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $MergeBaseSha,
+        [Parameter(Mandatory)][long] $RunId,
+        [Parameter(Mandatory)][long] $RunAttempt,
         [Parameter(Mandatory)][string] $Body
     )
 
@@ -483,7 +544,7 @@ function Publish-PublicApiPullRequestComment {
         throw 'Public API comment exceeds the GitHub body limit.'
     }
     $null = Assert-PublicApiLiveHead -Repository $Repository -PullRequest $PullRequest `
-        -HeadSha $HeadSha -BaseSha $BaseSha
+        -HeadSha $HeadSha -MergeBaseSha $MergeBaseSha
     $endpoint = "repos/$Repository/issues/$PullRequest/comments"
     $comments = @(Get-PublicApiGitHubCollection $endpoint)
     $owned = @($comments | Where-Object { Test-PublicApiOwnedComment $_ })
@@ -495,6 +556,13 @@ function Publish-PublicApiPullRequestComment {
     $writeEndpoint = $endpoint
     if ($owned.Count -eq 1) {
         $existing = $owned[0]
+        if (Test-PublicApiCommentIsNewer -Comment $existing -RunId $RunId -RunAttempt $RunAttempt) {
+            return $existing
+        }
+        if ([string]::IsNullOrWhiteSpace($MergeBaseSha) -and
+            $null -eq (Get-PublicApiCommentRunIdentity -Comment $existing)) {
+            return $existing
+        }
         if ($existing.body -ceq $Body) { return $existing }
         $method = 'PATCH'
         $writeEndpoint = "repos/$Repository/issues/comments/$($existing.id)"
@@ -503,7 +571,7 @@ function Publish-PublicApiPullRequestComment {
     # Revalidate immediately before mutation because a newer producer run can advance the PR
     # while this publisher reads the comment collection.
     $null = Assert-PublicApiLiveHead -Repository $Repository -PullRequest $PullRequest `
-        -HeadSha $HeadSha -BaseSha $BaseSha
+        -HeadSha $HeadSha -MergeBaseSha $MergeBaseSha
     try {
         return Invoke-PublicApiGitHubJson -Endpoint $writeEndpoint -Method $method -Body @{ body = $Body }
     } catch {
@@ -547,7 +615,7 @@ function Publish-PublicApiComment {
         throw 'Workflow conclusion must be a GitHub conclusion identifier.'
     }
     $contractFailure = $null
-    $baseSha = ''
+    $mergeBaseSha = ''
     if (-not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) {
         if ($Conclusion -eq 'success') {
             $contractFailure = [InvalidOperationException]::new(
@@ -559,11 +627,11 @@ function Publish-PublicApiComment {
         try {
             $artifact = Read-PublicApiArtifact -Path $ArtifactPath -Repository $Repository `
                 -PullRequest $pullRequest -RunId $RunId -RunAttempt $RunAttempt -HeadSha $HeadSha
-            $baseSha = $artifact.base_sha
+            $mergeBaseSha = $artifact.merge_base_sha
             $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId $RunId `
                 -RunAttempt $RunAttempt -Conclusion $Conclusion
         } catch {
-            $baseSha = ''
+            $mergeBaseSha = ''
             $contractFailure = $_.Exception
             $body = ConvertTo-PublicApiFailureComment -Repository $Repository -RunId $RunId `
                 -RunAttempt $RunAttempt -HeadSha $HeadSha -Detail 'The producer artifact was invalid.'
@@ -571,7 +639,7 @@ function Publish-PublicApiComment {
     }
 
     $comment = Publish-PublicApiPullRequestComment -Repository $Repository -PullRequest $pullRequest `
-        -HeadSha $HeadSha -BaseSha $baseSha -Body $body
+        -HeadSha $HeadSha -MergeBaseSha $mergeBaseSha -RunId $RunId -RunAttempt $RunAttempt -Body $body
     if ($null -ne $contractFailure) { throw $contractFailure }
     return $comment
 }

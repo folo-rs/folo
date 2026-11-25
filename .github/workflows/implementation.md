@@ -533,12 +533,15 @@ with `name`, `status` (`changed`, `unchanged` or `error`) and bounded `output`. 
 publisher does not depend on `workflow_run.pull_requests`, which may be empty for forks.
 It resolves the one open PR whose live head repository and SHA match the completed run.
 The module compares artifact identity fields with immutable workflow inputs and rejects
-malformed text, duplicate package names, stale heads or bases and duplicate publisher-owned marker
-comments. A marker qualifies as owned only when the body begins with it and
+malformed text, duplicate package names, stale heads or effective merge bases and duplicate
+publisher-owned marker comments. A base-tip change does not invalidate a report when its merge
+base is unchanged. A marker qualifies as owned only when the body begins with it and
 `github-actions[bot]` authored the comment. Tool output is rendered through a code fence
 longer than any backtick sequence it contains. Runs larger than the comment limit retain
 bounded scope counts and links to the authoritative artifact; unsuccessful producers keep
-any valid evidence but qualify it as non-authoritative.
+any valid evidence but qualify it as non-authoritative. The generated run link establishes
+report order so an older run cannot replace a newer result. When a producer has no verifiable
+comparison, the publisher preserves any newer or unidentifiable owned result.
 
 `PublishPublicApiComment.ps1` is the thin workflow entry point. GitHub CLI owns the
 paginated API reads and single create/update write; a failed ambiguous write is

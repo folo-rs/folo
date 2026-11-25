@@ -154,10 +154,14 @@ Describe 'Public API comment reconciliation' {
         $script:marker = '<!-- folo-public-api-diff:v1 -->'
         $script:sha = 'a' * 40
         $script:baseSha = 'b' * 40
+        $script:mergeBaseSha = 'd' * 40
         Mock Invoke-PublicApiGitHubJson -ModuleName PublicApiComment {
             param($Endpoint)
             if ($Endpoint -like '*/pulls/*') {
                 return @{ head = @{ sha = $script:sha }; base = @{ sha = $script:baseSha } }
+            }
+            if ($Endpoint -like '*/compare/*') {
+                return @{ merge_base_commit = @{ sha = $script:mergeBaseSha } }
             }
             return @{ id = 7; body = $script:publishedBody }
         }
@@ -169,7 +173,8 @@ Describe 'Public API comment reconciliation' {
         $script:publishedBody = $body
 
         $comment = Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-            -HeadSha $script:sha -BaseSha $script:baseSha -Body $body
+            -HeadSha $script:sha -MergeBaseSha $script:mergeBaseSha `
+            -RunId 123 -RunAttempt 1 -Body $body
 
         $comment.body | Should -BeExactly $body
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
@@ -188,7 +193,8 @@ Describe 'Public API comment reconciliation' {
         $script:publishedBody = $body
 
         Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-            -HeadSha $script:sha -BaseSha $script:baseSha -Body $body
+            -HeadSha $script:sha -MergeBaseSha $script:mergeBaseSha `
+            -RunId 123 -RunAttempt 1 -Body $body
 
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
             -ParameterFilter { $Method -eq 'PATCH' -and $Endpoint -eq 'repos/example/repository/issues/comments/9' }
@@ -212,7 +218,8 @@ Describe 'Public API comment reconciliation' {
 
         {
             Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-                -HeadSha $script:sha -BaseSha $script:baseSha -Body "$script:marker`nreplacement"
+                -HeadSha $script:sha -MergeBaseSha $script:mergeBaseSha -RunId 123 -RunAttempt 1 `
+                -Body "$script:marker`nreplacement"
         } | Should -Throw '*multiple public API diff marker comments*'
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
             -ParameterFilter { $Method -in @('POST', 'PATCH') }
@@ -230,7 +237,8 @@ Describe 'Public API comment reconciliation' {
         $script:publishedBody = $body
 
         Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-            -HeadSha $script:sha -BaseSha $script:baseSha -Body $body
+            -HeadSha $script:sha -MergeBaseSha $script:mergeBaseSha `
+            -RunId 123 -RunAttempt 1 -Body $body
 
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
             -ParameterFilter { $Method -eq 'POST' -and $Endpoint -eq 'repos/example/repository/issues/42/comments' }
@@ -246,24 +254,75 @@ Describe 'Public API comment reconciliation' {
 
         {
             Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-                -HeadSha $script:sha -BaseSha $script:baseSha -Body "$script:marker`nold"
+                -HeadSha $script:sha -MergeBaseSha $script:mergeBaseSha -RunId 123 -RunAttempt 1 `
+                -Body "$script:marker`nold"
         } | Should -Throw '*advanced beyond workflow head*'
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
             -ParameterFilter { $Method -in @('POST', 'PATCH') }
     }
 
-    It 'refuses to publish a comparison after the PR base changes' {
-        Mock Invoke-PublicApiGitHubJson -ModuleName PublicApiComment {
-            param($Endpoint)
-            $null = $Endpoint
-            return @{ head = @{ sha = $script:sha }; base = @{ sha = ('c' * 40) } }
-        }
+    It 'publishes a current comparison after an unrelated base-tip change' {
+        $script:baseSha = 'c' * 40
+        Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment { @() }
+
+        Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
+            -HeadSha $script:sha -MergeBaseSha $script:mergeBaseSha -RunId 123 -RunAttempt 1 `
+            -Body "$script:marker`ncurrent"
+
+        Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
+            -ParameterFilter { $Method -eq 'POST' -and $Endpoint -eq 'repos/example/repository/issues/42/comments' }
+    }
+
+    It 'rejects a comparison after the effective merge base changes' {
+        $script:mergeBaseSha = 'e' * 40
         Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment { @() }
 
         {
             Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-                -HeadSha $script:sha -BaseSha $script:baseSha -Body "$script:marker`nold"
-        } | Should -Throw '*changed base since workflow base*'
+                -HeadSha $script:sha -MergeBaseSha ('d' * 40) -RunId 123 -RunAttempt 1 `
+                -Body "$script:marker`nold"
+        } | Should -Throw '*changed merge base since workflow comparison*'
+        Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
+            -ParameterFilter { $Method -in @('POST', 'PATCH') }
+    }
+
+    It 'preserves a newer report when an older run has no valid comparison' {
+        $newerBody = ConvertTo-PublicApiComment -Artifact @{
+            repository = 'example/repository'
+            head_sha = $script:sha
+            packages = @()
+        } -RunId 200 -RunAttempt 1 -Conclusion success
+        Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment {
+            @(@{
+                id = 9
+                body = $newerBody
+                user = @{ login = 'github-actions[bot]' }
+            })
+        }
+
+        $comment = Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
+            -HeadSha $script:sha -MergeBaseSha '' -RunId 123 -RunAttempt 1 `
+            -Body "$script:marker`nolder failure"
+
+        $comment.body | Should -BeExactly $newerBody
+        Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
+            -ParameterFilter { $Method -in @('POST', 'PATCH') }
+    }
+
+    It 'preserves an existing report with unknown run identity when a failed run has no artifact' {
+        Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment {
+            @(@{
+                id = 9
+                body = "$script:marker`nlegacy comment"
+                user = @{ login = 'github-actions[bot]' }
+            })
+        }
+
+        $comment = Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
+            -HeadSha $script:sha -MergeBaseSha '' -RunId 123 -RunAttempt 1 `
+            -Body "$script:marker`nnew failure"
+
+        $comment.body | Should -BeExactly "$script:marker`nlegacy comment"
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
             -ParameterFilter { $Method -in @('POST', 'PATCH') }
     }
