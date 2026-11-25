@@ -2,7 +2,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Protects the trust boundary and idempotence of the workflow_run public-API comment
-# publisher: schema mismatches, stale heads and duplicate markers must never be written.
+# publisher: schema mismatches, stale comparisons and duplicate markers must never be written.
 # Ref: ../../.github/workflows/design.md#public-api-diff-publication.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -18,6 +18,7 @@ BeforeAll {
                 repository = 'example/repository'
                 pull_request = 42
                 head_sha = ('a' * 40)
+                base_sha = ('c' * 40)
                 merge_base_sha = ('b' * 40)
                 run_id = 123
                 run_attempt = 1
@@ -38,6 +39,7 @@ Describe 'Public API artifact validation' {
             -HeadSha ('a' * 40)
 
         $artifact.repository | Should -BeExactly 'example/repository'
+        $artifact.base_sha | Should -Be ('c' * 40)
         @($artifact.packages).Count | Should -Be 0
     }
 
@@ -47,6 +49,7 @@ Describe 'Public API artifact validation' {
             repository = 'example/other'
             pull_request = 42
             head_sha = ('a' * 40)
+            base_sha = ('c' * 40)
             merge_base_sha = ('b' * 40)
             run_id = 123
             run_attempt = 1
@@ -66,6 +69,7 @@ Describe 'Public API artifact validation' {
             repository = 'example/repository'
             pull_request = 42
             head_sha = ('a' * 40)
+            base_sha = ('c' * 40)
             merge_base_sha = ('b' * 40)
             run_id = 123
             run_attempt = 1
@@ -149,9 +153,12 @@ Describe 'Public API comment reconciliation' {
     BeforeEach {
         $script:marker = '<!-- folo-public-api-diff:v1 -->'
         $script:sha = 'a' * 40
+        $script:baseSha = 'b' * 40
         Mock Invoke-PublicApiGitHubJson -ModuleName PublicApiComment {
             param($Endpoint)
-            if ($Endpoint -like '*/pulls/*') { return @{ head = @{ sha = $script:sha } } }
+            if ($Endpoint -like '*/pulls/*') {
+                return @{ head = @{ sha = $script:sha }; base = @{ sha = $script:baseSha } }
+            }
             return @{ id = 7; body = $script:publishedBody }
         }
     }
@@ -162,7 +169,7 @@ Describe 'Public API comment reconciliation' {
         $script:publishedBody = $body
 
         $comment = Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-            -HeadSha $script:sha -Body $body
+            -HeadSha $script:sha -BaseSha $script:baseSha -Body $body
 
         $comment.body | Should -BeExactly $body
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
@@ -181,7 +188,7 @@ Describe 'Public API comment reconciliation' {
         $script:publishedBody = $body
 
         Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-            -HeadSha $script:sha -Body $body
+            -HeadSha $script:sha -BaseSha $script:baseSha -Body $body
 
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
             -ParameterFilter { $Method -eq 'PATCH' -and $Endpoint -eq 'repos/example/repository/issues/comments/9' }
@@ -205,7 +212,7 @@ Describe 'Public API comment reconciliation' {
 
         {
             Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-                -HeadSha $script:sha -Body "$script:marker`nreplacement"
+                -HeadSha $script:sha -BaseSha $script:baseSha -Body "$script:marker`nreplacement"
         } | Should -Throw '*multiple public API diff marker comments*'
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
             -ParameterFilter { $Method -in @('POST', 'PATCH') }
@@ -223,7 +230,7 @@ Describe 'Public API comment reconciliation' {
         $script:publishedBody = $body
 
         Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-            -HeadSha $script:sha -Body $body
+            -HeadSha $script:sha -BaseSha $script:baseSha -Body $body
 
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 1 -Exactly `
             -ParameterFilter { $Method -eq 'POST' -and $Endpoint -eq 'repos/example/repository/issues/42/comments' }
@@ -239,8 +246,24 @@ Describe 'Public API comment reconciliation' {
 
         {
             Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
-                -HeadSha $script:sha -Body "$script:marker`nold"
+                -HeadSha $script:sha -BaseSha $script:baseSha -Body "$script:marker`nold"
         } | Should -Throw '*advanced beyond workflow head*'
+        Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
+            -ParameterFilter { $Method -in @('POST', 'PATCH') }
+    }
+
+    It 'refuses to publish a comparison after the PR base changes' {
+        Mock Invoke-PublicApiGitHubJson -ModuleName PublicApiComment {
+            param($Endpoint)
+            $null = $Endpoint
+            return @{ head = @{ sha = $script:sha }; base = @{ sha = ('c' * 40) } }
+        }
+        Mock Get-PublicApiGitHubCollection -ModuleName PublicApiComment { @() }
+
+        {
+            Publish-PublicApiPullRequestComment -Repository example/repository -PullRequest 42 `
+                -HeadSha $script:sha -BaseSha $script:baseSha -Body "$script:marker`nold"
+        } | Should -Throw '*changed base since workflow base*'
         Should -Invoke Invoke-PublicApiGitHubJson -ModuleName PublicApiComment -Times 0 -Exactly `
             -ParameterFilter { $Method -in @('POST', 'PATCH') }
     }

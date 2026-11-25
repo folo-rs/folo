@@ -26,20 +26,18 @@ function Get-PublicApiDeltaConfig {
     return [regex]::Replace($Config, $pattern, "remote_branch = `"$MergeBaseSha`"")
 }
 
-function Select-PublicApiPackage {
-    # Cargo metadata supplies current workspace membership, publication policy and target kinds.
+function Get-PublicApiLibraryName {
+    # Cargo metadata supplies workspace membership, publication policy and target kinds for one revision.
     [CmdletBinding()]
+    [OutputType([string[]])]
     param(
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Affected,
         [Parameter(Mandatory)][hashtable] $Metadata
     )
 
     $members = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($id in $Metadata.workspace_members) { $null = $members.Add($id) }
-    $affectedNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($name in $Affected) { $null = $affectedNames.Add($name) }
     foreach ($package in $Metadata.packages) {
-        if ($members.Contains($package.id) -and $affectedNames.Contains($package.name) -and
+        if ($members.Contains($package.id) -and
             ($null -eq $package.publish -or $package.publish.Count -gt 0) -and
             @($package.targets | Where-Object {
                 @($_.kind | Where-Object { $_ -in @('lib', 'rlib', 'dylib', 'cdylib', 'staticlib', 'proc-macro') }).Count -gt 0
@@ -49,20 +47,49 @@ function Select-PublicApiPackage {
     }
 }
 
-function ConvertTo-PublicApiAddedDiff {
-    # A library created by the PR has no old API to build. Present its head API as additions
-    # so the report uses the same visible diff format as cargo-public-api's commit comparison.
+function Select-PublicApiPackage {
+    # Public API scope includes publishable libraries on either side of the merge-base comparison.
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Affected,
+        [Parameter(Mandatory)][hashtable] $Metadata,
+        [Parameter(Mandatory)][hashtable] $BaselineMetadata
+    )
+
+    $eligible = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($name in @(Get-PublicApiLibraryName -Metadata $Metadata) +
+            @(Get-PublicApiLibraryName -Metadata $BaselineMetadata)) {
+        $null = $eligible.Add($name)
+    }
+
+    $selected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($name in $Affected) {
+        if ($eligible.Contains($name) -and $selected.Add($name)) { $name }
+    }
+}
+
+function ConvertTo-PublicApiOneSidedDiff {
+    # A library target present at only one revision is compared with an empty API on the other side.
     [CmdletBinding()]
     [OutputType([string])]
-    param([Parameter(Mandatory)][AllowEmptyString()][string] $ApiOutput)
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $ApiOutput,
+        [Parameter(Mandatory)][ValidateSet('Added', 'Removed')][string] $Direction
+    )
 
     $items = @($ApiOutput -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($items.Count -eq 0) { $items = @('(none)') }
-    else { $items = @($items | ForEach-Object { "+$_" }) }
+    else {
+        $prefix = if ($Direction -eq 'Added') { '+' } else { '-' }
+        $items = @($items | ForEach-Object { "$prefix$_" })
+    }
+    $addedItems = if ($Direction -eq 'Added') { $items } else { @('(none)') }
+    $removedItems = if ($Direction -eq 'Removed') { $items } else { @('(none)') }
     return @(
         'Removed items from the public API'
         '================================='
-        '(none)'
+        $removedItems
         ''
         'Changed items in the public API'
         '==============================='
@@ -70,7 +97,7 @@ function ConvertTo-PublicApiAddedDiff {
         ''
         'Added items to the public API'
         '============================='
-        $items
+        $addedItems
     ) -join "`n"
 }
 
@@ -118,6 +145,7 @@ function Get-PublicApiReport {
         [Parameter(Mandatory)][string] $Repository,
         [Parameter(Mandatory)][long] $PullRequest,
         [Parameter(Mandatory)][string] $HeadSha,
+        [Parameter(Mandatory)][string] $BaseSha,
         [Parameter(Mandatory)][string] $MergeBaseSha,
         [Parameter(Mandatory)][long] $RunId,
         [Parameter(Mandatory)][long] $RunAttempt,
@@ -142,6 +170,7 @@ function Get-PublicApiReport {
         repository = $Repository
         pull_request = $PullRequest
         head_sha = $HeadSha
+        base_sha = $BaseSha
         merge_base_sha = $MergeBaseSha
         run_id = $RunId
         run_attempt = $RunAttempt
@@ -150,4 +179,5 @@ function Get-PublicApiReport {
 }
 
 Export-ModuleMember -Function Get-PublicApiDeltaConfig, Select-PublicApiPackage, `
-    ConvertTo-PublicApiAddedDiff, ConvertTo-PublicApiPackageReport, Get-PublicApiReport
+    Get-PublicApiLibraryName, ConvertTo-PublicApiOneSidedDiff, `
+    ConvertTo-PublicApiPackageReport, Get-PublicApiReport

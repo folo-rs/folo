@@ -132,7 +132,7 @@ Clippy already guarantees.
 
 ## Public API diff publication
 
-Public API review uses a sticky PR comment generated after every head update. The
+Public API review uses a sticky PR comment generated after every PR head or base update. The
 unprivileged `pull_request` producer may compile and inspect PR source but receives no
 write permission. It publishes a bounded, structured JSON artifact and never invokes
 GitHub comment APIs. It compares affected publishable libraries from the event's merge
@@ -143,10 +143,10 @@ trusted default branch, not from the completed run's head. Before writing, its P
 publisher resolves the unique open PR from the completed run's head repository, branch
 and SHA, which also covers fork runs whose `workflow_run.pull_requests` array is empty.
 It validates the artifact schema and workflow identity, verifies the live PR still has
-the completed run's head SHA, and renders only validated fields and tool output. A hidden
+the completed run's head and base SHAs, and renders only validated fields and tool output. A hidden
 marker at the start of a `github-actions[bot]` comment identifies publisher ownership;
 user-authored marker copies are ignored, while duplicate publisher ownership fails
-visibly. Older runs cannot replace results for a newer head, and ambiguous writes are
+visibly. Older runs cannot replace results for a newer head or base, and ambiguous writes are
 reconciled by reading the owned comment back instead of blindly retrying.
 
 Producer failure or cancellation leaves a useful failure notice for the affected head.

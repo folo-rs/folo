@@ -110,7 +110,7 @@ function Read-PublicApiArtifact {
             throw "Public API artifact field '$($field.Name)' does not match the workflow event."
         }
     }
-    foreach ($field in @('head_sha', 'merge_base_sha')) {
+    foreach ($field in @('head_sha', 'base_sha', 'merge_base_sha')) {
         $sha = Get-PublicApiJsonProperty $artifact $field
         if ($sha -isnot [string] -or $sha -notmatch '^[0-9a-f]{40}([0-9a-f]{24})?$') {
             throw "Public API artifact field '$field' must be a full Git object ID."
@@ -167,6 +167,7 @@ function Read-PublicApiArtifact {
         repository = $artifact.repository
         pull_request = [long]$artifact.pull_request
         head_sha = $artifact.head_sha
+        base_sha = $artifact.base_sha
         merge_base_sha = $artifact.merge_base_sha
         run_id = [long]$artifact.run_id
         run_attempt = [long]$artifact.run_attempt
@@ -427,7 +428,8 @@ function Assert-PublicApiLiveHead {
     param(
         [Parameter(Mandatory)][string] $Repository,
         [Parameter(Mandatory)][long] $PullRequest,
-        [Parameter(Mandatory)][string] $HeadSha
+        [Parameter(Mandatory)][string] $HeadSha,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $BaseSha
     )
 
     $pull = Invoke-PublicApiGitHubJson "repos/$Repository/pulls/$PullRequest"
@@ -436,6 +438,17 @@ function Assert-PublicApiLiveHead {
         $pull.head.sha -isnot [string] -or
         $pull.head.sha -cne $HeadSha) {
         throw "Pull request $Repository#$PullRequest has advanced beyond workflow head $HeadSha."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($BaseSha)) {
+        $liveBaseSha = if ($pull -is [hashtable] -and $pull.ContainsKey('base') -and
+            $pull.base -is [hashtable] -and $pull.base.ContainsKey('sha')) {
+            $pull.base.sha
+        } else {
+            $null
+        }
+        if ($liveBaseSha -isnot [string] -or $liveBaseSha -cne $BaseSha) {
+            throw "Pull request $Repository#$PullRequest has changed base since workflow base $BaseSha."
+        }
     }
     return $pull
 }
@@ -462,13 +475,15 @@ function Publish-PublicApiPullRequestComment {
         [Parameter(Mandatory)][string] $Repository,
         [Parameter(Mandatory)][long] $PullRequest,
         [Parameter(Mandatory)][string] $HeadSha,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $BaseSha,
         [Parameter(Mandatory)][string] $Body
     )
 
     if ([Text.Encoding]::UTF8.GetByteCount($Body) -gt 65536) {
         throw 'Public API comment exceeds the GitHub body limit.'
     }
-    $null = Assert-PublicApiLiveHead -Repository $Repository -PullRequest $PullRequest -HeadSha $HeadSha
+    $null = Assert-PublicApiLiveHead -Repository $Repository -PullRequest $PullRequest `
+        -HeadSha $HeadSha -BaseSha $BaseSha
     $endpoint = "repos/$Repository/issues/$PullRequest/comments"
     $comments = @(Get-PublicApiGitHubCollection $endpoint)
     $owned = @($comments | Where-Object { Test-PublicApiOwnedComment $_ })
@@ -487,7 +502,8 @@ function Publish-PublicApiPullRequestComment {
 
     # Revalidate immediately before mutation because a newer producer run can advance the PR
     # while this publisher reads the comment collection.
-    $null = Assert-PublicApiLiveHead -Repository $Repository -PullRequest $PullRequest -HeadSha $HeadSha
+    $null = Assert-PublicApiLiveHead -Repository $Repository -PullRequest $PullRequest `
+        -HeadSha $HeadSha -BaseSha $BaseSha
     try {
         return Invoke-PublicApiGitHubJson -Endpoint $writeEndpoint -Method $method -Body @{ body = $Body }
     } catch {
@@ -531,6 +547,7 @@ function Publish-PublicApiComment {
         throw 'Workflow conclusion must be a GitHub conclusion identifier.'
     }
     $contractFailure = $null
+    $baseSha = ''
     if (-not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) {
         if ($Conclusion -eq 'success') {
             $contractFailure = [InvalidOperationException]::new(
@@ -542,9 +559,11 @@ function Publish-PublicApiComment {
         try {
             $artifact = Read-PublicApiArtifact -Path $ArtifactPath -Repository $Repository `
                 -PullRequest $pullRequest -RunId $RunId -RunAttempt $RunAttempt -HeadSha $HeadSha
+            $baseSha = $artifact.base_sha
             $body = ConvertTo-PublicApiComment -Artifact $artifact -RunId $RunId `
                 -RunAttempt $RunAttempt -Conclusion $Conclusion
         } catch {
+            $baseSha = ''
             $contractFailure = $_.Exception
             $body = ConvertTo-PublicApiFailureComment -Repository $Repository -RunId $RunId `
                 -RunAttempt $RunAttempt -HeadSha $HeadSha -Detail 'The producer artifact was invalid.'
@@ -552,7 +571,7 @@ function Publish-PublicApiComment {
     }
 
     $comment = Publish-PublicApiPullRequestComment -Repository $Repository -PullRequest $pullRequest `
-        -HeadSha $HeadSha -Body $body
+        -HeadSha $HeadSha -BaseSha $baseSha -Body $body
     if ($null -ne $contractFailure) { throw $contractFailure }
     return $comment
 }

@@ -507,12 +507,13 @@ does not replace declared dependencies.
 `public-api-diff.yml` checks out the immutable PR head with full history and uses the
 event base and head to compute the merge base. The existing Cargo delta analysis selects
 affected packages against that commit. Live Cargo metadata limits the report to publishable
-workspace libraries. A temporary delta configuration binds its Git change detection to the
-same commit as the baseline snapshot, independent of the default `origin/main` setting.
-The pinned nightly and `cargo-public-api` compare each selected
-package with simplified output and all features. A library absent from merge-base metadata
-is represented by its head API as additions. Its in-place commit checkouts require
-temporary output files outside the checkout. The producer continues after package errors,
+workspace libraries present at either comparison revision. A temporary delta configuration
+binds its Git change detection to the same commit as the baseline snapshot, independent of the
+default `origin/main` setting.
+The pinned nightly and `cargo-public-api` compare each selected package with simplified output
+and all features. A library target present at only one revision is represented against an empty
+API, preserving additions and removals. Its in-place commit checkouts require temporary output
+files outside the checkout. The producer continues after package errors,
 writes their reports and then fails the job. Setup and selection failures leave no report,
 which the publisher reports as an incomplete run.
 
@@ -527,12 +528,12 @@ It downloads the run's `public-api-diff-<run>-<attempt>` artifact into the runne
 directory and never checks out or executes the producer head.
 
 `scripts/workflow/PublicApiComment.psm1` owns the version-one artifact contract:
-repository, PR number, base/head SHAs, workflow run/attempt and one package list entry
+repository, PR number, base, merge-base and head SHAs, workflow run/attempt and one package list entry
 with `name`, `status` (`changed`, `unchanged` or `error`) and bounded `output`. The
 publisher does not depend on `workflow_run.pull_requests`, which may be empty for forks.
 It resolves the one open PR whose live head repository and SHA match the completed run.
 The module compares artifact identity fields with immutable workflow inputs and rejects
-malformed text, duplicate package names, stale heads and duplicate publisher-owned marker
+malformed text, duplicate package names, stale heads or bases and duplicate publisher-owned marker
 comments. A marker qualifies as owned only when the body begins with it and
 `github-actions[bot]` authored the comment. Tool output is rendered through a code fence
 longer than any backtick sequence it contains. Runs larger than the comment limit retain
