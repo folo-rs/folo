@@ -65,8 +65,8 @@ impl WorkerPolicy for TestPolicy {
         self.state.started.get_or_init(|| {
             for _ in 0..self.state.workers {
                 _ = spawn({
-                    let group = group.clone();
-                    move || group.execute_worker()
+                    let worker = group.add_worker();
+                    move || worker.run()
                 });
             }
         });

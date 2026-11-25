@@ -94,14 +94,14 @@ impl WorkerPolicy for GrowingPolicy {
 /// Transfers one group handle into a policy-owned OS thread and records its startup.
 fn spawn_worker(group: &WorkerGroup, worker_count: &Arc<AtomicUsize>) {
     _ = spawn({
-        let group = group.clone();
+        let worker = group.add_worker();
         let worker_count = Arc::clone(worker_count);
         move || {
             // The task handshakes below establish that this increment happened before the
             // assertion. Release/Acquire only describes the counter update; it is not a
             // substitute for waiting for the worker to enter task execution.
             worker_count.fetch_add(1, Ordering::Release);
-            group.execute_worker();
+            worker.run();
         }
     });
 }

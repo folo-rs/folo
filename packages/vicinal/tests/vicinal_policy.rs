@@ -26,8 +26,8 @@ impl WorkerPolicy for LazySingleGroupPolicy {
         *self.group.get_or_init(|| {
             let group = groups.add();
             _ = spawn({
-                let group = group.clone();
-                move || group.execute_worker()
+                let worker = group.add_worker();
+                move || worker.run()
             });
             group.id()
         })

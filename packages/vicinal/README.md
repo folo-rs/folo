@@ -122,9 +122,11 @@ every selected processor, represented region or the system, according to the wor
 It waits for initial affinity and every configured `thread_init` callback to complete.
 Initialization effects are visible when construction returns, and the calling thread's affinity
 remains unchanged. For a custom policy, eager readiness means whichever workers its
-`prepare()` implementation creates and initializes before returning. Startup failure stops and
-waits for participating workers before construction panics; it does not join policy-owned
-operating-system threads after they leave `execute_worker()`.
+`prepare()` implementation reserves with `WorkerGroup::add_worker()`. The builder waits
+after `prepare()` returns for each reserved `Worker::run()` to finish initialization.
+Dropping a reserved worker cancels that preparation target. Startup failure stops and waits
+for participating workers before construction panics; it does not join policy-owned
+operating-system threads after they leave `Worker::run()`.
 
 Callbacks run once per worker, may overlap, and must preserve affinity. They must not wait for
 same-pool work, shut down their pool or depend on eager construction returning. In particular,

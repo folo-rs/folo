@@ -97,12 +97,12 @@ the route's `OnceLock` serializes group creation, thread spawning and initial pi
 That lock is absent from established routes. Shared-policy membership uses sorted atomic
 membership entries so a known submitting processor takes no registry lock and builds no mask.
 
-Built-in policy pinning happens in each newly spawned thread before `execute_worker()`.
-`execute_worker()` registers participation, runs initialization and then enters the worker
-loop. Lazy startup waits for affinity readiness but not for `thread_init` completion. Eager
-startup waits for initialization too. A custom policy owns its operating-system thread handles,
-but every thread that reaches `execute_worker()` participates in the pool's shutdown barrier
-and failure state.
+Built-in policy pinning happens in each newly spawned thread before `Worker::run()`.
+`Worker::run()` registers participation, runs initialization and then enters the worker
+loop. Lazy startup waits for affinity readiness but not for `thread_init` completion.
+Preparation-time worker reservations wait for initialization too. A custom policy owns
+its operating-system thread handles, but every thread that reaches `Worker::run()`
+participates in the pool's shutdown barrier and failure state.
 
 ### Worker initialization
 
@@ -135,11 +135,13 @@ singletons for distinct processors, distinct regions or one system mask accordin
 Repeated entries never create additional worker groups. Group masks and shared
 membership are seeded before spawning; no synthetic task is allocated, counted or executed.
 
-Lazy and eager startup share `WorkerGroup::execute_worker()`. Eager preparation first seeds every
-selected group's mask, then starts every selected group and waits for all callback acknowledgments.
-Callbacks can overlap across groups. A callback panic records the first payload in `PoolRuntime`,
-stops all groups and wakes the preparation waiter. The builder then retrieves the payload after
-participating workers leave.
+Lazy and eager startup share `Worker::run()`. Eager preparation first seeds every selected
+group's mask, then reserves and starts every selected worker. The builder closes the preparation
+reservation phase after `WorkerPolicy::prepare()` returns and waits for every outstanding
+reservation to reach the end of `thread_init()`. Dropping a reserved `Worker` cancels that
+expectation. Callbacks can overlap across groups. A callback panic records the first payload in
+`PoolRuntime`, stops all groups and wakes the preparation waiter. The builder then retrieves the
+payload after participating workers leave.
 
 Workers enter the loop with their already-applied initial affinity revision. The first real
 submission from a selected processor therefore needs neither startup nor membership expansion.

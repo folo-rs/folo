@@ -39,14 +39,14 @@ impl WorkerPolicy for GatedSelectionPolicy {
         self.worker_started.get_or_init(|| {
             let group = self.inner.group();
             _ = spawn({
-                let group = group.clone();
+                let worker = group.add_worker();
                 let exited = self.exited.clone();
                 move || {
-                    group.execute_worker();
+                    worker.run();
                     exited.send(()).unwrap();
                 }
             });
-            group.wait_until_initialized(nz!(1_usize));
+            group.wait_for_initialized_workers(nz!(1_usize));
         });
         self.entered.send(()).unwrap();
         self.release.lock().unwrap().recv().unwrap();

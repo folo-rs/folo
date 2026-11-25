@@ -138,8 +138,8 @@ fn shutdown_waits_for_failure_publication_to_finish() {
         );
 
         let worker = spawn({
-            let group = group.clone();
-            move || group.execute_worker()
+            let worker = group.add_worker();
+            move || worker.run()
         });
         initializer_arrival.recv().unwrap();
 

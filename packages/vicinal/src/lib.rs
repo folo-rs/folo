@@ -169,7 +169,7 @@ pub(crate) use worker::*;
 #[cfg(test)]
 pub(crate) use worker_group::WorkerEntry;
 pub(crate) use worker_group::{GroupState, WorkerGroupState};
-pub use worker_group::{WorkerGroup, WorkerGroupId};
+pub use worker_group::{Worker, WorkerGroup, WorkerGroupId};
 pub(crate) use worker_policy::BuiltInWorkerPolicy;
 pub use worker_policy::*;
 

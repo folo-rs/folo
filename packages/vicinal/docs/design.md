@@ -44,13 +44,19 @@ worker groups and name. `select_group()` runs for every submission and returns a
 submission neither clones `WorkerGroups` nor `WorkerGroup`.
 
 A policy may add groups during preparation or selection and may clone a `WorkerGroups`
-handle to add groups later. Adding a worker clones its `WorkerGroup`, moves that clone into
-the new thread and calls the blocking `execute_worker()` method. The policy applies the
-thread's intended affinity before calling `execute_worker()`. Vicinal then owns task
-execution, worker initialization, failure containment and participation through shutdown.
+handle to add groups later. To add a worker, the policy calls `WorkerGroup::add_worker()`,
+moves the returned `Worker` into the new thread, applies the intended affinity and calls
+the blocking `Worker::run()` method. Vicinal then owns task execution, worker initialization,
+failure containment and participation through shutdown.
+
+Every `Worker` created while `prepare()` runs reserves one preparation-time initialization.
+After `prepare()` returns, the builder waits until each reserved worker runs its initialization
+callback. A policy that cannot run a reserved worker drops that value to cancel the reservation.
+Retaining a reserved worker without running or dropping it leaves pool construction waiting.
+Workers created after preparation do not delay pool construction.
 
 A policy may retain a `WorkerGroup` handle and inspect its participating worker count with
-`len()` or its combined urgent/regular backlog with `queue_len()`. These are instantaneous
+`worker_count()` or its combined urgent/regular backlog with `queue_len()`. These are instantaneous
 observations rather than reservations. Selection runs before the incoming task is admitted,
 so `queue_len()` does not include that task. The stand-alone `vicinal_growing_pool` example
 uses this boundary to add a worker whenever a later submission observes existing backlog.
@@ -73,10 +79,10 @@ previous narrower mask. Migration within the permitted mask is allowed even duri
 but is not required. Regional work never moves to another region to obtain an idle worker.
 System workers may move between permitted processors in different memory regions.
 
-Each built-in destination starts its configured worker count once, on first use or during eager
-construction. The default policy starts no workers during construction unless eager selection is
-configured; a custom policy controls its own preparation-time startup. Workers persist until shutdown.
-Shared worker counts are not multiplied
+Each built-in destination starts its configured worker count once, on first use or
+during eager construction. The default policy starts no workers during construction
+unless eager selection is configured; a custom policy controls its own preparation-time
+startup. Workers persist until shutdown. Shared worker counts are not multiplied
 by the number of submitting processors; a system count is also independent of the number
 of submitting regions. Counts must be nonzero but may exceed the
 processor count, supporting blocking workloads.
@@ -87,8 +93,9 @@ processor count, supporting blocking workloads.
 selected policy during `prepare()`. It records the selection without starting workers.
 Repeated calls replace the selection; `build()` uses the final policy, hardware, name
 and initialization callback regardless of setter order. A custom policy decides how its
-eager selection maps to groups. Its preparation must finish the required worker readiness
-before returning.
+eager selection maps to groups. It reserves each eager worker with
+`WorkerGroup::add_worker()` during `prepare()`; the builder waits for those workers after
+the policy returns.
 
 The selection must belong to the pool's hardware instance. The pool validates the complete
 selection before starting workers, including hardware identity rather than only numeric CPU IDs.
@@ -205,4 +212,4 @@ creation and initial affinity setup, panic on the submitting call. A later affin
 refresh failure occurs on a worker, so the triggering submission may already have returned.
 Dropping the pool waits for every participating worker and propagates worker failures
 after cleanup. A custom policy owns the operating-system thread handles, if it needs them,
-while `execute_worker()` supplies the pool's participation and failure boundaries.
+while `Worker::run()` supplies the pool's participation and failure boundaries.

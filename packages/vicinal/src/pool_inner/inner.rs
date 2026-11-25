@@ -57,17 +57,20 @@ impl PoolInner {
         if let Some(processors) = eager {
             validate_eager_processors(hardware, processors);
         }
+        runtime.begin_worker_preparation();
         let result = catch_unwind(AssertUnwindSafe(|| {
             policy.prepare(WorkerPolicyContext::new(
                 hardware, eager, &groups, &pool_name,
             ));
         }));
+        runtime.end_worker_preparation();
 
         if let Err(payload) = result {
             runtime.fail(payload);
             runtime.wait_for_workers();
             runtime.resume_failure();
         }
+        runtime.wait_for_preparation_workers();
         // Custom preparation can return after a participating worker independently records
         // a failure. Construction must propagate that published failure rather than returning
         // an already-poisoned pool.
@@ -153,7 +156,7 @@ impl PoolInner {
     /// Publishes shutdown, contains queue cleanup and waits for all participating workers.
     ///
     /// This owns pool destruction cleanup; policy-owned operating-system threads may perform
-    /// cleanup after leaving `execute_worker()`.
+    /// cleanup after leaving [`Worker::run()`][crate::Worker::run].
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn shutdown_and_wait_for_workers(&self) {
         self.runtime.stop_workers();

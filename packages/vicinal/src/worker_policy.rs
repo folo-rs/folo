@@ -18,8 +18,9 @@ use crate::{GroupId, NEVER_POISONED, SubmissionTarget, WorkerGroup, WorkerGroupI
 /// cloning [`WorkerGroup`] handles. Group creation and worker startup may clone handles,
 /// because those operations occur off the ordinary task-routing path.
 ///
-/// A policy-created thread applies its intended affinity and then calls
-/// [`WorkerGroup::execute_worker`], which blocks until the worker leaves the pool.
+/// A policy reserves a worker with [`WorkerGroup::add_worker`], moves the returned
+/// [`Worker`][crate::Worker] into a thread, applies its intended affinity and calls
+/// [`Worker::run`][crate::Worker::run]. That method blocks until the worker leaves the pool.
 ///
 /// # Example
 ///
@@ -41,8 +42,8 @@ use crate::{GroupId, NEVER_POISONED, SubmissionTarget, WorkerGroup, WorkerGroupI
 ///         *self.group.get_or_init(|| {
 ///             let group = groups.add();
 ///             spawn({
-///                 let group = group.clone();
-///                 move || group.execute_worker()
+///                 let worker = group.add_worker();
+///                 move || worker.run()
 ///             });
 ///             group.id()
 ///         })
@@ -60,12 +61,11 @@ use crate::{GroupId, NEVER_POISONED, SubmissionTarget, WorkerGroup, WorkerGroupI
 pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// Performs one-time initialization using the pool's final configuration.
     ///
-    /// The default implementation does nothing. If [`WorkerPolicyContext::eager`] is
-    /// present, a policy that honors eager construction creates and initializes the
-    /// corresponding workers before returning. The method may clone the supplied
-    /// [`WorkerGroups`] to support later asynchronous group creation. After spawning
-    /// its eager workers, a policy can call [`WorkerGroup::wait_until_initialized`] for
-    /// each group to wait for their initialization callbacks.
+    /// The default implementation does nothing. A policy creates preparation-time workers
+    /// with [`WorkerGroup::add_worker`] and may clone the supplied [`WorkerGroups`] to support
+    /// later asynchronous group creation. The builder counts those reservations and waits
+    /// for each worker to complete its initialization callback after this method returns.
+    /// If the policy cannot run a reserved worker, dropping it cancels that target.
     fn prepare(&mut self, _context: WorkerPolicyContext<'_>) {}
 
     /// Selects the group for one submitted task.
@@ -386,18 +386,8 @@ impl PreparedPolicy {
                 (destination, group, affinity)
             })
             .collect::<Vec<_>>();
-        let workers = groups
-            .iter()
-            .map(|(destination, group, affinity)| {
-                (
-                    group.clone(),
-                    group.start_eager_workers(*destination, affinity, count),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        for (group, expected) in workers {
-            group.wait_for_eager_workers(expected);
+        for (destination, group, affinity) in groups {
+            group.start_eager_workers(destination, &affinity, count);
         }
     }
 

@@ -27,9 +27,10 @@ impl WorkerPolicy for SingleGroupPolicy {
         self.group.set(id).unwrap();
 
         let affinity = context.hardware().processors();
+        let worker = group.add_worker();
         _ = spawn(move || {
             affinity.pin_current_thread_to();
-            group.execute_worker();
+            worker.run();
         });
     }
 
@@ -153,5 +154,5 @@ fn group_and_id_are_copy_clone_safe() {
     let cloned = group.clone();
 
     assert_eq!(id, group.id());
-    assert_eq!(cloned.len(), 0);
+    assert_eq!(cloned.worker_count(), 0);
 }

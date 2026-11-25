@@ -55,7 +55,7 @@ impl PoolRuntime {
             shutdown: AtomicBool::new(false),
             poisoned: AtomicBool::new(false),
             groups: Mutex::new(Vec::new()),
-            workers: Mutex::new(WorkerLifecycle { active: 0 }),
+            workers: Mutex::new(WorkerLifecycle::default()),
             workers_changed: Condvar::new(),
             #[cfg(test)]
             before_worker_wait: OnceLock::new(),
@@ -128,6 +128,64 @@ impl PoolRuntime {
         ControlFlow::Continue(())
     }
 
+    /// Enables builder-owned tracking for workers reserved by policy preparation.
+    pub(crate) fn begin_worker_preparation(&self) {
+        let mut workers = self.workers.lock().expect(NEVER_POISONED);
+        assert!(
+            !workers.preparing,
+            "worker preparation has not begun more than once"
+        );
+        workers.preparing = true;
+    }
+
+    /// Returns whether a worker belongs to the current policy-preparation phase.
+    pub(crate) fn reserve_preparation_worker(&self) -> bool {
+        let mut workers = self.workers.lock().expect(NEVER_POISONED);
+        if !workers.preparing {
+            return false;
+        }
+
+        workers.preparing_workers = workers
+            .preparing_workers
+            .checked_add(1)
+            .expect("worker count cannot exceed addressable memory");
+        true
+    }
+
+    /// Cancels one worker-initialization target without running that worker.
+    pub(crate) fn cancel_preparation_worker(&self) {
+        let mut workers = self.workers.lock().expect(NEVER_POISONED);
+        workers.preparing_workers = workers
+            .preparing_workers
+            .checked_sub(1)
+            .expect("only reserved preparation workers can be cancelled");
+        self.workers_changed.notify_all();
+    }
+
+    /// Completes one tracked preparation worker after its initializer returns.
+    pub(crate) fn initialize_preparation_worker(&self) {
+        let mut workers = self.workers.lock().expect(NEVER_POISONED);
+        workers.preparing_workers = workers
+            .preparing_workers
+            .checked_sub(1)
+            .expect("only reserved preparation workers can initialize");
+        self.workers_changed.notify_all();
+    }
+
+    /// Stops assigning newly reserved workers to the completed preparation phase.
+    pub(crate) fn end_worker_preparation(&self) {
+        self.workers.lock().expect(NEVER_POISONED).preparing = false;
+    }
+
+    /// Waits until policy-preparation workers initialize or the pool fails.
+    #[cfg_attr(test, mutants::skip)]
+    pub(crate) fn wait_for_preparation_workers(&self) {
+        let mut workers = self.workers.lock().expect(NEVER_POISONED);
+        while workers.preparing_workers != 0 && !self.is_poisoned() {
+            workers = self.workers_changed.wait(workers).expect(NEVER_POISONED);
+        }
+    }
+
     // Omitting this decrement can leave the shutdown barrier waiting forever.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn end_worker(&self) {
@@ -154,6 +212,7 @@ impl PoolRuntime {
             #[cfg(test)]
             group.mark_startup_failed_if_started(self.is_poisoned());
         }
+        self.workers_changed.notify_all();
     }
 
     pub(crate) fn stop_admission(&self) {
@@ -302,8 +361,11 @@ enum FailureState {
     Unavailable,
 }
 
+#[derive(Default)]
 struct WorkerLifecycle {
     active: usize,
+    preparing: bool,
+    preparing_workers: usize,
 }
 
 fn drain_queue(queue: &Mutex<std::collections::VecDeque<ErasedTaskHandle>>) {

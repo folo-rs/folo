@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::panic::{catch_unwind, panic_any};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::spawn;
@@ -26,7 +26,8 @@ impl WorkerPolicy for StartupFailurePolicy {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
-        _ = spawn(move || group.execute_worker());
+        let worker = group.add_worker();
+        _ = spawn(move || worker.run());
         self.ready.lock().unwrap().take().unwrap().recv().unwrap();
         panic_any(PreparationFailure);
     }
@@ -53,7 +54,8 @@ impl WorkerPolicy for ReturningFailurePolicy {
                 .is_ok()
         );
         *self.failure.lock().unwrap() = Some(failure);
-        _ = spawn(move || group.execute_worker());
+        let worker = group.add_worker();
+        _ = spawn(move || worker.run());
         self.failure.lock().unwrap().take().unwrap().recv().unwrap();
     }
 
@@ -62,7 +64,7 @@ impl WorkerPolicy for ReturningFailurePolicy {
     }
 }
 
-/// Verifies a custom policy can own eager worker readiness without a built-in route.
+/// Reserves multiple custom workers during preparation for builder-owned readiness tracking.
 struct EagerCustomPolicy {
     group: OnceLock<WorkerGroupId>,
 }
@@ -71,11 +73,29 @@ impl WorkerPolicy for EagerCustomPolicy {
     fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
-        _ = spawn({
-            let group = group.clone();
-            move || group.execute_worker()
-        });
-        group.wait_until_initialized(std::num::NonZero::new(1).unwrap());
+        for _ in 0..2 {
+            _ = spawn({
+                let worker = group.add_worker();
+                move || worker.run()
+            });
+        }
+    }
+
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        *self.group.get().unwrap()
+    }
+}
+
+/// Records whether preparation can abandon a worker that will never run.
+struct DroppedWorkerPolicy {
+    group: OnceLock<WorkerGroupId>,
+}
+
+impl WorkerPolicy for DroppedWorkerPolicy {
+    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+        let group = context.groups().add();
+        self.group.set(group.id()).unwrap();
+        drop(group.add_worker());
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
@@ -110,7 +130,7 @@ fn policy_preparation_failure_stops_started_workers() {
             .unwrap()
             .take()
             .expect("preparation retained the created group for observation");
-        assert!(group.is_empty());
+        assert_eq!(group.worker_count(), 0);
     });
 }
 
@@ -180,9 +200,9 @@ fn custom_policy_rejects_foreign_eager_hardware() {
 }
 
 #[test]
-fn custom_policy_can_wait_for_eager_initialization() {
+fn builder_waits_for_every_custom_preparation_worker() {
     with_watchdog(|| {
-        let initialized = Arc::new(AtomicBool::new(false));
+        let initialized = Arc::new(AtomicUsize::new(0));
         let pool = Pool::builder()
             .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
                 nz!(1),
@@ -193,13 +213,32 @@ fn custom_policy_can_wait_for_eager_initialization() {
             })
             .thread_init({
                 let initialized = Arc::clone(&initialized);
-                // wait_until_initialized below is the construction completion barrier; this
-                // flag is only the initializer observation.
-                move || initialized.store(true, Ordering::Release)
+                // The builder waits for the policy's reserved worker; this flag only observes
+                // that every initializer ran before construction returned.
+                move || {
+                    initialized.fetch_add(1, Ordering::Release);
+                }
             })
             .build();
 
-        assert!(initialized.load(Ordering::Acquire));
+        assert_eq!(initialized.load(Ordering::Acquire), 2);
+        drop(pool);
+    });
+}
+
+#[test]
+fn dropping_a_preparation_worker_cancels_its_readiness_target() {
+    with_watchdog(|| {
+        let pool = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .worker_policy(DroppedWorkerPolicy {
+                group: OnceLock::new(),
+            })
+            .build();
+
         drop(pool);
     });
 }

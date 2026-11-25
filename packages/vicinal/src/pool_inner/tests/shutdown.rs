@@ -366,22 +366,6 @@ fn post_failure_group_registration_does_not_poison_cleanup() {
     assert_eq!(inner.runtime.active_workers(), 0);
 }
 
-/// Readiness waiting cannot report success after clean shutdown prevented initialization.
-#[test]
-fn readiness_wait_rejects_incomplete_clean_shutdown() {
-    let policy = TestPolicy::new(0);
-    let pool = Pool::builder()
-        .hardware(hardware())
-        .worker_policy(policy.clone())
-        .build();
-    let group = policy.group();
-    drop(pool);
-
-    assert_panics(|| {
-        group.wait_until_initialized(std::num::NonZero::new(1).unwrap());
-    });
-}
-
 /// Clean shutdown cannot add system members, retain new work or restart the shared group.
 #[test]
 fn system_post_shutdown_submissions_do_not_expand_or_restart() {
