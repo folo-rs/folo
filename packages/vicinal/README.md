@@ -171,13 +171,14 @@ Dropping a handle does not cancel the task.
 
 ## Shutdown
 
-Dropping the pool cancels queued tasks and waits for executing tasks and workers.
+Dropping the pool cancels queued tasks and waits for workers. A drop performed outside a
+worker waits for every worker; a worker drops the pool without waiting for itself.
 Cancelled joined tasks retain their captures for recovery until the handle, error or recovered
 body is dropped or the body executes. Fire-and-forget cancellation releases captures.
 Retained schedulers return cancelled join handles for submissions after clean shutdown.
 Await required work before dropping the pool.
-Do not synchronously drop the pool from a callback running on one of its workers, including
-a tracing subscriber handling a worker diagnostic; defer shutdown to another thread.
+A worker may synchronously drop the pool. Shutdown waits for every other worker and lets the
+current worker leave after its callback returns.
 
 Infrastructure failures, including worker startup and affinity refresh, log the failure
 and stop the entire pool. Queued joined tasks are cancelled recoverably; queued fire-and-forget

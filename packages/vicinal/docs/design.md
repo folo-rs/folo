@@ -182,7 +182,9 @@ retains the message, source chain, backtrace and enrichment. Recovery state itse
 
 ## Shutdown
 
-Dropping the pool stops accepting work and waits for tasks that are already executing.
+Dropping the pool stops accepting work and waits for worker participation. A drop performed
+outside a worker waits for all workers, while a worker excludes itself because its task
+cannot return until the drop completes.
 Queued tasks may be cancelled. Callers that require completion await the corresponding
 join handles before dropping the pool. Cancellation completes joined handles even when
 schedulers remain alive. Joined task captures remain available until their handle, error or
@@ -190,8 +192,9 @@ recovered body is dropped, or the recovered body executes. Fire-and-forget cance
 captures during shutdown.
 Submissions through retained schedulers after clean shutdown are immediately cancelled without
 execution. Submission returns normally; a joined submission yields a recoverable cancellation.
-Callbacks running on a worker thread, including tracing subscribers handling worker diagnostics,
-must not synchronously drop the pool. They must defer shutdown to another thread.
+Callbacks may synchronously drop the pool from a worker thread. Shutdown waits for every
+other participating worker and lets the current worker return to the worker loop before
+its participation ends.
 
 ## Infrastructure failures
 

@@ -36,16 +36,16 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Lifetime
 ///
-/// Dropping the pool stops accepting work, cancels queued tasks and waits for executing tasks
-/// and worker participation in [`Worker::run()`][crate::Worker::run] to finish. Policy-owned
-/// operating-system threads may perform cleanup after leaving that method; the pool does not
-/// join them. Cancelled joined tasks return a
+/// Dropping the pool stops accepting work, cancels queued tasks and waits for other workers
+/// participating in [`Worker::run()`][crate::Worker::run] to finish. When called outside a
+/// worker, this includes every worker. Policy-owned operating-system threads may perform cleanup
+/// after leaving that method; the pool does not join them. Cancelled joined tasks return a
 /// [`TaskError`][crate::TaskError] that retains the original body for recovery;
 /// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
 /// submissions after clean shutdown as well.
-/// Do not synchronously drop the pool from a callback running on one of its workers,
-/// including a tracing subscriber handling a worker diagnostic; defer shutdown to another
-/// thread.
+/// A worker may drop the pool synchronously: shutdown waits for every other worker, then
+/// lets the current worker leave after its callback returns. The pool still resumes any
+/// recorded infrastructure failure after cleanup.
 /// An infrastructure failure stops and permanently poisons the entire pool; all further
 /// submissions then panic synchronously, even after the pool is dropped.
 ///
@@ -152,11 +152,12 @@ impl PoolBuilder {
 
     /// Initializes workers for the selected processors during construction.
     ///
-    /// The final selection is passed to [`WorkerPolicy::prepare`]. A custom policy decides how
-    /// it maps the selection to groups and is responsible for waiting for required worker
-    /// readiness before preparation returns. The setter itself starts no workers and takes
-    /// ownership of the nonempty processor set. Repeated calls replace the selection;
-    /// construction uses the final builder settings.
+    /// The final selection is passed to [`WorkerPolicy::prepare`]. A custom policy reserves its
+    /// required workers with [`WorkerGroup::add_worker`][crate::WorkerGroup::add_worker].
+    /// The builder waits after `prepare()` returns for each reserved worker to finish
+    /// initialization; dropping an unrun [`Worker`][crate::Worker] cancels that reservation.
+    /// The setter itself starts no workers and takes ownership of the nonempty processor set.
+    /// Repeated calls replace the selection; construction uses the final builder settings.
     ///
     /// With [`policies::WorkersPerProcessor`][crate::policies::WorkersPerProcessor], each selected
     /// processor gets its configured worker count. With

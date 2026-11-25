@@ -106,6 +106,24 @@ fn drop_pool_after_awaiting_task() {
 }
 
 #[test]
+fn pool_can_be_dropped_by_its_current_worker() {
+    with_watchdog(|| {
+        let pool = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .build();
+        let handle = pool.scheduler().spawn(move || {
+            drop(pool);
+            42
+        });
+
+        assert_eq!(block_on(handle).unwrap(), 42);
+    });
+}
+
+#[test]
 fn spawn_many_tasks_await_all() {
     // Repeated submissions exercise task/result slot reuse; native runs retain the larger batch.
     const TASK_COUNT: usize = if cfg!(miri) { 4 } else { 100 };

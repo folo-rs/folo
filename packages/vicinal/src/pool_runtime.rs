@@ -1,6 +1,7 @@
 //! Pool-wide terminal state shared by every policy-created worker group.
 
 use std::any::Any;
+use std::cell::Cell;
 use std::mem::replace;
 use std::ops::ControlFlow;
 #[cfg(test)]
@@ -8,6 +9,7 @@ use std::panic::panic_any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
@@ -19,6 +21,22 @@ use crate::{
     ErasedTaskHandle, NEVER_POISONED, ThreadInit, WorkerGroupState, discard_panic,
     extract_panic_message, report_diagnostic,
 };
+
+thread_local! {
+    /// Identifies the runtime whose worker is currently executing on this thread.
+    static CURRENT_WORKER_RUNTIME: Cell<Option<NonNull<PoolRuntime>>> = const { Cell::new(None) };
+}
+
+/// Restores thread-local worker participation after one `Worker::run()` call.
+pub(crate) struct WorkerScope {
+    previous: Option<NonNull<PoolRuntime>>,
+}
+
+impl Drop for WorkerScope {
+    fn drop(&mut self) {
+        CURRENT_WORKER_RUNTIME.set(self.previous);
+    }
+}
 
 /// Coordinates terminal state, group registration, failure ownership and worker participation.
 ///
@@ -128,6 +146,16 @@ impl PoolRuntime {
         ControlFlow::Continue(())
     }
 
+    /// Marks the current thread as a participating worker of this pool.
+    pub(crate) fn enter_worker(&self) -> WorkerScope {
+        let previous = CURRENT_WORKER_RUNTIME.replace(Some(NonNull::from(self)));
+        WorkerScope { previous }
+    }
+
+    fn is_current_worker(&self) -> bool {
+        CURRENT_WORKER_RUNTIME.get() == Some(NonNull::from(self))
+    }
+
     /// Enables builder-owned tracking for workers reserved by policy preparation.
     pub(crate) fn begin_worker_preparation(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
@@ -227,7 +255,10 @@ impl PoolRuntime {
     pub(crate) fn wait_for_workers(&self) {
         // This is the pool-owned barrier, not a join of policy-owned OS threads.
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
-        while workers.active != 0 {
+        // A task may own and drop the last Pool handle. The current worker cannot leave
+        // until that task returns, so only other participating workers may be awaited here.
+        let current_worker = usize::from(self.is_current_worker());
+        while workers.active > current_worker {
             #[cfg(test)]
             if let Some(before_wait) = self.before_worker_wait.get() {
                 before_wait();
