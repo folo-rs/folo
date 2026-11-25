@@ -212,8 +212,11 @@ workflow on `main`, including manual dispatches of that workflow and its invoked
 standard checks. Standalone PR/push CI, benchmark history, releases and other
 workflows are outside its scope, even when they run on a schedule.
 
-Verify the linked run and reported attempt before applying ownership, labels or
-closure rules. A generic triage request, title prefix or label is not
+Do not select the skill for a generic request to triage an issue or workflow
+failure. Verify first that the target is an unsuccessful run of
+`.github/workflows/deep-validation.yml` on `main`, from a scheduled or manual
+dispatch of that exact workflow. Then verify the linked run and reported attempt
+before applying ownership, labels or closure rules. A title prefix or label is not
 proof of an eligible run. A confirmed provenance mismatch receives a
 [one-time notification](#provenance-mismatch-notifications), not ownership,
 labels, findings or closure. Unverified reports remain unchanged; ordinary triage
@@ -741,6 +744,10 @@ operator choices. Setup neither installs tooling nor runs an automation.
 |---|---|---|
 | Triage | Folo scheduled failure triage | `scheduled-triage` |
 | Repair coordination | Folo scheduled repair | `scheduled-intake` |
+
+The triage skill applies only after a target run's Deep validation provenance is
+verified. Do not select it for generic issue or CI triage, including benchmark
+history and release failures.
 
 The coordinator uses native session lookup and `open_issue_session` or
 `open_pr_session` to open/resume visible linked sessions, and `create_session` with
