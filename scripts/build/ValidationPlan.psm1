@@ -59,6 +59,7 @@ function Get-ValidationPlan {
         if ($path -cmatch '^\.github/fixtures/bench-history-caller/' -or
             $path -cmatch '^scripts/bench-history/' -or
             $path -ceq 'scripts/workflow/ArtifactVisibility.psm1' -or
+            $path -cmatch '^\.github/actions/artifact-download/' -or
             $path -cmatch '^\.github/actions/bench-history-setup/' -or
             $path -cin @('.github/workflows/standard-validation.yml', '.github/workflows/deep-validation.yml',
                 '.github/workflows/benchmark-action-canary.yml', 'justfiles/just_quality.just',

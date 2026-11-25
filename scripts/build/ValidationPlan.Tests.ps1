@@ -186,6 +186,16 @@ Describe 'Caller integration selection' {
             Should -Be @('bench-history')
     }
 
+    It 'selects benchmark integration for the shared artifact transfer action' {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan `
+                -ChangedPath @('.github/actions/artifact-download/action.yml') -CanaryTrusted $true)
+        $selection = Get-ValidationCanarySelection -PlanJson $plan -AffectedPackageJson '[]'
+        $selection.check_fixture | Should -BeTrue
+        $selection.run_hosted | Should -BeTrue
+        @(Get-ValidationScriptDomain -PlanJson $plan -AffectedPackageJson '[]') |
+            Should -Be @('bench-history')
+    }
+
     It 'uses transitive consumer impact for <_> rather than enumerating private partitions' -ForEach @(
         'cargo-bench-history', 'cargo-bench-history-github', 'cargo-bench-history-faker'
     ) {

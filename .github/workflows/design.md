@@ -311,12 +311,16 @@ defines that boundary.
 
 Artifact upload completion does not guarantee immediate visibility to a later job in the same
 workflow run. Same-run consumers therefore run an authenticated bounded visibility and freshness
-gate before the pinned official download action. Pattern consumers require their complete producer
-set, so eventual consistency cannot silently become a partial result or an unbounded workflow hang.
+gate, freeze the exact selected IDs and then use isolated staging directories with the pinned
+official download action. Pattern consumers require their complete producer set, so eventual
+consistency cannot silently become a partial result or an unbounded workflow hang.
 
 The gate retries only temporary metadata absence and recognized transient request failures.
 Authentication, authorization and expiration failures retain ordinary immediate failure behavior.
-The first-party action remains the single owner of archive retrieval and extraction.
+If the first transfer fails or omits an expected artifact, the workflow checks archive redirects
+with its own credential and retries into fresh staging. A final single-ID 404 may use the official
+same-run service fallback, but a multi-ID selection must complete every archive. Only a complete,
+verified staging tree reaches the caller.
 
 Steps implementing a design obligation explain the reason beside the step or cohesive step group
 and link to its owning design or implementation heading. This keeps authority, ordering and

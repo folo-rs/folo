@@ -54,6 +54,23 @@ Describe 'Wait-GitHubRunArtifact' {
         Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 1 -Exactly
     }
 
+    It 'returns the frozen selection only after every exact ID is visible' {
+        $script:reads = 0
+        Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
+            $script:reads++
+            Get-TestArtifact -Id 41 -Name first
+            if ($script:reads -gt 1) { Get-TestArtifact -Id 42 -Name second }
+        }
+
+        $selection = @(Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
+                -Repository owner/repo -RunId 100 -GitHubToken token `
+                -ArtifactIds '41,42' -Attempt 2 -DelaySeconds 0)
+
+        $selection.Id | Should -Be @(41, 42)
+        $selection.Name | Should -Be @('first', 'second')
+        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
+    }
+
     It 'waits for the latest record with an exact artifact name' {
         Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
             Get-TestArtifact -Id 1 -Name report
@@ -292,12 +309,20 @@ Describe 'GitHub artifact HTTP boundaries' {
             -ParameterFilter { $Seconds -eq 5 }
     }
 
-    It 'retries a transient HTTP 503 with the response diagnostics' {
+    It 'retries transient metadata status <StatusCode>' -ForEach @(
+        @{ StatusCode = 404 }
+        @{ StatusCode = 408 }
+        @{ StatusCode = 429 }
+        @{ StatusCode = 500 }
+        @{ StatusCode = 502 }
+        @{ StatusCode = 503 }
+        @{ StatusCode = 504 }
+    ) {
         $script:queries = 0
         Mock Invoke-RestMethod -ModuleName ArtifactVisibility {
             $script:queries++
             if ($script:queries -eq 1) {
-                throw (Get-TestHttpException -StatusCode 503 -Message 'Service Unavailable')
+                throw (Get-TestHttpException -StatusCode $StatusCode -Message 'transient')
             }
             [pscustomobject]@{
                 total_count = 1
@@ -313,30 +338,29 @@ Describe 'GitHub artifact HTTP boundaries' {
         Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
-    It 'retries a statusless transport timeout' {
+    It 'propagates a statusless transport failure' {
         $script:queries = 0
         Mock Invoke-RestMethod -ModuleName ArtifactVisibility {
             $script:queries++
-            if ($script:queries -eq 1) {
-                throw 'The operation timed out.'
-            }
-            [pscustomobject]@{
-                total_count = 1
-                artifacts = @(Get-TestArtifact -Id 42)
-            }
+            throw 'The operation timed out.'
         }
 
         {
             Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -GitHubToken token `
-                -ArtifactId 42 -Attempt 2 -DelaySeconds 0
-        } | Should -Not -Throw
-        Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 2 -Exactly
+                -ArtifactId 42 -Attempt 4 -DelaySeconds 0
+        } | Should -Throw '*timed out*'
+        Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 1 -Exactly
+        Should -Invoke Start-Sleep -ModuleName Retry -Times 0 -Exactly
     }
 
-    It 'does not retry an HTTP 401' {
+    It 'does not retry permanent metadata status <StatusCode>' -ForEach @(
+        @{ StatusCode = 401 }
+        @{ StatusCode = 403 }
+        @{ StatusCode = 410 }
+    ) {
         Mock Invoke-RestMethod -ModuleName ArtifactVisibility {
-            throw (Get-TestHttpException -StatusCode 401 -Message 'Unauthorized')
+            throw (Get-TestHttpException -StatusCode $StatusCode -Message 'permanent')
         }
 
         {
@@ -345,5 +369,105 @@ Describe 'GitHub artifact HTTP boundaries' {
                 -ArtifactId 42 -Attempt 4 -DelaySeconds 0
         } | Should -Throw
         Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 1 -Exactly
+    }
+}
+
+Describe 'Artifact transfer retry and completeness' {
+    BeforeEach {
+        Mock Start-Sleep -ModuleName ArtifactVisibility { }
+    }
+
+    It 'checks every archive with the workflow token and retries only a delayed redirect' {
+        $script:checks = 0
+        Mock Get-GitHubArtifactArchiveStatus -ModuleName ArtifactVisibility {
+            $script:checks++
+            if ($Uri -ceq 'https://api.github.test/repos/owner/repo/actions/artifacts/42/zip' -and
+                $script:checks -eq 2) {
+                return 404
+            }
+            302
+        }
+
+        Wait-GitHubArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+            -Repository owner/repo -GitHubToken job-token -ArtifactIds 41, 42 `
+            -Attempt 2 -DelaySeconds 0 | Should -BeTrue
+
+        Should -Invoke Get-GitHubArtifactArchiveStatus -ModuleName ArtifactVisibility `
+            -Times 3 -Exactly
+        Should -Invoke Get-GitHubArtifactArchiveStatus -ModuleName ArtifactVisibility `
+            -Times 3 -Exactly -ParameterFilter {
+                $Headers.Authorization -ceq 'Bearer job-token'
+            }
+        Should -Invoke Start-Sleep -ModuleName ArtifactVisibility -Times 1 -Exactly
+    }
+
+    It 'falls back to same-run transfer after persistent REST 404 for one immutable ID' {
+        Mock Get-GitHubArtifactArchiveStatus -ModuleName ArtifactVisibility { 404 }
+
+        Wait-GitHubArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+            -Repository owner/repo -GitHubToken job-token -ArtifactIds 41 `
+            -Attempt 12 -DelaySeconds 0 | Should -BeFalse
+        Should -Invoke Get-GitHubArtifactArchiveStatus -ModuleName ArtifactVisibility `
+            -Times 12 -Exactly
+    }
+
+    It 'rejects an incomplete multi-ID transfer instead of using a masked 404 fallback' {
+        Mock Get-GitHubArtifactArchiveStatus -ModuleName ArtifactVisibility { 404 }
+
+        {
+            Wait-GitHubArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                -Repository owner/repo -GitHubToken job-token -ArtifactIds 41, 42 `
+                -Attempt 2 -DelaySeconds 0
+        } | Should -Throw '*artifact 41*HTTP 404*attempt 2/2*'
+    }
+
+    It 'propagates permanent archive status <Status> without waiting' -ForEach @(
+        @{ Status = 401 }
+        @{ Status = 403 }
+        @{ Status = 410 }
+    ) {
+        Mock Get-GitHubArtifactArchiveStatus -ModuleName ArtifactVisibility { $Status }
+
+        {
+            Wait-GitHubArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                -Repository owner/repo -GitHubToken job-token -ArtifactIds 41 `
+                -Attempt 4 -DelaySeconds 0
+        } | Should -Throw "*HTTP $Status*attempt 1/*"
+        Should -Invoke Start-Sleep -ModuleName ArtifactVisibility -Times 0 -Exactly
+    }
+
+    It 'rejects missing or unexpected multi-artifact staging entries' {
+        $selection = @(
+            [pscustomobject]@{ Id = 41; Name = 'first' }
+            [pscustomobject]@{ Id = 42; Name = 'second' }
+        )
+        $stage = New-Item -ItemType Directory -Path (Join-Path $TestDrive stage)
+        $null = New-Item -ItemType Directory -Path (Join-Path $stage first)
+        { Assert-GitHubArtifactTransferComplete -Path $stage -Selection $selection } |
+            Should -Throw '*missing second*'
+        $null = New-Item -ItemType Directory -Path (Join-Path $stage second)
+        $null = New-Item -ItemType File -Path (Join-Path $stage unexpected)
+        { Assert-GitHubArtifactTransferComplete -Path $stage -Selection $selection } |
+            Should -Throw '*unexpected staged entry*'
+    }
+
+    It 'exposes the flattened contents of a complete multi-artifact staging tree' {
+        $selection = @(
+            [pscustomobject]@{ Id = 41; Name = 'book-alpha' }
+            [pscustomobject]@{ Id = 42; Name = 'book-beta' }
+        )
+        $stage = New-Item -ItemType Directory -Path (Join-Path $TestDrive complete-stage)
+        $alpha = New-Item -ItemType Directory -Path (Join-Path $stage 'book-alpha')
+        $beta = New-Item -ItemType Directory -Path (Join-Path $stage 'book-beta')
+        Set-Content -LiteralPath (Join-Path $alpha 'alpha.html') -Value alpha
+        Set-Content -LiteralPath (Join-Path $beta 'beta.html') -Value beta
+        $destination = Join-Path $TestDrive public
+
+        Publish-GitHubArtifactTransfer -Source $stage -Destination $destination `
+            -Selection $selection -MergeMultiple
+
+        (Get-Content -LiteralPath (Join-Path $destination 'alpha.html')) | Should -Be alpha
+        (Get-Content -LiteralPath (Join-Path $destination 'beta.html')) | Should -Be beta
+        Test-Path -LiteralPath $stage | Should -BeFalse
     }
 }

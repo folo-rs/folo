@@ -122,10 +122,11 @@ rustup, installed-tool or other environment caches.
 
 ## Same-run artifact visibility
 
-Artifact upload completion and run-artifact discovery are separate observations in GitHub Actions.
-Every repository-owned same-run download first calls `Wait-GitHubRunArtifact` in
-`scripts/workflow/ArtifactVisibility.psm1`, then lets the pinned official
-`actions/download-artifact` own archive retrieval and extraction.
+Artifact upload completion, run-artifact discovery and transfer readiness are separate observations
+in GitHub Actions. Every repository-owned same-run download uses
+`.github/actions/artifact-download/action.yml`. It calls `Wait-GitHubRunArtifact` in
+`scripts/workflow/ArtifactVisibility.psm1` to freeze exact IDs and names, then lets the pinned
+official `actions/download-artifact` transfer and extract them into isolated staging.
 
 The helper supports artifact ID, exact name and wildcard-pattern selectors. Pattern consumers
 state the complete producer count, and the helper counts distinct artifact names so duplicate
@@ -135,13 +136,21 @@ The helper queries the current attempt's jobs and requires its latest visible ar
 been created after that producer started. Producers that did not rerun retain their earlier valid
 artifacts, so failed-job reruns do not rebuild successful matrix legs.
 REST inventory requests use a request timeout. The helper retries missing selection and recognized
-transient request failures within a bounded interval. Authentication, authorization, expiration
-and malformed responses fail immediately; an exhausted retry budget fails explicitly. The official
-download action starts only after this gate succeeds.
+transient request failures within the shared 12-attempt, 5-second policy. Authentication,
+authorization, expiration and malformed responses fail immediately; an exhausted retry budget fails
+explicitly. Archive metadata requests use a 30-second timeout.
 
-The book deployment downloads every exact artifact from the discovered matrix; current-attempt
-producer jobs must expose a newer archive while unchanged jobs retain valid inherited artifacts.
-The benchmark canary downloads the reusable workflow's exact report artifact ID.
+After preflight, the action performs one official transfer into isolated `first` staging. A failed
+transfer, or a successful multi-ID transfer missing any frozen name, triggers authenticated REST
+redirect probes for every selected archive. A redirect permits a retry with the workflow token into
+fresh `retry` staging. A persistent 404 permits only one immutable-ID fallback to the official
+same-run service; incomplete multi-ID sets always fail. The action exposes a destination only after
+verifying the complete frozen selection.
+
+The book deployment freezes every exact artifact from the discovered matrix and flattens each
+verified artifact directory into the Pages root; current-attempt producer jobs must expose newer
+metadata while unchanged jobs retain valid inherited artifacts. The benchmark canary freezes and
+transfers the reusable workflow's exact report artifact ID.
 
 ## Benchmark workflow artifacts
 
