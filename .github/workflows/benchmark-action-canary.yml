@@ -328,11 +328,15 @@ jobs:
             -Notable $env:NOTABLE -Regressions $env:REGRESSIONS -PartialPlatformCoverage $env:PARTIAL `
             -ArtifactId $env:ARTIFACT_ID -ArtifactUrl $env:ARTIFACT_URL
       - name: Download the emitted report bundle
-        uses: actions/download-artifact@v8
+        # The reusable workflow finalized its upload, but metadata and transfer can race. The
+        # shared action freezes the selected ID, checks completeness and retries through the
+        # workflow credential when the official same-run transfer fails.
+        # Ref: implementation.md#same-run-artifact-visibility.
+        uses: ./.github/actions/artifact-download
         with:
-          artifact-ids: ${{ needs.exercise.outputs.report-artifact-id }}
           path: ${{ runner.temp }}/caller-report
           github-token: ${{ github.token }}
+          artifact-ids: ${{ needs.exercise.outputs.report-artifact-id }}
       - name: Verify actual report files
         shell: pwsh
         env:

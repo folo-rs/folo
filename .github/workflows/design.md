@@ -335,6 +335,21 @@ commands; reusable PowerShell orchestration belongs in Pester-tested modules und
 The [automation language guidance](../../docs/build-and-tooling.md#automation-language-and-boundaries)
 defines that boundary.
 
+### Same-run artifact visibility
+
+Artifact upload completion does not guarantee immediate visibility to a later job in the same
+workflow run. Same-run consumers therefore run an authenticated bounded visibility and freshness
+gate, freeze the exact selected IDs and then use isolated staging directories with the pinned
+official download action. Pattern consumers require their complete producer set, so eventual
+consistency cannot silently become a partial result or an unbounded workflow hang.
+
+The gate retries only temporary metadata absence and recognized transient request failures.
+Authentication, authorization and expiration failures retain ordinary immediate failure behavior.
+If the first transfer fails or omits an expected artifact, the workflow checks archive redirects
+with its own credential and retries into fresh staging. A final single-ID 404 may use the official
+same-run service fallback, but a multi-ID selection must complete every archive. Only a complete,
+verified staging tree reaches the caller.
+
 Steps implementing a design obligation explain the reason beside the step or cohesive step group
 and link to its owning design or implementation heading. This keeps authority, ordering and
 failure-handling decisions visible without duplicating their full rationale. Every `run:` step
@@ -1015,10 +1030,10 @@ checksum that never matches) costs only the capped backoff window before it surf
 Unavailable freshness evidence is qualified explicitly; it does not silently produce a
 current-looking benchmark report.
 
-First-party marketplace actions (checkout, cache, artifact up/download, and the like) are trusted
-to retry their own network operations internally, so they are not wrapped in a third-party retry
-action; adding one would trade the minimal-dependency stance for redundant coverage. That trust is
-revisited only if a specific action is observed to flake.
+First-party marketplace actions (checkout, cache and the like) are trusted to handle network
+operations internally, so they are not wrapped in a third-party retry action. Same-run artifact
+consumers use the repository visibility gate described above because metadata visibility can lag
+upload completion before the official download action starts.
 
 ## Job timeouts
 

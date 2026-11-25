@@ -70,6 +70,7 @@ jobs:
   # Builds one book per matrix leg and uploads it as an artifact whose contents are rooted at
   # `<book-name>/`, so the deploy job can merge every book into the site without further shuffling.
   build:
+    name: Build book ${{ matrix.book }}
     needs: [discover]
     runs-on: ubuntu-latest
     strategy:
@@ -137,10 +138,11 @@ jobs:
   # GitHub Pages. Skipped on pull requests. Like `discover`, generating the landing page needs only
   # PowerShell, so this job skips setup-environment too.
   deploy:
-    needs: [build]
+    needs: [discover, build]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       pages: write
       id-token: write
@@ -151,11 +153,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Resolve book artifact producers
+        # The matrix output supplies exact expected names and producer jobs for preflight freshness.
+        # Ref: implementation.md#same-run-artifact-visibility.
+        id: producers
+        shell: pwsh
+        env:
+          BOOKS: ${{ needs.discover.outputs.books }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $books = @(ConvertFrom-Json -InputObject $env:BOOKS)
+          $producerJobs = @{}
+          foreach ($book in $books) {
+            $producerJobs["book-$book"] = "Build book $book"
+          }
+          "count=$($books.Count)" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "jobs=$((ConvertTo-Json -InputObject $producerJobs -Compress))" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
       - name: Download book artifacts
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/artifact-download
         with:
-          pattern: book-*
           path: public
+          github-token: ${{ github.token }}
+          pattern: book-*
+          expected-count: ${{ steps.producers.outputs.count }}
+          producer-jobs: ${{ steps.producers.outputs.jobs }}
           merge-multiple: true
 
       - name: Generate landing page

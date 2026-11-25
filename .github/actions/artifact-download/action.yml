@@ -1,0 +1,158 @@
+name: Download same-run artifact
+description: Preflight same-run metadata, then transfer through the official artifact action.
+
+# The preflight freezes exact IDs and producer freshness. Transfers use isolated staging directories
+# so a failed or incomplete first attempt cannot be exposed to the caller.
+inputs:
+  path:
+    description: New directory that receives the verified download.
+    required: true
+  github-token:
+    description: Token with actions read permission for this workflow run.
+    required: true
+  artifact-ids:
+    description: Comma-separated artifact IDs, mutually exclusive with name and pattern.
+    default: ''
+  name:
+    description: Exact artifact name, mutually exclusive with artifact IDs and pattern.
+    default: ''
+  pattern:
+    description: Artifact wildcard, mutually exclusive with artifact IDs and name.
+    default: ''
+  expected-count:
+    description: Number of distinct expected names for pattern downloads.
+    default: '1'
+  producer-jobs:
+    description: JSON map from expected artifact names to local producer job names.
+    default: '{}'
+  merge-multiple:
+    description: Flatten each verified artifact directory into the destination.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Preflight selected same-run artifacts
+      id: selected
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FOLO_ARTIFACT_IDS: ${{ inputs.artifact-ids }}
+        FOLO_ARTIFACT_NAME: ${{ inputs.name }}
+        FOLO_ARTIFACT_PATTERN: ${{ inputs.pattern }}
+        FOLO_ARTIFACT_EXPECTED_COUNT: ${{ inputs.expected-count }}
+        FOLO_ARTIFACT_PRODUCER_JOBS: ${{ inputs.producer-jobs }}
+        FOLO_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+
+        Import-Module (Join-Path $env:FOLO_ACTION_PATH '..\..\..\scripts\workflow\ArtifactVisibility.psm1') -Force
+        $common = @{
+          ApiUrl = $env:GITHUB_API_URL
+          Repository = $env:GITHUB_REPOSITORY
+          RunId = $env:GITHUB_RUN_ID
+          GitHubToken = $env:GH_TOKEN
+        }
+        $selection = @(
+          if (-not [string]::IsNullOrWhiteSpace($env:FOLO_ARTIFACT_IDS)) {
+            Wait-GitHubRunArtifact @common -ArtifactIds $env:FOLO_ARTIFACT_IDS
+          }
+          elseif (-not [string]::IsNullOrWhiteSpace($env:FOLO_ARTIFACT_NAME)) {
+            Wait-GitHubRunArtifact @common -Name $env:FOLO_ARTIFACT_NAME
+          }
+          else {
+            $producerJobs = ConvertFrom-Json -InputObject $env:FOLO_ARTIFACT_PRODUCER_JOBS `
+              -AsHashtable
+            Wait-GitHubRunArtifact @common -Pattern $env:FOLO_ARTIFACT_PATTERN `
+              -ExpectedCount ([int] $env:FOLO_ARTIFACT_EXPECTED_COUNT) `
+              -ProducerJob $producerJobs -RunAttempt $env:GITHUB_RUN_ATTEMPT
+          }
+        )
+        if ($selection.Count -eq 0) {
+          throw 'Artifact preflight produced an empty frozen selection.'
+        }
+        $ids = ($selection | ForEach-Object { $_.Id }) -join ','
+        $selectionJson = ConvertTo-Json -InputObject $selection -Depth 3 -Compress
+        "ids=$ids" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+        "selection=$selectionJson" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+        $staging = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))
+        "staging=$staging" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+    - name: Download frozen same-run selection
+      id: transfer
+      continue-on-error: true
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        github-token: ${{ contains(steps.selected.outputs.ids, ',') && inputs.github-token || '' }}
+        path: ${{ steps.selected.outputs.staging }}/first
+
+    - name: Check first transfer completeness
+      id: complete
+      if: steps.transfer.outcome == 'success'
+      continue-on-error: true
+      shell: pwsh
+      env:
+        FOLO_ACTION_PATH: ${{ github.action_path }}
+        SELECTION: ${{ steps.selected.outputs.selection }}
+        SOURCE: ${{ steps.transfer.outputs.download-path }}
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+
+        Import-Module (Join-Path $env:FOLO_ACTION_PATH '..\..\..\scripts\workflow\ArtifactVisibility.psm1') -Force
+        Assert-GitHubArtifactTransferComplete -Path $env:SOURCE `
+          -Selection (ConvertFrom-Json -InputObject $env:SELECTION -NoEnumerate)
+
+    - name: Check archive access before retry
+      id: archive
+      if: steps.transfer.outcome == 'failure' || steps.complete.outcome == 'failure'
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FOLO_ACTION_PATH: ${{ github.action_path }}
+        FOLO_ARTIFACT_IDS: ${{ steps.selected.outputs.ids }}
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+
+        Write-Warning 'Artifact transfer failed. Checking archive access with the workflow token.'
+        Import-Module (Join-Path $env:FOLO_ACTION_PATH '..\..\..\scripts\workflow\ArtifactVisibility.psm1') -Force
+        $useRest = Wait-GitHubArtifactArchiveRedirect `
+          -ApiUrl $env:GITHUB_API_URL -Repository $env:GITHUB_REPOSITORY `
+          -ArtifactIds ($env:FOLO_ARTIFACT_IDS -split ',') -GitHubToken $env:GH_TOKEN
+        "rest=$useRest" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+    - name: Retry frozen selection
+      id: retry
+      if: steps.archive.outcome == 'success'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        github-token: ${{ steps.archive.outputs.rest == 'true' && inputs.github-token || '' }}
+        path: ${{ steps.selected.outputs.staging }}/retry
+
+    - name: Expose verified artifact transfer
+      shell: pwsh
+      env:
+        FOLO_ACTION_PATH: ${{ github.action_path }}
+        SELECTION: ${{ steps.selected.outputs.selection }}
+        SOURCE: ${{ steps.complete.outcome == 'success' && steps.transfer.outputs.download-path || steps.retry.outputs.download-path }}
+        DESTINATION: ${{ inputs.path }}
+        MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+
+        Import-Module (Join-Path $env:FOLO_ACTION_PATH '..\..\..\scripts\workflow\ArtifactVisibility.psm1') -Force
+        $mergeMultiple = if ($env:MERGE_MULTIPLE -ceq 'true') { $true }
+        elseif ($env:MERGE_MULTIPLE -ceq 'false') { $false }
+        else { throw 'merge-multiple must be true or false.' }
+        Publish-GitHubArtifactTransfer -Source $env:SOURCE -Destination $env:DESTINATION `
+          -Selection (ConvertFrom-Json -InputObject $env:SELECTION -NoEnumerate) `
+          -MergeMultiple:$mergeMultiple

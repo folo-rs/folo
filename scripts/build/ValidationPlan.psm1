@@ -58,6 +58,8 @@ function Get-ValidationPlan {
 
         if ($path -cmatch '^\.github/fixtures/bench-history-caller/' -or
             $path -cmatch '^scripts/bench-history/' -or
+            $path -ceq 'scripts/workflow/ArtifactVisibility.psm1' -or
+            $path -cmatch '^\.github/actions/artifact-download/' -or
             $path -cmatch '^\.github/actions/bench-history-setup/' -or
             $path -cin @('.github/workflows/standard-validation.yml', '.github/workflows/deep-validation.yml',
                 '.github/workflows/benchmark-action-canary.yml', 'justfiles/just_quality.just',
@@ -97,12 +99,14 @@ function Get-ValidationPlan {
         }
         if ($path -cmatch '^scripts/') {
             if ($path -cmatch '\.ps(m1|d1|1)$') { $analysis = $true }
-            if ($path -cmatch '^scripts/workflow/') {
+            if ($path -ceq 'scripts/workflow/ArtifactVisibility.psm1') {
+                $null = $domains.Add('bench-history')
+                Write-Verbose "'$path' owns benchmark artifact handoff behavior; selecting that domain's tests."
+            } elseif ($path -cmatch '^scripts/workflow/') {
                 $domains.Add('build') | Out-Null
                 Write-Verbose "'$path' owns workflow publication behavior; selecting build helper tests."
                 continue
-            }
-            if ($path -cmatch '^scripts/([^/]+)/' -and $Matches[1] -cin $script:ScriptDomains) {
+            } elseif ($path -cmatch '^scripts/([^/]+)/' -and $Matches[1] -cin $script:ScriptDomains) {
                 $null = $domains.Add($Matches[1])
                 Write-Verbose "'$path' belongs to script domain '$($Matches[1])'; selecting that domain's tests."
             } else {
