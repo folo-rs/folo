@@ -49,6 +49,31 @@ function Select-PublicApiPackage {
     }
 }
 
+function ConvertTo-PublicApiAddedDiff {
+    # A library created by the PR has no old API to build. Present its head API as additions
+    # so the report uses the same visible diff format as cargo-public-api's commit comparison.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $ApiOutput)
+
+    $items = @($ApiOutput -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($items.Count -eq 0) { $items = @('(none)') }
+    else { $items = @($items | ForEach-Object { "+$_" }) }
+    return @(
+        'Removed items from the public API'
+        '================================='
+        '(none)'
+        ''
+        'Changed items in the public API'
+        '==============================='
+        '(none)'
+        ''
+        'Added items to the public API'
+        '============================='
+        $items
+    ) -join "`n"
+}
+
 function ConvertTo-PublicApiPackageReport {
     # The pinned tool prints headings even for an empty diff. Require its complete empty
     # representation before declaring no change; unrecognized output is a visible failure.
@@ -125,4 +150,4 @@ function Get-PublicApiReport {
 }
 
 Export-ModuleMember -Function Get-PublicApiDeltaConfig, Select-PublicApiPackage, `
-    ConvertTo-PublicApiPackageReport, Get-PublicApiReport
+    ConvertTo-PublicApiAddedDiff, ConvertTo-PublicApiPackageReport, Get-PublicApiReport

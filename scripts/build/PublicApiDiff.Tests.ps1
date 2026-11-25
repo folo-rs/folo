@@ -8,8 +8,8 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot 'PublicApiDiff.psm1') -Force
-    Import-Module (Join-Path $PSScriptRoot 'PublicApiComment.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..\workflow\PublicApiDiff.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..\workflow\PublicApiComment.psm1') -Force
     $script:emptyDiff = @'
 Removed items from the public API
 =================================
@@ -59,6 +59,17 @@ Describe 'Public API producer' {
         (ConvertTo-PublicApiPackageReport -Name sample -Output $changed -ExitCode 1).status | Should -Be 'error'
         (ConvertTo-PublicApiPackageReport -Name sample -Output 'unexpected' -ExitCode 0).status | Should -Be 'error'
         (ConvertTo-PublicApiPackageReport -Name sample -Output ('x' * (2MB + 1)) -ExitCode 0).status | Should -Be 'error'
+    }
+
+    It 'represents a newly introduced library API as additions' {
+        $output = ConvertTo-PublicApiAddedDiff -ApiOutput "pub struct NewType;`npub fn create();"
+        $output | Should -Match '(?m)^\+pub struct NewType;$'
+        $output | Should -Match '(?m)^\+pub fn create\(\);$'
+        (ConvertTo-PublicApiPackageReport -Name sample -Output $output -ExitCode 0).status |
+            Should -Be 'changed'
+        $empty = ConvertTo-PublicApiAddedDiff -ApiOutput ''
+        (ConvertTo-PublicApiPackageReport -Name sample -Output $empty -ExitCode 0).status |
+            Should -Be 'unchanged'
     }
 
     It 'retains all package results after a generation failure' {

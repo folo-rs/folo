@@ -35,6 +35,8 @@ Describe 'Non-Cargo change domains' {
         @{ Path = 'scripts/release/ReleasePlan.psm1'; Domains = @('release'); Analysis = $true; Workflows = $false },
         @{ Path = 'PSScriptAnalyzerSettings.psd1'; Domains = @('analyzer'); Analysis = $true; Workflows = $false },
         @{ Path = '.github/workflows/release.yml'; Domains = @('release'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/public-api-diff.yml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/public-api-diff-publish.yml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = '.github/workflows/book.yml'; Domains = @(); Analysis = $false; Workflows = $true },
         @{ Path = '.github/actionlint.yaml'; Domains = @(); Analysis = $false; Workflows = $true },
         @{ Path = '.github/actions/setup-workflow-lint/action.yml'; Domains = @(); Analysis = $false; Workflows = $true },

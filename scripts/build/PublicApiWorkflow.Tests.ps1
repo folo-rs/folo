@@ -20,7 +20,7 @@ Describe 'Public API workflow contract' {
         $name | Should -BeExactly 'Public API diff'
         $publisher | Should -Match ([regex]::Escape("- $name"))
         $producer | Should -Match '(?m)^on:\r?\n  pull_request:\r?\n'
-        foreach ($eventType in @('opened', 'synchronize', 'reopened', 'ready_for_review')) {
+        foreach ($eventType in @('opened', 'synchronize', 'reopened', 'ready_for_review', 'edited')) {
             $producer | Should -Match ([regex]::Escape($eventType))
         }
         $producer | Should -Match '(?m)^  contents: read\r?$'

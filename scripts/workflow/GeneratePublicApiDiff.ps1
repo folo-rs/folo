@@ -37,6 +37,25 @@ try {
 }
 $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json -AsHashtable
 $packages = @(Select-PublicApiPackage -Affected $affected -Metadata $metadata)
+$baselineWorktree = Join-Path ([IO.Path]::GetTempPath()) "public-api-base-$([guid]::NewGuid())"
+try {
+    git worktree add --quiet --detach $baselineWorktree $mergeBase
+    Push-Location $baselineWorktree
+    try {
+        $baselineMetadata = cargo metadata --no-deps --format-version 1 --locked `
+            --manifest-path (Join-Path $baselineWorktree 'Cargo.toml') | ConvertFrom-Json -AsHashtable
+    } finally {
+        Pop-Location
+    }
+} finally {
+    git worktree remove --force $baselineWorktree
+}
+$baselineMembers = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($memberId in $baselineMetadata.workspace_members) {
+    foreach ($baselinePackage in $baselineMetadata.packages) {
+        if ($baselinePackage.id -ceq $memberId) { $null = $baselineMembers.Add($baselinePackage.name) }
+    }
+}
 $constants = Read-DotEnvFile -Path 'constants.env'
 $nightly = Get-RequiredConstant -Values $constants -Name 'RUST_NIGHTLY'
 
@@ -48,18 +67,26 @@ $report = Get-PublicApiReport -Repository $Repository -PullRequest $PullRequest 
         $stderr = "$stdout.err"
         try {
             if ((git rev-parse HEAD) -cne $HeadSha) { throw 'Checkout no longer matches the event head.' }
-            # cargo-public-api checks out both commits in place and restores HEAD. Outputs stay
-            # outside the checkout so they do not prevent those checkouts.
             $previous = $PSNativeCommandUseErrorActionPreference
             try {
                 $PSNativeCommandUseErrorActionPreference = $false
-                cargo "+$nightly" public-api -sss --all-features --color never -p $name `
-                    diff "$mergeBase..$HeadSha" > $stdout 2> $stderr
-                $exitCode = $LASTEXITCODE
+                if ($baselineMembers.Contains($name)) {
+                    # The commit diff checks out both revisions in place; keep outputs outside
+                    # the checkout so they do not prevent those checkouts.
+                    cargo "+$nightly" public-api -sss --all-features --color never -p $name `
+                        diff "$mergeBase..$HeadSha" > $stdout 2> $stderr
+                    $exitCode = $LASTEXITCODE
+                    $output = [IO.File]::ReadAllText($stdout)
+                } else {
+                    # A crate introduced by this PR has no old package to build at the merge base.
+                    cargo "+$nightly" public-api -sss --all-features --color never -p $name `
+                        > $stdout 2> $stderr
+                    $exitCode = $LASTEXITCODE
+                    $output = ConvertTo-PublicApiAddedDiff -ApiOutput ([IO.File]::ReadAllText($stdout))
+                }
             } finally {
                 $PSNativeCommandUseErrorActionPreference = $previous
             }
-            $output = [IO.File]::ReadAllText($stdout)
             $errors = [IO.File]::ReadAllText($stderr)
             if ($exitCode -ne 0) { Write-Host "Public API diff failed for $name`:`n$errors" }
             if ((git rev-parse HEAD) -cne $HeadSha) { throw 'Public API tool did not restore the event head.' }
