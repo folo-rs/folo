@@ -1,7 +1,7 @@
 //! Pool-wide terminal state shared by every policy-created worker group.
 
 use std::any::Any;
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::mem::replace;
 use std::ops::ControlFlow;
 #[cfg(test)]
@@ -23,18 +23,32 @@ use crate::{
 };
 
 thread_local! {
-    /// Identifies the runtime whose worker is currently executing on this thread.
-    static CURRENT_WORKER_RUNTIME: Cell<Option<NonNull<PoolRuntime>>> = const { Cell::new(None) };
+    /// Counts every active worker scope for each runtime on this thread.
+    static CURRENT_WORKER_RUNTIMES: RefCell<Vec<(NonNull<PoolRuntime>, usize)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// Restores thread-local worker participation after one `Worker::run()` call.
 pub(crate) struct WorkerScope {
-    previous: Option<NonNull<PoolRuntime>>,
+    runtime: NonNull<PoolRuntime>,
 }
 
 impl Drop for WorkerScope {
     fn drop(&mut self) {
-        CURRENT_WORKER_RUNTIME.set(self.previous);
+        CURRENT_WORKER_RUNTIMES.with_borrow_mut(|workers| {
+            let (index, (_, count)) = workers
+                .iter_mut()
+                .enumerate()
+                .find(|(_, (runtime, _))| *runtime == self.runtime)
+                .expect("every worker scope has a matching runtime entry");
+            if *count == 1 {
+                workers.remove(index);
+            } else {
+                *count = count
+                    .checked_sub(1)
+                    .expect("an active scope contributes one worker");
+            }
+        });
     }
 }
 
@@ -148,12 +162,30 @@ impl PoolRuntime {
 
     /// Marks the current thread as a participating worker of this pool.
     pub(crate) fn enter_worker(&self) -> WorkerScope {
-        let previous = CURRENT_WORKER_RUNTIME.replace(Some(NonNull::from(self)));
-        WorkerScope { previous }
+        let runtime = NonNull::from(self);
+        CURRENT_WORKER_RUNTIMES.with_borrow_mut(|workers| {
+            if let Some((_, count)) = workers
+                .iter_mut()
+                .find(|(registered, _)| *registered == runtime)
+            {
+                *count = count
+                    .checked_add(1)
+                    .expect("worker nesting cannot exceed addressable memory");
+            } else {
+                workers.push((runtime, 1));
+            }
+        });
+        WorkerScope { runtime }
     }
 
-    fn is_current_worker(&self) -> bool {
-        CURRENT_WORKER_RUNTIME.get() == Some(NonNull::from(self))
+    fn current_worker_count(&self) -> usize {
+        let runtime = NonNull::from(self);
+        CURRENT_WORKER_RUNTIMES.with_borrow(|workers| {
+            workers
+                .iter()
+                .find_map(|(registered, count)| (*registered == runtime).then_some(*count))
+                .unwrap_or(0)
+        })
     }
 
     /// Enables builder-owned tracking for workers reserved by policy preparation.
@@ -257,8 +289,8 @@ impl PoolRuntime {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         // A task may own and drop the last Pool handle. The current worker cannot leave
         // until that task returns, so only other participating workers may be awaited here.
-        let current_worker = usize::from(self.is_current_worker());
-        while workers.active > current_worker {
+        let current_workers = self.current_worker_count();
+        while workers.active > current_workers {
             #[cfg(test)]
             if let Some(before_wait) = self.before_worker_wait.get() {
                 before_wait();
@@ -425,6 +457,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use testing::with_watchdog;
     use tracing::span::{Attributes, Id, Record};
     use tracing::{Event, Metadata, Subscriber};
 
@@ -491,5 +524,45 @@ mod tests {
             .take_failure()
             .expect("diagnostic panic does not replace the infrastructure failure");
         assert!(failure.is::<OriginalFailure>());
+    }
+
+    #[test]
+    fn nested_workers_do_not_wait_for_their_own_runtime() {
+        with_watchdog(|| {
+            let first = PoolRuntime::new(1, "first".to_string(), None);
+            assert!(first.begin_worker().is_continue());
+            let first_scope = first.enter_worker();
+
+            assert!(first.begin_worker().is_continue());
+            let nested_first_scope = first.enter_worker();
+            first.stop_workers();
+            first.wait_for_workers();
+
+            drop(nested_first_scope);
+            first.end_worker();
+            drop(first_scope);
+            first.end_worker();
+        });
+    }
+
+    #[test]
+    fn nested_other_runtime_preserves_outer_shutdown_scope() {
+        with_watchdog(|| {
+            let outer = PoolRuntime::new(1, "outer".to_string(), None);
+            assert!(outer.begin_worker().is_continue());
+            let outer_scope = outer.enter_worker();
+
+            let inner = PoolRuntime::new(2, "inner".to_string(), None);
+            assert!(inner.begin_worker().is_continue());
+            let inner_scope = inner.enter_worker();
+
+            outer.stop_workers();
+            outer.wait_for_workers();
+
+            drop(inner_scope);
+            inner.end_worker();
+            drop(outer_scope);
+            outer.end_worker();
+        });
     }
 }

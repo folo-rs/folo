@@ -176,9 +176,10 @@ permission to execute unpinned. A runtime refresh failure poisons the entire poo
 signaling every group and draining queued tasks outside locks. Participating workers are
 tracked in the runtime's active count. The reporting worker never attempts to join itself;
 pool destruction waits on the count and propagates the retained failure after cleanup.
-Each `Worker::run()` scope records its exact runtime in thread-local state. Pool destruction
-on that thread excludes its own participation from the wait target; other threads still wait
-for every active worker. The scope restores any prior runtime when worker execution returns.
+Each `Worker::run()` scope increments a thread-local count for its exact runtime. Pool
+destruction on that thread excludes all of its scopes for that runtime from the wait target;
+scopes belonging to another runtime remain counted separately. Other threads still wait for
+every active worker, and leaving a scope restores its runtime count.
 
 The submission boundary retains caller-owned task state outside topology, result-channel
 and allocation operations. It also catches poisoned rejection before destroying captures.
