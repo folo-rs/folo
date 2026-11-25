@@ -153,9 +153,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Download book artifacts
-        # Upload completion can precede metadata and archive visibility. Require every discovered
-        # producer and its current-attempt freshness before extracting a partial site.
+      - name: Wait for book artifacts
+        # Upload completion can precede run-artifact visibility. Require every discovered producer
+        # and its current-attempt freshness before the official action downloads any site content.
         # Ref: implementation.md#same-run-artifact-visibility.
         shell: pwsh
         env:
@@ -172,11 +172,19 @@ jobs:
           foreach ($book in $books) {
             $producerJobs["book-$book"] = "Build book $book"
           }
-          Invoke-GitHubRunArtifactDownload -ApiUrl $env:GITHUB_API_URL `
+          Wait-GitHubRunArtifact -ApiUrl $env:GITHUB_API_URL `
             -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID `
-            -GitHubToken $env:GH_TOKEN -Path public -RunAttempt $env:GITHUB_RUN_ATTEMPT `
-            -Pattern 'book-*' -MergeMultiple `
+            -GitHubToken $env:GH_TOKEN -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+            -Pattern 'book-*' `
             -ExpectedCount $books.Count -ProducerJob $producerJobs
+
+      - name: Download book artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: book-*
+          path: public
+          merge-multiple: true
+          github-token: ${{ github.token }}
 
       - name: Generate landing page
         shell: pwsh

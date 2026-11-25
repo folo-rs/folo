@@ -289,23 +289,25 @@ Describe 'Same-run artifact visibility' {
         $deploy = Get-WorkflowJob $book 'deploy'
         @(Get-WorkflowJobDependency $deploy) | Should -Be @('discover', 'build')
         (Get-WorkflowJob $book 'build') | Should -Match '(?m)^    name: Build book \$\{\{ matrix\.book \}\}'
-        $deploy | Should -Match '(?m)Invoke-GitHubRunArtifactDownload'
-        $deploy | Should -Not -Match 'uses: actions/download-artifact@'
+        $deploy.IndexOf('Wait-GitHubRunArtifact') |
+            Should -BeLessThan $deploy.IndexOf('uses: actions/download-artifact@')
         $deploy | Should -Match '(?m)-ExpectedCount \$books\.Count -ProducerJob \$producerJobs'
         $deploy | Should -Match '(?m)-RunAttempt \$env:GITHUB_RUN_ATTEMPT'
         $deploy | Should -Match '(?m)actions: read'
         $deploy | Should -Match '(?m)-GitHubToken \$env:GH_TOKEN'
         $deploy | Should -Match '(?m)-ApiUrl \$env:GITHUB_API_URL'
-        $deploy | Should -Match '(?m)-MergeMultiple'
+        $deploy | Should -Match '(?m)uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'
+        $deploy | Should -Match '(?m)github-token: \$\{\{ github\.token \}\}'
     }
 
     It 'waits for the reusable workflow report ID before downloading it' {
         $verify = Get-WorkflowJob $canary 'verify'
-        $verify | Should -Match '(?m)Invoke-GitHubRunArtifactDownload'
-        $verify | Should -Not -Match 'uses: actions/download-artifact@'
+        $verify.IndexOf('Wait-GitHubRunArtifact') |
+            Should -BeLessThan $verify.IndexOf('uses: actions/download-artifact@')
         $verify | Should -Match '(?m)-ArtifactId \$env:ARTIFACT_ID'
         $verify | Should -Match '(?m)-GitHubToken \$env:GH_TOKEN'
         $verify | Should -Match '(?m)-ApiUrl \$env:GITHUB_API_URL'
+        $verify | Should -Match '(?m)uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'
     }
 }
 

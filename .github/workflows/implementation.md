@@ -122,10 +122,10 @@ rustup, installed-tool or other environment caches.
 
 ## Same-run artifact visibility
 
-Artifact upload completion, run-artifact discovery and archive discovery are separate observations
-in GitHub Actions. Every repository-owned same-run download uses
-`Invoke-GitHubRunArtifactDownload` in `scripts/workflow/ArtifactVisibility.psm1` so one bounded
-operation covers the complete handoff.
+Artifact upload completion and run-artifact discovery are separate observations in GitHub Actions.
+Every repository-owned same-run download first calls `Wait-GitHubRunArtifact` in
+`scripts/workflow/ArtifactVisibility.psm1`, then lets the pinned official
+`actions/download-artifact` own archive retrieval and extraction.
 
 The helper supports artifact ID, exact name and wildcard-pattern selectors. Pattern consumers
 state the complete producer count, and the helper counts distinct artifact names so duplicate
@@ -134,11 +134,10 @@ When a workflow reruns, pattern consumers must map each expected artifact name t
 The helper queries the current attempt's jobs and requires its latest visible artifact to have
 been created after that producer started. Producers that did not rerun retain their earlier valid
 artifacts, so failed-job reruns do not rebuild successful matrix legs.
-REST inventory requests use a request timeout. The helper retries missing selection, an archive 404
-and recognized transient request failures within a bounded interval. Archives are staged completely
-before extraction, so a later archive 404 cannot leave a partial site or report. Authentication,
-authorization, expiration, malformed responses and extraction failures fail immediately; an
-exhausted retry budget fails explicitly.
+REST inventory requests use a request timeout. The helper retries missing selection and recognized
+transient request failures within a bounded interval. Authentication, authorization, expiration
+and malformed responses fail immediately; an exhausted retry budget fails explicitly. The official
+download action starts only after this gate succeeds.
 
 The book deployment downloads every exact artifact from the discovered matrix; current-attempt
 producer jobs must expose a newer archive while unchanged jobs retain valid inherited artifacts.

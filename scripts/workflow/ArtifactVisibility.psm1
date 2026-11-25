@@ -1,8 +1,8 @@
 #Requires -Version 7.6
 
-# Owns the bounded same-run artifact handoff. Metadata selection and archive download are separate
-# service observations, so one retry operation covers both instead of leaving the download action
-# as an unguarded one-shot request after an upload becomes visible.
+# Owns the authenticated, bounded visibility gate between an artifact upload and the official
+# download action. The gate establishes complete same-run metadata and rerun freshness, then leaves
+# archive retrieval and extraction to the maintained first-party action.
 # Ref: .github/workflows/implementation.md#same-run-artifact-visibility.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -56,8 +56,7 @@ function Get-GitHubArtifactResponseProperty {
 }
 
 function Get-GitHubArtifactPendingError {
-    # Missing metadata and archive-not-found responses are deterministic retry evidence, not API
-    # defects. The shared error ID keeps the retry classifier narrower than status-text matching.
+    # Missing metadata is deterministic retry evidence rather than an API defect.
     [CmdletBinding()]
     [OutputType([System.Management.Automation.ErrorRecord])]
     param(
@@ -90,8 +89,7 @@ function Get-GitHubArtifactTransientError {
 }
 
 function Invoke-GitHubArtifactRestMethod {
-    # Applies a hard per-request timeout and classifies only bounded retry categories. An
-    # unrecognized response remains a permanent failure instead of consuming the retry budget.
+    # Applies a hard per-request timeout and classifies only bounded retry categories.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [uri] $Uri,
@@ -114,8 +112,8 @@ function Invoke-GitHubArtifactRestMethod {
 }
 
 function Get-GitHubRunArtifact {
-    # Reads the complete paginated run inventory because pattern selection and download both use
-    # this same authenticated REST boundary. Empty pages remain ordinary eventual absence.
+    # Reads the complete paginated run inventory because the official download action resolves
+    # same-run IDs and names through this authenticated inventory.
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -149,8 +147,8 @@ function Get-GitHubRunArtifact {
 }
 
 function Get-GitHubRunAttemptJob {
-    # Reads the current attempt's jobs to identify producers that actually need a fresh artifact.
-    # Reused successful jobs retain their original start time and therefore accept inherited data.
+    # Reads current-attempt jobs so producer freshness distinguishes actual reruns from inherited
+    # successful jobs whose artifacts must remain valid.
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -186,7 +184,7 @@ function Get-GitHubRunAttemptJob {
 }
 
 function Get-GitHubArtifactJobMarker {
-    # Reusable workflows can prefix local job names; selection compares the final local component.
+    # Reusable workflows prefix local job names; producer matching uses the final local component.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -201,7 +199,7 @@ function Get-GitHubArtifactJobMarker {
 
 function Select-GitHubRunArtifact {
     # Resolves latest-per-name selection to match download-artifact behavior while keeping one ID
-    # exact. Pattern consumers with producer maps select only expected current matrix identities.
+    # exact. Pattern consumers select only their explicit producer identities.
     [CmdletBinding(DefaultParameterSetName = 'ById')]
     [OutputType([pscustomobject])]
     param(
@@ -209,7 +207,7 @@ function Select-GitHubRunArtifact {
         [Parameter(Mandatory, ParameterSetName = 'ById')] [long] $ArtifactId,
         [Parameter(Mandatory, ParameterSetName = 'ByName')] [string] $Name,
         [Parameter(Mandatory, ParameterSetName = 'ByPattern')] [string] $Pattern,
-        [Parameter(ParameterSetName = 'ByPattern')] [hashtable] $ProducerJob
+        [Parameter(Mandatory, ParameterSetName = 'ByPattern')] [hashtable] $ProducerJob
     )
 
     $matching = @(switch ($PSCmdlet.ParameterSetName) {
@@ -217,7 +215,6 @@ function Select-GitHubRunArtifact {
             'ByName' { $Artifact | Where-Object { [string] $_.name -ceq $Name } }
             'ByPattern' { $Artifact | Where-Object { [string] $_.name -clike $Pattern } }
         })
-
     if ($PSCmdlet.ParameterSetName -ceq 'ById') { return @($matching) }
 
     $latestByName = @(
@@ -225,19 +222,21 @@ function Select-GitHubRunArtifact {
             Group-Object -Property name -CaseSensitive |
             ForEach-Object { @($_.Group | Sort-Object -Property id -Descending)[0] }
     )
-    if ($ProducerJob) {
-        foreach ($name in $ProducerJob.Keys) {
-            if ($name -cnotlike $Pattern) {
-                throw "Producer artifact '$name' does not match pattern '$Pattern'."
+    if ($PSCmdlet.ParameterSetName -ceq 'ByPattern') {
+        foreach ($artifactName in $ProducerJob.Keys) {
+            if ($artifactName -cnotlike $Pattern) {
+                throw "Producer artifact '$artifactName' does not match pattern '$Pattern'."
             }
         }
-        return @($latestByName | Where-Object { $ProducerJob.ContainsKey([string] $_.name) })
+        return @($latestByName | Where-Object {
+                $ProducerJob.ContainsKey([string] $_.name)
+            })
     }
     return $latestByName
 }
 
 function Assert-GitHubRunArtifactSelection {
-    # Proves that selected metadata belongs to this run and remains usable before archive download.
+    # Rejects wrong-run, expired or malformed metadata before the official action starts.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [object[]] $Artifact,
@@ -255,24 +254,24 @@ function Assert-GitHubRunArtifactSelection {
         if ([bool] (Get-GitHubArtifactResponseProperty -Response $item -Name 'expired')) {
             throw "Artifact '$name' has expired."
         }
-        $null = Get-GitHubArtifactResponseProperty -Response $item -Name 'archive_download_url'
     }
 }
 
 function Get-GitHubArtifactFreshness {
-    # Identifies expected names whose latest archive predates a producer that actually reran.
+    # Identifies expected names whose latest metadata predates a producer that actually reran.
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Artifact,
+        [Parameter(Mandatory)] [object[]] $Artifact,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Job,
         [Parameter(Mandatory)] [hashtable] $ProducerJob,
         [Parameter(Mandatory)] [int] $RunAttempt
     )
 
     foreach ($artifactName in $ProducerJob.Keys) {
-        $latestArtifact = @($Artifact | Where-Object { [string] $_.name -ceq $artifactName }) |
-            Select-Object -First 1
+        $latestArtifact = @($Artifact | Where-Object {
+                [string] $_.name -ceq $artifactName
+            }) | Select-Object -First 1
         if ($null -eq $latestArtifact) {
             $artifactName
             continue
@@ -302,65 +301,9 @@ function Get-GitHubArtifactFreshness {
     }
 }
 
-function Save-GitHubArtifactArchive {
-    # Downloads one archive through its public URL. Only a 404 is artifact visibility evidence;
-    # authorization, expiration, service and transport failures retain their distinct outcomes.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] $Artifact,
-        [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [hashtable] $Headers,
-        [Parameter(Mandatory)] [int] $TimeoutSeconds
-    )
-
-    $uri = [uri] (Get-GitHubArtifactResponseProperty `
-            -Response $Artifact -Name 'archive_download_url')
-    try {
-        Invoke-WebRequest -Uri $uri -Headers $Headers -OutFile $Path `
-            -TimeoutSec $TimeoutSeconds -ErrorAction Stop
-    }
-    catch {
-        $status = Get-GitHubArtifactHttpStatusCode -ErrorRecord $_
-        if ($status -eq 404) {
-            throw (Get-GitHubArtifactPendingError `
-                    -Message "Artifact archive is not available yet for download.")
-        }
-        if ($null -ne $status -and ($status -eq 408 -or $status -eq 429 -or $status -ge 500)) {
-            throw (Get-GitHubArtifactTransientError `
-                    -Message "GitHub artifact archive request failed with HTTP $status." `
-                    -InnerException $_.Exception)
-        }
-        throw
-    }
-}
-
-function Get-GitHubArtifactDestination {
-    # Mirrors action download directory layout while rejecting names that can escape the root.
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)] [string] $Root,
-        [Parameter(Mandatory)] $Artifact,
-        [Parameter(Mandatory)] [string] $Selector,
-        [Parameter(Mandatory)] [int] $SelectedCount,
-        [Parameter(Mandatory)] [bool] $MergeMultiple
-    )
-
-    if ($MergeMultiple -or $Selector -ceq 'ByName' -or
-        ($Selector -ceq 'ById' -and $SelectedCount -eq 1)) {
-        return $Root
-    }
-    $name = [string] (Get-GitHubArtifactResponseProperty -Response $Artifact -Name 'name')
-    if ([string]::IsNullOrWhiteSpace($name) -or $name -cin @('.', '..') -or
-        $name -cmatch '[\\/]') {
-        throw "Artifact name '$name' cannot be used as a download directory."
-    }
-    return Join-Path $Root $name
-}
-
-function Invoke-GitHubRunArtifactDownload {
-    # Resolves, downloads and extracts one exact same-run selector through a bounded retry budget.
-    # Archives are staged completely before extraction, so a later 404 cannot leave partial files.
+function Wait-GitHubRunArtifact {
+    # Waits for a complete, fresh artifact selector through the same inventory used by the official
+    # download action. Actual archive download and extraction remain owned by that action.
     [CmdletBinding(DefaultParameterSetName = 'ById')]
     param(
         [Parameter(Mandatory)] [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
@@ -368,7 +311,6 @@ function Invoke-GitHubRunArtifactDownload {
         [Parameter(Mandatory)] [ValidateRange(1, [long]::MaxValue)] [long] $RunId,
         [Parameter(Mandatory)] [uri] $ApiUrl,
         [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $GitHubToken,
-        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $Path,
         [Parameter(Mandatory, ParameterSetName = 'ById')]
         [ValidateRange(1, [long]::MaxValue)]
         [long] $ArtifactId,
@@ -387,19 +329,17 @@ function Invoke-GitHubRunArtifactDownload {
         [Parameter(Mandatory, ParameterSetName = 'ByPattern')]
         [ValidateRange(1, [int]::MaxValue)]
         [int] $RunAttempt,
-        [switch] $MergeMultiple,
-        # These defaults cover short service propagation without letting a failed handoff hold CI.
+        # These defaults cover short propagation without allowing an unbounded CI wait.
         [ValidateRange(1, 100)] [int] $Attempt = 12,
-        # A fixed delay keeps the bounded wait short while avoiding a tight REST polling loop.
+        # A fixed delay avoids tight polling while preserving the bounded retry window.
         [ValidateRange(0, 300)] [int] $DelaySeconds = 5,
-        # Each REST and archive request must fail within the overall handoff budget.
+        # A stalled REST request must fail within the overall handoff budget.
         [ValidateRange(1, 300)] [int] $RequestTimeoutSeconds = 30
     )
 
-    if ($PSCmdlet.ParameterSetName -ceq 'ByPattern') {
-        if ($ExpectedCount -ne $ProducerJob.Count) {
-            throw 'ExpectedCount must equal the producer-job mapping count.'
-        }
+    if ($PSCmdlet.ParameterSetName -ceq 'ByPattern' -and
+        $ExpectedCount -ne $ProducerJob.Count) {
+        throw 'ExpectedCount must equal the producer-job mapping count.'
     }
 
     $selector = switch ($PSCmdlet.ParameterSetName) {
@@ -408,15 +348,12 @@ function Invoke-GitHubRunArtifactDownload {
         'ByPattern' { "artifact pattern '$Pattern'" }
     }
     $headers = @{
-        Accept                = 'application/vnd.github+json'
-        Authorization         = "Bearer $GitHubToken"
+        Accept = 'application/vnd.github+json'
+        Authorization = "Bearer $GitHubToken"
         'X-GitHub-Api-Version' = '2022-11-28'
     }
-    $temporaryRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
     $requestApiUrl = $ApiUrl
     $requestRepository = $Repository
-    $downloadPath = $Path
-    $downloadMergeMultiple = $MergeMultiple.IsPresent
     $requestTimeout = $RequestTimeoutSeconds
     $requestRunAttempt = $RunAttempt
 
@@ -459,8 +396,8 @@ function Invoke-GitHubRunArtifactDownload {
 
             if ($PSCmdlet.ParameterSetName -ceq 'ByPattern') {
                 $jobs = @(Get-GitHubRunAttemptJob -ApiUrl $requestApiUrl `
-                        -Repository $requestRepository `
-                        -RunId $RunId -RunAttempt $requestRunAttempt -Headers $headers `
+                        -Repository $requestRepository -RunId $RunId `
+                        -RunAttempt $requestRunAttempt -Headers $headers `
                         -TimeoutSeconds $requestTimeout)
                 $stale = @(Get-GitHubArtifactFreshness -Artifact $selected -Job $jobs `
                         -ProducerJob $ProducerJob -RunAttempt $requestRunAttempt)
@@ -470,31 +407,7 @@ function Invoke-GitHubRunArtifactDownload {
                 }
             }
 
-            $downloadRoot = Join-Path $temporaryRoot "folo-artifacts-$([guid]::NewGuid().ToString('N'))"
-            New-Item -ItemType Directory -Path $downloadRoot | Out-Null
-            try {
-                $archives = @()
-                foreach ($item in $selected) {
-                    $id = [long] (Get-GitHubArtifactResponseProperty -Response $item -Name 'id')
-                    $archive = Join-Path $downloadRoot "$id.zip"
-                    Save-GitHubArtifactArchive -Artifact $item -Path $archive -Headers $headers `
-                        -TimeoutSeconds $requestTimeout
-                    $archives += @{ artifact = $item; path = $archive }
-                }
-
-                New-Item -ItemType Directory -Path $downloadPath -Force | Out-Null
-                foreach ($entry in $archives) {
-                    $destination = Get-GitHubArtifactDestination -Root $downloadPath `
-                        -Artifact $entry.artifact -Selector $PSCmdlet.ParameterSetName `
-                        -SelectedCount $selected.Count -MergeMultiple:$downloadMergeMultiple
-                    New-Item -ItemType Directory -Path $destination -Force | Out-Null
-                    Expand-Archive -LiteralPath $entry.path -DestinationPath $destination -Force
-                }
-                Write-Host "Downloaded $selector from workflow run $RunId."
-            }
-            finally {
-                Remove-Item -LiteralPath $downloadRoot -Recurse -Force -ErrorAction SilentlyContinue
-            }
+            Write-Host "$selector is visible and fresh in workflow run $RunId."
         }
     }
     catch {
@@ -503,11 +416,11 @@ function Invoke-GitHubRunArtifactDownload {
                 'ArtifactRequestTransient'
             )) {
             throw [System.InvalidOperationException]::new(
-                "$selector did not become downloadable after $Attempt attempts in workflow run $RunId."
+                "$selector did not become visible after $Attempt attempts in workflow run $RunId."
             )
         }
         throw
     }
 }
 
-Export-ModuleMember -Function Invoke-GitHubRunArtifactDownload
+Export-ModuleMember -Function Wait-GitHubRunArtifact

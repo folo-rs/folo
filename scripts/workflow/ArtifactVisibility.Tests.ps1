@@ -1,8 +1,8 @@
 #Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Pester suite for ArtifactVisibility.psm1. Service responses and downloads are mocked so metadata,
-# archive, rerun and HTTP-classification boundaries are exercised without GitHub or real delays.
+# Pester suite for ArtifactVisibility.psm1. REST and job responses are mocked so selector,
+# pagination, freshness, retry and permanent-failure boundaries run without GitHub or delays.
 # Ref: .github/workflows/implementation.md#same-run-artifact-visibility.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -14,15 +14,17 @@ BeforeAll {
     function Get-TestArtifact(
         [long] $Id = 1,
         [string] $Name = 'report',
-        [string] $CreatedAt = '2026-11-25T03:00:00Z'
+        [string] $CreatedAt = '2026-11-25T03:00:00Z',
+        [bool] $Expired = $false,
+        [long] $WorkflowRunId = 100
     ) {
         [pscustomobject]@{
-            id                  = $Id
-            name                = $Name
-            created_at          = $CreatedAt
-            expired             = $false
+            id = $Id
+            name = $Name
+            created_at = $CreatedAt
+            expired = $Expired
             archive_download_url = "https://api.github.test/artifacts/$Id/zip"
-            workflow_run        = [pscustomobject]@{ id = 100 }
+            workflow_run = [pscustomobject]@{ id = $WorkflowRunId }
         }
     }
 
@@ -34,49 +36,35 @@ BeforeAll {
     }
 }
 
-Describe 'Invoke-GitHubRunArtifactDownload' {
+Describe 'Wait-GitHubRunArtifact' {
     BeforeEach {
-        $env:RUNNER_TEMP = $TestDrive
         Mock Start-Sleep -ModuleName Retry { }
-        Mock Save-GitHubArtifactArchive -ModuleName ArtifactVisibility {
-            Set-Content -LiteralPath $Path -Value archive
-        }
-        Mock Expand-Archive -ModuleName ArtifactVisibility { }
     }
 
-    AfterEach {
-        Remove-Item Env:\RUNNER_TEMP -ErrorAction SilentlyContinue
-    }
-
-    It 'downloads an exact artifact ID' {
+    It 'waits for an exact artifact ID' {
         Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
             Get-TestArtifact -Id 42
         }
-        $path = Join-Path $TestDrive 'id'
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
-                -Repository owner/repo -RunId 100 -GitHubToken token -Path $path `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
+                -Repository owner/repo -RunId 100 -GitHubToken token `
                 -ArtifactId 42 -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility -Times 1 -Exactly
-        Should -Invoke Expand-Archive -ModuleName ArtifactVisibility -Times 1 -Exactly `
-            -ParameterFilter { $DestinationPath -ceq $path }
+        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 1 -Exactly
     }
 
-    It 'downloads the latest record for an exact artifact name' {
+    It 'waits for the latest record with an exact artifact name' {
         Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
             Get-TestArtifact -Id 1 -Name report
             Get-TestArtifact -Id 2 -Name report
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'name') -Name report -Attempt 2 -DelaySeconds 0
+                -Name report -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility `
-            -Times 1 -Exactly -ParameterFilter { $Artifact.id -eq 2 }
     }
 
     It 'waits through a temporarily disappearing partial pattern inventory' {
@@ -96,13 +84,12 @@ Describe 'Invoke-GitHubRunArtifactDownload' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
-                -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'pattern') -RunAttempt 2 -Pattern 'book-*' `
-                -ExpectedCount 2 -ProducerJob $producers -MergeMultiple -Attempt 4 -DelaySeconds 0
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
+                -Repository owner/repo -RunId 100 -RunAttempt 2 -GitHubToken token `
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producers `
+                -Attempt 4 -DelaySeconds 0
         } | Should -Not -Throw
         Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 3 -Exactly
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
     It 'counts distinct pattern names rather than duplicate rerun records' {
@@ -122,14 +109,12 @@ Describe 'Invoke-GitHubRunArtifactDownload' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
-                -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'duplicates') -RunAttempt 2 -Pattern 'book-*' `
-                -ExpectedCount 2 -ProducerJob $producers -MergeMultiple `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
+                -Repository owner/repo -RunId 100 -RunAttempt 2 -GitHubToken token `
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producers `
                 -Attempt 3 -DelaySeconds 0
         } | Should -Not -Throw
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility `
-            -Times 2 -Exactly
+        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
     It 'waits for artifacts newer than rerun producers' {
@@ -159,13 +144,12 @@ Describe 'Invoke-GitHubRunArtifactDownload' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -RunAttempt 2 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'rerun') -Pattern 'book-*' -ExpectedCount 2 `
-                -ProducerJob $producers -MergeMultiple -Attempt 3 -DelaySeconds 0
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producers `
+                -Attempt 3 -DelaySeconds 0
         } | Should -Not -Throw
         Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
     It 'accepts inherited artifacts from a reused producer job' {
@@ -186,12 +170,11 @@ Describe 'Invoke-GitHubRunArtifactDownload' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -RunAttempt 2 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'reused') -Pattern 'book-*' -ExpectedCount 2 `
-                -ProducerJob $producers -MergeMultiple -Attempt 2 -DelaySeconds 0
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producers `
+                -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
     It 'selects only producer-mapped names from a wider pattern inventory' {
@@ -207,13 +190,11 @@ Describe 'Invoke-GitHubRunArtifactDownload' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -RunAttempt 2 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'mapped') -Pattern 'book-*' -ExpectedCount 2 `
-                -ProducerJob $producers -MergeMultiple -Attempt 2 -DelaySeconds 0
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producers `
+                -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility `
-            -Times 2 -Exactly -ParameterFilter { $Artifact.name -cne 'book-removed' }
     }
 
     It 'rejects a pattern producer map that does not match the expected count' {
@@ -223,10 +204,10 @@ Describe 'Invoke-GitHubRunArtifactDownload' {
         $producers = @{'book-alpha' = 'Build book alpha' }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -RunAttempt 2 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'invalid-producers') -Pattern 'book-*' `
-                -ExpectedCount 2 -ProducerJob $producers -Attempt 2 -DelaySeconds 0
+                -Pattern 'book-*' -ExpectedCount 2 -ProducerJob $producers `
+                -Attempt 2 -DelaySeconds 0
         } | Should -Throw -ExpectedMessage '*must equal*'
         Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 0 -Exactly
     }
@@ -245,64 +226,31 @@ Describe 'Invoke-GitHubRunArtifactDownload' {
         $producers = @{'book-alpha' = 'Build book alpha' }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -RunAttempt 2 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'stale') -Pattern 'book-*' `
-                -ExpectedCount 1 -ProducerJob $producers -Attempt 3 -DelaySeconds 0
-        } | Should -Throw -ExpectedMessage '*did not become downloadable after 3 attempts*'
+                -Pattern 'book-*' -ExpectedCount 1 -ProducerJob $producers `
+                -Attempt 3 -DelaySeconds 0
+        } | Should -Throw -ExpectedMessage '*did not become visible after 3 attempts*'
         Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 3 -Exactly
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility -Times 0 -Exactly
     }
 
-    It 'retries an archive 404 without extracting a partial set' {
-        $script:downloads = 0
+    It 'does not retry expired metadata' {
         Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
-            Get-TestArtifact -Id 1 -Name book-alpha
-            Get-TestArtifact -Id 2 -Name book-beta
-        }
-        Mock Save-GitHubArtifactArchive -ModuleName ArtifactVisibility {
-            $script:downloads++
-            if ($script:downloads -eq 2) {
-                $pending = [System.Management.Automation.ErrorRecord]::new(
-                    [System.InvalidOperationException]::new('not found'),
-                    'ArtifactVisibilityPending',
-                    [System.Management.Automation.ErrorCategory]::ResourceUnavailable,
-                    $null
-                )
-                throw $pending
-            }
-            Set-Content -LiteralPath $Path -Value archive
-        }
-        Mock Get-GitHubRunAttemptJob -ModuleName ArtifactVisibility { @() }
-        $producers = @{
-            'book-alpha' = 'Build book alpha'
-            'book-beta' = 'Build book beta'
+            Get-TestArtifact -Id 42 -Expired $true
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'archive-404') -RunAttempt 2 -Pattern 'book-*' `
-                -ExpectedCount 2 -ProducerJob $producers -MergeMultiple `
-                -Attempt 3 -DelaySeconds 0
-        } | Should -Not -Throw
-        Should -Invoke Save-GitHubArtifactArchive -ModuleName ArtifactVisibility -Times 4 -Exactly
-        Should -Invoke Expand-Archive -ModuleName ArtifactVisibility -Times 2 -Exactly
+                -ArtifactId 42 -Attempt 4 -DelaySeconds 0
+        } | Should -Throw -ExpectedMessage '*has expired*'
+        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 1 -Exactly
     }
 }
 
 Describe 'GitHub artifact HTTP boundaries' {
     BeforeEach {
-        $env:RUNNER_TEMP = $TestDrive
         Mock Start-Sleep -ModuleName Retry { }
-        Mock Expand-Archive -ModuleName ArtifactVisibility { }
-        Mock Invoke-WebRequest -ModuleName ArtifactVisibility {
-            Set-Content -LiteralPath $OutFile -Value archive
-        }
-    }
-
-    AfterEach {
-        Remove-Item Env:\RUNNER_TEMP -ErrorAction SilentlyContinue
     }
 
     It 'retries an inventory from a real empty REST response' {
@@ -321,13 +269,27 @@ Describe 'GitHub artifact HTTP boundaries' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'empty-rest') -ArtifactId 42 `
-                -RequestTimeoutSeconds 23 -Attempt 2 -DelaySeconds 0
+                -ArtifactId 42 -RequestTimeoutSeconds 23 -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
         Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 2 -Exactly `
             -ParameterFilter { $TimeoutSec -eq 23 }
+    }
+
+    It 'uses the shared bounded retry defaults' {
+        Mock Invoke-RestMethod -ModuleName ArtifactVisibility {
+            [pscustomobject]@{ total_count = 0; artifacts = @() }
+        }
+
+        {
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
+                -Repository owner/repo -RunId 100 -GitHubToken token -ArtifactId 42
+        } | Should -Throw -ExpectedMessage '*after 12 attempts*'
+        Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 12 -Exactly `
+            -ParameterFilter { $TimeoutSec -eq 30 }
+        Should -Invoke Start-Sleep -ModuleName Retry -Times 11 -Exactly `
+            -ParameterFilter { $Seconds -eq 5 }
     }
 
     It 'retries a transient HTTP 503 with the response diagnostics' {
@@ -344,10 +306,9 @@ Describe 'GitHub artifact HTTP boundaries' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'http-503') -ArtifactId 42 `
-                -Attempt 2 -DelaySeconds 0
+                -ArtifactId 42 -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
         Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
@@ -366,10 +327,9 @@ Describe 'GitHub artifact HTTP boundaries' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'transport-timeout') -ArtifactId 42 `
-                -Attempt 2 -DelaySeconds 0
+                -ArtifactId 42 -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
         Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
@@ -380,51 +340,10 @@ Describe 'GitHub artifact HTTP boundaries' {
         }
 
         {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
+            Wait-GitHubRunArtifact -ApiUrl 'https://api.github.test' `
                 -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'http-401') -ArtifactId 42 `
-                -Attempt 4 -DelaySeconds 0
+                -ArtifactId 42 -Attempt 4 -DelaySeconds 0
         } | Should -Throw
         Should -Invoke Invoke-RestMethod -ModuleName ArtifactVisibility -Times 1 -Exactly
-    }
-
-    It 'retries a real archive 404' {
-        Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
-            Get-TestArtifact -Id 42
-        }
-        $script:archives = 0
-        Mock Invoke-WebRequest -ModuleName ArtifactVisibility {
-            $script:archives++
-            if ($script:archives -eq 1) {
-                throw (Get-TestHttpException -StatusCode 404 -Message 'Not Found')
-            }
-            Set-Content -LiteralPath $OutFile -Value archive
-        }
-
-        {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
-                -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'archive-404') -ArtifactId 42 `
-                -Attempt 2 -DelaySeconds 0 -RequestTimeoutSeconds 21
-        } | Should -Not -Throw
-        Should -Invoke Invoke-WebRequest -ModuleName ArtifactVisibility -Times 2 -Exactly `
-            -ParameterFilter { $TimeoutSec -eq 21 }
-    }
-
-    It 'does not retry an archive authorization failure' {
-        Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
-            Get-TestArtifact -Id 42
-        }
-        Mock Invoke-WebRequest -ModuleName ArtifactVisibility {
-            throw (Get-TestHttpException -StatusCode 403 -Message 'Forbidden')
-        }
-
-        {
-            Invoke-GitHubRunArtifactDownload -ApiUrl 'https://api.github.test' `
-                -Repository owner/repo -RunId 100 -GitHubToken token `
-                -Path (Join-Path $TestDrive 'archive-403') -ArtifactId 42 `
-                -Attempt 4 -DelaySeconds 0
-        } | Should -Throw
-        Should -Invoke Invoke-WebRequest -ModuleName ArtifactVisibility -Times 1 -Exactly
     }
 }
