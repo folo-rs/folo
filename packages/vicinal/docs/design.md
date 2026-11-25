@@ -85,7 +85,7 @@ System workers may move between permitted processors in different memory regions
 Each built-in worker group starts its configured worker count once, on first task use or
 during eager construction. The default policy starts no workers during construction
 unless eager selection is configured. Every policy receives the eager selection during
-`prepare()` through `WorkerPolicyContext::eager()`. Built-in policies honor it automatically;
+`prepare()` through `PrepareContext::eager()`. Built-in policies honor it automatically;
 a custom policy may interpret or ignore it, but the builder still waits for any workers that
 the policy reserves with `WorkerGroup::add_worker()` during `prepare()`. Workers persist until
 shutdown. Shared worker counts are not multiplied
@@ -140,8 +140,8 @@ does not wait for it. Eager construction waits for all selected workers to finis
 Workers can therefore initialize independently, and an initializer may submit work to its
 pool. Initializers must preserve affinity, must not wait for work submitted to the same
 pool and must not shut down that pool. Eager initializers must not depend on construction
-returning, including to publish a scheduler for their own pool. They run under the full initial
-affinity mask of their destination. A panic is an infrastructure failure that stops and
+returning, including to publish a scheduler for their own pool. They run with the worker
+group's full initial permitted processor set. A panic is an infrastructure failure that stops and
 poisons the pool, rather than a task failure.
 
 ## Locality boundaries
@@ -209,14 +209,14 @@ the pool does not forcibly terminate threads. Every later submission panics sync
 even after the pool is dropped. Task panics retain their separate behavior and do not
 poison the pool.
 
-Built-in policy startup establishes the full configured count and initial affinity before
-accepting work for a worker group. Eager construction failures, including initializer panics,
-propagate on the constructing call after stopping and waiting for every running worker;
-no partial pool is returned. User initialization side effects are not reversible, and the
+Built-in policy startup establishes every configured worker for a worker group and applies its
+initial affinity before accepting work for that group. Eager construction failures, including
+initializer panics, propagate on the constructing call after stopping and waiting for every
+running worker. No partial pool is returned. User initialization side effects are not reversible, and the
 pool cannot forcibly terminate a callback that does not return.
-Failures detected during task submission, including thread
-creation and initial affinity setup, panic on the submitting call. A later affinity
-refresh failure occurs on a worker, so the triggering submission may already have returned.
+Failures detected during task submission, including thread creation and initial affinity setup,
+panic on the submitting call. A failure while a worker applies a later permitted affinity set
+can occur after task submission has already returned.
 Dropping the pool waits for every running worker and propagates worker failures
 after cleanup. A custom policy owns the operating-system thread handles, if it needs them,
 while `Worker::run()` supplies the pool's worker-lifetime and failure boundaries.

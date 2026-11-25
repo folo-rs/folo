@@ -19,8 +19,8 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use tracing::error;
 
 use crate::{
-    ErasedTaskHandle, NEVER_POISONED, PoolRuntime, ThreadInit, WorkerGroups, WorkerPolicy,
-    WorkerPolicyContext, discard_panic, extract_panic_message, report_diagnostic,
+    ErasedTaskHandle, NEVER_POISONED, PoolRuntime, PrepareContext, ThreadInit, WorkerGroups,
+    WorkerPolicy, discard_panic, extract_panic_message, report_diagnostic,
     validate_eager_processors,
 };
 #[cfg(test)]
@@ -59,9 +59,7 @@ impl PoolInner {
         }
         runtime.begin_worker_preparation();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            policy.prepare(WorkerPolicyContext::new(
-                hardware, eager, &groups, &pool_name,
-            ));
+            policy.prepare(PrepareContext::new(hardware, eager, &groups, &pool_name));
         }));
         runtime.end_worker_preparation();
 

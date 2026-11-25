@@ -11,7 +11,7 @@ use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
 use testing::with_watchdog;
-use vicinal::{Pool, WorkerGroupId, WorkerGroups, WorkerPolicy};
+use vicinal::{Pool, PrepareContext, WorkerGroupId, WorkerGroups, WorkerPolicy};
 
 testing::init_tracing!();
 
@@ -22,6 +22,8 @@ struct LazySingleGroupPolicy {
 }
 
 impl WorkerPolicy for LazySingleGroupPolicy {
+    fn prepare(&mut self, _context: PrepareContext<'_>) {}
+
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get_or_init(|| {
             let group = groups.add();

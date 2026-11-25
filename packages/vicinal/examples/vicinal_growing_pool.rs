@@ -1,18 +1,13 @@
 //! Demonstrates a custom policy that grows without a fixed worker limit.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::thread::spawn;
 
 use futures::executor::block_on;
-use vicinal::{Pool, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext};
+use vicinal::{Pool, PrepareContext, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy};
 
 fn main() {
-    let worker_count = Arc::new(AtomicUsize::new(0));
-    let pool = Pool::builder()
-        .worker_policy(GrowingPolicy::new(Arc::clone(&worker_count)))
-        .build();
+    let pool = Pool::builder().worker_policy(GrowingPolicy::new()).build();
     let scheduler = pool.scheduler();
 
     let (first_entered, first_arrival) = channel();
@@ -44,8 +39,6 @@ fn main() {
     second_arrival
         .recv()
         .expect("the additional worker enters the queued task");
-    // `second_arrival` completes after the second worker increments the counter above.
-    assert_eq!(worker_count.load(Ordering::Acquire), 2);
 
     release_first
         .send(())
@@ -62,29 +55,25 @@ fn main() {
 /// observes backlog. It deliberately never removes workers or imposes a maximum.
 struct GrowingPolicy {
     group: Option<WorkerGroup>,
-    worker_count: Arc<AtomicUsize>,
 }
 
 impl GrowingPolicy {
-    fn new(worker_count: Arc<AtomicUsize>) -> Self {
-        Self {
-            group: None,
-            worker_count,
-        }
+    fn new() -> Self {
+        Self { group: None }
     }
 }
 
 impl WorkerPolicy for GrowingPolicy {
-    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) {
         let group = context.groups().add();
-        spawn_worker(&group, &self.worker_count);
+        spawn_worker(&group);
         self.group = Some(group);
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         let group = self.group.as_ref().expect("build prepares the policy");
         if group.queue_len() != 0 {
-            spawn_worker(group, &self.worker_count);
+            spawn_worker(group);
         }
 
         group.id()
@@ -92,17 +81,10 @@ impl WorkerPolicy for GrowingPolicy {
 }
 
 /// Transfers one group handle into a policy-owned OS thread and records its startup.
-fn spawn_worker(group: &WorkerGroup, worker_count: &Arc<AtomicUsize>) {
+fn spawn_worker(group: &WorkerGroup) {
     _ = spawn({
         let worker = group.add_worker();
-        let worker_count = Arc::clone(worker_count);
-        move || {
-            // The task handshakes below establish that this increment happened before the
-            // assertion. Release/Acquire only describes the counter update; it is not a
-            // substitute for waiting for the worker to enter task execution.
-            worker_count.fetch_add(1, Ordering::Release);
-            worker.run();
-        }
+        move || worker.run()
     });
 }
 

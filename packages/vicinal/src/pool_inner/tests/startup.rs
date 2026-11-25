@@ -16,8 +16,8 @@ use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{OnDrop, PanickingPayload, TestPolicy, affinity, hardware, probe};
 use crate::{
-    BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, SubmissionTarget, WorkerGroupId, WorkerGroups,
-    WorkerPolicy, WorkerPolicyContext,
+    BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, PrepareContext, SubmissionTarget,
+    WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 /// Pauses policy selection after a test worker reaches the ordinary participation boundary.
@@ -30,7 +30,7 @@ struct GatedSelectionPolicy {
 }
 
 impl WorkerPolicy for GatedSelectionPolicy {
-    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) {
         self.inner.prepare(context);
     }
 
@@ -60,7 +60,7 @@ struct PanickingSelectionPolicy {
 }
 
 impl WorkerPolicy for PanickingSelectionPolicy {
-    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) {
         self.inner.prepare(context);
     }
 

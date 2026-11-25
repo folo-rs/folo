@@ -10,7 +10,7 @@ use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
-use crate::{Pool, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy, WorkerPolicyContext};
+use crate::{Pool, PrepareContext, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy};
 
 struct PreparationFailure;
 
@@ -22,7 +22,7 @@ struct StartupFailurePolicy {
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
-    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
@@ -43,7 +43,7 @@ struct ReturningFailurePolicy {
 }
 
 impl WorkerPolicy for ReturningFailurePolicy {
-    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) {
         let group = context.groups().add();
         let (failed, failure) = channel();
         assert!(
@@ -70,7 +70,7 @@ struct EagerCustomPolicy {
 }
 
 impl WorkerPolicy for EagerCustomPolicy {
-    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         for _ in 0..2 {
@@ -92,7 +92,7 @@ struct DroppedWorkerPolicy {
 }
 
 impl WorkerPolicy for DroppedWorkerPolicy {
-    fn prepare(&mut self, context: WorkerPolicyContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         drop(group.add_worker());

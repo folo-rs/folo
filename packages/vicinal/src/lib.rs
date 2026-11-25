@@ -137,6 +137,7 @@
 //! [avoiding operating system quota penalties]:
 //!   https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties
 
+mod built_in_worker_policy;
 mod constants;
 mod group_id;
 mod group_registry;
@@ -154,6 +155,9 @@ mod worker;
 mod worker_group;
 mod worker_policy;
 
+#[cfg(test)]
+pub(crate) use built_in_worker_policy::PolicyKind;
+pub(crate) use built_in_worker_policy::{BuiltInWorkerPolicy, validate_eager_processors};
 pub(crate) use constants::NEVER_POISONED;
 pub(crate) use group_id::*;
 pub use group_registry::WorkerGroups;
@@ -170,7 +174,6 @@ pub(crate) use worker::*;
 pub(crate) use worker_group::WorkerEntry;
 pub(crate) use worker_group::{GroupState, WorkerGroupState};
 pub use worker_group::{Worker, WorkerGroup, WorkerGroupId};
-pub(crate) use worker_policy::BuiltInWorkerPolicy;
 pub use worker_policy::*;
 
 #[cfg(test)]

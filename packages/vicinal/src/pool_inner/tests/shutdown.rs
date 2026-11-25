@@ -22,8 +22,8 @@ use super::helpers::{
     regional_hardware,
 };
 use crate::{
-    BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, Scheduler, WorkerGroupId, WorkerGroups,
-    WorkerPolicy,
+    BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, PrepareContext, Scheduler, WorkerGroupId,
+    WorkerGroups, WorkerPolicy,
 };
 
 /// Records whether terminal admission ever reaches custom policy selection.
@@ -34,6 +34,8 @@ struct RecordingPolicy {
 }
 
 impl WorkerPolicy for RecordingPolicy {
+    fn prepare(&mut self, _context: PrepareContext<'_>) {}
+
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         self.selected.fetch_add(1, Ordering::Release);
         panic!("shutdown must prevent policy selection")
