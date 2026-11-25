@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot 'PublicApiComment.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..\workflow\PublicApiComment.psm1') -Force
 
     function Write-PublicApiArtifact {
         param(

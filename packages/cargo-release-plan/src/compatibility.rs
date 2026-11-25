@@ -1,5 +1,6 @@
 //! Explicit external API evidence, kept separate from offline classification and semantic decisions.
 
+use std::collections::BTreeMap;
 use std::env::consts::EXE_SUFFIX;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
@@ -98,7 +99,7 @@ impl CompatibilityOutcome {
         &mut self,
         targets: impl IntoIterator<Item = String>,
         mut baseline: impl FnMut(&str) -> Result<Option<Version>, AppError>,
-        mut compare: impl FnMut(&str, &Version) -> Result<Output, AppError>,
+        mut compare: impl FnMut(&str, &Version) -> Result<BaselineComparison, AppError>,
         output: &mut CheckerOutput<impl Write, impl Write>,
         verbose: Verbose<'_>,
     ) -> Result<(), AppError> {
@@ -122,7 +123,7 @@ impl CompatibilityOutcome {
         &mut self,
         name: &str,
         baseline: Option<Version>,
-        compare: impl FnOnce(&Version) -> Result<Output, AppError>,
+        compare: impl FnOnce(&Version) -> Result<BaselineComparison, AppError>,
         output: &mut CheckerOutput<impl Write, impl Write>,
         verbose: Verbose<'_>,
     ) -> Result<(), AppError> {
@@ -134,8 +135,29 @@ impl CompatibilityOutcome {
             ));
             return Ok(());
         };
-        verbose.note(||format!("Comparing {name} against baseline {baseline} with all features from the captured source workspace."));
-        let result = compare(&baseline)?;
+        verbose.note(|| {
+            format!(
+                "Assessing {name} from the captured source workspace against baseline {baseline}; \
+                 unexcluded comparisons use all features."
+            )
+        });
+        let result = match compare(&baseline)? {
+            BaselineComparison::Compared(result) => result,
+            BaselineComparison::Excluded(reason) => {
+                verbose.note(|| {
+                    format!(
+                        "{name} baseline {baseline} is explicitly excluded because {reason}. \
+                     No comparison or semantic floor is inferred; assess the complete contract."
+                    )
+                });
+                let mut unavailable =
+                    Comparison::unavailable(name.to_owned(), NotComparedReason::ExplicitExclusion);
+                unavailable.baseline_version = Some(baseline.to_string());
+                unavailable.exclusion_reason = Some(reason);
+                self.packages.push(unavailable);
+                return Ok(());
+            }
+        };
         let text = output.record(&result)?;
         let floor = interpret(result.status.code(), &text)?;
         self.findings |= result.status.code() == Some(100);
@@ -145,6 +167,7 @@ impl CompatibilityOutcome {
             required_impact: floor,
             compared: true,
             not_compared_reason: None,
+            exclusion_reason: None,
         });
         Ok(())
     }
@@ -153,7 +176,7 @@ impl CompatibilityOutcome {
         (
             !deny_findings || !self.findings,
             format!(
-                "{}Compatibility evidence: {}.",
+                "{}{}Compatibility evidence: {}.",
                 if deny_findings && self.findings {
                     format!(
                         "Insufficient version increments: {}. ",
@@ -167,6 +190,16 @@ impl CompatibilityOutcome {
                     )
                 } else {
                     String::new()
+                },
+                if self
+                    .packages
+                    .iter()
+                    .any(|package| package.exclusion_reason.is_some())
+                {
+                    "Explicit exclusions require semantic assessment; no compatibility pass is \
+                     claimed for excluded packages. "
+                } else {
+                    ""
                 },
                 output.join("compatibility.json").display(),
             ),
@@ -191,8 +224,9 @@ impl CompatibilityOutcome {
 
 /// One contract's baseline comparison and any floor supplied by the checker.
 ///
-/// Unavailable evidence has no baseline or floor and is not compared. Completed comparisons
-/// always identify their baseline; an absent floor then means no minimum was established.
+/// Unavailable evidence has no floor and is not compared; an explicit exclusion keeps its version.
+/// Completed comparisons always identify their baseline; an absent floor means no minimum
+/// was established.
 /// Ref: book/src/reference/artifacts.md, "Compatibility evidence".
 #[derive(Debug, Serialize)]
 struct Comparison {
@@ -202,6 +236,8 @@ struct Comparison {
     compared: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     not_compared_reason: Option<NotComparedReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exclusion_reason: Option<String>,
 }
 
 impl Comparison {
@@ -212,20 +248,97 @@ impl Comparison {
             required_impact: None,
             compared: false,
             not_compared_reason: Some(reason),
+            exclusion_reason: None,
         }
     }
 }
 
-/// Distinguishes missing comparison data from an unsupported target without claiming compatibility.
+/// Records why a package was not compared, without implying compatibility.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum NotComparedReason {
     UnsupportedProcMacro,
     NoBaseline,
+    ExplicitExclusion,
 }
 
 /// Current compatibility.json layout; independent of the report and plan schemas.
-pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 3;
+/// Revisions must update the canonical increment-versions skill's schema admission.
+pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 4;
+
+/// An explicit exception cannot masquerade as checker output.
+enum BaselineComparison {
+    Excluded(String),
+    Compared(Output),
+}
+
+/// A validated request; exact-baseline admission still occurs after baseline acquisition.
+#[derive(Debug)]
+struct Exclusion {
+    baseline: Version,
+    reason: String,
+}
+
+fn exclusions(
+    values: &[String],
+    targets: &SemverTargets,
+) -> Result<BTreeMap<String, Exclusion>, AppError> {
+    let mut exclusions = BTreeMap::new();
+    for value in values {
+        let invalid = || InvalidComparisonExclusion::new(value);
+        let (identity, reason) = value.split_once('=').ok_or_else(invalid)?;
+        let (name, version) = identity.split_once('@').ok_or_else(invalid)?;
+        if !targets.comparable.contains(name) || reason.trim().is_empty() {
+            return Err(invalid().into());
+        }
+        let baseline = Version::parse(version)?;
+        if exclusions
+            .insert(
+                name.to_owned(),
+                Exclusion {
+                    baseline,
+                    reason: reason.trim().to_owned(),
+                },
+            )
+            .is_some()
+        {
+            return Err(invalid().into());
+        }
+    }
+    Ok(exclusions)
+}
+
+impl Exclusion {
+    fn admit(&self, name: &str, baseline: Option<&Version>) -> Result<(), AppError> {
+        if baseline != Some(&self.baseline) {
+            let selected = baseline.map_or_else(|| "none".to_owned(), ToString::to_string);
+            return Err(
+                ExclusionBaselineMismatch::new(name, self.baseline.to_string(), selected).into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Exceptions are scoped to selected packages and require a version and substantive reason.
+#[ohno::error]
+#[display(
+    "invalid comparison exclusion {value}; use selected PACKAGE@VERSION=REASON once per package"
+)]
+struct InvalidComparisonExclusion {
+    value: String,
+}
+
+/// An exception for one predecessor cannot silently waive comparison with a different one.
+#[ohno::error]
+#[display(
+    "comparison exclusion for {name} requests {version}, but selected baseline is {selected}"
+)]
+struct ExclusionBaselineMismatch {
+    name: String,
+    version: String,
+    selected: String,
+}
 
 /// Persists critical checker evidence while deferring secondary diagnostic-delivery failures.
 struct CheckerOutput<L, M> {
@@ -349,6 +462,7 @@ pub(crate) fn check_with_target(
     merge_target: Option<&str>,
     output: &Path,
     deny_findings: bool,
+    exclude_comparison: &[String],
     verbose: bool,
 ) -> Result<(bool, String), AppError> {
     let deferred = Arc::new(DeferredDiagnostics::new(Arc::new(Stderr)));
@@ -365,6 +479,7 @@ pub(crate) fn check_with_target(
         merge_target,
         output,
         deny_findings,
+        exclude_comparison,
         &diagnostics,
     );
     finish_delivery(result, deferred.take_failure())
@@ -385,6 +500,7 @@ fn check_with_output(
     merge_target: Option<&str>,
     output: &Path,
     deny_findings: bool,
+    exclude_comparison: &[String],
     diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
     let verbose = diagnostics.notes();
@@ -426,10 +542,14 @@ fn check_with_output(
     let report = output.join("report.json");
     let source_report = read_report(&report)?;
     let targets = semver_targets(&source_report, verbose);
+    let exclusions = exclusions(exclude_comparison, &targets)?;
     let mut outcome = CompatibilityOutcome::new(report, &targets);
     let targets = targets.comparable;
-    let cache = cache_path(&env::temp_dir(), &original_root)?;
-    fs::create_dir_all(&cache)?;
+    let needs_checker = targets.iter().any(|name| !exclusions.contains_key(name));
+    if !targets.is_empty() && !needs_checker {
+        "not invoked: exclusions requested for all selected comparisons"
+            .clone_into(&mut outcome.checker);
+    }
     let log = output.join("semver-checks.log");
     let log = fs::File::create(log).map_err(CheckerLogFailed::caused_by)?;
     let mut checker_output = CheckerOutput::new(log, io::stderr());
@@ -460,16 +580,19 @@ fn check_with_output(
         };
         // Resolve once outside the assessed Cargo configuration. An alias in that configuration
         // must not select a different checker for identity, canary or comparison.
-        let checker = if targets.is_empty() {
+        let checker = if !needs_checker {
             None
         } else {
-            Some(resolve_checker()?)
+            let checker = resolve_checker()?;
+            let cache = cache_path(&env::temp_dir(), &original_root)?;
+            fs::create_dir_all(&cache)?;
+            Some((checker, cache))
         };
-        if let Some(checker) = &checker {
-            let identity = invoke(checker, &manifest, &cache, &["--version"])?;
+        if let Some((checker, cache)) = &checker {
+            let identity = invoke(checker, &manifest, cache, &["--version"])?;
             outcome.identify(&identity)?;
-            canary(checker, &cache, &mut checker_output)?;
-            admit_checker_resolution(&manifest, &cache, &mut checker_output)?;
+            canary(checker, cache, &mut checker_output)?;
+            admit_checker_resolution(&manifest, cache, &mut checker_output)?;
         }
         let registry = targets
             .iter()
@@ -479,7 +602,7 @@ fn check_with_output(
         outcome.assess(
             targets,
             |name| {
-                comparison_baseline(
+                let baseline = comparison_baseline(
                     name,
                     parent_baseline(name),
                     |name| {
@@ -489,17 +612,24 @@ fn check_with_output(
                             .comparison_baseline(name)
                     },
                     verbose,
-                )
+                )?;
+                if let Some(exclusion) = exclusions.get(name) {
+                    exclusion.admit(name, baseline.as_ref())?;
+                }
+                Ok(baseline)
             },
             |name, baseline| {
-                let checker = checker
-                    .as_deref()
-                    .expect("nonempty targets resolved the checker");
+                if let Some(exclusion) = exclusions.get(name) {
+                    return Ok(BaselineComparison::Excluded(exclusion.reason.clone()));
+                }
+                let (checker, cache) = checker
+                    .as_ref()
+                    .expect("nonexcluded targets resolved the checker");
                 let command = match parent_baseline(name) {
                     Some((_, root)) => source_comparison_command(checker, &manifest, name, root),
                     None => comparison_command(checker, &manifest, name, baseline),
                 };
-                execute_checker(command, &cache)
+                execute_checker(command, cache).map(BaselineComparison::Compared)
             },
             &mut checker_output,
             verbose,
@@ -1100,11 +1230,12 @@ mod tests {
             required_impact: Some("breaking"),
             compared: true,
             not_compared_reason: None,
+            exclusion_reason: None,
         });
         assert_eq!(
             serde_json::to_value(outcome).unwrap(),
             json!({
-                "schema_version":3,
+                "schema_version":4,
                 "checker":"not invoked",
                 "report":"report.json",
                 "completed":false,
@@ -1128,6 +1259,116 @@ mod tests {
             stdout: stdout.to_vec(),
             stderr: stderr.to_vec(),
         }
+    }
+
+    fn comparison_output(code: u8, stdout: &[u8], stderr: &[u8]) -> BaselineComparison {
+        BaselineComparison::Compared(checker_output(code, stdout, stderr))
+    }
+
+    #[test]
+    fn exclusions_require_selected_package_version_reason_and_unique_identity() {
+        let targets = SemverTargets {
+            comparable: ["cli".to_owned()].into(),
+            unsupported_proc_macros: ["macros".to_owned()].into(),
+        };
+        let values = ["cli@0.5.0= predecessor has no library ".to_owned()];
+        let parsed = exclusions(&values, &targets).unwrap();
+        let exclusion = parsed.get("cli").unwrap();
+        assert_eq!(exclusion.reason, "predecessor has no library");
+        exclusion
+            .admit("cli", Some(&Version::new(0, 5, 0)))
+            .unwrap();
+        for baseline in [None, Some(Version::new(0, 5, 1))] {
+            let error = exclusion.admit("cli", baseline.as_ref()).unwrap_err();
+            let mismatch = error.find_source::<ExclusionBaselineMismatch>().unwrap();
+            assert_eq!(mismatch.version, "0.5.0");
+            assert_eq!(
+                mismatch.selected,
+                baseline.map_or_else(|| "none".to_owned(), |version| version.to_string())
+            );
+        }
+        for value in [
+            "cli",
+            "cli=reason",
+            "cli@0.5.0",
+            "cli@0.5.0= ",
+            "other@0.5.0=reason",
+            "macros@0.5.0=reason",
+        ] {
+            assert!(
+                exclusions(&[value.to_owned()], &targets)
+                    .unwrap_err()
+                    .find_source::<InvalidComparisonExclusion>()
+                    .is_some()
+            );
+        }
+        assert!(
+            exclusions(&[values[0].clone(), values[0].clone()], &targets)
+                .unwrap_err()
+                .find_source::<InvalidComparisonExclusion>()
+                .is_some()
+        );
+        _ = exclusions(&["cli@invalid=reason".to_owned()], &targets).unwrap_err();
+    }
+
+    #[test]
+    fn explicit_exclusion_retains_version_and_reason_without_claiming_a_comparison_or_floor() {
+        let mut outcome = outcome();
+        let mut log = Vec::new();
+        outcome
+            .assess(
+                ["cli".to_owned()],
+                |_| Ok(Some(Version::new(0, 5, 0))),
+                |_, _| {
+                    Ok(BaselineComparison::Excluded(
+                        "predecessor has no library".to_owned(),
+                    ))
+                },
+                &mut CheckerOutput::new(&mut log, io::sink()),
+                Verbose::new(true, &crp_diag::Discard),
+            )
+            .unwrap();
+        assert!(outcome.completed);
+        assert!(!outcome.findings);
+        assert!(log.is_empty());
+        assert_eq!(
+            serde_json::to_value(&outcome.packages).unwrap(),
+            json!([{
+                "name":"cli", "baseline_version":"0.5.0", "compared":false,
+                "required_impact":null, "not_compared_reason":"explicit-exclusion",
+                "exclusion_reason":"predecessor has no library"
+            }])
+        );
+        let (passed, message) = outcome.conclusion(Path::new("evidence"), true);
+        assert!(passed);
+        assert!(message.contains("Explicit exclusions require semantic assessment"));
+    }
+
+    #[test]
+    fn explicit_exclusion_does_not_hide_another_packages_checker_failure() {
+        let mut outcome = outcome();
+        let mut log = Vec::new();
+        let result = outcome.assess(
+            ["excluded".to_owned(), "library".to_owned()],
+            |_| Ok(Some(Version::new(1, 0, 0))),
+            |name, _| {
+                Ok(if name == "excluded" {
+                    BaselineComparison::Excluded("reviewed missing predecessor API".to_owned())
+                } else {
+                    comparison_output(101, b"", b"build failed")
+                })
+            },
+            &mut CheckerOutput::new(&mut log, io::sink()),
+            Verbose::new(false, &crp_diag::Discard),
+        );
+        assert!(result.unwrap_err().find_source::<CheckerFailed>().is_some());
+        assert!(!outcome.completed);
+        assert!(!outcome.findings);
+        assert_eq!(outcome.packages.len(), 1);
+        let excluded = outcome.packages.first().unwrap();
+        assert_eq!(excluded.name, "excluded");
+        assert!(!excluded.compared);
+        assert_eq!(log, b"build failed");
     }
 
     #[test]
@@ -1158,7 +1399,7 @@ mod tests {
             interpret(Some(100), " Summary semver requires new major version: 1").unwrap(),
             Some("breaking")
         );
-        for code in [None, Some(1), Some(2)] {
+        for code in [None, Some(1), Some(2), Some(101)] {
             interpret(code, " Summary no semver update required").unwrap_err();
         }
         interpret(Some(0), "checker did not compare").unwrap_err();
@@ -1230,7 +1471,7 @@ mod tests {
                         Some(Version::new(1, 2, 3)),
                         |baseline| {
                             assert_eq!(baseline, &Version::new(1, 2, 3));
-                            Ok(checker_output(code, b"comparison\n", summary.as_bytes()))
+                            Ok(comparison_output(code, b"comparison\n", summary.as_bytes()))
                         },
                         &mut CheckerOutput::new(&mut log, io::sink()),
                         Verbose::new(true, &crp_diag::Discard),
@@ -1247,7 +1488,7 @@ mod tests {
                     "unchanged-library",
                     Some(Version::new(1, 2, 3)),
                     |_| {
-                        Ok(checker_output(
+                        Ok(comparison_output(
                             0,
                             b" Summary no semver update required\n",
                             b"",
@@ -1292,7 +1533,7 @@ mod tests {
                 "completed-library",
                 Some(Version::new(1, 0, 0)),
                 |_| {
-                    Ok(checker_output(
+                    Ok(comparison_output(
                         0,
                         b" Summary no semver update required\n",
                         b"",
@@ -1312,7 +1553,7 @@ mod tests {
                 .compare(
                     "library",
                     Some(Version::new(1, 0, 0)),
-                    |_| Ok(checker_output(code, text.as_bytes(), b"")),
+                    |_| Ok(comparison_output(code, text.as_bytes(), b"")),
                     &mut CheckerOutput::new(&mut log, io::sink()),
                     Verbose::new(false, &crp_diag::Discard),
                 )
@@ -1349,7 +1590,7 @@ mod tests {
                 },
                 |name, baseline| {
                     compared.push((name.to_owned(), baseline.clone()));
-                    Ok(checker_output(
+                    Ok(comparison_output(
                         100,
                         b" Summary semver requires new major version: 1\n",
                         b"",
@@ -1392,9 +1633,9 @@ mod tests {
                     |name, _| {
                         compared.push(name.to_owned());
                         if name == "failed" {
-                            return Ok(checker_output(1, b"", b"comparison failed"));
+                            return Ok(comparison_output(1, b"", b"comparison failed"));
                         }
-                        Ok(checker_output(
+                        Ok(comparison_output(
                             0,
                             b" Summary no semver update required",
                             b"",
@@ -1431,7 +1672,7 @@ mod tests {
                 "library",
                 Some(Version::new(1, 0, 0)),
                 |_| {
-                    Ok(checker_output(
+                    Ok(comparison_output(
                         0,
                         b" Summary no semver update required",
                         b"",
@@ -1496,7 +1737,7 @@ mod tests {
             vec!["first".to_owned(), "second".to_owned()],
             |_| Ok(Some(Version::new(1, 0, 0))),
             |name, _| {
-                Ok(checker_output(
+                Ok(comparison_output(
                     0,
                     name.as_bytes(),
                     b"\n Summary no semver update required\n",
@@ -1541,7 +1782,7 @@ mod tests {
                     "library",
                     Some(Version::new(1, 0, 0)),
                     |_| {
-                        Ok(checker_output(
+                        Ok(comparison_output(
                             1,
                             b"captured stdout\n",
                             b"captured stderr\n",
