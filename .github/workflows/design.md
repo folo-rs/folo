@@ -310,13 +310,14 @@ defines that boundary.
 ### Same-run artifact visibility
 
 Artifact upload completion does not guarantee immediate visibility to a later job in the same
-workflow run. Same-run consumers therefore wait for the selected run artifact to appear before
-starting the download action. The wait is bounded and pattern consumers require their complete
-producer set, so eventual consistency cannot silently become a partial result or an unbounded
-workflow hang.
+workflow run, and visible metadata does not guarantee that the archive endpoint is ready. Same-run
+consumers therefore select metadata and download archives through one bounded handoff. Pattern
+consumers require their complete producer set, so eventual consistency cannot silently become a
+partial result or an unbounded workflow hang.
 
-This gate retries only artifact visibility and recognized transient inventory-read failures.
-Permanent API failures and the download itself retain ordinary immediate failure behavior.
+The handoff retries only temporary metadata absence, archive 404 responses and recognized transient
+request failures. Authentication, authorization, expiration and archive extraction failures retain
+ordinary immediate failure behavior.
 
 Steps implementing a design obligation explain the reason beside the step or cohesive step group
 and link to its owning design or implementation heading. This keeps authority, ordering and
@@ -998,11 +999,11 @@ checksum that never matches) costs only the capped backoff window before it surf
 Unavailable freshness evidence is qualified explicitly; it does not silently produce a
 current-looking benchmark report.
 
-First-party marketplace actions (checkout, cache, artifact up/download, and the like) are trusted
-to retry their own network operations internally, so they are not wrapped in a third-party retry
-action; adding one would trade the minimal-dependency stance for redundant coverage. Same-run
-artifact consumers use the separate visibility gate described above because that race occurs
-before the download action starts and is outside its network retry behavior.
+First-party marketplace actions (checkout, cache and the like) are trusted to retry their own
+network operations internally, so they are not wrapped in a third-party retry action. Same-run
+artifact consumers use the repository handoff described above because metadata and archive
+visibility can race after upload completion, while the ordinary download action has no policy for
+that two-stage consistency window.
 
 ## Job timeouts
 

@@ -122,26 +122,27 @@ rustup, installed-tool or other environment caches.
 
 ## Same-run artifact visibility
 
-Artifact upload completion and artifact discovery are separate observations in GitHub Actions.
-An upload step can finish while a later job in the same workflow run still cannot find the new
-artifact. Every repository-owned same-run download first polls the run-artifact inventory through
-`Wait-GitHubRunArtifact` in `scripts/workflow/ArtifactVisibility.psm1`.
+Artifact upload completion, run-artifact discovery and archive discovery are separate observations
+in GitHub Actions. Every repository-owned same-run download uses
+`Invoke-GitHubRunArtifactDownload` in `scripts/workflow/ArtifactVisibility.psm1` so one bounded
+operation covers the complete handoff.
 
-The wait helper supports artifact ID, exact name and wildcard-pattern selectors. Pattern consumers
+The helper supports artifact ID, exact name and wildcard-pattern selectors. Pattern consumers
 state the complete producer count, and the helper counts distinct artifact names so duplicate
 results from reruns cannot authorize a partial download.
-When a workflow reruns, pattern consumers can map each expected artifact name to its producer job.
+When a workflow reruns, pattern consumers must map each expected artifact name to its producer job.
 The helper queries the current attempt's jobs and requires its latest visible artifact to have
 been created after that producer started. Producers that did not rerun retain their earlier valid
 artifacts, so failed-job reruns do not rebuild successful matrix legs.
-The helper retries only missing inventory entries and recognized transient query failures for a
-bounded interval. Authentication, malformed requests and other permanent query failures fail on
-the first attempt; an exhausted visibility budget fails explicitly. The download action remains
-single-shot so a real download failure is not hidden behind another upload-independent retry.
+REST inventory requests use a request timeout. The helper retries missing selection, an archive 404
+and recognized transient request failures within a bounded interval. Archives are staged completely
+before extraction, so a later archive 404 cannot leave a partial site or report. Authentication,
+authorization, expiration, malformed responses and extraction failures fail immediately; an
+exhausted retry budget fails explicitly.
 
-The book deployment waits for every artifact from the discovered matrix before its pattern
-download. The benchmark canary waits for the reusable workflow's exact report artifact ID before
-verifying its files.
+The book deployment downloads every exact artifact from the discovered matrix; current-attempt
+producer jobs must expose a newer archive while unchanged jobs retain valid inherited artifacts.
+The benchmark canary downloads the reusable workflow's exact report artifact ID.
 
 ## Benchmark workflow artifacts
 

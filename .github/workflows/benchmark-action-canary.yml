@@ -327,10 +327,10 @@ jobs:
           Assert-HistoryCanaryOutput -Outcome $env:OUTCOME -State $env:STATE `
             -Notable $env:NOTABLE -Regressions $env:REGRESSIONS -PartialPlatformCoverage $env:PARTIAL `
             -ArtifactId $env:ARTIFACT_ID -ArtifactUrl $env:ARTIFACT_URL
-      - name: Wait for the emitted report bundle
-        # The reusable workflow has finalized its upload, but the run inventory can expose the
-        # artifact later. Retry only that visibility boundary, not the download or permanent API
-        # failures. Ref: implementation.md#same-run-artifact-visibility.
+      - name: Download the emitted report bundle
+        # The reusable workflow has finalized its upload, but metadata and the archive endpoint can
+        # expose the artifact later. Retry only those visibility boundaries, not permanent API or
+        # extraction failures. Ref: implementation.md#same-run-artifact-visibility.
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -341,14 +341,10 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
 
           Import-Module ./scripts/workflow/ArtifactVisibility.psm1 -Force
-          Wait-GitHubRunArtifact -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID `
+          Invoke-GitHubRunArtifactDownload -ApiUrl $env:GITHUB_API_URL `
+            -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID `
+            -GitHubToken $env:GH_TOKEN -Path (Join-Path $env:RUNNER_TEMP 'caller-report') `
             -ArtifactId $env:ARTIFACT_ID
-      - name: Download the emitted report bundle
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ needs.exercise.outputs.report-artifact-id }}
-          path: ${{ runner.temp }}/caller-report
-          github-token: ${{ github.token }}
       - name: Verify actual report files
         shell: pwsh
         env:
