@@ -139,7 +139,6 @@ impl WorkerGroup {
         if self.runtime.begin_worker().is_break() {
             return;
         }
-        let _scope = self.runtime.enter_worker();
         if let Err(payload) = catch_unwind(AssertUnwindSafe(initial_setup)) {
             self.runtime.fail(payload);
             self.runtime.end_worker();

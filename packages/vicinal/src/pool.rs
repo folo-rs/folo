@@ -36,16 +36,15 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Lifetime
 ///
-/// Dropping the pool stops accepting work, cancels queued tasks and waits for other workers
-/// participating in [`Worker::run()`][crate::Worker::run] to finish. When called outside a
-/// worker, this includes every worker. Policy-owned operating-system threads may perform cleanup
-/// after leaving that method; the pool does not join them. Cancelled joined tasks return a
+/// Dropping the pool stops accepting work, cancels queued tasks and waits for every worker
+/// participating in [`Worker::run()`][crate::Worker::run] to finish. Policy-owned operating-system
+/// threads may perform cleanup after leaving that method; the pool does not join them. Cancelled
+/// joined tasks return a
 /// [`TaskError`][crate::TaskError] that retains the original body for recovery;
 /// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
 /// submissions after clean shutdown as well.
-/// A worker may drop the pool synchronously: shutdown waits for every other worker, then
-/// lets the current worker leave after its callback returns. The pool still resumes any
-/// recorded infrastructure failure after cleanup.
+/// Do not synchronously drop the pool from a callback running on one of its workers;
+/// the worker cannot leave the pool while its callback is waiting for that worker.
 /// An infrastructure failure stops and permanently poisons the entire pool; all further
 /// submissions then panic synchronously, even after the pool is dropped.
 ///

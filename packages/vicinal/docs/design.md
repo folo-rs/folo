@@ -38,8 +38,8 @@ let system_pool = Pool::builder()
     .build();
 ```
 
-The pool calls a custom policy's `prepare()` once with the final hardware, eager selection,
-worker groups and name. `select_group()` runs for every submission and returns a copyable
+The pool calls the selected policy's `prepare()` once with the final hardware, eager selection,
+worker groups and name. `select_group()` runs for every task submission and returns a copyable
 `WorkerGroupId`. The scheduler resolves that ID by borrowing the group; established task
 submission neither clones `WorkerGroups` nor `WorkerGroup`.
 
@@ -47,42 +47,48 @@ A policy may add groups during preparation or selection and may clone a `WorkerG
 handle to add groups later. To add a worker, the policy calls `WorkerGroup::add_worker()`,
 moves the returned `Worker` into the new thread, applies the intended affinity and calls
 the blocking `Worker::run()` method. Vicinal then owns task execution, worker initialization,
-failure containment and participation through shutdown.
+failure containment and worker lifetime through shutdown.
 
-Every `Worker` created while `prepare()` runs reserves one preparation-time initialization.
-After `prepare()` returns, the builder waits until each reserved worker runs its initialization
-callback. A policy that cannot run a reserved worker drops that value to cancel the reservation.
-Retaining a reserved worker without running or dropping it leaves pool construction waiting.
-Workers created after preparation do not delay pool construction.
+Every `Worker` created while `prepare()` runs creates an individual preparation-time
+initialization reservation. After `prepare()` returns, the builder waits until each exact
+reserved `Worker` runs its initialization callback. A policy that cannot run one reserved
+worker drops that specific value to cancel only its reservation. Retaining a reserved worker
+without running or dropping it leaves pool construction waiting. Workers created after
+`prepare()` returns do not participate in this wait, even if construction is still waiting
+for earlier reservations.
 
 A policy may retain a `WorkerGroup` handle and inspect its participating worker count with
 `worker_count()` or its combined urgent/regular backlog with `queue_len()`. These are instantaneous
 observations rather than reservations. Selection runs before the incoming task is admitted,
 so `queue_len()` does not include that task. The stand-alone `vicinal_growing_pool` example
-uses this boundary to add a worker whenever a later submission observes existing backlog.
-It deliberately starts with one worker, grows without a maximum and never removes workers.
+uses this boundary to add a worker whenever a later task submission observes existing backlog.
+It starts with one worker and grows without a configured maximum. Once a worker enters
+`Worker::run()`, the API keeps it alive until the pool shuts down; policies cannot remove it.
 
-The built-in policies assign a task using one processor observation during submission;
+The built-in policies assign a task using one processor observation during task submission;
 regional routing derives the `many_cpus` memory region from that same processor.
 Processor-policy workers are pinned to the sampled processor. Regional workers share work
 from every submitting processor in the selected region. System workers share work from every
 submitting processor in the pool, treating the whole system as one locality group.
 
-Each shared worker destination starts with an optional eager processor selection and accumulates
-processors when their submissions reach the built-in policy selection step. Without eager
-selection, first use starts workers with the submitting processor's singleton affinity. A new
-submitting processor expands the permitted set without adding workers. Repeated submissions from
-known processors do not change the set. Processors are never removed.
+Each shared worker group starts with an optional eager processor selection and accumulates
+processors when their task submissions reach the built-in policy selection step. Without eager
+selection, first use starts workers permitted to run only on the submitting processor. A new
+submitting processor expands the permitted set without adding workers. Repeated task submissions
+from known processors do not change the set. The policy cannot remove processors from that set.
 
 Workers refresh their affinity at task boundaries; executing tasks may finish with the
 previous narrower mask. Migration within the permitted mask is allowed even during a task,
 but is not required. Regional work never moves to another region to obtain an idle worker.
 System workers may move between permitted processors in different memory regions.
 
-Each built-in destination starts its configured worker count once, on first use or
+Each built-in worker group starts its configured worker count once, on first task use or
 during eager construction. The default policy starts no workers during construction
-unless eager selection is configured; a custom policy controls its own preparation-time
-startup. Workers persist until shutdown. Shared worker counts are not multiplied
+unless eager selection is configured. Every policy receives the eager selection during
+`prepare()` through `WorkerPolicyContext::eager()`. Built-in policies honor it automatically;
+a custom policy may interpret or ignore it, but the builder still waits for any workers that
+the policy reserves with `WorkerGroup::add_worker()` during `prepare()`. Workers persist until
+shutdown. Shared worker counts are not multiplied
 by the number of submitting processors; a system count is also independent of the number
 of submitting regions. Counts must be nonzero but may exceed the
 processor count, supporting blocking workloads.
@@ -90,10 +96,10 @@ processor count, supporting blocking workloads.
 ## Eager construction
 
 `PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` and passes it to the
-selected policy during `prepare()`. It records the selection without starting workers.
+selected policy during `prepare()`. The setter records the selection without starting workers.
 Repeated calls replace the selection; `build()` uses the final policy, hardware, name
-and initialization callback regardless of setter order. A custom policy decides how its
-eager selection maps to groups. It reserves each eager worker with
+and initialization callback regardless of setter order. A custom policy decides how the
+eager selection maps to worker groups. The policy reserves each eager worker with
 `WorkerGroup::add_worker()` during `prepare()`; the builder waits for those workers after
 the policy returns.
 
@@ -112,9 +118,10 @@ affinity and completed its initialization callback. The callback's effects are v
 to the constructing thread.
 This prepares workers, not task-specific storage, application caches or a guaranteed sleeping state.
 
-Selection seeds membership rather than restricting future submissions. Submissions from other
-eligible processors create missing destinations lazily or expand existing shared groups.
-Built-in policies never remove workers or membership during the pool's lifetime.
+Selection seeds membership rather than restricting future task submissions. Task submissions
+from other eligible processors create missing worker groups lazily or expand existing shared
+groups. Neither the worker group API nor the built-in policies remove running workers or
+previously admitted processor membership during the pool's lifetime.
 
 ## Worker thread names
 
@@ -128,7 +135,7 @@ The optional function runs once per worker, after initial affinity setup and bef
 worker executes any tasks. Building an unused lazy pool does not invoke it; eager construction
 initializes every selected worker, including idle siblings. Repeated setters replace the function.
 
-Initialization on different workers may overlap without a guaranteed order, and submission
+Initialization on different workers may overlap without a guaranteed order, and task submission
 does not wait for it. Eager construction waits for all selected workers to finish initialization.
 Workers can therefore initialize independently, and an initializer may submit work to its
 pool. Initializers must preserve affinity, must not wait for work submitted to the same
@@ -139,9 +146,9 @@ poisons the pool, rather than a task failure.
 
 ## Locality boundaries
 
-Every processor permitted by hard operating-system restrictions is a valid submission
-destination. Processor-time quotas do not narrow destination eligibility: a caller outside
-a quota-selected subset still requires local workers.
+Every processor permitted by hard operating-system restrictions can submit tasks to the pool.
+Processor-time quotas do not narrow that eligibility: a caller outside a quota-selected subset
+still requires local workers.
 
 Shared workers stay within their initial selection plus the cumulative submitting-processor set.
 An orchestrator using the same suitable stable quota-obeying set for eager selection and
@@ -182,19 +189,16 @@ retains the message, source chain, backtrace and enrichment. Recovery state itse
 
 ## Shutdown
 
-Dropping the pool stops accepting work and waits for worker participation. A drop performed
-outside a worker waits for all workers, while a worker excludes itself because its task
-cannot return until the drop completes.
+Dropping the pool stops accepting work and waits for every running worker to leave.
 Queued tasks may be cancelled. Callers that require completion await the corresponding
 join handles before dropping the pool. Cancellation completes joined handles even when
 schedulers remain alive. Joined task captures remain available until their handle, error or
 recovered body is dropped, or the recovered body executes. Fire-and-forget cancellation releases
 captures during shutdown.
-Submissions through retained schedulers after clean shutdown are immediately cancelled without
-execution. Submission returns normally; a joined submission yields a recoverable cancellation.
-Callbacks may synchronously drop the pool from a worker thread. Shutdown waits for every
-other participating worker and lets the current worker return to the worker loop before
-its participation ends.
+Task submissions through retained schedulers after clean shutdown are immediately cancelled
+without execution. A submission returns normally; a joined task submission yields a recoverable
+cancellation. A worker callback must not synchronously drop its own pool because shutdown
+waits for that worker to return from the callback.
 
 ## Infrastructure failures
 
@@ -206,13 +210,13 @@ even after the pool is dropped. Task panics retain their separate behavior and d
 poison the pool.
 
 Built-in policy startup establishes the full configured count and initial affinity before
-accepting work for a destination. Eager construction failures, including initializer panics,
-propagate on the constructing call after stopping and waiting for every participating worker;
+accepting work for a worker group. Eager construction failures, including initializer panics,
+propagate on the constructing call after stopping and waiting for every running worker;
 no partial pool is returned. User initialization side effects are not reversible, and the
 pool cannot forcibly terminate a callback that does not return.
-Failures detected during submission, including thread
+Failures detected during task submission, including thread
 creation and initial affinity setup, panic on the submitting call. A later affinity
 refresh failure occurs on a worker, so the triggering submission may already have returned.
-Dropping the pool waits for every participating worker and propagates worker failures
+Dropping the pool waits for every running worker and propagates worker failures
 after cleanup. A custom policy owns the operating-system thread handles, if it needs them,
-while `Worker::run()` supplies the pool's participation and failure boundaries.
+while `Worker::run()` supplies the pool's worker-lifetime and failure boundaries.
