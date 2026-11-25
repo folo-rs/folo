@@ -128,7 +128,8 @@ artifact. Every repository-owned same-run download first polls the run-artifact 
 `Wait-GitHubRunArtifact` in `scripts/workflow/ArtifactVisibility.psm1`.
 
 The wait helper supports artifact ID, exact name and wildcard-pattern selectors. Pattern consumers
-state the complete producer count so one early result cannot authorize a partial download.
+state the complete producer count, and the helper counts distinct artifact names so duplicate
+results from reruns cannot authorize a partial download.
 The helper retries only missing inventory entries and recognized transient query failures for a
 bounded interval. Authentication, malformed requests and other permanent query failures fail on
 the first attempt; an exhausted visibility budget fails explicitly. The download action remains

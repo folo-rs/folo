@@ -176,6 +176,7 @@ jobs:
           pattern: book-*
           path: public
           merge-multiple: true
+          github-token: ${{ github.token }}
 
       - name: Generate landing page
         shell: pwsh

@@ -19,6 +19,7 @@ Describe 'Wait-GitHubRunArtifact' {
 
     It 'waits for an artifact ID through the paginated run inventory' {
         Mock gh -ModuleName ArtifactVisibility {
+            $global:LASTEXITCODE = 0
             '[{"artifacts":[{"id":42,"name":"report","expired":false}]}]'
         }
 
@@ -57,6 +58,24 @@ Describe 'Wait-GitHubRunArtifact' {
         Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
+    It 'does not count duplicate pattern names as complete inventory' {
+        $script:reads = 0
+        Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
+            $script:reads++
+            [pscustomobject]@{ id = 1; name = 'book-alpha' }
+            [pscustomobject]@{ id = 2; name = 'book-alpha' }
+            if ($script:reads -gt 1) {
+                [pscustomobject]@{ id = 3; name = 'book-beta' }
+            }
+        }
+
+        {
+            Wait-GitHubRunArtifact -Repository owner/repo -RunId 100 -Pattern 'book-*' `
+                -ExpectedCount 2 -Attempt 3 -DelaySeconds 0
+        } | Should -Not -Throw
+        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
+    }
+
     It 'fails explicitly after the visibility budget is exhausted' {
         Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility { @() }
 
@@ -68,18 +87,23 @@ Describe 'Wait-GitHubRunArtifact' {
     }
 
     It 'retries a transient inventory query failure' {
-        $script:reads = 0
-        Mock Get-GitHubRunArtifact -ModuleName ArtifactVisibility {
-            $script:reads++
-            if ($script:reads -eq 1) { throw 'HTTP 503: Service Unavailable' }
-            [pscustomobject]@{ id = 42; name = 'report' }
+        $script:queries = 0
+        Mock gh -ModuleName ArtifactVisibility {
+            $script:queries++
+            if ($script:queries -eq 1) {
+                $global:LASTEXITCODE = 1
+                'HTTP 503: Service Unavailable'
+            } else {
+                $global:LASTEXITCODE = 0
+                '[{"artifacts":[{"id":42,"name":"report","expired":false}]}]'
+            }
         }
 
         {
             Wait-GitHubRunArtifact -Repository owner/repo -RunId 100 -ArtifactId 42 `
                 -Attempt 2 -DelaySeconds 0
         } | Should -Not -Throw
-        Should -Invoke Get-GitHubRunArtifact -ModuleName ArtifactVisibility -Times 2 -Exactly
+        Should -Invoke gh -ModuleName ArtifactVisibility -Times 2 -Exactly
     }
 
     It 'does not retry a permanent inventory query failure' {

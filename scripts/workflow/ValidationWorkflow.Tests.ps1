@@ -292,6 +292,7 @@ Describe 'Same-run artifact visibility' {
             Should -BeLessThan $deploy.IndexOf('uses: actions/download-artifact@')
         $deploy | Should -Match '(?m)-Pattern ''book-\*'' -ExpectedCount \$books\.Count'
         $deploy | Should -Match '(?m)actions: read'
+        $deploy | Should -Match '(?m)^\s+github-token: \$\{\{ github\.token \}\}'
     }
 
     It 'waits for the reusable workflow report ID before downloading it' {

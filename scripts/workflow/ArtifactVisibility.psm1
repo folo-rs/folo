@@ -20,7 +20,22 @@ function Get-GitHubRunArtifact {
         [Parameter(Mandatory)][ValidateRange(1, [long]::MaxValue)][long] $RunId
     )
 
-    $json = gh api --paginate --slurp "repos/$Repository/actions/runs/$RunId/artifacts?per_page=100"
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    try {
+        $PSNativeCommandUseErrorActionPreference = $false
+        $output = @(gh api --paginate --slurp `
+                "repos/$Repository/actions/runs/$RunId/artifacts?per_page=100" 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+    }
+
+    if ($exitCode -ne 0) {
+        $diagnostics = $output -join "`n"
+        throw "GitHub artifact inventory request failed (exit $exitCode): $diagnostics"
+    }
+
+    $json = $output -join "`n"
     $pages = @($json | ConvertFrom-Json)
     return @($pages | ForEach-Object { $_.artifacts })
 }
@@ -73,13 +88,19 @@ function Wait-GitHubRunArtifact {
                 'ByPattern' { @($artifacts | Where-Object { $_.name -clike $Pattern }) }
             })
 
-            if ($matchingArtifacts.Count -ge $ExpectedCount) {
+            $matchingCount = if ($PSCmdlet.ParameterSetName -ceq 'ByPattern') {
+                @($matchingArtifacts | ForEach-Object { $_.name } | Sort-Object -CaseSensitive -Unique).Count
+            } else {
+                $matchingArtifacts.Count
+            }
+
+            if ($matchingCount -ge $ExpectedCount) {
                 Write-Host "Artifact inventory contains $selector."
                 return
             }
 
             $detail = "$selector is not yet visible in workflow run $RunId " +
-                "(observed $($matchingArtifacts.Count))."
+                "(observed $matchingCount)."
             $errorRecord = [System.Management.Automation.ErrorRecord]::new(
                 [System.InvalidOperationException]::new($detail),
                 'ArtifactVisibilityPending',
