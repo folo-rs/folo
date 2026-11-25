@@ -1,5 +1,7 @@
 //! Worker-side affinity refresh and wake coordination around individual task execution.
 
+#[cfg(test)]
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use event_listener::{Listener, listener};
@@ -33,7 +35,7 @@ pub(crate) fn worker_loop_with(
             break;
         }
 
-        refresh_affinity(state, &mut revision, &mut pin);
+        refresh_affinity_from_runtime(runtime, state, &mut revision, &mut pin);
 
         let outcome = core.run_one_iteration_with(
             || {
@@ -41,7 +43,7 @@ pub(crate) fn worker_loop_with(
                     return false;
                 }
 
-                refresh_affinity(state, &mut revision, &mut pin);
+                refresh_affinity_from_runtime(runtime, state, &mut revision, &mut pin);
 
                 !runtime.is_shutdown()
             },
@@ -93,10 +95,28 @@ pub(crate) fn worker_loop_with(
     }
 }
 
-/// Applies a newly published affinity snapshot and advances this worker's local cursor.
+/// Applies a newly published shared affinity snapshot and advances this worker's local cursor.
 ///
-/// The revision/acquire pair establishes the mask to clone; pinning runs after the snapshot
-/// lock is released.
+/// The revision/acquire pair establishes the immutable shared mask; pinning runs after the
+/// snapshot locks are released.
+#[cfg_attr(test, mutants::skip)]
+fn refresh_affinity_from_runtime(
+    runtime: &PoolRuntime,
+    state: &WorkerGroupState,
+    revision: &mut usize,
+    pin: impl FnOnce(&ProcessorSet),
+) {
+    if state.affinity_revision.load(Ordering::Acquire) == *revision {
+        return;
+    }
+
+    let (affinity, latest) = runtime.affinity_snapshot(state);
+    pin(&affinity);
+    *revision = latest;
+}
+
+/// Applies an affinity snapshot directly for focused worker-loop tests.
+#[cfg(test)]
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn refresh_affinity(
     state: &WorkerGroupState,
@@ -109,13 +129,12 @@ pub(crate) fn refresh_affinity(
 
     let (affinity, latest) = {
         let affinity = state.affinity.read().expect(NEVER_POISONED);
-        // This clone occurs only when a published revision changes. Affinity snapshots stay
-        // owned values so worker-group coordination introduces no Arc or Weak reference count.
         (
-            affinity
-                .as_ref()
-                .expect("a revision publishes a nonempty mask")
-                .clone(),
+            Arc::clone(
+                affinity
+                    .as_ref()
+                    .expect("a revision publishes a nonempty mask"),
+            ),
             state.affinity_revision.load(Ordering::Acquire),
         )
     };

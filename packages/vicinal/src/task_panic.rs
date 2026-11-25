@@ -1,8 +1,8 @@
 //! Panic payload ownership and bounded disposal during task and pool cleanup.
 
 use std::any::Any;
-use std::mem;
-use std::panic::{self, AssertUnwindSafe};
+use std::mem::forget;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use tracing::error;
 
@@ -47,19 +47,19 @@ pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
 
 /// Emits a failure diagnostic without allowing a subscriber panic to interrupt cleanup.
 pub(crate) fn report_diagnostic(report: impl FnOnce()) {
-    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(report)) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(report)) {
         // A subscriber panic is an unrelated diagnostic failure. Its payload may have a
         // panicking destructor, so retaining it is the only bounded cleanup path.
-        mem::forget(payload);
+        forget(payload);
     }
 }
 
 /// Disposes of a suppressed failure without allowing its destructor to interrupt pool cleanup.
 pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
-    if let Err(replacement) = panic::catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+    if let Err(replacement) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
         // A replacement can itself have a panicking destructor. Retain it rather than
         // recursively disposing of arbitrary user payloads; see docs/implementation.md.
-        mem::forget(replacement);
+        forget(replacement);
         report_diagnostic(|| {
             error!(
                 target: TASK_LOG_TARGET,
@@ -71,7 +71,7 @@ pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
 
 /// Releases task captures outside an active unwind while preserving an earlier failure.
 pub(crate) fn discard_task_after_failure<T>(task: T) {
-    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(task))) {
         report_diagnostic(|| {
             error!(
                 target: TASK_LOG_TARGET,

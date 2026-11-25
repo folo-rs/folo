@@ -3,7 +3,7 @@
 use std::any::type_name;
 use std::fmt;
 use std::num::NonZero;
-use std::panic::AssertUnwindSafe;
+use std::panic::{AssertUnwindSafe, panic_any};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -13,7 +13,7 @@ use new_zealand::nz;
 use crate::policies::WorkersPerProcessor;
 #[cfg(test)]
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
-use crate::{PoolInner, Scheduler, WorkerPolicy};
+use crate::{PoolInner, PrepareError, Scheduler, WorkerPolicy};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -37,14 +37,15 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// # Lifetime
 ///
 /// Dropping the pool stops accepting work, cancels queued tasks and waits for every worker
-/// participating in [`Worker::run()`][crate::Worker::run] to finish. Policy-owned operating-system
-/// threads may perform cleanup after leaving that method; the pool does not join them. Cancelled
-/// joined tasks return a
+/// participating in [`Worker::run()`][crate::Worker::run] to finish. Policy-owned
+/// operating-system threads may perform cleanup after leaving that method; the pool does not
+/// join them. Cancelled joined tasks return a
 /// [`TaskError`][crate::TaskError] that retains the original body for recovery;
 /// fire-and-forget tasks release their captures. Retained schedulers immediately cancel
 /// submissions after clean shutdown as well.
-/// Do not synchronously drop the pool from a callback running on one of its workers;
-/// the worker cannot leave the pool while its callback is waiting for that worker.
+/// Do not release the last owning `Pool` reference from a callback running on one of its workers;
+/// the worker cannot leave the pool while shutdown waits for it. Capture a [`Scheduler`] for
+/// follow-up submissions and retain the pool owner until the required work finishes.
 /// An infrastructure failure stops and permanently poisons the entire pool; all further
 /// submissions then panic synchronously, even after the pool is dropped.
 ///
@@ -110,7 +111,7 @@ impl Drop for Pool {
 /// Builder for configuring a [`Pool`].
 pub struct PoolBuilder {
     name: Option<String>,
-    policy: Box<dyn WorkerPolicy>,
+    policy: Option<Box<dyn WorkerPolicy>>,
     hardware: Option<SystemHardware>,
     thread_init: Option<ThreadInit>,
     eager: Option<ProcessorSet>,
@@ -120,7 +121,7 @@ impl PoolBuilder {
     fn new() -> Self {
         Self {
             name: None,
-            policy: Box::new(WorkersPerProcessor::new(DEFAULT_WORKERS_PER_PROCESSOR)),
+            policy: None,
             hardware: None,
             thread_init: None,
             eager: None,
@@ -138,14 +139,13 @@ impl PoolBuilder {
 
     /// Sets the policy that assigns tasks and creates worker groups.
     ///
-    /// Replaces any previously selected policy; the last setter wins. Policies are boxed
-    /// internally, so `Pool` and `Scheduler` remain non-generic.
+    /// Replaces any previously selected policy; the last setter wins.
     ///
     /// The builder calls [`WorkerPolicy::prepare`] once with the final settings. Subsequent
     /// submissions call [`WorkerPolicy::select_group`].
     #[must_use]
     pub fn worker_policy(mut self, policy: impl WorkerPolicy) -> Self {
-        self.policy = Box::new(policy);
+        self.policy = Some(Box::new(policy));
         self
     }
 
@@ -190,8 +190,10 @@ impl PoolBuilder {
     /// The function runs once on each worker, after its initial affinity is set and before
     /// it executes any tasks. Built-in workers start lazily unless [`Self::eager`] initializes
     /// selected destinations during construction; a custom [`WorkerPolicy`] controls its own
-    /// startup and readiness waits. Calls on different workers may overlap, without a
-    /// guaranteed order. Built-in lazy submission does not wait for initialization.
+    /// startup. After a custom policy's [`WorkerPolicy::prepare`] returns, the builder waits
+    /// for every worker reserved during preparation to finish initialization or to be cancelled
+    /// by dropping its unrun value. Calls on different workers may overlap, without a guaranteed
+    /// order. Built-in lazy submission does not wait for initialization.
     ///
     /// The function must preserve worker affinity. It may submit work to the same pool,
     /// but must not wait for that work to complete or shut down the pool.
@@ -258,40 +260,54 @@ impl PoolBuilder {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Omitting eager startup can strand initializer coordination.
     pub fn build(self) -> Pool {
+        self.try_build().unwrap_or_else(|error| panic_any(error))
+    }
+
+    /// Tries to build the pool with the configured worker policy and initialization.
+    ///
+    /// The default policy starts no workers during construction unless [`Self::eager`] selects
+    /// eager destinations. A custom policy may create workers during `prepare()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error reported by [`WorkerPolicy::prepare`] after all participating workers
+    /// started during preparation have left the worker loop.
+    pub fn try_build(self) -> Result<Pool, PrepareError> {
         let hardware = self
             .hardware
             .unwrap_or_else(|| SystemHardware::current().clone());
         let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
         let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
+        // Deferring the default box avoids allocating it for custom or abandoned builders.
+        let policy = self
+            .policy
+            .unwrap_or_else(|| Box::new(WorkersPerProcessor::new(DEFAULT_WORKERS_PER_PROCESSOR)));
 
         // Policy preparation can start participating workers before the outer Pool exists.
         // PoolInner::new therefore owns preparation failure cleanup through the runtime barrier.
         // Ref: docs/implementation.md, "Eager construction".
-        Pool {
-            inner: Arc::new(PoolInner::new(
+        Ok(Pool {
+            inner: Arc::new(PoolInner::try_new(
                 pool_id,
                 pool_name,
                 &hardware,
-                self.policy,
+                policy,
                 self.thread_init,
                 self.eager.as_ref(),
-            )),
-        }
+            )?),
+        })
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for PoolBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let policy = std::any::type_name_of_val(&*self.policy);
         f.debug_struct(type_name::<Self>())
             .field("name", &self.name)
-            .field("has_worker_policy", &true)
             .field("hardware", &self.hardware)
             .field("has_thread_init", &self.thread_init.is_some())
             .field("eager", &self.eager)
-            .field("policy", &policy)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

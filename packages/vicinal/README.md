@@ -121,11 +121,11 @@ hardware instance. The setter starts no workers. `build()` starts the configured
 every selected processor, represented region or the system, according to the worker policy.
 It waits for initial affinity and every configured `thread_init` callback to complete.
 Initialization effects are visible when construction returns, and the calling thread's affinity
-remains unchanged. For a custom policy, eager readiness means whichever workers its
-`prepare()` implementation reserves with `WorkerGroup::add_worker()`. The builder waits
-after `prepare()` returns for each reserved `Worker::run()` to finish initialization.
-Dropping a reserved worker cancels that preparation target. Startup failure stops and waits
-for participating workers before construction panics; it does not join policy-owned
+remains unchanged. An eager processor selection is separate from custom-policy readiness.
+A custom policy must run or drop each `Worker` reserved with `WorkerGroup::add_worker()`
+during `prepare()`. After `prepare()` returns, the builder waits for each reservation to
+finish initialization or to be cancelled by dropping an unrun worker. Startup failure stops
+and waits for participating workers before construction panics; it does not join policy-owned
 operating-system threads after they leave `Worker::run()`.
 
 Callbacks run once per worker, may overlap, and must preserve affinity. They must not wait for
@@ -171,13 +171,13 @@ Dropping a handle does not cancel the task.
 
 ## Shutdown
 
-Dropping the pool cancels queued tasks and waits for every worker.
+Dropping the pool cancels queued tasks and waits for every participating worker to leave
+`Worker::run()`. It does not join policy-owned operating-system threads after that point.
 Cancelled joined tasks retain their captures for recovery until the handle, error or recovered
 body is dropped or the body executes. Fire-and-forget cancellation releases captures.
 Retained schedulers return cancelled join handles for submissions after clean shutdown.
 Await required work before dropping the pool.
-Do not synchronously drop the pool from a callback running on one of its workers. The worker
-cannot finish leaving the pool while its callback is waiting for every worker to leave.
+Do not synchronously drop the pool from a callback running on one of its workers.
 
 Infrastructure failures, including worker startup and affinity refresh, log the failure
 and stop the entire pool. Queued joined tasks are cancelled recoverably; queued fire-and-forget

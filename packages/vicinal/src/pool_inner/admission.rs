@@ -1,6 +1,7 @@
 //! Submission ownership, policy selection and queue admission.
 
-use std::panic::{self, AssertUnwindSafe};
+use std::ops::ControlFlow;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 #[cfg(test)]
 use std::thread::JoinHandle as ThreadJoinHandle;
@@ -20,7 +21,7 @@ impl PoolInner {
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn submit<T, R>(&self, task: T, action: impl FnOnce(&mut Option<T>) -> R) -> R {
         let mut task = Some(task);
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
             assert!(!self.runtime.is_poisoned());
             action(&mut task)
         }));
@@ -34,7 +35,7 @@ impl PoolInner {
                 discard_task_after_failure(task);
 
                 if already_stopped {
-                    panic::resume_unwind(payload);
+                    resume_unwind(payload);
                 }
 
                 self.poison(payload);
@@ -56,7 +57,7 @@ impl PoolInner {
             &state.regular_queue
         };
         let mut task = Some(task);
-        let accepted = panic::catch_unwind(AssertUnwindSafe(|| {
+        let admitted = catch_unwind(AssertUnwindSafe(|| {
             let mut queue = queue.lock().expect(NEVER_POISONED);
 
             if self.runtime.is_poisoned() {
@@ -64,15 +65,15 @@ impl PoolInner {
                 panic!("worker pool is poisoned");
             }
             if self.runtime.is_shutdown() {
-                return false;
+                return ControlFlow::Break(());
             }
 
             queue.push_back(task.take().expect("admission consumes each task once"));
-            true
+            ControlFlow::Continue(())
         }));
 
-        let accepted = match accepted {
-            Ok(accepted) => accepted,
+        let admitted = match admitted {
+            Ok(admitted) => admitted,
             Err(payload) => {
                 self.stop_admission();
                 if let Some(task) = task.take() {
@@ -82,24 +83,28 @@ impl PoolInner {
             }
         };
 
-        if accepted {
-            state.record_task_spawned();
-            state.wake_event.notify(1.additional());
-            trace!(
-                target: POOL_LOG_TARGET,
-                pool_id = self.pool_id,
-                urgent,
-                "spawned task"
-            );
-        } else {
-            trace!(
-                target: POOL_LOG_TARGET,
-                pool_id = self.pool_id,
-                "abandoned task during shutdown"
-            );
+        match admitted {
+            ControlFlow::Continue(()) => {
+                state.record_task_spawned();
+                state.wake_event.notify(1.additional());
+                trace!(
+                    target: POOL_LOG_TARGET,
+                    pool_id = self.pool_id,
+                    urgent,
+                    "spawned task"
+                );
+            }
+            ControlFlow::Break(()) => {
+                trace!(
+                    target: POOL_LOG_TARGET,
+                    pool_id = self.pool_id,
+                    "abandoned task during shutdown"
+                );
+            }
         }
     }
 
+    /// Adapts controlled worker startup into the production admission path for race fixtures.
     #[cfg(test)]
     pub(crate) fn enqueue_with(
         self: &Arc<Self>,
@@ -121,11 +126,13 @@ impl PoolInner {
         }
 
         let mut started = Vec::new();
-        let result = panic::catch_unwind(AssertUnwindSafe(|| start(&mut started)));
+        let result = catch_unwind(AssertUnwindSafe(|| start(&mut started)));
         self.worker_handles
             .lock()
             .expect(NEVER_POISONED)
             .append(&mut started);
+        // Shutdown may drain the fixture handles before the injected callback returns its
+        // newly started handle. Publish then join any late handles to close that ownership gap.
         if self.runtime.is_shutdown() {
             let handles = std::mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
             for handle in handles {

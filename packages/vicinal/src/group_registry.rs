@@ -5,7 +5,9 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{GroupId, GroupState, NEVER_POISONED, PoolRuntime, WorkerGroup, WorkerGroupId};
+use crate::{
+    GroupId, GroupState, NEVER_POISONED, PoolRuntime, WorkerGroup, WorkerGroupId, WorkerGroupState,
+};
 
 // Identity values need uniqueness only; the registry-specific validation supplies the
 // synchronization relationship.
@@ -42,8 +44,9 @@ impl WorkerGroups {
 
     /// Adds one empty group and returns a cloneable participation handle.
     ///
-    /// This is a cold operation. Cloning the returned handle into newly spawned worker
-    /// threads is expected; task routing should return [`WorkerGroupId`] instead.
+    /// Use this during policy setup or when adding capacity. Cloning the returned handle
+    /// into newly spawned worker threads is expected; task routing should return
+    /// [`WorkerGroupId`] instead.
     ///
     /// # Panics
     ///
@@ -81,17 +84,17 @@ impl WorkerGroups {
         self.len() == 0
     }
 
-    /// Returns a cloned snapshot of every group.
+    /// Returns a snapshot of every group for inspection.
     ///
-    /// This is a cold/introspection operation and changes reference counts for the
-    /// returned handles. Policies should cache [`WorkerGroupId`] values for hot routing.
+    /// The snapshot clones every stored group handle. Policies that choose a group for each
+    /// task should cache [`WorkerGroupId`] values instead of taking snapshots repeatedly.
     #[must_use]
     #[inline]
     pub fn iter(&self) -> std::vec::IntoIter<WorkerGroup> {
         self.snapshot().into_iter()
     }
 
-    pub(crate) fn resolve(&self, group: WorkerGroupId) -> &GroupState {
+    pub(crate) fn resolve(&self, group: WorkerGroupId) -> &WorkerGroupState {
         assert!(
             group.owner == self.inner.owner,
             "worker group belongs to another pool"
@@ -105,7 +108,8 @@ impl WorkerGroups {
         // The registry and every WorkerGroup retain the state only through Arc. Their mutable
         // fields use interior synchronization, so no &mut WorkerGroupState exists while this &T
         // is borrowed.
-        unsafe { group.state.as_ref() }
+        let state: &GroupState = unsafe { group.state.as_ref() };
+        state
     }
 
     pub(crate) fn snapshot(&self) -> Vec<WorkerGroup> {
@@ -127,7 +131,7 @@ impl WorkerGroups {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_or_init(&self, destination: GroupId) -> &GroupState {
+    pub(crate) fn get_or_init(&self, destination: GroupId) -> &WorkerGroupState {
         self.resolve(self.group_id(destination))
     }
 
@@ -204,7 +208,7 @@ pub(crate) struct InitializedGroups<'a> {
 
 #[cfg(test)]
 impl<'a> Iterator for InitializedGroups<'a> {
-    type Item = &'a GroupState;
+    type Item = &'a WorkerGroupState;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.ids.next().map(|id| self.groups.resolve(id))

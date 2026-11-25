@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Barrier, Mutex, OnceLock};
 use std::thread::{Builder, current, spawn};
 
@@ -16,7 +16,7 @@ use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{OnDrop, PanickingPayload, TestPolicy, affinity, hardware, probe};
 use crate::{
-    BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, PrepareContext, SubmissionTarget,
+    BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, PrepareContext, PrepareError, SubmissionTarget,
     WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
@@ -30,8 +30,8 @@ struct GatedSelectionPolicy {
 }
 
 impl WorkerPolicy for GatedSelectionPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
-        self.inner.prepare(context);
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+        self.inner.prepare(context)
     }
 
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
@@ -60,8 +60,8 @@ struct PanickingSelectionPolicy {
 }
 
 impl WorkerPolicy for PanickingSelectionPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
-        self.inner.prepare(context);
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+        self.inner.prepare(context)
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
@@ -173,10 +173,11 @@ fn shutdown_accounts_for_in_progress_startup() {
         let (entered, selection_entered) = channel();
         let (exited, worker_exited) = channel();
         let (release, selection_release) = channel();
+        let policy = TestPolicy::new(0);
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(GatedSelectionPolicy {
-                inner: TestPolicy::new(0),
+                inner: policy.clone(),
                 worker_started: OnceLock::new(),
                 entered,
                 exited,
@@ -185,14 +186,48 @@ fn shutdown_accounts_for_in_progress_startup() {
             .build();
         let inner = Arc::clone(&pool.inner);
         let scheduler = pool.scheduler();
+        let group = policy.group();
+        let state = group.state();
+        let (worker_waiting, worker_wait) = channel();
+        let (release_worker, worker_release) = channel();
+        let worker_release = Mutex::new(Some(worker_release));
+        assert!(
+            state
+                .before_wait
+                .set(Box::new(move |_, _| {
+                    worker_waiting.send(()).unwrap();
+                    let worker_release = worker_release.lock().unwrap().take().unwrap();
+                    worker_release.recv().unwrap();
+                }))
+                .is_ok()
+        );
         let starter = spawn(move || block_on(scheduler.spawn(|| 42)).unwrap_err());
 
         selection_entered.recv().unwrap();
-        let shutdown = spawn(move || drop(pool));
+        worker_wait.recv().unwrap();
+        let (shutdown_waiting, shutdown_wait) = channel();
+        assert!(
+            inner
+                .runtime
+                .before_worker_wait
+                .set(Box::new(move || {
+                    shutdown_waiting.send(()).unwrap();
+                }))
+                .is_ok()
+        );
+        let (shutdown_done, shutdown_completion) = channel();
+        let shutdown = spawn(move || {
+            drop(pool);
+            shutdown_done.send(()).unwrap();
+        });
+        shutdown_wait.recv().unwrap();
+        assert_eq!(shutdown_completion.try_recv(), Err(TryRecvError::Empty));
+
+        release_worker.send(()).unwrap();
         worker_exited.recv().unwrap();
+        shutdown.join().unwrap();
         release.send(()).unwrap();
         assert!(starter.join().unwrap().is_cancel());
-        shutdown.join().unwrap();
 
         assert!(inner.runtime.is_shutdown());
         assert_eq!(inner.runtime.active_workers(), 0);
@@ -315,7 +350,27 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     assert!(inner.runtime.is_poisoned());
     assert!(state.task_pool.lock().unwrap().is_empty());
 
-    assert_panics(|| scheduler.spawn(|| panic_any(PanickingPayload)));
+    let executed = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let payload = catch_unwind(AssertUnwindSafe({
+        let executed = Arc::clone(&executed);
+        let dropped = Arc::clone(&dropped);
+        move || {
+            let capture = OnDrop(Some(Box::new(move || {
+                dropped.store(true, Ordering::Release);
+                panic_any(PanickingPayload);
+            })));
+            _ = scheduler.spawn(move || {
+                executed.store(true, Ordering::Release);
+                drop(capture);
+            });
+        }
+    }))
+    .unwrap_err();
+
+    _ = payload;
+    assert!(dropped.load(Ordering::Acquire));
+    assert!(!executed.load(Ordering::Acquire));
     assert!(state.task_pool.lock().unwrap().is_empty());
     assert_eq!(inner.runtime.active_workers(), 0);
 }

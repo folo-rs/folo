@@ -39,9 +39,9 @@ let system_pool = Pool::builder()
 ```
 
 The pool calls the selected policy's `prepare()` once with the final hardware, eager selection,
-worker groups and name. `select_group()` runs for every task submission and returns a copyable
-`WorkerGroupId`. The scheduler resolves that ID by borrowing the group; established task
-submission neither clones `WorkerGroups` nor `WorkerGroup`.
+worker groups and name. `select_group()` runs for each submission that reaches worker-group
+routing and returns a copyable `WorkerGroupId`. The scheduler resolves that ID by borrowing the
+group; established task submission neither clones `WorkerGroups` nor `WorkerGroup`.
 
 A policy may add groups during preparation or selection and may clone a `WorkerGroups`
 handle to add groups later. To add a worker, the policy calls `WorkerGroup::add_worker()`,
@@ -49,13 +49,8 @@ moves the returned `Worker` into the new thread, applies the intended affinity a
 the blocking `Worker::run()` method. Vicinal then owns task execution, worker initialization,
 failure containment and worker lifetime through shutdown.
 
-Every `Worker` created while `prepare()` runs creates an individual preparation-time
-initialization reservation. After `prepare()` returns, the builder waits until each exact
-reserved `Worker` runs its initialization callback. A policy that cannot run one reserved
-worker drops that specific value to cancel only its reservation. Retaining a reserved worker
-without running or dropping it leaves pool construction waiting. Workers created after
-`prepare()` returns do not participate in this wait, even if construction is still waiting
-for earlier reservations.
+Preparation-time worker reservations and their readiness boundary follow the rules in
+[Eager construction](#eager-construction).
 
 A policy may retain a `WorkerGroup` handle and inspect its participating worker count with
 `worker_count()` or its combined urgent/regular backlog with `queue_len()`. These are instantaneous
@@ -86,22 +81,26 @@ Each built-in worker group starts its configured worker count once, on first tas
 during eager construction. The default policy starts no workers during construction
 unless eager selection is configured. Every policy receives the eager selection during
 `prepare()` through `PrepareContext::eager()`. Built-in policies honor it automatically;
-a custom policy may interpret or ignore it, but the builder still waits for any workers that
-the policy reserves with `WorkerGroup::add_worker()` during `prepare()`. Workers persist until
-shutdown. Shared worker counts are not multiplied
-by the number of submitting processors; a system count is also independent of the number
-of submitting regions. Counts must be nonzero but may exceed the
+a custom policy may interpret or ignore it. Workers persist until shutdown. Shared worker
+counts are not multiplied by the number of submitting processors; a system count is also
+independent of the number of submitting regions. Counts must be nonzero but may exceed the
 processor count, supporting blocking workloads.
 
 ## Eager construction
 
 `PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` and passes it to the
 selected policy during `prepare()`. The setter records the selection without starting workers.
-Repeated calls replace the selection; `build()` uses the final policy, hardware, name
-and initialization callback regardless of setter order. A custom policy decides how the
-eager selection maps to worker groups. The policy reserves each eager worker with
-`WorkerGroup::add_worker()` during `prepare()`; the builder waits for those workers after
-the policy returns.
+Repeated calls replace the selection; `build()` uses the final policy, hardware, name and
+initialization callback regardless of setter order. A custom policy decides how the eager
+selection maps to worker groups and may ignore it.
+
+Every `Worker` created with `WorkerGroup::add_worker()` while `prepare()` runs creates an
+individual preparation-time initialization reservation. The policy must run or drop each
+reserved `Worker`. After `prepare()` returns, the builder waits until each exact reservation
+finishes initialization or its unrun worker is dropped to cancel it. A policy must not wait
+for `build()` to return before resolving an outstanding reservation. Workers created after
+`prepare()` returns do not participate in this wait, even if construction is still waiting
+for earlier reservations.
 
 The selection must belong to the pool's hardware instance. The pool validates the complete
 selection before starting workers, including hardware identity rather than only numeric CPU IDs.
@@ -113,15 +112,15 @@ the selected processors in that region. System pools start their count once with
 set as affinity. Shared workers may use selected processors before those processors submit work.
 The pool respects the exact selection without independently applying a quota or widening regions.
 
-A successful eager construction means every worker required by the policy has applied
-affinity and completed its initialization callback. The callback's effects are visible
-to the constructing thread.
-This prepares workers, not task-specific storage, application caches or a guaranteed sleeping state.
+With a built-in policy, successful eager construction means every worker required by the
+eager selection has applied affinity and completed its initialization callback. The callback's
+effects are visible to the constructing thread. This prepares workers, not task-specific
+storage, application caches or a guaranteed sleeping state.
 
 Selection seeds membership rather than restricting future task submissions. Task submissions
 from other eligible processors create missing worker groups lazily or expand existing shared
-groups. Neither the worker group API nor the built-in policies remove running workers or
-previously admitted processor membership during the pool's lifetime.
+groups. The worker group API and built-in policies never remove individual workers, and
+built-in shared groups never remove processors from the set on which their workers may run.
 
 ## Worker thread names
 
@@ -166,7 +165,9 @@ Single-task latency on an otherwise idle pool remains the primary optimization t
 
 ## Scheduling
 
-All regular/urgent and joined/fire-and-forget submissions use the selected policy.
+All regular/urgent and joined/fire-and-forget submissions that reach worker-group routing use
+the selected policy. A submission that detects clean shutdown before routing bypasses the
+policy; selection does not guarantee acceptance if shutdown starts before queue admission.
 Regular and urgent work use separate priority classes. Workers prefer urgent work, but
 tasks within a class may execute in any order and urgent work does not preempt a task that
 is already running.

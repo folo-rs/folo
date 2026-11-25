@@ -1,4 +1,5 @@
 use std::num::NonZero;
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::spawn;
 
@@ -10,18 +11,18 @@ use testing::with_watchdog;
 
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
 use crate::{
-    GroupId, Pool, PrepareContext, Scheduler, WorkerGroup, WorkerGroupId, WorkerGroups,
-    WorkerPolicy,
+    GroupId, Pool, PrepareContext, PrepareError, Scheduler, WorkerGroup, WorkerGroupId,
+    WorkerGroups, WorkerPolicy,
 };
 
 #[derive(Debug)]
-/// Prepares one stable ID-only route to verify ownership without cloning on selection.
+/// Prepares one stable ID-only route for cached-group routing coverage.
 struct SingleGroupPolicy {
     group: OnceLock<WorkerGroupId>,
 }
 
 impl WorkerPolicy for SingleGroupPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         let group = context.groups().add();
         let id = group.id();
         self.group.set(id).unwrap();
@@ -32,6 +33,7 @@ impl WorkerPolicy for SingleGroupPolicy {
             affinity.pin_current_thread_to();
             worker.run();
         });
+        Ok(())
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
@@ -45,10 +47,11 @@ struct ReentrantStartupPolicy {
     affinity: OnceLock<ProcessorSet>,
     started: OnceLock<WorkerGroupId>,
     scheduler: Arc<Mutex<Option<Scheduler>>>,
+    reentrant_completed: Sender<()>,
 }
 
 impl WorkerPolicy for ReentrantStartupPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         let group = context.groups().add();
         assert!(
             group
@@ -56,19 +59,26 @@ impl WorkerPolicy for ReentrantStartupPolicy {
                 .before_startup_trace
                 .set(Box::new({
                     let scheduler = Arc::clone(&self.scheduler);
+                    let reentrant_completed = self.reentrant_completed.clone();
                     move || {
-                        scheduler
+                        let scheduler = scheduler
                             .lock()
                             .unwrap()
                             .clone()
-                            .expect("the scheduler is installed before lazy startup")
-                            .spawn_and_forget(|| {});
+                            .expect("the scheduler is installed before lazy startup");
+                        scheduler.spawn_and_forget({
+                            let reentrant_completed = reentrant_completed.clone();
+                            move || {
+                                reentrant_completed.send(()).unwrap();
+                            }
+                        });
                     }
                 }))
                 .is_ok()
         );
         self.group.set(group).unwrap();
         self.affinity.set(context.hardware().processors()).unwrap();
+        Ok(())
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
@@ -85,7 +95,7 @@ impl WorkerPolicy for ReentrantStartupPolicy {
 }
 
 #[test]
-fn custom_policy_selects_owned_group_without_cloning() {
+fn custom_policy_routes_tasks_using_a_cached_group_id() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
@@ -105,6 +115,7 @@ fn custom_policy_selects_owned_group_without_cloning() {
 fn startup_trace_can_submit_through_participating_route() {
     with_watchdog(|| {
         let scheduler = Arc::new(Mutex::new(None));
+        let (reentrant_completed, reentrant_completion) = channel();
         let pool = Pool::builder()
             .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
                 nz!(1),
@@ -115,12 +126,14 @@ fn startup_trace_can_submit_through_participating_route() {
                 affinity: OnceLock::new(),
                 started: OnceLock::new(),
                 scheduler: Arc::clone(&scheduler),
+                reentrant_completed,
             })
             .build();
         let pool_scheduler = pool.scheduler();
         *scheduler.lock().unwrap() = Some(pool_scheduler.clone());
 
         assert_eq!(block_on(pool_scheduler.spawn(|| 42)).unwrap(), 42);
+        reentrant_completion.recv().unwrap();
         *scheduler.lock().unwrap() = None;
     });
 }
@@ -142,7 +155,7 @@ fn last_built_in_policy_setter_wins() {
 }
 
 #[test]
-fn group_and_id_are_copy_clone_safe() {
+fn cloning_empty_group_keeps_identity_and_adds_no_workers() {
     let pool = Pool::builder()
         .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
             nz!(1),

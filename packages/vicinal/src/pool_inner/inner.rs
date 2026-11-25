@@ -1,16 +1,17 @@
 //! Shared pool ownership, policy preparation and terminal cleanup.
 
 use std::any::{Any, type_name};
-use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 #[cfg(test)]
 use std::io;
 #[cfg(test)]
-use std::mem::take;
-#[cfg(test)]
 use std::num::NonZero;
+#[cfg(test)]
+use std::ops::Deref;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 #[cfg(test)]
 use std::thread::{Builder, JoinHandle};
 use std::thread::{Result as ThreadResult, panicking};
@@ -19,54 +20,94 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use tracing::error;
 
 use crate::{
-    ErasedTaskHandle, NEVER_POISONED, PoolRuntime, PrepareContext, ThreadInit, WorkerGroups,
-    WorkerPolicy, discard_panic, extract_panic_message, report_diagnostic,
-    validate_eager_processors,
+    PoolRuntime, PrepareContext, PrepareError, ThreadInit, WorkerGroups, WorkerPolicy,
+    discard_panic, extract_panic_message, report_diagnostic, validate_eager_processors,
 };
 #[cfg(test)]
 use crate::{SubmissionTarget, WorkerEntry};
 
 pub(crate) const POOL_LOG_TARGET: &str = module_path!();
 
+/// Shares the runtime-owned pool name with tests that inspect the inner facade directly.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct PoolName(Arc<str>);
+
+#[cfg(test)]
+impl Deref for PoolName {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl PartialEq<&str> for PoolName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0.as_ref() == *other
+    }
+}
+
 /// Keeps schedulers' shared storage alive while the owning pool controls worker lifetime.
 pub(crate) struct PoolInner {
     pub(crate) pool_id: u64,
-    pub(crate) pool_name: String,
+    #[cfg(test)]
+    pub(crate) pool_name: PoolName,
     pub(crate) groups: WorkerGroups,
     #[cfg(test)]
     pub(crate) registry: WorkerGroups,
     #[cfg(test)]
     pub(crate) hardware: SystemHardware,
     #[cfg(test)]
+    // Test fixtures own these OS-thread handles independently of pool participation.
     pub(crate) worker_handles: Mutex<Vec<JoinHandle<()>>>,
     pub(crate) policy: Box<dyn WorkerPolicy>,
     pub(crate) runtime: Arc<PoolRuntime>,
 }
 
 impl PoolInner {
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         pool_id: u64,
         pool_name: String,
         hardware: &SystemHardware,
         mut policy: Box<dyn WorkerPolicy>,
         thread_init: Option<ThreadInit>,
         eager: Option<&ProcessorSet>,
-    ) -> Self {
-        let runtime = PoolRuntime::new(pool_id, pool_name.clone(), thread_init);
+    ) -> Result<Self, PrepareError> {
+        let runtime = PoolRuntime::new(pool_id, pool_name, thread_init);
         let groups = WorkerGroups::new(Arc::clone(&runtime));
         if let Some(processors) = eager {
             validate_eager_processors(hardware, processors);
         }
         runtime.begin_worker_preparation();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            policy.prepare(PrepareContext::new(hardware, eager, &groups, &pool_name));
+            policy.prepare(PrepareContext::new(
+                hardware,
+                eager,
+                &groups,
+                runtime.pool_name(),
+            ))
         }));
         runtime.end_worker_preparation();
 
-        if let Err(payload) = result {
-            runtime.fail(payload);
+        let preparation = match result {
+            Ok(preparation) => preparation,
+            Err(payload) => {
+                runtime.fail(payload);
+                runtime.wait_for_workers();
+                runtime.resume_failure();
+            }
+        };
+        if let Err(error) = preparation {
+            runtime.stop_workers();
+            drop(policy);
+            runtime.wait_for_preparation_workers();
             runtime.wait_for_workers();
-            runtime.resume_failure();
+            if runtime.is_poisoned() {
+                runtime.resume_failure();
+            }
+            return Err(error);
         }
         runtime.wait_for_preparation_workers();
         // Custom preparation can return after a participating worker independently records
@@ -77,9 +118,10 @@ impl PoolInner {
             runtime.resume_failure();
         }
 
-        Self {
+        Ok(Self {
             pool_id,
-            pool_name,
+            #[cfg(test)]
+            pool_name: PoolName(runtime.pool_name_snapshot()),
             groups: groups.clone(),
             #[cfg(test)]
             registry: groups,
@@ -89,7 +131,7 @@ impl PoolInner {
             worker_handles: Mutex::new(Vec::new()),
             policy,
             runtime,
-        }
+        })
     }
 
     #[cfg_attr(test, mutants::skip)]
@@ -127,7 +169,8 @@ impl PoolInner {
     pub(crate) fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
         let payload = self.runtime.fail_for_submission(payload);
         let mut failure = Err(payload);
-        self.stop_groups(&mut failure);
+        self.runtime
+            .drain_groups(|result| record_failure(&mut failure, result, &self.runtime));
         resume_unwind(failure.expect_err("pool failure retains its original panic"))
     }
 
@@ -148,16 +191,9 @@ impl PoolInner {
             });
             Err(payload)
         });
-        self.stop_groups(&mut failure);
+        self.runtime
+            .drain_groups(|result| record_failure(&mut failure, result, &self.runtime));
         self.runtime.wait_for_workers();
-
-        #[cfg(test)]
-        {
-            let handles = take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
-            for handle in handles {
-                record_failure(&mut failure, handle.join(), &self.runtime);
-            }
-        }
 
         if let Some(payload) = self.runtime.take_failure() {
             report_diagnostic(|| {
@@ -187,19 +223,6 @@ impl PoolInner {
             }
         }
     }
-
-    /// Signals all groups before draining their queues outside registry and queue locks.
-    #[cfg_attr(test, mutants::skip)]
-    fn stop_groups(&self, failure: &mut ThreadResult<()>) {
-        let groups = self.groups.snapshot();
-        for group in &groups {
-            group.state().signal_shutdown();
-        }
-        for group in groups {
-            discard_queue(&group.state().urgent_queue, failure, &self.runtime);
-            discard_queue(&group.state().regular_queue, failure, &self.runtime);
-        }
-    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -207,29 +230,8 @@ impl Debug for PoolInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
-            .field("pool_name", &self.pool_name)
+            .field("pool_name", &self.runtime.pool_name())
             .finish_non_exhaustive()
-    }
-}
-
-/// Drains the live queue without running user destructors under a lock.
-#[cfg_attr(test, mutants::skip)]
-fn discard_queue(
-    queue: &Mutex<VecDeque<ErasedTaskHandle>>,
-    failure: &mut ThreadResult<()>,
-    runtime: &PoolRuntime,
-) {
-    loop {
-        let task = queue.lock().expect(NEVER_POISONED).pop_front();
-        let Some(task) = task else {
-            break;
-        };
-
-        record_failure(
-            failure,
-            catch_unwind(AssertUnwindSafe(|| drop(task))),
-            runtime,
-        );
     }
 }
 

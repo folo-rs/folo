@@ -12,9 +12,9 @@ use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
 use crate::{
-    BuiltInWorkerPolicy, ErasedTaskHandle, PrepareContext, Scheduler, SubmissionTarget,
-    VicinalTask, WorkerGroup, WorkerGroupId, WorkerGroupState, WorkerGroups, WorkerPolicy,
-    init_task,
+    BuiltInWorkerPolicy, ErasedTaskHandle, PrepareContext, PrepareError, Scheduler,
+    SubmissionTarget, VicinalTask, WorkerGroup, WorkerGroupId, WorkerGroupState, WorkerGroups,
+    WorkerPolicy, init_task,
 };
 
 /// Retains the concrete built-in policy for white-box startup tests.
@@ -56,8 +56,8 @@ impl TestBuiltInPolicy {
 }
 
 impl WorkerPolicy for TestBuiltInPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
-        self.policy.lock().unwrap().prepare(context);
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+        self.policy.lock().unwrap().prepare(context)
     }
 
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
@@ -102,11 +102,12 @@ impl TestPolicy {
 }
 
 impl WorkerPolicy for TestPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         self.state
             .group
             .set(context.groups().add())
             .expect("a test policy is prepared once");
+        Ok(())
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {

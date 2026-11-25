@@ -3,6 +3,7 @@
 use std::any::type_name;
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
+#[cfg(test)]
 use std::io;
 use std::num::NonZero;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -13,7 +14,9 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
-use std::thread::{Builder, JoinHandle};
+use std::thread::Builder;
+#[cfg(test)]
+use std::thread::JoinHandle;
 
 use event_listener::Event;
 use events_once::EventLake;
@@ -43,11 +46,15 @@ impl WorkerGroupId {
     }
 }
 
-// SAFETY: IDs contain an address into registry-owned synchronized state. The fields remain
-// private, and IDs can be constructed only for a group owned by that exact registry.
+// SAFETY: Moving an ID copies only its owner and address; the ID does not dereference or own
+// the pointee. The pointer is dereferenced only by WorkerGroups::resolve, after checking the
+// registry owner. That registry retains the Arc-backed state for the returned shared reference's
+// entire lifetime. Future direct dereferences must preserve the same checked-resolution boundary.
 unsafe impl Send for WorkerGroupId {}
-// SAFETY: The target state contains synchronization for every mutable field and IDs expose
-// only the immutable registry address.
+// SAFETY: Sharing an ID copies only its owner and address. No operation on the ID reads the
+// pointee: WorkerGroups::resolve performs the sole dereference after owner validation and under
+// the registry borrow that keeps the Arc-backed state alive. Sharing the ID itself neither prolongs
+// nor assumes the pointee's lifetime.
 unsafe impl Sync for WorkerGroupId {}
 
 impl Debug for WorkerGroupId {
@@ -87,6 +94,9 @@ impl WorkerGroup {
     }
 
     /// Returns the number of workers currently participating in this group.
+    ///
+    /// This includes workers still running their initializer. It excludes reserved workers
+    /// that have not started participating.
     #[must_use]
     #[inline]
     pub fn worker_count(&self) -> usize {
@@ -103,7 +113,7 @@ impl WorkerGroup {
     #[inline]
     pub fn add_worker(&self) -> Worker {
         Worker {
-            group: Some(self.clone()),
+            group: self.clone(),
             reservation: PreparationReservation::new(
                 Arc::clone(&self.runtime),
                 self.runtime.reserve_preparation_worker(),
@@ -144,8 +154,10 @@ impl WorkerGroup {
             self.runtime.end_worker();
             return;
         }
-        // Acquire observes the mask revision that was released before this worker applies its
-        // initial pin; later task-boundary refreshes advance only this worker-local cursor.
+        // Acquire observes the mask revision that was released before this worker applied its
+        // initial pin. The caller prevents route publication until this worker records the
+        // revision before participation; later task-boundary refreshes advance only its local
+        // cursor.
         let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
         self.run_worker(reservation, pin, applied_revision);
     }
@@ -160,6 +172,7 @@ impl WorkerGroup {
         pin: impl FnMut(&ProcessorSet) + Send,
         applied_revision: usize,
     ) {
+        #[cfg(test)]
         let mut initialized = false;
         let mut pin = pin;
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -174,31 +187,17 @@ impl WorkerGroup {
             if let Some(before_startup_trace) = self.state.before_startup_trace.get() {
                 before_startup_trace();
             }
-            if let Some(group) = self.state.destination {
-                debug!(
-                    target: POOL_LOG_TARGET,
-                    pool_name = self.runtime.pool_name(),
-                    pool_id = self.runtime.pool_id(),
-                    group = ?group,
-                    worker_index,
-                    "worker thread started"
-                );
-            } else {
-                debug!(
-                    target: POOL_LOG_TARGET,
-                    pool_name = self.runtime.pool_name(),
-                    pool_id = self.runtime.pool_id(),
-                    worker_index,
-                    "worker thread started"
-                );
-            }
+            self.trace_worker_started(worker_index);
 
             if let Some(thread_init) = self.runtime.thread_init() {
                 (thread_init.0)();
             }
 
             self.mark_worker_initialized(&mut reservation);
-            initialized = true;
+            #[cfg(test)]
+            {
+                initialized = true;
+            }
             worker_loop_with(
                 &self.runtime,
                 &self.state,
@@ -207,24 +206,7 @@ impl WorkerGroup {
                 &mut pin,
             );
 
-            if let Some(group) = self.state.destination {
-                debug!(
-                    target: POOL_LOG_TARGET,
-                    pool_name = self.runtime.pool_name(),
-                    pool_id = self.runtime.pool_id(),
-                    group = ?group,
-                    worker_index,
-                    "worker thread exiting"
-                );
-            } else {
-                debug!(
-                    target: POOL_LOG_TARGET,
-                    pool_name = self.runtime.pool_name(),
-                    pool_id = self.runtime.pool_id(),
-                    worker_index,
-                    "worker thread exiting"
-                );
-            }
+            self.trace_worker_exiting(worker_index);
         }));
 
         if let Err(payload) = result {
@@ -236,7 +218,11 @@ impl WorkerGroup {
             }
         }
 
+        #[cfg(test)]
         if initialized {
+            // This test-only Release publishes the removal from the initialized snapshot. It
+            // occurs outside the initialization mutex because the counter observes completion,
+            // not a condition-variable shutdown predicate.
             self.state
                 .initialized_workers
                 .fetch_sub(1, Ordering::Release);
@@ -245,6 +231,54 @@ impl WorkerGroup {
         self.runtime.end_worker();
     }
 
+    /// Records the start of a worker while preserving destination-specific trace fields.
+    fn trace_worker_started(&self, worker_index: u32) {
+        if let Some(group) = self.state.destination {
+            debug!(
+                target: POOL_LOG_TARGET,
+                pool_name = self.runtime.pool_name(),
+                pool_id = self.runtime.pool_id(),
+                group = ?group,
+                worker_index,
+                "worker thread started"
+            );
+        } else {
+            debug!(
+                target: POOL_LOG_TARGET,
+                pool_name = self.runtime.pool_name(),
+                pool_id = self.runtime.pool_id(),
+                worker_index,
+                "worker thread started"
+            );
+        }
+    }
+
+    /// Records the end of a worker while preserving destination-specific trace fields.
+    fn trace_worker_exiting(&self, worker_index: u32) {
+        if let Some(group) = self.state.destination {
+            debug!(
+                target: POOL_LOG_TARGET,
+                pool_name = self.runtime.pool_name(),
+                pool_id = self.runtime.pool_id(),
+                group = ?group,
+                worker_index,
+                "worker thread exiting"
+            );
+        } else {
+            debug!(
+                target: POOL_LOG_TARGET,
+                pool_name = self.runtime.pool_name(),
+                pool_id = self.runtime.pool_id(),
+                worker_index,
+                "worker thread exiting"
+            );
+        }
+    }
+
+    // Replacing lazy startup with an empty body can strand joined submissions forever because no
+    // participation source remains for the readiness wait. Ref: docs/testing.md, "Tests must not
+    // hang".
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn start_workers(
         &self,
         destination: GroupId,
@@ -261,14 +295,16 @@ impl WorkerGroup {
             .checked_add(count.get() as usize)
             .expect("worker reservation is bounded by the topology implementation");
         self.spawn_workers(destination, affinity, count);
-        self.wait_for_workers(expected, false);
+        self.wait_for_workers(expected);
         #[cfg(test)]
-        self.state
-            .startup
-            .set(Ok(()))
-            .expect("a worker group starts once");
+        {
+            _ = self.state.startup.get_or_init(|| Ok(()));
+        }
     }
 
+    // Omitting eager startup can leave a successfully constructed policy-selected route with
+    // no worker to execute admitted tasks.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn start_eager_workers(
         &self,
         destination: GroupId,
@@ -278,15 +314,24 @@ impl WorkerGroup {
         self.spawn_workers(destination, affinity, count);
     }
 
+    // Removing thread creation leaves the lazy readiness wait without a producer.
+    #[cfg_attr(test, mutants::skip)]
     fn spawn_workers(&self, destination: GroupId, affinity: &ProcessorSet, count: NonZero<u32>) {
-        self.spawn_workers_with_consumer(
-            destination,
-            affinity,
-            count,
-            Builder::spawn,
-            ProcessorSet::pin_current_thread_to,
-            |_| {},
-        );
+        for worker_index in 0..count.get() {
+            let entry = worker_entry(
+                self.add_worker(),
+                affinity.clone(),
+                ProcessorSet::pin_current_thread_to,
+            );
+            let builder = Builder::new().name(format!(
+                "{}-{destination}-{worker_index}",
+                self.runtime.pool_name()
+            ));
+            let handle = builder.spawn(entry).unwrap_or_else(|error| {
+                panic!("failed to start worker in {destination:?}: {error}")
+            });
+            _ = handle;
+        }
     }
 
     // Omitting the participation publication can leave lazy startup waiting forever.
@@ -307,23 +352,36 @@ impl WorkerGroup {
     // Omitting the initializer-completion publication can strand eager waiters indefinitely.
     #[cfg_attr(test, mutants::skip)]
     fn mark_worker_initialized(&self, reservation: &mut PreparationReservation) {
-        // Release publishes completion of thread_init; the waiter acquires while holding the
-        // same condition-variable mutex.
-        let progress = self
-            .state
-            .initialization
-            .lock()
-            .expect("worker initialization state remains valid");
-        self.state
-            .initialized_workers
-            .fetch_add(1, Ordering::Release);
-        self.state.initialization_changed.notify_all();
         #[cfg(test)]
-        if reservation.is_preparation_pending() {
-            _ = self.state.startup.get_or_init(|| Ok(()));
+        {
+            // The test-only counter is published under the mutex and before its notification.
+            // Its waiter acquires while holding the same mutex, closing the predicate/wait gap.
+            let progress = self
+                .state
+                .initialization
+                .lock()
+                .expect("worker initialization state remains valid");
+            self.state
+                .initialized_workers
+                .fetch_add(1, Ordering::Release);
+            self.state.initialization_changed.notify_all();
+            if reservation.is_preparation_pending() {
+                _ = self.state.startup.get_or_init(|| Ok(()));
+            }
+
+            // Preserve the original test-build ordering: the initialization waiter cannot
+            // observe the published count until the production reservation is complete too.
+            reservation.initialize();
+            drop(progress);
         }
-        reservation.initialize();
-        drop(progress);
+
+        // The runtime reservation carries the production initialization barrier independently
+        // of the test-only initialized-worker counter.
+        #[cfg(not(test))]
+        {
+            _ = self;
+            reservation.initialize();
+        }
     }
 
     // Omitting worker-count removal can make shutdown wait forever for a nonexistent decrement.
@@ -341,22 +399,34 @@ impl WorkerGroup {
         drop(progress);
     }
 
-    // A wrong readiness comparison can require a worker that a fixed-count policy never creates,
-    // and a false predicate can make shutdown wait forever without another notification.
+    // A wrong participation predicate can wait for a worker that startup never creates.
     #[cfg_attr(test, mutants::skip)]
-    fn wait_for_workers(&self, expected: usize, initialized: bool) {
+    fn wait_for_workers(&self, expected: usize) {
+        self.wait_for_worker_count(expected, || {
+            // Acquire pairs with the participating worker's mutex-protected Release.
+            self.state.worker_count.load(Ordering::Acquire)
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_for_initialized_workers(&self, count: NonZero<usize>) {
+        self.wait_for_worker_count(count.get(), || {
+            // Acquire pairs with the test-only initializer-completion Release.
+            self.state.initialized_workers.load(Ordering::Acquire)
+        });
+    }
+
+    // A wrong predicate or a skipped wake can strand every readiness waiter without another
+    // producer. The condition-variable and mutex keep each transition observable by a waiter.
+    #[cfg_attr(test, mutants::skip)]
+    fn wait_for_worker_count(&self, expected: usize, ready: impl Fn() -> usize) {
         let mut progress = self
             .state
             .initialization
             .lock()
             .expect("worker initialization state remains valid");
         loop {
-            let ready = if initialized {
-                self.state.initialized_workers.load(Ordering::Acquire)
-            } else {
-                self.state.worker_count.load(Ordering::Acquire)
-            };
-            if ready >= expected {
+            if ready() >= expected {
                 return;
             }
             if self.runtime.is_poisoned() {
@@ -376,18 +446,15 @@ impl WorkerGroup {
     }
 
     #[cfg(test)]
-    pub(crate) fn wait_for_initialized_workers(&self, count: NonZero<usize>) {
-        self.wait_for_workers(count.get(), true);
-    }
-
-    #[cfg(test)]
+    // Removing the injected startup path can leave its readiness wait without a producer.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn start_workers_with(
         &self,
         destination: GroupId,
         affinity: &ProcessorSet,
         count: NonZero<u32>,
         handles: &mut Vec<JoinHandle<()>>,
-        spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<JoinHandle<()>>,
+        mut spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<JoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
     ) {
         let expected = self
@@ -397,44 +464,12 @@ impl WorkerGroup {
             .checked_add(count.get() as usize)
             .expect("worker reservation is bounded by the topology implementation");
 
-        self.spawn_workers_with_consumer(destination, affinity, count, spawn, pin, |handle| {
-            handles.push(handle);
-        });
-
-        self.wait_for_workers(expected, false);
-        self.state
-            .startup
-            .set(Ok(()))
-            .expect("a worker group starts once");
-    }
-
-    /// Starts all requested workers while delegating ownership of each OS handle to the caller.
-    ///
-    /// Ref: docs/implementation.md, "Ownership and coordination".
-    fn spawn_workers_with_consumer(
-        &self,
-        destination: GroupId,
-        affinity: &ProcessorSet,
-        count: NonZero<u32>,
-        mut spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<JoinHandle<()>>,
-        pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
-        mut consume_handle: impl FnMut(JoinHandle<()>),
-    ) {
         for worker_index in 0..count.get() {
-            let worker = self.add_worker();
-            let entry: WorkerEntry = Box::new({
-                let affinity = affinity.clone();
-                let pin = pin.clone();
-                move || {
-                    worker.run_with(
-                        {
-                            let pin = pin.clone();
-                            move || pin(&affinity)
-                        },
-                        pin,
-                    );
-                }
-            });
+            let entry: WorkerEntry = Box::new(worker_entry(
+                self.add_worker(),
+                affinity.clone(),
+                pin.clone(),
+            ));
             let builder = Builder::new().name(format!(
                 "{}-{destination}-{worker_index}",
                 self.runtime.pool_name()
@@ -442,8 +477,11 @@ impl WorkerGroup {
             let handle = spawn(builder, entry).unwrap_or_else(|error| {
                 panic!("failed to start worker in {destination:?}: {error}")
             });
-            consume_handle(handle);
+            handles.push(handle);
         }
+
+        self.wait_for_workers(expected);
+        _ = self.state.startup.get_or_init(|| Ok(()));
     }
 
     pub(crate) fn state(&self) -> &WorkerGroupState {
@@ -466,6 +504,17 @@ impl Debug for WorkerGroup {
     }
 }
 
+/// Builds the concrete thread entry before the chosen spawn boundary.
+fn worker_entry(
+    worker: Worker,
+    affinity: ProcessorSet,
+    pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
+) -> impl FnOnce() + Send + 'static {
+    let initial_pin = pin.clone();
+
+    move || worker.run_with(move || initial_pin(&affinity), pin)
+}
+
 /// Runs one reserved worker through the pool's worker lifecycle.
 ///
 /// A policy moves this value into a thread and calls [`run`][Self::run] once.
@@ -473,7 +522,7 @@ impl Debug for WorkerGroup {
 /// policy preparation.
 #[must_use = "reserved workers must be run or explicitly dropped"]
 pub struct Worker {
-    group: Option<WorkerGroup>,
+    group: WorkerGroup,
     reservation: PreparationReservation,
 }
 
@@ -482,7 +531,10 @@ impl Debug for Worker {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("group", &self.group)
-            .field("preparation_pending", &self.reservation.active)
+            .field(
+                "preparation_pending",
+                &self.reservation.is_preparation_pending(),
+            )
             .finish()
     }
 }
@@ -491,45 +543,44 @@ impl Worker {
     /// Runs this worker on the current thread until the pool shuts down.
     ///
     /// The policy must apply the intended initial affinity before calling this method.
+    #[inline]
     pub fn run(self) {
         self.run_with(|| {}, ProcessorSet::pin_current_thread_to);
     }
 
-    fn run_with(mut self, initial_setup: impl FnOnce(), pin: impl FnMut(&ProcessorSet) + Send) {
-        let group = self.group.take().expect("a worker runs only once");
-        group.execute_worker(self.reservation, initial_setup, pin);
+    fn run_with(self, initial_setup: impl FnOnce(), pin: impl FnMut(&ProcessorSet) + Send) {
+        let Self { group, reservation } = self;
+        group.execute_worker(reservation, initial_setup, pin);
     }
 }
 
 /// Releases an outstanding preparation target when a reserved worker is dropped.
 struct PreparationReservation {
-    runtime: Arc<PoolRuntime>,
-    active: bool,
+    runtime: Option<Arc<PoolRuntime>>,
 }
 
 impl PreparationReservation {
     fn new(runtime: Arc<PoolRuntime>, active: bool) -> Self {
-        Self { runtime, active }
-    }
-
-    fn initialize(&mut self) {
-        if self.active {
-            self.active = false;
-            self.runtime.initialize_preparation_worker();
+        Self {
+            runtime: if active { Some(runtime) } else { None },
         }
     }
 
-    #[cfg(test)]
+    fn initialize(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.initialize_preparation_worker();
+        }
+    }
+
     fn is_preparation_pending(&self) -> bool {
-        self.active
+        self.runtime.is_some()
     }
 }
 
 impl Drop for PreparationReservation {
     fn drop(&mut self) {
-        if self.active {
-            self.active = false;
-            self.runtime.cancel_preparation_worker();
+        if let Some(runtime) = self.runtime.take() {
+            runtime.cancel_preparation_worker();
         }
     }
 }
@@ -542,7 +593,7 @@ pub(crate) struct WorkerGroupState {
     pub(crate) regular_queue: Mutex<VecDeque<ErasedTaskHandle>>,
     pub(crate) wake_event: Event,
     pub(crate) shutdown_flag: AtomicBool,
-    pub(crate) affinity: RwLock<Option<ProcessorSet>>,
+    pub(crate) affinity: RwLock<Option<Arc<ProcessorSet>>>,
     pub(crate) affinity_revision: AtomicUsize,
 
     pub(crate) task_pool: Mutex<MultiPool>,
@@ -550,7 +601,15 @@ pub(crate) struct WorkerGroupState {
     pub(crate) tasks_spawned: AtomicU64,
 
     next_worker_index: AtomicU32,
+    // Acquire observations in worker_count(), lazy-startup reservation and the mutex-held
+    // waiter pair with Release updates made under initialization. That mutex is also required
+    // to keep the predicate check and condition-variable wait from missing an increment or
+    // terminal decrement.
     worker_count: AtomicUsize,
+    #[cfg(test)]
+    // Test-only initializer-completion observations. Completion publishes Release while holding
+    // initialization; the startup test acquires while holding that same mutex. Exit removal is
+    // outside the mutex and publishes only a current-snapshot decrement, not a readiness wakeup.
     initialized_workers: AtomicUsize,
     #[cfg(test)]
     pub(crate) startup: OnceLock<Result<(), ()>>,
@@ -588,6 +647,7 @@ impl WorkerGroupState {
             tasks_spawned: AtomicU64::new(0),
             next_worker_index: AtomicU32::new(0),
             worker_count: AtomicUsize::new(0),
+            #[cfg(test)]
             initialized_workers: AtomicUsize::new(0),
             #[cfg(test)]
             startup: OnceLock::new(),
@@ -608,6 +668,10 @@ impl WorkerGroupState {
 
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn signal_shutdown(&self) {
+        // This group-local terminal bit is distinct from the runtime shutdown and poison flags.
+        // The worker's post-listener Acquire observes this Release and the caller's preceding
+        // terminal-state writes, then the event notification closes the register/recheck/wait
+        // gap. The atomic does not replace queue locks or publish all queue access.
         self.shutdown_flag.store(true, Ordering::Release);
         self.wake_event.notify(usize::MAX);
     }
@@ -644,29 +708,48 @@ impl WorkerGroupState {
 /// Public group handles expose only participation and identity; queue internals stay borrowed.
 pub(crate) type GroupState = WorkerGroupState;
 
-/// Transfers one worker-thread entry closure through test-only spawn adapters.
+/// Erases the shared worker-spawn entry only at injected test spawn boundaries.
+#[cfg(test)]
 pub(crate) type WorkerEntry = Box<dyn FnOnce() + Send>;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
-    use std::pin::Pin;
+    use std::sync::OnceLock;
 
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-    use crate::{Pool, VicinalTask, Worker, init_task};
+    use crate::{
+        Pool, PrepareContext, PrepareError, Worker, WorkerGroupId, WorkerGroups, WorkerPolicy,
+    };
 
     assert_impl_all!(Worker: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(Worker: Copy, Clone);
 
-    struct NoopTask;
+    /// Supplies one routable group without workers so admitted tasks remain observable.
+    #[derive(Default)]
+    struct NoWorkerPolicy {
+        group: OnceLock<WorkerGroupId>,
+    }
 
-    impl VicinalTask for NoopTask {
-        fn call(self: Pin<&mut Self>) {}
+    impl WorkerPolicy for NoWorkerPolicy {
+        fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+            self.group
+                .set(context.groups().add().id())
+                .expect("the no-worker policy prepares once");
+            Ok(())
+        }
+
+        fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+            *self
+                .group
+                .get()
+                .expect("the builder prepares the no-worker policy")
+        }
     }
 
     #[test]
@@ -676,23 +759,18 @@ mod tests {
                 nz!(1),
                 nz!(1),
             )))
+            .worker_policy(NoWorkerPolicy::default())
             .build();
-        let group = pool.inner.groups.add();
-        let urgent = group.state().task_pool.lock().unwrap().alloc_uninit_box();
-        let regular = group.state().task_pool.lock().unwrap().alloc_uninit_box();
+        let group = pool
+            .inner
+            .groups
+            .iter()
+            .next()
+            .expect("the policy creates one group");
+        let scheduler = pool.scheduler();
 
-        group
-            .state()
-            .urgent_queue
-            .lock()
-            .unwrap()
-            .push_back(init_task(urgent, NoopTask));
-        group
-            .state()
-            .regular_queue
-            .lock()
-            .unwrap()
-            .push_back(init_task(regular, NoopTask));
+        let _regular = scheduler.spawn(|| ());
+        let _urgent = scheduler.spawn_urgent(|| ());
 
         assert_eq!(group.queue_len(), 2);
     }

@@ -5,14 +5,14 @@ use std::collections::BTreeSet;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::iter::repeat_with;
 use std::num::NonZero;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use many_cpus::{MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware};
 
 use crate::{
-    GroupId, NEVER_POISONED, PrepareContext, SubmissionTarget, WorkerGroup, WorkerGroupId,
-    WorkerGroups, WorkerPolicy,
+    GroupId, NEVER_POISONED, PrepareContext, PrepareError, SubmissionTarget, WorkerGroup,
+    WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 /// Shares the implementation used by the public built-in policy facades.
 #[derive(Debug)]
@@ -102,7 +102,7 @@ impl Clone for BuiltInWorkerPolicy {
 }
 
 impl WorkerPolicy for BuiltInWorkerPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         self.prepared = Some(PreparedPolicy::new(
             context.hardware(),
             context.eager(),
@@ -110,6 +110,7 @@ impl WorkerPolicy for BuiltInWorkerPolicy {
             self.kind,
             self.count,
         ));
+        Ok(())
     }
 
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
@@ -207,6 +208,11 @@ impl PreparedPolicy {
     }
 
     /// Seeds all eager destinations before starting and waiting for their workers.
+    ///
+    /// Shared masks, revisions and membership readiness are complete before worker startup.
+    /// Each worker applies its startup pin and records the published revision before it joins
+    /// participation, so construction cannot expose an expandable route before those facts
+    /// agree. Ref: docs/implementation.md, "Affinity and failure coordination".
     fn prepare_eager(
         &self,
         registry: &WorkerGroups,
@@ -214,15 +220,13 @@ impl PreparedPolicy {
         count: NonZero<u32>,
         processors: ProcessorSet,
     ) {
-        let groups = eager_groups(kind, processors)
-            .into_iter()
-            .map(|(destination, affinity)| {
-                let group = registry.add_for(destination);
-                self.publish_initial(&group, destination, &affinity);
-                self.install_eager_group(destination, group.id());
-                (destination, group, affinity)
-            })
-            .collect::<Vec<_>>();
+        let mut groups = Vec::new();
+        for_each_eager_group(kind, processors, |destination, affinity| {
+            let group = registry.add_for(destination);
+            self.publish_initial(&group, destination, &affinity);
+            self.install_eager_group(destination, group.id());
+            groups.push((destination, group, affinity));
+        });
         for (destination, group, affinity) in groups {
             group.start_eager_workers(destination, &affinity, count);
         }
@@ -248,16 +252,16 @@ impl PreparedPolicy {
                 groups,
                 members,
             } => {
-                let target = hardware.with_current_processor(|processor| SubmissionTarget {
-                    group: GroupId::MemoryRegion(processor.memory_region_id()),
-                    processor: processor.id(),
+                let (region_id, processor_id) = hardware.with_current_processor(|processor| {
+                    (processor.memory_region_id(), processor.id())
                 });
                 let index = ids
-                    .binary_search(&match target.group {
-                        GroupId::MemoryRegion(id) => id,
-                        _ => unreachable!("memory-region policy selects a region"),
-                    })
+                    .binary_search(&region_id)
                     .expect("a submitting region contains an eligible processor");
+                let target = SubmissionTarget {
+                    group: GroupId::MemoryRegion(region_id),
+                    processor: processor_id,
+                };
                 let id = groups
                     .get(index)
                     .expect("binary search identifies an existing region slot")
@@ -293,27 +297,43 @@ impl PreparedPolicy {
         destination: GroupId,
         processor: ProcessorId,
     ) -> WorkerGroupId {
-        let affinity = self
-            .hardware()
-            .all_processors()
-            .to_builder()
-            .filter(|candidate| candidate.id() == processor && destination.contains(candidate))
-            .take_all()
-            .unwrap_or_else(|| panic!("no eligible processors for worker group {destination:?}"));
+        let affinity = Arc::new(
+            self.hardware()
+                .all_processors()
+                .to_builder()
+                .filter(|candidate| candidate.id() == processor && destination.contains(candidate))
+                .take_all()
+                .unwrap_or_else(|| {
+                    panic!("no eligible processors for worker group {destination:?}")
+                }),
+        );
         let group = registry.add_for(destination);
 
         if !matches!(destination, GroupId::Processor(_)) {
-            *group.state().affinity.write().expect(NEVER_POISONED) = Some(affinity.clone());
+            // Regional and system routes may widen, so their workers need a shared snapshot
+            // and revision. Processor routes receive a fixed singleton startup pin and never
+            // use this shared-publication path. Ref: docs/implementation.md, "Affinity and
+            // failure coordination".
+            *group.state().affinity.write().expect(NEVER_POISONED) = Some(Arc::clone(&affinity));
             group
                 .state()
                 .affinity_revision
                 .fetch_add(1, Ordering::Release);
         }
 
+        // The worker applies this pin and reads its initial revision before publishing
+        // participation. Lazy startup waits for that participation before exposing the route,
+        // so the worker-local revision cannot refer to a wider mask than the pin it applied.
         group.start_workers(destination, &affinity, count);
         group.id()
     }
 
+    /// Expands a shared route and publishes processor readiness.
+    ///
+    /// A membership `Release`/`Acquire` handoff certifies that the matching mask and revision
+    /// are available to the lock-free submitter. The separately acquired revision lets a
+    /// worker observe the snapshot; only applying that snapshot pins the worker.
+    /// Ref: docs/implementation.md, "Affinity and failure coordination".
     // Omitting expansion can leave tests waiting on hooks that no producer will invoke.
     #[cfg_attr(test, mutants::skip)]
     fn expand_if_needed(
@@ -324,6 +344,8 @@ impl PreparedPolicy {
         id: WorkerGroupId,
     ) {
         let member = membership(members, target.processor);
+        // This is the lock-free fast path. The matching Release store below happens only after
+        // the mask and revision exist, so a ready observation requires no topology or group lock.
         if member.load(Ordering::Acquire) {
             return;
         }
@@ -334,6 +356,9 @@ impl PreparedPolicy {
             before_lock();
         }
         let mut current = state.affinity.write().expect(NEVER_POISONED);
+        // The writer-guarded recheck and reconstruction loads below observe Release-published
+        // flags from other slow-path publishers. They close those races but do not replace the
+        // lock-free readiness handoff above.
         if member.load(Ordering::Acquire) {
             return;
         }
@@ -342,12 +367,15 @@ impl PreparedPolicy {
                 .iter()
                 .any(|processor| processor.id() == target.processor)
         }) {
+            // Lazy group creation installed its singleton mask and revision but intentionally
+            // left readiness unpublished. Only readiness remains; no revision or wakeup is
+            // needed until a later submission widens the mask.
             member.store(true, Ordering::Release);
             return;
         }
 
-        // The publication lock serializes mask/revision construction with membership readiness.
-        // The current processor is included explicitly before its flag is released-published.
+        // The publication lock serializes mask construction with membership observations. The
+        // current processor is included explicitly before readiness reaches the lock-free path.
         let affinity = self
             .hardware()
             .all_processors()
@@ -359,7 +387,9 @@ impl PreparedPolicy {
             })
             .take_all()
             .expect("the sampled processor belongs to its selected destination");
-        *current = Some(affinity);
+        *current = Some(Arc::new(affinity));
+        // Workers acquire this revision to find the corresponding immutable snapshot. Seeing a
+        // revision does not itself mean that the worker has applied the snapshot.
         state.affinity_revision.fetch_add(1, Ordering::Release);
         #[cfg(test)]
         if let Some(before_publish) = state.before_membership_publish.get() {
@@ -374,10 +404,12 @@ impl PreparedPolicy {
 
     fn publish_initial(&self, group: &WorkerGroup, destination: GroupId, affinity: &ProcessorSet) {
         if matches!(destination, GroupId::Processor(_)) {
+            // Processor-local workers keep the fixed singleton pin applied by startup. Their
+            // route cannot widen, so it needs neither a shared revision nor membership readiness.
             return;
         }
 
-        *group.state().affinity.write().expect(NEVER_POISONED) = Some(affinity.clone());
+        *group.state().affinity.write().expect(NEVER_POISONED) = Some(Arc::new(affinity.clone()));
         group
             .state()
             .affinity_revision
@@ -389,21 +421,25 @@ impl PreparedPolicy {
     }
 
     fn install_eager_group(&self, destination: GroupId, group: WorkerGroupId) {
+        self.route_slot(destination)
+            .set(group)
+            .expect("eager destinations are unique");
+    }
+
+    /// Resolves the shared route layout for eager and fixture-only installation.
+    fn route_slot(&self, destination: GroupId) -> &OnceLock<WorkerGroupId> {
         match (self, destination) {
             (Self::Processor { groups, .. }, GroupId::Processor(id)) => groups
                 .get(id as usize)
-                .expect("an eager processor belongs to the hardware index space")
-                .set(group)
-                .expect("eager destinations are unique"),
+                .expect("a processor destination belongs to the hardware index space"),
             (Self::MemoryRegion { ids, groups, .. }, GroupId::MemoryRegion(id)) => groups
-                .get(ids.binary_search(&id).expect("eager region is populated"))
-                .expect("region search identifies a group")
-                .set(group)
-                .expect("eager destinations are unique"),
-            (Self::System { group: slot, .. }, GroupId::System) => slot
-                .set(group)
-                .expect("one eager selection creates one system group"),
-            _ => panic!("the eager destination must match the prepared policy"),
+                .get(
+                    ids.binary_search(&id)
+                        .expect("a region destination is populated"),
+                )
+                .expect("region search identifies a group"),
+            (Self::System { group, .. }, GroupId::System) => group,
+            _ => panic!("the destination must match the prepared policy"),
         }
     }
 
@@ -440,38 +476,12 @@ impl PreparedPolicy {
             self.publish_initial(group, destination, affinity);
         }
 
-        match (self, destination) {
-            (Self::Processor { groups, .. }, GroupId::Processor(id)) => {
-                let slot = groups
-                    .get(id as usize)
-                    .expect("a test processor belongs to the hardware index space");
-                if let Some(existing) = slot.get() {
-                    assert_eq!(*existing, group.id());
-                } else {
-                    slot.set(group.id())
-                        .expect("the test route is initially empty");
-                }
-            }
-            (Self::MemoryRegion { ids, groups, .. }, GroupId::MemoryRegion(id)) => {
-                let slot = groups
-                    .get(ids.binary_search(&id).expect("test region is populated"))
-                    .expect("region search identifies a group");
-                if let Some(existing) = slot.get() {
-                    assert_eq!(*existing, group.id());
-                } else {
-                    slot.set(group.id())
-                        .expect("the test route is initially empty");
-                }
-            }
-            (Self::System { group: slot, .. }, GroupId::System) => {
-                if let Some(existing) = slot.get() {
-                    assert_eq!(*existing, group.id());
-                } else {
-                    slot.set(group.id())
-                        .expect("the test route is initially empty");
-                }
-            }
-            _ => panic!("the test destination must match the prepared policy"),
+        let slot = self.route_slot(destination);
+        if let Some(existing) = slot.get() {
+            assert_eq!(*existing, group.id());
+        } else {
+            slot.set(group.id())
+                .expect("the test route is initially empty");
         }
     }
 }
@@ -502,29 +512,37 @@ fn membership(members: &[(ProcessorId, AtomicBool)], processor: ProcessorId) -> 
         .1
 }
 
-fn eager_groups(policy: PolicyKind, processors: ProcessorSet) -> Vec<(GroupId, ProcessorSet)> {
+/// Visits unique eager destinations while selecting each destination's affinity.
+///
+/// Registration consumes each result immediately so startup retains only the completed group
+/// tuples instead of first allocating a destination buffer.
+fn for_each_eager_group(
+    policy: PolicyKind,
+    processors: ProcessorSet,
+    mut visit: impl FnMut(GroupId, ProcessorSet),
+) {
     match policy {
         PolicyKind::Processor => {
             let mut destinations = BTreeSet::new();
-            processors
-                .decompose()
-                .into_iter()
-                .filter(|set| destinations.insert(set.processors().first().id()))
-                .map(|set| (GroupId::Processor(set.processors().first().id()), set))
-                .collect()
+            for affinity in processors.decompose() {
+                let id = affinity.processors().first().id();
+                if destinations.insert(id) {
+                    visit(GroupId::Processor(id), affinity);
+                }
+            }
         }
-        PolicyKind::MemoryRegion => processors
-            .iter()
-            .map(Processor::memory_region_id)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|region| {
+        PolicyKind::MemoryRegion => {
+            let regions = processors
+                .iter()
+                .map(Processor::memory_region_id)
+                .collect::<BTreeSet<_>>();
+            for region in regions {
                 let affinity = processors
                     .filter(|processor| processor.memory_region_id() == region)
                     .expect("each selected region contains a selected processor");
-                (GroupId::MemoryRegion(region), affinity)
-            })
-            .collect(),
-        PolicyKind::System => vec![(GroupId::System, processors)],
+                visit(GroupId::MemoryRegion(region), affinity);
+            }
+        }
+        PolicyKind::System => visit(GroupId::System, processors),
     }
 }

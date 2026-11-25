@@ -203,6 +203,6 @@ fn publish_expansion(pool: &Pool, group: &WorkerGroup) {
 /// Publishes snapshots without task admission so tests control the loop's exact queue contents.
 fn publish_affinity(state: &WorkerGroupState, set: ProcessorSet) {
     let mut affinity = state.affinity.write().unwrap();
-    *affinity = Some(set);
+    *affinity = Some(Arc::new(set));
     state.affinity_revision.fetch_add(1, Ordering::Release);
 }

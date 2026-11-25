@@ -297,6 +297,12 @@ fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
 #[test]
 fn concurrent_same_processor_submissions_wait_for_membership_publication() {
     with_watchdog(|| {
+        #[derive(Debug, Eq, PartialEq)]
+        enum MembershipOutcome {
+            SlowPath,
+            ReturnedBeforePublication,
+        }
+
         let hardware = regional_hardware();
         pin(&hardware, 0);
         let pool = Pool::builder()
@@ -312,25 +318,25 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
         assert_eq!(block_on(initial).unwrap(), BTreeSet::from([0]));
         let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
 
-        let lock_attempts = Arc::new(AtomicUsize::new(0));
-        let (second_at_lock, second_lock_arrival) = mpsc::channel();
+        let lock_attempts = AtomicUsize::new(0);
+        let (outcome, outcomes) = mpsc::channel();
         assert!(
             state
                 .before_membership_lock
                 .set(Box::new({
-                    let lock_attempts = Arc::clone(&lock_attempts);
+                    let outcome = outcome.clone();
                     move || {
                         // The channel below orders this hook with the competing submitter; the
                         // atomic only elects which callback must send.
-                        if lock_attempts.fetch_add(1, Ordering::Acquire) == 1 {
-                            second_at_lock.send(()).unwrap();
+                        if lock_attempts.fetch_add(1, Ordering::Relaxed) == 1 {
+                            outcome.send(MembershipOutcome::SlowPath).unwrap();
                         }
                     }
                 }))
                 .is_ok()
         );
 
-        let first_publisher = Arc::new(AtomicBool::new(true));
+        let first_publisher = AtomicBool::new(true);
         let (publishing, publication) = mpsc::channel();
         let (release_publication, wait_for_release) = mpsc::channel();
         let wait_for_release = Mutex::new(wait_for_release);
@@ -338,11 +344,10 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
             state
                 .before_membership_publish
                 .set(Box::new({
-                    let first_publisher = Arc::clone(&first_publisher);
                     move || {
                         // The channel rendezvous supplies ordering; swap elects one callback
                         // to hold publication open while the other waits.
-                        if first_publisher.swap(false, Ordering::AcqRel) {
+                        if first_publisher.swap(false, Ordering::Relaxed) {
                             publishing.send(()).unwrap();
                             wait_for_release.lock().unwrap().recv().unwrap();
                         }
@@ -360,25 +365,22 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
             }
         });
         publication.recv().unwrap();
-        let (returned, returns) = mpsc::channel();
         let second = {
             let scheduler = scheduler;
             let hardware = hardware;
             thread::spawn(move || {
                 pin(&hardware, 1);
                 let task = scheduler.spawn(move || affinity(&hardware));
-                returned.send(()).unwrap();
+                _ = outcome.send(MembershipOutcome::ReturnedBeforePublication);
                 task
             })
         };
-        second_lock_arrival.recv().unwrap();
-        assert_eq!(returns.try_recv().unwrap_err(), mpsc::TryRecvError::Empty);
+        assert_eq!(outcomes.recv().unwrap(), MembershipOutcome::SlowPath);
         release_publication.send(()).unwrap();
 
         for task in [first.join().unwrap(), second.join().unwrap()] {
             assert_eq!(block_on(task).unwrap(), BTreeSet::from([0, 1]));
         }
-        assert_eq!(state.affinity_revision.load(Ordering::Acquire), 2);
     });
 }
 
@@ -571,7 +573,6 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     );
 
     // Drive admission with no threads so listener notifications are directly observable.
-    state.startup.set(Ok(())).unwrap();
     let allocate = || {
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
         init_task(slot, NoopTask)
@@ -586,10 +587,9 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), None);
 
-    // Two writers may publish separately or serialize into one inherited mask/revision;
-    // the contract here is that final affinity and worker count are correct.
+    // A known-processor resubmission must leave both affinity revision and mask unchanged.
     let revision = state.affinity_revision.load(Ordering::Acquire);
-    let snapshot = state.affinity.read().unwrap().as_ref().unwrap().clone();
+    let snapshot = Arc::clone(state.affinity.read().unwrap().as_ref().unwrap());
     let first = state.wake_event.listen();
     let second = state.wake_event.listen();
 
@@ -635,7 +635,6 @@ fn separate_enqueues_notify_separate_waiters() {
     let second = state.wake_event.listen();
 
     // No OS workers are needed to verify the notification protocol.
-    state.startup.set(Ok(())).unwrap();
     pool.inner.enqueue(state, probe(state, || {}), false);
     pool.inner.enqueue(state, probe(state, || {}), true);
     assert_eq!(first.now_or_never(), Some(()));

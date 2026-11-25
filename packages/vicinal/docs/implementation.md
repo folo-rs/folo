@@ -18,6 +18,10 @@ reference-count changes happen only through explicit `WorkerGroups` or `WorkerGr
 Group addition is serialized and cold. The registry never relocates or removes a live group.
 The public APIs do not expose mutable queue or registry state.
 
+For preparation-time startup, a policy borrows the group to synchronously reserve a `Worker`,
+then moves only that reserved value into the policy-owned thread. This establishes the
+preparation reservation before the thread starts.
+
 The runtime separately retains a strong snapshot of each group state for terminal signaling
 and failure cleanup. Group state does not retain the runtime, so these registrations cannot
 form a strong cycle. Cleanup may clone registered group-state handles, but ordinary task
@@ -126,12 +130,12 @@ time. It constructs the runtime and worker-group registry before calling policy 
 If preparation unwinds, the runtime stops every registered group and waits for participating
 workers before resuming the failure.
 
-Built-in eager preparation validates both supplied processor handles and processors rebuilt
-through the selection's backing hardware against the pool's eligible set. Full processor equality
-includes hardware-instance identity; supplied handles alone do not establish the backend used for
-pinning.
-It partitions the selection into
-singletons for distinct processors, distinct regions or one system mask according to the policy.
+Pool construction validates an eager selection before invoking any `WorkerPolicy::prepare`
+implementation. It checks both supplied processor handles and processors rebuilt through the
+selection's backing hardware against the pool's eligible set. Full processor equality includes
+hardware-instance identity; supplied handles alone do not establish the backend used for pinning.
+Built-in policies partition the selection into singletons for distinct processors, distinct
+regions or one system mask according to the policy.
 Repeated entries never create additional worker groups. Group masks and shared
 membership are seeded before spawning; no synthetic task is allocated, counted or executed.
 

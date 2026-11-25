@@ -9,7 +9,7 @@ use many_cpus::SystemHardware;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use new_zealand::nz;
 use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerProcessor, WorkersPerSystem};
-use vicinal::{Pool, PrepareContext, WorkerGroupId, WorkerGroups, WorkerPolicy};
+use vicinal::{Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy};
 
 ::testing::set_allocator!();
 
@@ -56,13 +56,14 @@ impl PolicyProbe {
 }
 
 impl WorkerPolicy for PolicyProbe {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         let mut policy = PreparedPolicy::new(self.kind);
-        policy.prepare(context);
+        policy.prepare(context)?;
         assert!(
             self.state.set((context.groups().clone(), policy)).is_ok(),
             "the benchmark prepares each policy once"
         );
+        Ok(())
     }
 
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
@@ -90,7 +91,7 @@ impl PreparedPolicy {
         }
     }
 
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         match self {
             Self::Processor(policy) => WorkerPolicy::prepare(policy, context),
             Self::MemoryRegion(policy) => WorkerPolicy::prepare(policy, context),
@@ -113,11 +114,12 @@ struct NoWorkerPolicy {
 }
 
 impl WorkerPolicy for NoWorkerPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         assert!(
             self.group.set(context.groups().add().id()).is_ok(),
             "the benchmark prepares the no-worker policy once"
         );
+        Ok(())
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
@@ -129,6 +131,9 @@ impl WorkerPolicy for NoWorkerPolicy {
 }
 
 /// Supplies stable fake topology without OS hardware discovery or affinity syscalls.
+///
+/// Processors 0 and 1 intentionally share a region so the membership benchmark expands an
+/// established regional route instead of starting an unused route.
 fn hardware() -> SystemHardware {
     SystemHardware::fake(
         HardwareBuilder::new()
@@ -224,8 +229,9 @@ fn membership_expansion(criterion: &mut Criterion) {
                         .worker_policy(probe.clone())
                         .build();
                     black_box(probe.select());
-                    // Stop and join the worker during setup. The measured expansion then only
-                    // constructs and publishes the new mask; no worker wakeup can enter it.
+                    // Stop the pool during setup so no worker remains participating. The
+                    // measured expansion then only constructs and publishes the new mask;
+                    // no worker wakeup can enter it.
                     drop(pool);
                     pin_to(&hardware, 1);
 

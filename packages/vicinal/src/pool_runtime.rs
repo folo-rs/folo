@@ -10,8 +10,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread::Result as ThreadResult;
 
 use events_once::EventLake;
+use many_cpus::ProcessorSet;
 use tracing::error;
 
 use crate::pool_inner::POOL_LOG_TARGET;
@@ -26,12 +28,12 @@ use crate::{
 /// docs/implementation.md, "Ownership and coordination" and "Affinity and failure coordination".
 pub(crate) struct PoolRuntime {
     pool_id: u64,
-    pool_name: String,
+    pool_name: Arc<str>,
     registry_owner: OnceLock<u64>,
     thread_init: Option<ThreadInit>,
     shutdown: AtomicBool,
     poisoned: AtomicBool,
-    groups: Mutex<Vec<Arc<WorkerGroupState>>>,
+    groups: Mutex<Vec<RegisteredGroup>>,
     workers: Mutex<WorkerLifecycle>,
     workers_changed: Condvar,
     #[cfg(test)]
@@ -39,6 +41,11 @@ pub(crate) struct PoolRuntime {
         OnceLock<Box<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     failure: Mutex<FailureState>,
     pub(crate) result_channel_pool: EventLake,
+}
+
+/// Retains terminal and affinity access to one group.
+struct RegisteredGroup {
+    state: Arc<WorkerGroupState>,
 }
 
 impl PoolRuntime {
@@ -49,7 +56,7 @@ impl PoolRuntime {
     ) -> Arc<Self> {
         Arc::new(Self {
             pool_id,
-            pool_name,
+            pool_name: Arc::from(pool_name),
             registry_owner: OnceLock::new(),
             thread_init,
             shutdown: AtomicBool::new(false),
@@ -85,6 +92,11 @@ impl PoolRuntime {
         &self.pool_name
     }
 
+    #[cfg(test)]
+    pub(crate) fn pool_name_snapshot(&self) -> Arc<str> {
+        Arc::clone(&self.pool_name)
+    }
+
     pub(crate) fn thread_init(&self) -> Option<&ThreadInit> {
         self.thread_init.as_ref()
     }
@@ -100,6 +112,8 @@ impl PoolRuntime {
         self.poisoned.load(Ordering::Acquire)
     }
 
+    // Omitting terminal registration strands participating workers outside shutdown scans.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn register_group(&self, group: &Arc<WorkerGroupState>) {
         let mut groups = self.groups.lock().expect(NEVER_POISONED);
         if self.is_poisoned() {
@@ -107,10 +121,33 @@ impl PoolRuntime {
             panic!("worker groups cannot be added after pool failure");
         }
 
-        groups.push(Arc::clone(group));
+        groups.push(RegisteredGroup {
+            state: Arc::clone(group),
+        });
         if self.is_shutdown() {
             group.signal_shutdown();
         }
+    }
+
+    /// Returns the immutable affinity publication shared by workers observing one revision.
+    ///
+    /// The unchanged-revision fast path remains in the worker loop, so only workers that need
+    /// to refresh pay a reference-count cost.
+    pub(crate) fn affinity_snapshot(&self, state: &WorkerGroupState) -> (Arc<ProcessorSet>, usize) {
+        let groups = self.groups.lock().expect(NEVER_POISONED);
+        let registered = groups
+            .iter()
+            .find(|group| std::ptr::eq(Arc::as_ref(&group.state), state))
+            .expect("affinity state belongs to the registered pool groups");
+        let affinity = registered.state.affinity.read().expect(NEVER_POISONED);
+        (
+            Arc::clone(
+                affinity
+                    .as_ref()
+                    .expect("a revision publishes a nonempty mask"),
+            ),
+            registered.state.affinity_revision.load(Ordering::Acquire),
+        )
     }
 
     pub(crate) fn begin_worker(&self) -> ControlFlow<()> {
@@ -153,6 +190,8 @@ impl PoolRuntime {
     }
 
     /// Cancels one worker-initialization target without running that worker.
+    // Omitting this decrement and notification can leave preparation waiting forever.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn cancel_preparation_worker(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         workers.preparing_workers = workers
@@ -163,6 +202,8 @@ impl PoolRuntime {
     }
 
     /// Completes one tracked preparation worker after its initializer returns.
+    // Omitting this decrement and notification can leave preparation waiting forever.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn initialize_preparation_worker(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         workers.preparing_workers = workers
@@ -207,10 +248,12 @@ impl PoolRuntime {
         self.shutdown.store(true, Ordering::Release);
 
         for group in groups.iter() {
-            group.signal_shutdown();
-            group.notify_initialization_failure();
+            group.state.signal_shutdown();
+            group.state.notify_initialization_failure();
             #[cfg(test)]
-            group.mark_startup_failed_if_started(self.is_poisoned());
+            group
+                .state
+                .mark_startup_failed_if_started(self.is_poisoned());
         }
         self.workers_changed.notify_all();
     }
@@ -283,6 +326,12 @@ impl PoolRuntime {
     }
 
     /// Publishes a failure whose submitting thread owns the payload through diagnostic reentry.
+    ///
+    /// A vacant failure belongs to this call, which publishes it and returns the same payload
+    /// after terminal cleanup. A retained failure transfers the earlier primary payload to this
+    /// caller and discards its secondary payload. An unavailable failure remains submission-owned,
+    /// so this call returns its payload without publishing or draining again. Only first
+    /// publication completes failure cleanup.
     pub(crate) fn fail_for_submission(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
         let (message, retained) = {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
@@ -317,15 +366,31 @@ impl PoolRuntime {
                 "worker pool infrastructure failed"
             );
         });
-        self.drain_groups();
+        self.drain_groups(|result| {
+            if let Err(payload) = result {
+                report_diagnostic(|| {
+                    error!(
+                        message = extract_panic_message(&payload),
+                        "failure during worker pool cleanup"
+                    );
+                });
+                discard_panic(payload);
+            }
+        });
     }
 
-    /// Drains every registered queue outside the registry lock after failure publication.
-    fn drain_groups(&self) {
-        let groups = self.groups.lock().expect(NEVER_POISONED).clone();
+    /// Drains every registered queue outside the registry lock after terminal publication.
+    pub(crate) fn drain_groups(&self, mut record_failure: impl FnMut(ThreadResult<()>)) {
+        let groups = self
+            .groups
+            .lock()
+            .expect(NEVER_POISONED)
+            .iter()
+            .map(|group| Arc::clone(&group.state))
+            .collect::<Vec<_>>();
         for group in groups {
-            drain_queue(&group.urgent_queue);
-            drain_queue(&group.regular_queue);
+            drain_queue(&group.urgent_queue, &mut record_failure);
+            drain_queue(&group.regular_queue, &mut record_failure);
         }
     }
 
@@ -368,22 +433,17 @@ struct WorkerLifecycle {
     preparing_workers: usize,
 }
 
-fn drain_queue(queue: &Mutex<std::collections::VecDeque<ErasedTaskHandle>>) {
+fn drain_queue(
+    queue: &Mutex<std::collections::VecDeque<ErasedTaskHandle>>,
+    record_failure: &mut impl FnMut(ThreadResult<()>),
+) {
     loop {
         let task = queue.lock().expect(NEVER_POISONED).pop_front();
         let Some(task) = task else {
             return;
         };
 
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(task))) {
-            report_diagnostic(|| {
-                error!(
-                    message = extract_panic_message(&payload),
-                    "failure during worker pool cleanup"
-                );
-            });
-            discard_panic(payload);
-        }
+        record_failure(catch_unwind(AssertUnwindSafe(|| drop(task))));
     }
 }
 

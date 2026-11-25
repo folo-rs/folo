@@ -42,7 +42,7 @@ pub(crate) fn exercise(capture: &TracingCapture) {
     }));
 }
 
-/// Exercises one built-in policy while checking destination-independent diagnostics.
+/// Checks shared lifecycle events and the expected destination-specific `group` label.
 fn exercise_policy(
     capture: &TracingCapture,
     policy: impl WorkerPolicy,

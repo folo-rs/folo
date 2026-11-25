@@ -4,7 +4,9 @@ use std::sync::mpsc::channel;
 use std::thread::spawn;
 
 use futures::executor::block_on;
-use vicinal::{Pool, PrepareContext, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy};
+use vicinal::{
+    Pool, PrepareContext, PrepareError, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
+};
 
 fn main() {
     let pool = Pool::builder().worker_policy(GrowingPolicy::new()).build();
@@ -64,10 +66,11 @@ impl GrowingPolicy {
 }
 
 impl WorkerPolicy for GrowingPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         let group = context.groups().add();
         spawn_worker(&group);
         self.group = Some(group);
+        Ok(())
     }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
@@ -80,7 +83,7 @@ impl WorkerPolicy for GrowingPolicy {
     }
 }
 
-/// Transfers one group handle into a policy-owned OS thread and records its startup.
+/// Borrows the group to reserve a worker before moving only that worker into an OS thread.
 fn spawn_worker(group: &WorkerGroup) {
     _ = spawn({
         let worker = group.add_worker();

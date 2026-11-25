@@ -158,7 +158,7 @@ fn shutdown_waits_for_failure_publication_to_finish() {
                 .runtime
                 .before_worker_wait
                 .set(Box::new(move || {
-                    if !notified_shutdown_wait.swap(true, Ordering::Release) {
+                    if !notified_shutdown_wait.swap(true, Ordering::Relaxed) {
                         shutdown_waiting.send(()).unwrap();
                     }
                 }))

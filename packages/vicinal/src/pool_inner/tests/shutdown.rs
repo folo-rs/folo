@@ -8,7 +8,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Wake};
-use std::thread;
 
 use futures::FutureExt;
 use futures::executor::block_on;
@@ -22,8 +21,8 @@ use super::helpers::{
     regional_hardware,
 };
 use crate::{
-    BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, PrepareContext, Scheduler, WorkerGroupId,
-    WorkerGroups, WorkerPolicy,
+    BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, PrepareContext, PrepareError, Scheduler,
+    WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 /// Records whether terminal admission ever reaches custom policy selection.
@@ -34,7 +33,9 @@ struct RecordingPolicy {
 }
 
 impl WorkerPolicy for RecordingPolicy {
-    fn prepare(&mut self, _context: PrepareContext<'_>) {}
+    fn prepare(&mut self, _context: PrepareContext<'_>) -> Result<(), PrepareError> {
+        Ok(())
+    }
 
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         self.selected.fetch_add(1, Ordering::Release);
@@ -270,11 +271,9 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
         let pool = Pool::builder().hardware(hardware).build();
         let inner = Arc::clone(&pool.inner);
 
-        // Inject unwinds directly: this exercises cleanup rather than panic-hook output,
-        // keeping Miri's backtrace work focused on the failing payload destructor.
-        inner.worker_handles.lock().unwrap().push(thread::spawn(|| {
-            panic::resume_unwind(Box::new(PanickingPayload));
-        }));
+        // Retained runtime failure tests cleanup directly, rather than depending on whether
+        // detached test-thread state is released by a JoinHandle or the process.
+        inner.runtime.fail(Box::new(PanickingPayload));
 
         let payload = panic::catch_unwind(AssertUnwindSafe(move || {
             let _pool = pool;

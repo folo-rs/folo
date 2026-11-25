@@ -1,8 +1,10 @@
 use std::any::type_name;
+use std::error::Error;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use many_cpus::{ProcessorSet, SystemHardware};
+use ohno::OhnoCore;
 
 use crate::{WorkerGroupId, WorkerGroups};
 /// Controls how submitted tasks are assigned to worker groups.
@@ -21,29 +23,29 @@ use crate::{WorkerGroupId, WorkerGroups};
 ///
 /// ```
 /// # use std::error::Error;
-/// use std::sync::OnceLock;
 /// use std::thread::spawn;
 ///
-/// use vicinal::{Pool, PrepareContext, WorkerGroupId, WorkerGroups, WorkerPolicy};
+/// use vicinal::{Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy};
 /// # use futures::executor::block_on;
 ///
 /// #[derive(Default)]
 /// struct OneGroupPolicy {
-///     group: OnceLock<WorkerGroupId>,
+///     group: Option<WorkerGroupId>,
 /// }
 ///
 /// impl WorkerPolicy for OneGroupPolicy {
-///     fn prepare(&mut self, context: PrepareContext<'_>) {
+///     fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
 ///         let group = context.groups().add();
 ///         spawn({
 ///             let worker = group.add_worker();
 ///             move || worker.run()
 ///         });
-///         _ = self.group.set(group.id());
+///         self.group = Some(group.id());
+///         Ok(())
 ///     }
 ///
 ///     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-///         *self.group.get().unwrap()
+///         self.group.expect("the builder prepares the policy once")
 ///     }
 /// }
 ///
@@ -64,7 +66,7 @@ pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// counts those reservations and waits for each worker to complete its initialization
     /// callback after this method returns. If the policy cannot run a reserved worker, dropping
     /// it cancels that target.
-    fn prepare(&mut self, context: PrepareContext<'_>);
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError>;
 
     /// Selects the group for one submitted task.
     ///
@@ -75,6 +77,30 @@ pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// [`WorkerGroup::queue_len`][crate::WorkerGroup::queue_len] to observe existing
     /// backlog, but selection runs before the incoming task is added to that queue.
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId;
+}
+
+/// A worker policy failed while preparing a pool.
+///
+/// The error retains the policy's original failure in its source chain.
+#[derive(ohno::Error)]
+#[no_constructors]
+#[display("worker policy preparation failed")]
+pub struct PrepareError {
+    #[error]
+    core: OhnoCore,
+}
+
+impl UnwindSafe for PrepareError {}
+impl RefUnwindSafe for PrepareError {}
+
+impl PrepareError {
+    /// Creates a preparation error from a policy-specific failure.
+    #[must_use]
+    pub fn new(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
+        Self {
+            core: OhnoCore::from(error),
+        }
+    }
 }
 
 /// Final pool configuration supplied to [`WorkerPolicy::prepare`].
@@ -160,9 +186,12 @@ mod tests {
 
     assert_impl_all!(
         PrepareContext<'static>: Copy,
+        Send,
+        Sync,
         UnwindSafe,
         RefUnwindSafe
     );
+    assert_impl_all!(PrepareError: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn preparation_context_formats() {

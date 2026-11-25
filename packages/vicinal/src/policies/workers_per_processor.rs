@@ -2,7 +2,9 @@ use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
-use crate::{BuiltInWorkerPolicy, PrepareContext, WorkerGroupId, WorkerGroups, WorkerPolicy};
+use crate::{
+    BuiltInWorkerPolicy, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy,
+};
 
 /// Creates a fixed worker count on each submitting processor.
 ///
@@ -25,8 +27,8 @@ impl WorkersPerProcessor {
 
 impl WorkerPolicy for WorkersPerProcessor {
     #[inline]
-    fn prepare(&mut self, context: PrepareContext<'_>) {
-        WorkerPolicy::prepare(&mut self.policy, context);
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+        WorkerPolicy::prepare(&mut self.policy, context)
     }
 
     #[inline]
