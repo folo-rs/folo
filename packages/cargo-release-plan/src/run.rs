@@ -54,6 +54,7 @@ pub enum RunInput {
         merge_target: Option<String>,
         output: PathBuf,
         deny_findings: bool,
+        exclude_comparison: Vec<String>,
         verbose: bool,
     },
     /// Report completeness from current workflow job results and retained receipts.
@@ -355,6 +356,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             merge_target,
             output,
             deny_findings,
+            exclude_comparison,
             verbose,
         } => {
             let (passed, message) = check_compatibility(
@@ -365,6 +367,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 merge_target.as_deref(),
                 output,
                 *deny_findings,
+                exclude_comparison,
                 *verbose,
             )?;
             Ok(RunOutcome::Check {

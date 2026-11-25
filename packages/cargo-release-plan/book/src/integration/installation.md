@@ -51,7 +51,7 @@ without a Cargo workspace or Git repository. The short `--version` identity rema
 available for installation probes.
 
 The matching skill uses report/plan/prepared schema `8`, semantic-decision schema `2`,
-compatibility schema `3`, and release-context schema `2`. Exact skill/tool package
+compatibility schema `4`, and release-context schema `2`. Exact skill/tool package
 version synchronization is unnecessary; check those schemas. If unexpected CLI
 errors suggest a mismatch, consider upgrading both tool and skill.
 
