@@ -120,6 +120,24 @@ an exact hit; letting a setup-only job save first would prevent later compilatio
 that entry. All jobs can still restore it. This switch does not affect saving
 rustup, installed-tool or other environment caches.
 
+## Same-run artifact visibility
+
+Artifact upload completion and artifact discovery are separate observations in GitHub Actions.
+An upload step can finish while a later job in the same workflow run still cannot find the new
+artifact. Every repository-owned same-run download first polls the run-artifact inventory through
+`Wait-GitHubRunArtifact` in `scripts/workflow/ArtifactVisibility.psm1`.
+
+The wait helper supports artifact ID, exact name and wildcard-pattern selectors. Pattern consumers
+state the complete producer count so one early result cannot authorize a partial download.
+The helper retries only missing inventory entries and recognized transient query failures for a
+bounded interval. Authentication, malformed requests and other permanent query failures fail on
+the first attempt; an exhausted visibility budget fails explicitly. The download action remains
+single-shot so a real download failure is not hidden behind another upload-independent retry.
+
+The book deployment waits for every artifact from the discovered matrix before its pattern
+download. The benchmark canary waits for the reusable workflow's exact report artifact ID before
+verifying its files.
+
 ## Benchmark workflow artifacts
 
 Folo delegates its ordinary benchmark job graphs to

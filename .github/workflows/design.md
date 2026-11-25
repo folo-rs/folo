@@ -307,6 +307,17 @@ commands; reusable PowerShell orchestration belongs in Pester-tested modules und
 The [automation language guidance](../../docs/build-and-tooling.md#automation-language-and-boundaries)
 defines that boundary.
 
+### Same-run artifact visibility
+
+Artifact upload completion does not guarantee immediate visibility to a later job in the same
+workflow run. Same-run consumers therefore wait for the selected run artifact to appear before
+starting the download action. The wait is bounded and pattern consumers require their complete
+producer set, so eventual consistency cannot silently become a partial result or an unbounded
+workflow hang.
+
+This gate retries only artifact visibility and recognized transient inventory-read failures.
+Permanent API failures and the download itself retain ordinary immediate failure behavior.
+
 Steps implementing a design obligation explain the reason beside the step or cohesive step group
 and link to its owning design or implementation heading. This keeps authority, ordering and
 failure-handling decisions visible without duplicating their full rationale. Every `run:` step
@@ -989,8 +1000,9 @@ current-looking benchmark report.
 
 First-party marketplace actions (checkout, cache, artifact up/download, and the like) are trusted
 to retry their own network operations internally, so they are not wrapped in a third-party retry
-action; adding one would trade the minimal-dependency stance for redundant coverage. That trust is
-revisited only if a specific action is observed to flake.
+action; adding one would trade the minimal-dependency stance for redundant coverage. Same-run
+artifact consumers use the separate visibility gate described above because that race occurs
+before the download action starts and is outside its network retry behavior.
 
 ## Job timeouts
 

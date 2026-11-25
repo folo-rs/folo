@@ -137,10 +137,11 @@ jobs:
   # GitHub Pages. Skipped on pull requests. Like `discover`, generating the landing page needs only
   # PowerShell, so this job skips setup-environment too.
   deploy:
-    needs: [build]
+    needs: [discover, build]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       pages: write
       id-token: write
@@ -150,6 +151,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Wait for book artifacts
+        # Upload completion can precede run-artifact visibility. Require every discovered producer
+        # before merging so this job cannot silently download a partial pattern result.
+        # Ref: implementation.md#same-run-artifact-visibility.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOOKS: ${{ needs.discover.outputs.books }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/workflow/ArtifactVisibility.psm1 -Force
+          $books = @(ConvertFrom-Json -InputObject $env:BOOKS)
+          Wait-GitHubRunArtifact -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID `
+            -Pattern 'book-*' -ExpectedCount $books.Count
 
       - name: Download book artifacts
         uses: actions/download-artifact@v8

@@ -18,6 +18,7 @@ BeforeAll {
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
     $script:release = Get-Content -LiteralPath (Join-Path $root '.github/workflows/release.yml') -Raw
     $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
+    $script:book = Get-Content -LiteralPath (Join-Path $root '.github/workflows/book.yml') -Raw
     $script:benchmarkWorkflows = @(
         foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
             Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
@@ -280,6 +281,25 @@ Describe 'Shared environment preparation order' {
         $cache.Count | Should -Be 1
         [array]::IndexOf($steps, $preparation[0]) |
             Should -BeLessThan ([array]::IndexOf($steps, $cache[0]))
+    }
+}
+
+Describe 'Same-run artifact visibility' {
+    It 'waits for every discovered book before a pattern download' {
+        $deploy = Get-WorkflowJob $book 'deploy'
+        @(Get-WorkflowJobDependency $deploy) | Should -Be @('discover', 'build')
+        $deploy.IndexOf('Wait-GitHubRunArtifact') |
+            Should -BeLessThan $deploy.IndexOf('uses: actions/download-artifact@')
+        $deploy | Should -Match '(?m)-Pattern ''book-\*'' -ExpectedCount \$books\.Count'
+        $deploy | Should -Match '(?m)actions: read'
+    }
+
+    It 'waits for the reusable workflow report ID before downloading it' {
+        $verify = Get-WorkflowJob $canary 'verify'
+        $verify.IndexOf('Wait-GitHubRunArtifact') |
+            Should -BeLessThan $verify.IndexOf('uses: actions/download-artifact@')
+        $verify | Should -Match '(?m)-ArtifactId \$env:ARTIFACT_ID'
+        $verify | Should -Match '(?m)artifact-ids: \$\{\{ needs\.exercise\.outputs\.report-artifact-id \}\}'
     }
 }
 
