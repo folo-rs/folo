@@ -44,6 +44,35 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
     });
 }
 
+/// A rejected admission must not claim a failure that a worker already published.
+#[test]
+fn poisoned_enqueue_preserves_existing_runtime_failure() {
+    struct OriginalFailure;
+
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(policy.clone())
+        .build();
+    let group = policy.group();
+    let state = group.state();
+    pool.inner.runtime.fail(Box::new(OriginalFailure));
+    let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
+
+    let payload = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        pool.inner.enqueue(state, init_task(slot, NoopTask), false);
+    }))
+    .unwrap_err();
+
+    assert!(!payload.is::<OriginalFailure>());
+    let failure = pool
+        .inner
+        .runtime
+        .take_failure()
+        .expect("the existing failure remains runtime-owned");
+    assert!(failure.is::<OriginalFailure>());
+}
+
 /// Drop the receiver while its task is blocked so the worker must discard the eventual panic.
 #[test]
 fn disconnected_joined_panic_does_not_poison_pool() {

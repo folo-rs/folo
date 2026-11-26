@@ -13,7 +13,6 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::Result as ThreadResult;
 
 use events_once::EventLake;
-use many_cpus::ProcessorSet;
 use tracing::error;
 
 use crate::pool_inner::POOL_LOG_TARGET;
@@ -127,27 +126,6 @@ impl PoolRuntime {
         if self.is_shutdown() {
             group.signal_shutdown();
         }
-    }
-
-    /// Returns the immutable affinity publication shared by workers observing one revision.
-    ///
-    /// The unchanged-revision fast path remains in the worker loop, so only workers that need
-    /// to refresh pay a reference-count cost.
-    pub(crate) fn affinity_snapshot(&self, state: &WorkerGroupState) -> (Arc<ProcessorSet>, usize) {
-        let groups = self.groups.lock().expect(NEVER_POISONED);
-        let registered = groups
-            .iter()
-            .find(|group| std::ptr::eq(Arc::as_ref(&group.state), state))
-            .expect("affinity state belongs to the registered pool groups");
-        let affinity = registered.state.affinity.read().expect(NEVER_POISONED);
-        (
-            Arc::clone(
-                affinity
-                    .as_ref()
-                    .expect("a revision publishes a nonempty mask"),
-            ),
-            registered.state.affinity_revision.load(Ordering::Acquire),
-        )
     }
 
     pub(crate) fn begin_worker(&self) -> ControlFlow<()> {

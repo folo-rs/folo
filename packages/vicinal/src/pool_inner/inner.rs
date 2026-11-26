@@ -95,18 +95,12 @@ impl PoolInner {
             Ok(preparation) => preparation,
             Err(payload) => {
                 runtime.fail(payload);
-                runtime.wait_for_workers();
-                runtime.resume_failure();
+                finish_failed_preparation(&runtime, policy);
+                unreachable!("failed preparation resumes the retained worker failure")
             }
         };
         if let Err(error) = preparation {
-            runtime.stop_workers();
-            drop(policy);
-            runtime.wait_for_preparation_workers();
-            runtime.wait_for_workers();
-            if runtime.is_poisoned() {
-                runtime.resume_failure();
-            }
+            finish_failed_preparation(&runtime, policy);
             return Err(error);
         }
         runtime.wait_for_preparation_workers();
@@ -222,6 +216,24 @@ impl PoolInner {
                 resume_unwind(payload);
             }
         }
+    }
+}
+
+/// Stops policy-owned workers and contains policy destruction before propagating failure.
+///
+/// Policy destructors can re-enter the pool or unwind while preparation workers remain active.
+/// The runtime therefore records a destructor failure before the cleanup barriers, preserving
+/// the original failure when one was already retained.
+fn finish_failed_preparation(runtime: &PoolRuntime, policy: Box<dyn WorkerPolicy>) {
+    runtime.stop_workers();
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(policy))) {
+        runtime.fail(payload);
+    }
+    runtime.wait_for_preparation_workers();
+    runtime.wait_for_workers();
+
+    if runtime.is_poisoned() {
+        runtime.resume_failure();
     }
 }
 

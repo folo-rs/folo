@@ -1,6 +1,5 @@
 //! Worker-side affinity refresh and wake coordination around individual task execution.
 
-#[cfg(test)]
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -35,7 +34,7 @@ pub(crate) fn worker_loop_with(
             break;
         }
 
-        refresh_affinity_from_runtime(runtime, state, &mut revision, &mut pin);
+        refresh_affinity(state, &mut revision, &mut pin);
 
         let outcome = core.run_one_iteration_with(
             || {
@@ -43,7 +42,7 @@ pub(crate) fn worker_loop_with(
                     return false;
                 }
 
-                refresh_affinity_from_runtime(runtime, state, &mut revision, &mut pin);
+                refresh_affinity(state, &mut revision, &mut pin);
 
                 !runtime.is_shutdown()
             },
@@ -97,26 +96,9 @@ pub(crate) fn worker_loop_with(
 
 /// Applies a newly published shared affinity snapshot and advances this worker's local cursor.
 ///
-/// The revision/acquire pair establishes the immutable shared mask; pinning runs after the
-/// snapshot locks are released.
-#[cfg_attr(test, mutants::skip)]
-fn refresh_affinity_from_runtime(
-    runtime: &PoolRuntime,
-    state: &WorkerGroupState,
-    revision: &mut usize,
-    pin: impl FnOnce(&ProcessorSet),
-) {
-    if state.affinity_revision.load(Ordering::Acquire) == *revision {
-        return;
-    }
-
-    let (affinity, latest) = runtime.affinity_snapshot(state);
-    pin(&affinity);
-    *revision = latest;
-}
-
-/// Applies an affinity snapshot directly for focused worker-loop tests.
-#[cfg(test)]
+/// The caller already holds a lifetime-protected state reference, so this path avoids searching
+/// the pool registry on every refresh. The revision/acquire pair establishes the immutable mask;
+/// pinning runs after the affinity read lock is released.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn refresh_affinity(
     state: &WorkerGroupState,

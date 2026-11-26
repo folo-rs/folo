@@ -4,8 +4,8 @@
 )]
 
 use std::io;
-use std::sync::OnceLock;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Mutex, OnceLock};
 use std::thread::spawn;
 
 use futures::executor::block_on;
@@ -26,20 +26,21 @@ struct LazySingleGroupPolicy {
 
 /// Reports an ordinary policy-specific preparation failure.
 struct FailingPreparationPolicy {
-    started: Sender<()>,
+    initializer: Mutex<Receiver<()>>,
+    prepared: Sender<()>,
     exited: Sender<()>,
 }
 
 impl WorkerPolicy for FailingPreparationPolicy {
     fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
         let worker = context.groups().add().add_worker();
-        let started = self.started.clone();
         let exited = self.exited.clone();
         _ = spawn(move || {
-            started.send(()).unwrap();
             worker.run();
             exited.send(()).unwrap();
         });
+        self.initializer.lock().unwrap().recv().unwrap();
+        self.prepared.send(()).unwrap();
 
         Err(PrepareError::new(io::Error::other(
             "injected policy preparation failure",
@@ -88,17 +89,33 @@ fn custom_policy_lazily_creates_and_runs_worker() {
 #[test]
 fn preparation_failure_is_returned_after_started_workers_leave() {
     with_watchdog(|| {
-        let (started, worker_started) = channel();
+        let (initializer_entered, initializer_arrival) = channel();
+        let (prepared, policy_prepared) = channel();
+        let (release_initializer, initializer_release) = channel();
         let (exited, worker_exited) = channel();
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
 
-        let error = Pool::builder()
-            .hardware(hardware)
-            .worker_policy(FailingPreparationPolicy { started, exited })
-            .try_build()
-            .unwrap_err();
+        let construction = spawn(move || {
+            let initializer_release = Mutex::new(initializer_release);
+            Pool::builder()
+                .hardware(hardware)
+                .worker_policy(FailingPreparationPolicy {
+                    initializer: Mutex::new(initializer_arrival),
+                    prepared,
+                    exited,
+                })
+                .thread_init(move || {
+                    initializer_entered.send(()).unwrap();
+                    initializer_release.lock().unwrap().recv().unwrap();
+                })
+                .try_build()
+                .map(drop)
+        });
 
-        worker_started.recv().unwrap();
+        policy_prepared.recv().unwrap();
+        assert!(!construction.is_finished());
+        release_initializer.send(()).unwrap();
+        let error = construction.join().unwrap().unwrap_err();
         worker_exited.recv().unwrap();
         assert!(error.find_source::<io::Error>().is_some());
     });

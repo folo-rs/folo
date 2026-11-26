@@ -75,10 +75,16 @@ impl PoolInner {
         let admitted = match admitted {
             Ok(admitted) => admitted,
             Err(payload) => {
+                let already_stopped = self.runtime.is_shutdown() && self.runtime.is_poisoned();
+
                 self.stop_admission();
                 if let Some(task) = task.take() {
                     discard_task_after_failure(task);
                 }
+                if already_stopped {
+                    resume_unwind(payload);
+                }
+
                 self.poison(payload);
             }
         };

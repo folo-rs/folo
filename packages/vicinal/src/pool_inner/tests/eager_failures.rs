@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::io;
 use std::panic::{catch_unwind, panic_any};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -16,6 +17,7 @@ use crate::{
 };
 
 struct PreparationFailure;
+struct PolicyDropFailure;
 
 /// Distinguishes the expected preparation signal from an unexpected worker return.
 #[derive(Debug, Eq, PartialEq)]
@@ -29,6 +31,38 @@ enum PreparationEvent {
 struct StartupFailurePolicy {
     worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
     ready: Mutex<Option<(Sender<PreparationEvent>, Receiver<PreparationEvent>)>>,
+}
+
+/// Reports preparation failure and observes whether destructor failure waits for worker exit.
+struct PanickingDropPolicy {
+    worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
+    initializer: Mutex<Receiver<()>>,
+    dropped: Sender<()>,
+}
+
+impl WorkerPolicy for PanickingDropPolicy {
+    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+        let group = context.groups().add();
+        *self.worker_observer.lock().unwrap() = Some(group.clone());
+        let worker = group.add_worker();
+        _ = spawn(move || worker.run());
+        self.initializer.lock().unwrap().recv().unwrap();
+
+        Err(PrepareError::new(io::Error::other(
+            "injected preparation failure",
+        )))
+    }
+
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        unreachable!("construction must reject the preparation failure")
+    }
+}
+
+impl Drop for PanickingDropPolicy {
+    fn drop(&mut self) {
+        self.dropped.send(()).unwrap();
+        panic_any(PolicyDropFailure);
+    }
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
@@ -169,6 +203,46 @@ fn policy_preparation_failure_stops_started_workers() {
             .unwrap()
             .take()
             .expect("preparation retained the created group for observation");
+        assert_eq!(group.worker_count(), 0);
+    });
+}
+
+#[test]
+fn policy_drop_failure_waits_for_preparation_workers() {
+    with_watchdog(|| {
+        let observer = Arc::new(Mutex::new(None));
+        let (initializer_entered, worker_initialized) = channel();
+        let (release_initializer, initializer_release) = channel();
+        let initializer_release = Mutex::new(initializer_release);
+        let (dropped, policy_dropped) = channel();
+        let construction = spawn({
+            let observer = Arc::clone(&observer);
+            move || {
+                _ = Pool::builder()
+                    .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                        nz!(1),
+                        nz!(1),
+                    )))
+                    .worker_policy(PanickingDropPolicy {
+                        worker_observer: observer,
+                        initializer: Mutex::new(worker_initialized),
+                        dropped,
+                    })
+                    .thread_init(move || {
+                        initializer_entered.send(()).unwrap();
+                        initializer_release.lock().unwrap().recv().unwrap();
+                    })
+                    .try_build();
+            }
+        });
+
+        policy_dropped.recv().unwrap();
+        assert!(!construction.is_finished());
+        release_initializer.send(()).unwrap();
+
+        let payload = construction.join().unwrap_err();
+        assert!(payload.is::<PolicyDropFailure>());
+        let group = observer.lock().unwrap().take().unwrap();
         assert_eq!(group.worker_count(), 0);
     });
 }
