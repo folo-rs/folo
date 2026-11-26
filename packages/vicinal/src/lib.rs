@@ -170,7 +170,7 @@ pub use scheduler::*;
 pub(crate) use task::*;
 pub use task_error::*;
 pub(crate) use task_panic::*;
-pub(crate) use worker::PreparationReservation;
+pub(crate) use worker::BindingReservation;
 pub use worker::Worker;
 pub(crate) use worker_core::*;
 #[cfg(test)]

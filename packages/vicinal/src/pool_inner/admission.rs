@@ -22,7 +22,10 @@ impl PoolInner {
     pub(crate) fn submit<T, R>(&self, task: T, action: impl FnOnce(&mut Option<T>) -> R) -> R {
         let mut task = Some(task);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            assert!(!self.runtime.is_poisoned());
+            assert!(
+                !self.runtime.is_poisoned(),
+                "submission reached the scheduler after the pool published permanent failure"
+            );
             action(&mut task)
         }));
 
@@ -68,7 +71,10 @@ impl PoolInner {
                 return ControlFlow::Break(());
             }
 
-            queue.push_back(task.take().expect("admission consumes each task once"));
+            queue.push_back(
+                task.take()
+                    .expect("the queue branch is the only consumer of this prepared task"),
+            );
             ControlFlow::Continue(())
         }));
 
@@ -125,7 +131,7 @@ impl PoolInner {
             self.enqueue(
                 state,
                 task.take()
-                    .expect("a shutdown admission consumes its task once"),
+                    .expect("shutdown admission takes the still-owned task exactly once"),
                 urgent,
             );
             return;
@@ -149,7 +155,7 @@ impl PoolInner {
             self.stop_admission();
             discard_task_after_failure(
                 task.take()
-                    .expect("failed startup retains its unadmitted task"),
+                    .expect("startup failure occurs before the task can leave its Option"),
             );
             self.poison(payload);
         }
@@ -160,7 +166,7 @@ impl PoolInner {
         self.enqueue(
             state,
             task.take()
-                .expect("successful startup consumes its task once"),
+                .expect("successful startup is the first branch that consumes this task"),
             urgent,
         );
     }

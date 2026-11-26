@@ -35,7 +35,9 @@ impl WorkerGroups {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |owner| {
                 owner.checked_add(1)
             })
-            .expect("pool construction cannot continue after exhausting 2^64 registry identities");
+            .expect(
+                "registry IDs wrap only after 2^64 allocations, beyond the finite process lifetime",
+            );
         runtime.set_registry_owner(owner);
 
         Self {
@@ -115,7 +117,7 @@ impl WorkerGroups {
     pub(crate) fn resolve(&self, group: WorkerGroupId) -> &WorkerGroupState {
         assert!(
             group.owner == self.inner.owner,
-            "worker group belongs to another pool"
+            "policy returned a WorkerGroupId from another pool; return IDs created by this WorkerGroups"
         );
 
         // IDs contain stable addresses owned by this registry, and group removal is not
@@ -176,7 +178,7 @@ impl WorkerGroups {
             .expect(NEVER_POISONED)
             .iter()
             .find(|group| group.id() == id)
-            .expect("group ID belongs to this registry")
+            .expect("this ID came from the destination's group_id lookup in this registry")
             .clone()
     }
 

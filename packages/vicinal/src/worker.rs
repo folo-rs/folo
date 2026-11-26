@@ -12,18 +12,18 @@ use crate::{PoolRuntime, WorkerGroup};
 ///
 /// A policy moves this value into a thread and calls [`run`][Self::run] once.
 /// Dropping it before that call cancels any worker-initialization target created during
-/// policy preparation.
+/// policy binding.
 #[must_use = "reserved workers must be run or explicitly dropped"]
 pub struct Worker {
     group: WorkerGroup,
-    reservation: PreparationReservation,
+    reservation: BindingReservation,
 }
 
 impl Worker {
     pub(crate) fn new(group: WorkerGroup, runtime: Arc<PoolRuntime>, active: bool) -> Self {
         Self {
             group,
-            reservation: PreparationReservation::new(runtime, active),
+            reservation: BindingReservation::new(runtime, active),
         }
     }
 
@@ -51,24 +51,21 @@ impl Debug for Worker {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("group", &self.group)
-            .field(
-                "preparation_pending",
-                &self.reservation.is_preparation_pending(),
-            )
+            .field("binding_pending", &self.reservation.is_binding_pending())
             .finish()
     }
 }
 
 /// Owns one builder readiness target until a reserved worker initializes or is abandoned.
 ///
-/// Pool preparation can reserve workers that a custom policy later decides not to run.
+/// Pool binding can reserve workers that a custom policy later decides not to run.
 /// Dropping this guard cancels that outstanding target, while initialization consumes it
 /// without releasing an additional reservation.
-pub(crate) struct PreparationReservation {
+pub(crate) struct BindingReservation {
     runtime: Option<Arc<PoolRuntime>>,
 }
 
-impl PreparationReservation {
+impl BindingReservation {
     fn new(runtime: Arc<PoolRuntime>, active: bool) -> Self {
         Self {
             runtime: if active { Some(runtime) } else { None },
@@ -77,19 +74,19 @@ impl PreparationReservation {
 
     pub(crate) fn initialize(&mut self) {
         if let Some(runtime) = self.runtime.take() {
-            runtime.initialize_preparation_worker();
+            runtime.initialize_binding_worker();
         }
     }
 
-    pub(crate) fn is_preparation_pending(&self) -> bool {
+    pub(crate) fn is_binding_pending(&self) -> bool {
         self.runtime.is_some()
     }
 }
 
-impl Drop for PreparationReservation {
+impl Drop for BindingReservation {
     fn drop(&mut self) {
         if let Some(runtime) = self.runtime.take() {
-            runtime.cancel_preparation_worker();
+            runtime.cancel_binding_worker();
         }
     }
 }

@@ -77,7 +77,7 @@ impl Pool {
     ///
     /// # Panics
     ///
-    /// Panics if the default policy cannot finish preparation.
+    /// Panics if the default policy cannot finish binding.
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -114,10 +114,10 @@ impl Drop for Pool {
     }
 }
 
-/// Collects pool configuration before one fallible preparation phase.
+/// Collects pool configuration before one fallible binding phase.
 ///
 /// The builder chooses the concrete policy, topology and initialization callback before
-/// construction, so preparation starts with the final immutable configuration and can return
+/// construction, so binding starts with the final immutable configuration and can return
 /// a policy error before publishing a usable pool.
 pub struct PoolBuilder {
     name: Option<String>,
@@ -201,7 +201,7 @@ impl PoolBuilder {
     /// it executes any tasks. Built-in workers start lazily unless [`Self::eager`] initializes
     /// selected destinations during construction; a custom [`WorkerPolicy`] controls its own
     /// startup. After a custom policy's [`WorkerPolicy::bind`] returns, the builder waits
-    /// for every worker reserved during preparation to finish initialization or to be cancelled
+    /// for every worker reserved during binding to finish initialization or to be cancelled
     /// by dropping its unrun value. Calls on different workers may overlap, without a guaranteed
     /// order. Built-in lazy submission does not wait for initialization.
     ///
@@ -264,7 +264,7 @@ impl PoolBuilder {
     /// # Errors
     ///
     /// Returns an error reported by [`WorkerPolicy::bind`] after all participating workers
-    /// started during preparation have left the worker loop.
+    /// started during binding have left the worker loop.
     pub fn build(self) -> Result<Pool, PrepareError> {
         let hardware = self
             .hardware

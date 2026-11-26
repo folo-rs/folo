@@ -139,12 +139,13 @@ pub(crate) fn validate_eager_processors(hardware: &SystemHardware, processors: &
     let backing_processors = processors
         .to_builder()
         .take_all()
-        .expect("a nonempty selection retains candidates on its backing hardware");
+        .expect("ProcessorSet::to_builder retains the nonempty set's backing candidates");
     assert!(
         processors
             .iter()
             .chain(backing_processors.iter())
-            .all(|processor| eligible.contains(processor))
+            .all(|processor| eligible.contains(processor)),
+        "the eager set's processor values and backing topology must both belong to this hardware"
     );
 }
 
@@ -273,9 +274,7 @@ impl PreparedPolicy {
                 let processor = hardware.current_processor_id();
                 let id = groups
                     .get(processor as usize)
-                    .expect(
-                        "the current thread must run on one processor from the hardware topology",
-                    )
+                    .expect("current_processor_id returns an ID present in this hardware's slots")
                     .get_or_init(|| {
                         self.create_group(registry, count, GroupId::Processor(processor), processor)
                     });
@@ -293,14 +292,16 @@ impl PreparedPolicy {
                 });
                 let index = ids
                     .binary_search(&region_id)
-                    .expect("a submitting region contains an eligible processor");
+                    .expect("ids was built from every region in this hardware topology");
                 let target = SubmissionTarget {
                     group: GroupId::MemoryRegion(region_id),
                     processor: processor_id,
                 };
                 let id = groups
                     .get(index)
-                    .expect("binary search identifies an existing region slot")
+                    .expect(
+                        "binary_search returned an index from groups built at the same ids length",
+                    )
                     .get_or_init(|| {
                         let id = self.create_group(registry, count, target.group, target.processor);
                         // The first mask exists before the route can be observed. Publish its
@@ -362,7 +363,9 @@ impl PreparedPolicy {
                 .filter(|candidate| candidate.id() == processor && destination.contains(candidate))
                 .take_all()
                 .unwrap_or_else(|| {
-                    panic!("no eligible processors for worker group {destination:?}")
+                    panic!(
+                        "topology-derived destination {destination:?} contained no sampled processor"
+                    )
                 }),
         );
         let group = registry.add_for(destination);
@@ -444,7 +447,7 @@ impl PreparedPolicy {
                         || membership(members, processor.id()).load(Ordering::Acquire))
             })
             .take_all()
-            .expect("the sampled processor belongs to its selected destination");
+            .expect("the filter explicitly includes the sampled processor for this destination");
         *current = Some(Arc::new(affinity));
         // Workers acquire this revision to find the corresponding immutable snapshot. Seeing a
         // revision does not itself mean that the worker has applied the snapshot.
@@ -481,7 +484,7 @@ impl PreparedPolicy {
     fn install_eager_group(&self, destination: GroupId, group: WorkerGroupId) {
         self.route_slot(destination)
             .set(group)
-            .expect("eager destinations are unique");
+            .expect("for_each_eager_group emits each destination exactly once");
     }
 
     /// Resolves the shared route layout for eager and fixture-only installation.
@@ -489,15 +492,17 @@ impl PreparedPolicy {
         match (self, destination) {
             (Self::Processor { groups, .. }, GroupId::Processor(id)) => groups
                 .get(id as usize)
-                .expect("a processor destination belongs to the hardware index space"),
+                .expect("processor slots cover max_processor_count from this same hardware"),
             (Self::MemoryRegion { ids, groups, .. }, GroupId::MemoryRegion(id)) => groups
                 .get(
                     ids.binary_search(&id)
-                        .expect("a region destination is populated"),
+                        .expect("regions are collected from this hardware before slots are built"),
                 )
-                .expect("region search identifies a group"),
+                .expect("binary search found an index from the matching ids and groups arrays"),
             (Self::System { group, .. }, GroupId::System) => group,
-            _ => panic!("the destination must match the bound policy"),
+            _ => {
+                panic!("select_group constructed a destination that does not match its policy kind")
+            }
         }
     }
 
@@ -512,7 +517,9 @@ impl PreparedPolicy {
     fn members(&self) -> &[(ProcessorId, AtomicBool)] {
         match self {
             Self::MemoryRegion { members, .. } | Self::System { members, .. } => members,
-            Self::Processor { .. } => panic!("processor-local policy has no shared membership"),
+            Self::Processor { .. } => {
+                panic!("processor-local selection cannot request shared membership storage")
+            }
         }
     }
 
@@ -573,10 +580,10 @@ fn member_processors(hardware: &SystemHardware) -> Box<[(ProcessorId, AtomicBool
 fn membership(members: &[(ProcessorId, AtomicBool)], processor: ProcessorId) -> &AtomicBool {
     let index = members
         .binary_search_by_key(&processor, |(id, _)| *id)
-        .expect("a submitting processor belongs to the eligible topology");
+        .expect("member_processors copied every processor in this hardware topology");
     &members
         .get(index)
-        .expect("binary search identifies an eligible processor")
+        .expect("binary_search returned an index within the sorted membership slice")
         .1
 }
 
@@ -607,7 +614,7 @@ fn for_each_eager_group(
             for region in regions {
                 let affinity = processors
                     .filter(|processor| processor.memory_region_id() == region)
-                    .expect("each selected region contains a selected processor");
+                    .expect("regions are decomposed directly from the selected processor set");
                 visit(GroupId::MemoryRegion(region), affinity);
             }
         }

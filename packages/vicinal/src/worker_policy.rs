@@ -71,7 +71,7 @@ use crate::{WorkerGroupId, WorkerGroups};
 pub trait WorkerPolicy: Debug + 'static {
     /// Consumes the configuration and returns the policy used for task routing.
     ///
-    /// A policy creates preparation-time workers with
+    /// A policy creates binding-time workers with
     /// [`WorkerGroup::add_worker`][crate::WorkerGroup::add_worker] and may clone
     /// the supplied [`WorkerGroups`] to support later asynchronous group creation. The builder
     /// counts those reservations and waits for each worker to complete its initialization
@@ -123,12 +123,12 @@ where
     }
 }
 
-/// A worker policy failed while preparing a pool.
+/// A worker policy failed while binding to a pool.
 ///
 /// The error retains the policy's original failure in its source chain.
 #[derive(ohno::Error)]
 #[no_constructors]
-#[display("worker policy preparation failed")]
+#[display("worker policy binding failed")]
 pub struct PrepareError {
     #[error]
     core: OhnoCore,
@@ -138,7 +138,7 @@ impl UnwindSafe for PrepareError {}
 impl RefUnwindSafe for PrepareError {}
 
 impl PrepareError {
-    /// Creates a preparation error from a policy-specific failure.
+    /// Creates a binding error from a policy-specific failure.
     #[must_use]
     pub fn new(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
         Self {

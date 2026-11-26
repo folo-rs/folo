@@ -48,7 +48,9 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.receiver).poll(cx).map(|result| {
             // Every unexecuted wrapper sends cancellation before releasing its sender.
-            result.expect("joined tasks deliver completion or cancellation before dropping")
+            result.expect(
+                "JoinedTask sends completion, and its cancellation path sends before sender drop",
+            )
         })
     }
 }

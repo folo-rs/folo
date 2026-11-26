@@ -25,7 +25,7 @@ use tracing::debug;
 
 use crate::pool_inner::{POOL_LOG_TARGET, worker_loop_with};
 use crate::{
-    ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime, PreparationReservation, Worker,
+    BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime, Worker,
     WorkerGroupId,
 };
 
@@ -70,15 +70,15 @@ impl WorkerGroup {
     ///
     /// A worker reserved while [`WorkerPolicy::bind`][crate::WorkerPolicy::bind] runs
     /// remains pending until its [`Worker::run`] call completes initialization. The pool builder
-    /// waits for every such reservation after preparation returns. Drop the worker to cancel
-    /// its preparation target when the policy cannot run it. Retaining an unrun worker makes
+    /// waits for every such reservation after binding returns. Drop the worker to cancel
+    /// its binding target when the policy cannot run it. Retaining an unrun worker makes
     /// pool construction wait indefinitely.
     #[inline]
     pub fn add_worker(&self) -> Worker {
         Worker::new(
             self.clone(),
             Arc::clone(&self.runtime),
-            self.runtime.reserve_preparation_worker(),
+            self.runtime.reserve_binding_worker(),
         )
     }
 
@@ -98,12 +98,12 @@ impl WorkerGroup {
         urgent
             .len()
             .checked_add(regular.len())
-            .expect("two VecDeque lengths cannot exceed addressable memory")
+            .expect("both queue allocations coexist in one addressable process space")
     }
 
     pub(crate) fn execute_worker(
         &self,
-        reservation: PreparationReservation,
+        reservation: BindingReservation,
         initial_setup: impl FnOnce(),
         pin: impl FnMut(&ProcessorSet) + Send,
         applied_revision: Option<usize>,
@@ -130,7 +130,7 @@ impl WorkerGroup {
     /// accounting finish. Ref: docs/implementation.md, "Affinity and failure coordination".
     fn run_worker(
         &self,
-        mut reservation: PreparationReservation,
+        mut reservation: BindingReservation,
         pin: impl FnMut(&ProcessorSet) + Send,
         applied_revision: usize,
     ) {
@@ -255,7 +255,9 @@ impl WorkerGroup {
             .worker_count
             .load(Ordering::Acquire)
             .checked_add(count.get() as usize)
-            .expect("worker reservation is bounded by the topology implementation");
+            .expect(
+                "the topology count and existing workers both fit in the process's Vec capacity",
+            );
         self.spawn_workers(destination, affinity, count);
         self.wait_for_workers(expected);
         #[cfg(test)]
@@ -315,7 +317,7 @@ impl WorkerGroup {
 
     // Omitting the initializer-completion publication can strand eager waiters indefinitely.
     #[cfg_attr(test, mutants::skip)]
-    fn mark_worker_initialized(&self, reservation: &mut PreparationReservation) {
+    fn mark_worker_initialized(&self, reservation: &mut BindingReservation) {
         #[cfg(test)]
         {
             // The test-only counter is published under the mutex and before its notification.
@@ -329,7 +331,7 @@ impl WorkerGroup {
                 .initialized_workers
                 .fetch_add(1, Ordering::Release);
             self.state.initialization_changed.notify_all();
-            if reservation.is_preparation_pending() {
+            if reservation.is_binding_pending() {
                 _ = self.state.startup.get_or_init(|| Ok(()));
             }
 
@@ -426,7 +428,9 @@ impl WorkerGroup {
             .worker_count
             .load(Ordering::Acquire)
             .checked_add(count.get() as usize)
-            .expect("worker reservation is bounded by the topology implementation");
+            .expect(
+                "the topology count and existing workers both fit in the process's Vec capacity",
+            );
         let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
 
         for worker_index in 0..count.get() {

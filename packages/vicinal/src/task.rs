@@ -103,7 +103,7 @@ where
         let task = this
             .task
             .take()
-            .expect("an unexecuted task remains available");
+            .expect("call returns early if this task was already executed, so the body is present");
         task();
 
         let elapsed = CLOCK.with_borrow_mut(|clock| start.elapsed(clock));
@@ -128,7 +128,10 @@ where
     // Omitting execution strands tests waiting for task-provided synchronization signals.
     #[cfg_attr(test, mutants::skip)]
     fn run(mut self) {
-        let (task, sender) = self.pending.take().expect("a joined task is executed once");
+        let (task, sender) = self
+            .pending
+            .take()
+            .expect("call consumes pending state before execution and runs only through Pin once");
         let result = panic::catch_unwind(AssertUnwindSafe(task)).map_err(TaskError::panicked);
 
         sender.send(result);

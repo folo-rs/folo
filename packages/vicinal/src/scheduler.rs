@@ -187,7 +187,8 @@ impl Scheduler {
             let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
             let (sender, receiver) = self.inner.runtime.result_channel_pool.rent();
             drop(wrap_task(
-                task.take().expect("submission consumes its task once"),
+                task.take()
+                    .expect("submit installs this task before any fallible shutdown operation"),
                 sender,
                 spawn_time,
             ));
@@ -200,7 +201,8 @@ impl Scheduler {
         let (sender, receiver) = state.result_channel_pool.rent();
 
         let wrapped = wrap_task(
-            task.take().expect("submission consumes its task once"),
+            task.take()
+                .expect("submission keeps the task in this Option until first wrapping"),
             sender,
             spawn_time,
         );
@@ -210,13 +212,13 @@ impl Scheduler {
         self.inner.submit((Some(wrapped), receiver), |submission| {
             let (wrapped, _) = submission
                 .as_mut()
-                .expect("submission remains owned until admitted");
+                .expect("nested submit moves the wrapped task only after this borrow is released");
             let task = allocate_task(state, wrapped);
             self.inner.enqueue(state, task, urgent);
 
-            let (_, receiver) = submission
-                .take()
-                .expect("admission consumes its receiver once");
+            let (_, receiver) = submission.take().expect(
+                "successful admission is the sole branch that consumes the result receiver",
+            );
             JoinHandle::new(receiver)
         })
     }
@@ -234,7 +236,7 @@ impl Scheduler {
             );
             drop(
                 task.take()
-                    .expect("shutdown submission consumes its task once"),
+                    .expect("shutdown wrapping is the first operation that consumes this task"),
             );
             return;
         }
@@ -244,7 +246,8 @@ impl Scheduler {
         let state = self.inner.groups.resolve(group);
 
         let wrapped = wrap_task_and_forget(
-            task.take().expect("submission consumes its task once"),
+            task.take()
+                .expect("fire-and-forget wrapping is the first operation that consumes this task"),
             spawn_time,
         );
 
@@ -272,7 +275,8 @@ fn allocate_task<T: VicinalTask>(
 
     init_task(
         slot,
-        task.take().expect("allocation consumes its task once"),
+        task.take()
+            .expect("initialization consumes the wrapped task only after allocation succeeds"),
     )
 }
 

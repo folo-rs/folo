@@ -76,14 +76,14 @@ impl PoolRuntime {
     pub(crate) fn set_registry_owner(&self, owner: u64) {
         self.registry_owner
             .set(owner)
-            .expect("one registry belongs to each pool runtime");
+            .expect("PoolRuntime::new creates one registry and calls set_registry_owner once");
     }
 
     pub(crate) fn registry_owner(&self) -> u64 {
         *self
             .registry_owner
             .get()
-            .expect("the pool registry is installed before groups are created")
+            .expect("WorkerGroups::new installs the owner before add() can create a group")
     }
 
     pub(crate) fn pool_id(&self) -> u64 {
@@ -139,71 +139,70 @@ impl PoolRuntime {
             return ControlFlow::Break(());
         }
 
-        workers.active = workers
-            .active
-            .checked_add(1)
-            .expect("worker count cannot exceed addressable memory");
+        workers.active = workers.active.checked_add(1).expect(
+            "the process cannot allocate more participating workers than addressable memory",
+        );
         ControlFlow::Continue(())
     }
 
-    /// Enables builder-owned tracking for workers reserved by policy preparation.
-    pub(crate) fn begin_worker_preparation(&self) {
+    /// Enables builder-owned tracking for workers reserved by policy binding.
+    pub(crate) fn begin_worker_binding(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         assert!(
-            !workers.preparing,
-            "worker preparation has not begun more than once"
+            !workers.binding,
+            "policy binding begins only once per pool runtime"
         );
-        workers.preparing = true;
+        workers.binding = true;
     }
 
-    /// Returns whether a worker belongs to the current policy-preparation phase.
-    pub(crate) fn reserve_preparation_worker(&self) -> bool {
+    /// Returns whether a worker belongs to the current policy-binding phase.
+    pub(crate) fn reserve_binding_worker(&self) -> bool {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
-        if !workers.preparing {
+        if !workers.binding {
             return false;
         }
 
-        workers.preparing_workers = workers
-            .preparing_workers
+        workers.binding_workers = workers
+            .binding_workers
             .checked_add(1)
-            .expect("worker count cannot exceed addressable memory");
+            .expect("reserved workers cannot exceed the process's addressable handle capacity");
         true
     }
 
     /// Cancels one worker-initialization target without running that worker.
     // Omitting this decrement and notification can leave preparation waiting forever.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn cancel_preparation_worker(&self) {
+    pub(crate) fn cancel_binding_worker(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
-        workers.preparing_workers = workers
-            .preparing_workers
+        workers.binding_workers = workers
+            .binding_workers
             .checked_sub(1)
-            .expect("only reserved preparation workers can be cancelled");
+            .expect("BindingReservation owns one outstanding reservation until cancellation");
         self.workers_changed.notify_all();
     }
 
-    /// Completes one tracked preparation worker after its initializer returns.
+    /// Completes one tracked binding worker after its initializer returns.
     // Omitting this decrement and notification can leave preparation waiting forever.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn initialize_preparation_worker(&self) {
+    pub(crate) fn initialize_binding_worker(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
-        workers.preparing_workers = workers
-            .preparing_workers
+        workers.binding_workers = workers
+            .binding_workers
             .checked_sub(1)
-            .expect("only reserved preparation workers can initialize");
+            .expect("each initialized preparation worker owns exactly one reservation");
         self.workers_changed.notify_all();
     }
 
-    /// Stops assigning newly reserved workers to the completed preparation phase.
-    pub(crate) fn end_worker_preparation(&self) {
-        self.workers.lock().expect(NEVER_POISONED).preparing = false;
+    /// Stops assigning newly reserved workers to the completed binding phase.
+    pub(crate) fn end_worker_binding(&self) {
+        self.workers.lock().expect(NEVER_POISONED).binding = false;
     }
 
-    /// Waits until policy-preparation workers initialize or the pool fails.
+    /// Waits until policy-binding workers initialize or the pool fails.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn wait_for_preparation_workers(&self) {
+    pub(crate) fn wait_for_binding_workers(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
-        while workers.preparing_workers != 0 && !self.is_poisoned() {
+        while workers.binding_workers != 0 && !self.is_poisoned() {
             workers = self.workers_changed.wait(workers).expect(NEVER_POISONED);
         }
     }
@@ -217,7 +216,7 @@ impl PoolRuntime {
         workers.active = workers
             .active
             .checked_sub(1)
-            .expect("only registered workers can finish");
+            .expect("end_worker pairs exactly with one successful begin_worker call");
         self.workers_changed.notify_all();
     }
 
@@ -278,15 +277,14 @@ impl PoolRuntime {
         let message = {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
             if matches!(*failure, FailureState::Vacant) {
-                let message = extract_panic_message(
-                    payload
-                        .as_ref()
-                        .expect("the first failure retains its original payload"),
-                );
+                let message =
+                    extract_panic_message(payload.as_ref().expect(
+                        "Some is assigned for the vacant first-failure branch before take",
+                    ));
                 *failure = FailureState::Retained(
                     payload
                         .take()
-                        .expect("the first failure moves its retained payload"),
+                        .expect("the payload remains Some until this first-failure move"),
                 );
                 Some(message)
             } else {
@@ -298,7 +296,7 @@ impl PoolRuntime {
             // Keep the first infrastructure failure so later cleanup panics cannot
             // replace the root cause.
             discard_panic(
-                payload.expect("an already-recorded failure leaves this payload for disposal"),
+                payload.expect("the non-vacant branch neither takes nor replaces this payload"),
             );
             return;
         };
@@ -378,7 +376,7 @@ impl PoolRuntime {
     pub(crate) fn resume_failure(&self) -> ! {
         let payload = self
             .take_failure()
-            .expect("poisoned pool retains its original infrastructure failure");
+            .expect("stop_admission is paired with a retained or submission-owned failure");
         resume_unwind(payload)
     }
 
@@ -410,15 +408,15 @@ enum FailureState {
     Unavailable,
 }
 
-/// Counts live participation and outstanding preparation targets for shutdown barriers.
+/// Counts live participation and outstanding binding targets for shutdown barriers.
 ///
-/// The runtime uses one synchronized lifecycle so policy preparation, worker startup and
+/// The runtime uses one synchronized lifecycle so policy binding, worker startup and
 /// pool destruction agree on when every participating thread has left the pool.
 #[derive(Default)]
 struct WorkerLifecycle {
     active: usize,
-    preparing: bool,
-    preparing_workers: usize,
+    binding: bool,
+    binding_workers: usize,
 }
 
 fn drain_queue(

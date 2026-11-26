@@ -22,7 +22,9 @@ impl TaskPanic {
     }
 
     pub(crate) fn into_payload(mut self) -> Box<dyn Any + Send> {
-        self.payload.take().expect("a task panic is consumed once")
+        self.payload
+            .take()
+            .expect("the consuming method takes ownership before Drop can access the payload")
     }
 }
 

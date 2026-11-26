@@ -1,4 +1,4 @@
-//! Shared pool ownership, policy preparation and terminal cleanup.
+//! Shared pool ownership, policy binding and terminal cleanup.
 
 use std::any::{Any, type_name};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
@@ -81,7 +81,7 @@ impl PoolInner {
         if let Some(processors) = eager {
             validate_eager_processors(hardware, processors);
         }
-        runtime.begin_worker_preparation();
+        runtime.begin_worker_binding();
         let result = catch_unwind(AssertUnwindSafe(|| {
             policy.bind(PrepareContext::new(
                 hardware,
@@ -90,14 +90,16 @@ impl PoolInner {
                 runtime.pool_name(),
             ))
         }));
-        runtime.end_worker_preparation();
+        runtime.end_worker_binding();
 
         let bound = match result {
             Ok(bound) => bound,
             Err(payload) => {
                 runtime.fail(payload);
                 finish_failed_binding(&runtime);
-                unreachable!("failed binding resumes the retained worker failure")
+                unreachable!(
+                    "runtime.fail records the payload and finish_failed_binding resumes it before returning"
+                )
             }
         };
         let policy = match bound {
@@ -107,7 +109,7 @@ impl PoolInner {
                 return Err(error);
             }
         };
-        runtime.wait_for_preparation_workers();
+        runtime.wait_for_binding_workers();
         // Custom binding can return after a participating worker independently records
         // a failure. Construction must propagate that published failure rather than returning
         // an already-poisoned pool.
@@ -230,7 +232,7 @@ impl PoolInner {
 /// share the same worker cleanup barrier.
 fn finish_failed_binding(runtime: &PoolRuntime) {
     runtime.stop_workers();
-    runtime.wait_for_preparation_workers();
+    runtime.wait_for_binding_workers();
     runtime.wait_for_workers();
 
     if runtime.is_poisoned() {
