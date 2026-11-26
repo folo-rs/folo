@@ -343,6 +343,7 @@ mod tests {
             )))
             .worker_policy(TestPolicy::new(1))
             .build()
+            .unwrap()
     }
 
     /// Rejected capture cleanup must remain contained even through a retained poisoned scheduler.

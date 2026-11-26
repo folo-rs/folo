@@ -105,7 +105,7 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
         group.bench_function(format!("create/{name}"), |b| {
             b.iter_batched(
                 &builder,
-                |builder| black_box(builder.build()),
+                |builder| black_box(builder.build().unwrap()),
                 // Drop and join each returned pool outside measurement before creating another.
                 // Larger batches would leave idle worker pools competing with later iterations.
                 BatchSize::PerIteration,
@@ -115,7 +115,7 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
         group.bench_function(format!("first_task/{name}"), |b| {
             b.iter_batched_ref(
                 || {
-                    let pool = builder().build();
+                    let pool = builder().build().unwrap();
                     let scheduler = pool.scheduler();
                     // Do not submit warmup work: task slots and result channels must be cold.
                     (pool, scheduler)
@@ -621,7 +621,8 @@ fn region_contention(criterion: &mut Criterion, caller: &ProcessorSet) {
             // measured without changing the amount of worker parallelism.
             let pool = Pool::builder()
                 .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
-                .build();
+                .build()
+                .unwrap();
             let scheduler = pool.scheduler();
 
             // Only producers submit, including during setup, so the controller cannot expand

@@ -44,7 +44,8 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
                         }
                     }
                 })
-                .build();
+                .build()
+                .unwrap();
 
             let inner = Arc::clone(&pool.inner);
             let scheduler = pool.scheduler();
@@ -119,7 +120,8 @@ fn shutdown_waits_for_failure_publication_to_finish() {
                     panic_any(InitializationFailure);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
         let inner = Arc::clone(&pool.inner);
         let group = policy.group();
         let state = group.state();
@@ -200,7 +202,8 @@ fn shutdown_waits_for_initialization_and_cancels_queued_work() {
                     finished.store(true, Ordering::Release);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         let inner = Arc::clone(&pool.inner);
         let capture = OnDrop(Some(Box::new(move || release.send(()).unwrap())));

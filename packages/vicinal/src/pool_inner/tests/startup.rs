@@ -107,7 +107,8 @@ fn assert_concurrent_startup(kind: PolicyKind) {
             .name("workers")
             .hardware(hardware.clone())
             .worker_policy(policy)
-            .build();
+            .build()
+            .unwrap();
 
         let scheduler = pool.scheduler();
         let start = Arc::new(Barrier::new(WORKERS as usize));
@@ -183,7 +184,8 @@ fn shutdown_accounts_for_in_progress_startup() {
                 exited,
                 release: Mutex::new(selection_release),
             })
-            .build();
+            .build()
+            .unwrap();
         let inner = Arc::clone(&pool.inner);
         let scheduler = pool.scheduler();
         let group = policy.group();
@@ -241,7 +243,8 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(2)))
-            .build();
+            .build()
+            .unwrap();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
             group: GroupId::Processor(0),
@@ -296,7 +299,8 @@ fn affinity_failure_is_reported_before_admission() {
                 let initialized = Arc::clone(&initialized);
                 move || initialized.store(true, Ordering::Relaxed)
             })
-            .build();
+            .build()
+            .unwrap();
         let inner = &pool.inner;
         let destination = SubmissionTarget {
             group: GroupId::Processor(0),
@@ -334,7 +338,8 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
         .worker_policy(PanickingSelectionPolicy {
             inner: policy.clone(),
         })
-        .build();
+        .build()
+        .unwrap();
     let inner = &pool.inner;
     let group = policy.group();
     let state = group.state();
@@ -381,7 +386,8 @@ fn empty_region_never_starts_unpinned_workers() {
     let pool = Pool::builder()
         .hardware(hardware())
         .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-        .build();
+        .build()
+        .unwrap();
 
     // The sparse index space contains this ID, but no eligible processor belongs to it.
     assert_panics(|| {
@@ -420,7 +426,8 @@ fn startup_failure_stops_every_group() {
             let pool = Pool::builder()
                 .hardware(hardware.clone())
                 .worker_policy(policy.clone())
-                .build();
+                .build()
+                .unwrap();
             let scheduler = pool.scheduler();
             let (entered, arrivals) = channel();
             let (release, wait) = channel();

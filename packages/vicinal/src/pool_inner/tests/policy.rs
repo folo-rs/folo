@@ -105,7 +105,8 @@ fn custom_policy_routes_tasks_using_a_cached_group_id() {
             .worker_policy(SingleGroupPolicy {
                 group: OnceLock::new(),
             })
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(block_on(pool.scheduler().spawn(|| 42)).unwrap(), 42);
     });
@@ -128,7 +129,8 @@ fn startup_trace_can_submit_through_participating_route() {
                 scheduler: Arc::clone(&scheduler),
                 reentrant_completed,
             })
-            .build();
+            .build()
+            .unwrap();
         let pool_scheduler = pool.scheduler();
         *scheduler.lock().unwrap() = Some(pool_scheduler.clone());
 
@@ -146,7 +148,8 @@ fn last_built_in_policy_setter_wins() {
             .hardware(hardware)
             .worker_policy(WorkersPerSystem::new(NonZero::new(3).unwrap()))
             .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(block_on(pool.scheduler().spawn(|| 7)).unwrap(), 7);
         assert_eq!(pool.inner.groups.len(), 1);
@@ -161,7 +164,8 @@ fn cloning_empty_group_keeps_identity_and_adds_no_workers() {
             nz!(1),
             nz!(1),
         )))
-        .build();
+        .build()
+        .unwrap();
     let group = pool.inner.groups.add();
     let id = group.id();
     let cloned = group.clone();

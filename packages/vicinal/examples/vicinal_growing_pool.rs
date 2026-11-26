@@ -8,8 +8,10 @@ use vicinal::{
     Pool, PrepareContext, PrepareError, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
-fn main() {
-    let pool = Pool::builder().worker_policy(GrowingPolicy::new()).build();
+fn main() -> Result<(), PrepareError> {
+    let pool = Pool::builder()
+        .worker_policy(GrowingPolicy::new())
+        .build()?;
     let scheduler = pool.scheduler();
 
     let (first_entered, first_arrival) = channel();
@@ -48,6 +50,7 @@ fn main() {
     assert_eq!(block_on(first).expect("the first task succeeds"), 1);
     assert_eq!(block_on(second).expect("the second task succeeds"), 2);
     assert_eq!(block_on(third).expect("the third task succeeds"), 3);
+    Ok(())
 }
 
 /// Adds one worker for each submission that observes queued work in the sole group.

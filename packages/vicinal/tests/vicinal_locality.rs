@@ -97,7 +97,8 @@ fn assert_eager_affinity(policy: impl WorkerPolicy, regional: bool) {
                     ));
                 }
             })
-            .build();
+            .build()
+            .unwrap();
         let observations = observations.lock().unwrap();
         assert_eq!(observations.len(), if regional { regions.len() } else { 1 });
         for (region, actual) in observations.iter() {
@@ -121,7 +122,7 @@ fn assert_submitting_processor_affinity(policy: impl WorkerPolicy, regional: boo
     with_watchdog(move || {
         let hardware = SystemHardware::current();
         let processors = hardware.all_processors();
-        let pool = Pool::builder().worker_policy(policy).build();
+        let pool = Pool::builder().worker_policy(policy).build().unwrap();
         let scheduler = pool.scheduler();
 
         // Sequential CPU registration makes each expected cumulative mask deterministic.

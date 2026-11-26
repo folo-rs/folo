@@ -80,7 +80,8 @@ fn custom_policy_lazily_creates_and_runs_worker() {
             .worker_policy(LazySingleGroupPolicy {
                 group: OnceLock::new(),
             })
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(block_on(pool.scheduler().spawn(|| 42)).unwrap(), 42);
     });
@@ -108,7 +109,7 @@ fn preparation_failure_is_returned_after_started_workers_leave() {
                     initializer_entered.send(()).unwrap();
                     initializer_release.lock().unwrap().recv().unwrap();
                 })
-                .try_build()
+                .build()
                 .map(drop)
         });
 

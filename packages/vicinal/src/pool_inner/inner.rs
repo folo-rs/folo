@@ -67,7 +67,7 @@ pub(crate) struct PoolInner {
 }
 
 impl PoolInner {
-    pub(crate) fn try_new(
+    pub(crate) fn new(
         pool_id: u64,
         pool_name: String,
         hardware: &SystemHardware,

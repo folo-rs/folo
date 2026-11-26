@@ -52,7 +52,7 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// # block_on(async {
 /// let pool = Pool::builder()
 ///     .worker_policy(OneGroupPolicy::default())
-///     .build();
+///     .build()?;
 /// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
 /// # Ok::<(), Box<dyn Error>>(())
 /// # }).unwrap();
@@ -197,7 +197,7 @@ mod tests {
     fn preparation_context_formats() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let eager = hardware.all_processors();
-        let pool = Pool::builder().hardware(hardware.clone()).build();
+        let pool = Pool::builder().hardware(hardware.clone()).build().unwrap();
         let context =
             PrepareContext::new(&hardware, Some(&eager), &pool.inner.groups, "formatting");
 

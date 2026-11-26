@@ -15,7 +15,7 @@ fn main() -> Result<(), AppError> {
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
         .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
-        .build();
+        .build()?;
     let scheduler = pool.scheduler();
     let callers = submitters.spawn_threads(move |processor| -> Result<(), AppError> {
         let caller_region = processor.memory_region_id();

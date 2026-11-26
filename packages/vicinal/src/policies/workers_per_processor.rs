@@ -65,7 +65,8 @@ mod tests {
             let pool = Pool::builder()
                 .hardware(hardware)
                 .worker_policy(WorkersPerProcessor::new(nz!(1)))
-                .build();
+                .build()
+                .unwrap();
 
             assert_eq!(block_on(pool.scheduler().spawn(|| 42)).unwrap(), 42);
         });

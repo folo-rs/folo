@@ -767,7 +767,8 @@ mod tests {
                 nz!(1),
             )))
             .worker_policy(NoWorkerPolicy::default())
-            .build();
+            .build()
+            .unwrap();
         let group = pool
             .inner
             .groups

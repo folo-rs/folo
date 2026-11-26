@@ -173,7 +173,8 @@ fn preparation(criterion: &mut Criterion) {
                     let pool = Pool::builder()
                         .hardware(hardware)
                         .worker_policy(probe.clone())
-                        .build();
+                        .build()
+                        .unwrap();
                     operation_elapsed = operation_elapsed.saturating_add(start.elapsed());
                     black_box(&probe);
                     black_box(&pool);
@@ -202,7 +203,8 @@ fn established_selection(criterion: &mut Criterion) {
             let pool = Pool::builder()
                 .hardware(hardware)
                 .worker_policy(probe.clone())
-                .build();
+                .build()
+                .unwrap();
             black_box(probe.select());
 
             b.iter(|| black_box(probe.select()));
@@ -227,7 +229,8 @@ fn membership_expansion(criterion: &mut Criterion) {
                     let pool = Pool::builder()
                         .hardware(hardware.clone())
                         .worker_policy(probe.clone())
-                        .build();
+                        .build()
+                        .unwrap();
                     black_box(probe.select());
                     // Stop the pool during setup so no worker remains participating. The
                     // measured expansion then only constructs and publishes the new mask;
@@ -259,7 +262,8 @@ fn admission(criterion: &mut Criterion) {
                     .worker_policy(NoWorkerPolicy {
                         group: OnceLock::new(),
                     })
-                    .build();
+                    .build()
+                    .unwrap();
                 let scheduler = pool.scheduler();
                 let start = Instant::now();
                 let handle = scheduler.spawn(|| black_box(0));
@@ -281,7 +285,8 @@ fn admission(criterion: &mut Criterion) {
                     .worker_policy(NoWorkerPolicy {
                         group: OnceLock::new(),
                     })
-                    .build();
+                    .build()
+                    .unwrap();
                 let scheduler = pool.scheduler();
                 let start = Instant::now();
                 scheduler.spawn_and_forget(|| {

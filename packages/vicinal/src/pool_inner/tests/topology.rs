@@ -33,7 +33,8 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(pool.inner.registry.initialized().count(), 0);
         let initial_worker_count = pool.inner.runtime.active_workers();
@@ -88,7 +89,8 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_system(nz!(WORKERS)))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(pool.inner.registry.initialized().count(), 0);
         assert_eq!(pool.inner.runtime.active_workers(), 0);
@@ -156,6 +158,7 @@ fn system_pools_keep_processor_membership_independent() {
                 .hardware(hardware.clone())
                 .worker_policy(BuiltInWorkerPolicy::per_system(nz!(1)))
                 .build()
+                .unwrap()
         };
         let first = build();
         let second = build();
@@ -190,7 +193,8 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
 
         let handles = processors.spawn_threads(move |processor| {
@@ -218,7 +222,8 @@ fn every_submission_variant_grows_the_region_mask() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         let mut expected = BTreeSet::new();
 
@@ -259,7 +264,8 @@ fn membership_is_isolated_by_pool_and_region() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         block_on(scheduler.spawn(|| {})).unwrap();
 
@@ -267,7 +273,8 @@ fn membership_is_isolated_by_pool_and_region() {
         let independent = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
         assert_eq!(
             block_on(independent.scheduler().spawn({
                 let hardware = hardware.clone();
@@ -308,7 +315,8 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
 
         let initial = scheduler.spawn({
@@ -398,7 +406,8 @@ fn assert_concurrent_additions(policy: BuiltInWorkerPolicy, processors: [u32; 2]
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(policy)
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         let (entered, arrivals) = mpsc::channel();
         // Occupy the group so concurrent expansion cannot be confused with task execution.
@@ -469,7 +478,8 @@ fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32)
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(policy.clone())
-            .build();
+            .build()
+            .unwrap();
         policy.install_test_group(&pool.inner.groups, &hardware, target);
 
         let state = pool.inner.registry.get_or_init(target.group);
@@ -561,7 +571,8 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     let pool = Pool::builder()
         .hardware(hardware.clone())
         .worker_policy(policy.clone())
-        .build();
+        .build()
+        .unwrap();
     let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
     policy.install_test_group(
         &pool.inner.groups,
@@ -628,7 +639,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
 /// Separate listeners represent workers that must each wake for separately blocking work.
 #[test]
 fn separate_enqueues_notify_separate_waiters() {
-    let pool = Pool::builder().hardware(hardware()).build();
+    let pool = Pool::builder().hardware(hardware()).build().unwrap();
     let destination = GroupId::Processor(0);
     let state = pool.inner.registry.get_or_init(destination);
     let first = state.wake_event.listen();

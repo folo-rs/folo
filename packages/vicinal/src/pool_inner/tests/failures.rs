@@ -21,7 +21,8 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(TestPolicy::new(1))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         assert!(
             block_on(scheduler.spawn(|| panic!("task panic")))
@@ -53,7 +54,8 @@ fn poisoned_enqueue_preserves_existing_runtime_failure() {
     let pool = Pool::builder()
         .hardware(hardware())
         .worker_policy(policy.clone())
-        .build();
+        .build()
+        .unwrap();
     let group = policy.group();
     let state = group.state();
     pool.inner.runtime.fail(Box::new(OriginalFailure));
@@ -80,7 +82,8 @@ fn disconnected_joined_panic_does_not_poison_pool() {
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(TestPolicy::new(1))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         let (release, wait) = mpsc::channel();
 
@@ -104,7 +107,8 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(TestPolicy::new(1))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
 
         let completed = scheduler.spawn(|| panic::panic_any(PanickingPayload));
@@ -125,7 +129,8 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(policy.clone())
-            .build();
+            .build()
+            .unwrap();
         let target = hardware.with_current_processor(|processor| SubmissionTarget {
             group: GroupId::MemoryRegion(processor.memory_region_id()),
             processor: processor.id(),

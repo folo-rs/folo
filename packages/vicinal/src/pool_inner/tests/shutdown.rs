@@ -50,7 +50,8 @@ fn shutdown_preserves_joined_bodies_after_schedulers_are_dropped() {
     let pool = Pool::builder()
         .hardware(hardware())
         .worker_policy(policy)
-        .build();
+        .build()
+        .unwrap();
 
     let scheduler = pool.scheduler();
     let dropped = Arc::new(AtomicUsize::new(0));
@@ -110,7 +111,8 @@ fn completion_waker_can_drop_handles_and_submit() {
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(policy.clone())
-            .build();
+            .build()
+            .unwrap();
         let group = policy.group();
         let state = group.state();
 
@@ -154,7 +156,8 @@ fn shutdown_before_lazy_state_creation_starts_no_workers() {
         .worker_policy(RecordingPolicy {
             selected: Arc::clone(&selected),
         })
-        .build();
+        .build()
+        .unwrap();
     let scheduler = pool.scheduler();
     let inner = Arc::clone(&pool.inner);
     drop(pool);
@@ -172,7 +175,8 @@ fn shutdown_racing_enqueue_drops_outside_locks() {
     let pool = Pool::builder()
         .hardware(hardware())
         .worker_policy(policy.clone())
-        .build();
+        .build()
+        .unwrap();
     let inner = Arc::clone(&pool.inner);
     let group = policy.group();
     let state = group.state();
@@ -204,7 +208,8 @@ fn shutdown_drains_both_queues_despite_a_destructor_panic() {
     let pool = Pool::builder()
         .hardware(hardware())
         .worker_policy(policy.clone())
-        .build();
+        .build()
+        .unwrap();
     let group = policy.group();
     let state = group.state();
     state
@@ -236,7 +241,8 @@ fn shutdown_contains_secondary_payload_destruction() {
     let pool = Pool::builder()
         .hardware(hardware())
         .worker_policy(policy.clone())
-        .build();
+        .build()
+        .unwrap();
     let group = policy.group();
     let state = group.state();
     let inner = Arc::clone(&pool.inner);
@@ -268,7 +274,7 @@ fn shutdown_contains_payload_destruction_during_outer_unwind() {
 
     with_watchdog(|| {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let inner = Arc::clone(&pool.inner);
 
         // Retained runtime failure tests cleanup directly, rather than depending on whether
@@ -294,7 +300,8 @@ fn retained_scheduler_releases_forgotten_captures_and_cancels_handles() {
         let pool = Pool::builder()
             .hardware(hardware())
             .worker_policy(TestPolicy::new(1))
-            .build();
+            .build()
+            .unwrap();
 
         let scheduler = pool.scheduler();
         let (entered, arrivals) = mpsc::channel();
@@ -338,7 +345,8 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
     let pool = Pool::builder()
         .hardware(hardware())
         .worker_policy(TestPolicy::new(0))
-        .build();
+        .build()
+        .unwrap();
     let scheduler = pool.scheduler();
 
     assert_panics(|| {
@@ -356,7 +364,7 @@ fn poisoned_pool_rejects_submissions_even_after_drop() {
 /// A rejected group registration must not poison the terminal registry mutex.
 #[test]
 fn post_failure_group_registration_does_not_poison_cleanup() {
-    let pool = Pool::builder().hardware(hardware()).build();
+    let pool = Pool::builder().hardware(hardware()).build().unwrap();
     let inner = Arc::clone(&pool.inner);
     inner.stop_admission();
 
@@ -377,7 +385,8 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
         let pool = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_system(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         block_on(scheduler.spawn(|| {})).unwrap();
 
@@ -415,7 +424,8 @@ fn post_shutdown_submissions_do_not_expand_or_activate() {
     let pool = Pool::builder()
         .hardware(hardware.clone())
         .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
-        .build();
+        .build()
+        .unwrap();
     let scheduler = pool.scheduler();
     block_on(scheduler.spawn(|| {})).unwrap();
 

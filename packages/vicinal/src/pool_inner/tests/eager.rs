@@ -68,7 +68,8 @@ fn assert_ready(kind: PolicyKind) {
                         .push((thread::current().id(), affinity(&hardware)));
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         let expected_masks = match kind {
             PolicyKind::Processor => vec![
@@ -164,7 +165,8 @@ fn assert_expansion(kind: PolicyKind) {
                     initialized.fetch_add(1, Ordering::Relaxed);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         let mut members = BTreeSet::from([0, 3]);
         for (variant, processor) in [0, 3, 2, 8].into_iter().enumerate() {
@@ -248,7 +250,7 @@ fn eager_setters_replace_configuration_without_starting_workers() {
                 }
             });
         assert_eq!(initialized.load(Ordering::Relaxed), 0);
-        let pool = builder.build();
+        let pool = builder.build().unwrap();
         assert_eq!(initialized.load(Ordering::Relaxed), 1);
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 1);
@@ -285,7 +287,7 @@ fn eager_selection_rejects_foreign_hardware_before_initialization() {
                 initialized.fetch_add(1, Ordering::Relaxed);
             }
         });
-    assert_panics(|| builder.build());
+    assert_panics(|| builder.build().unwrap());
     assert_eq!(initialized.load(Ordering::Relaxed), 0);
 }
 
@@ -317,7 +319,7 @@ fn eager_selection_rejects_foreign_backing_hardware_before_initialization() {
                         initialized.fetch_add(1, Ordering::Relaxed);
                     }
                 });
-            assert_panics(|| builder.build());
+            assert_panics(|| builder.build().unwrap());
             assert_eq!(initialized.load(Ordering::Relaxed), 0);
         }
     });
@@ -333,7 +335,8 @@ fn eager_unused_pool_without_initializer_joins_workers() {
             .hardware(hardware.clone())
             .worker_policy(BuiltInWorkerPolicy::per_system(nz!(2)))
             .eager(hardware.all_processors())
-            .build();
+            .build()
+            .unwrap();
         let inner = Arc::clone(&pool.inner);
         let scheduler = pool.scheduler();
         let worker_count = inner.runtime.active_workers();
@@ -374,7 +377,8 @@ fn eager_initializers_overlap_across_groups() {
                     initialized.fetch_add(1, Ordering::Relaxed);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
         assert_eq!(initialized.load(Ordering::Relaxed), 2);
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 2);

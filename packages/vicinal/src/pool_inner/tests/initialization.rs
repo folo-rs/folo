@@ -61,7 +61,8 @@ fn assert_lazy_initialization(kind: PolicyKind) {
                         .unwrap();
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         let scheduler = pool.scheduler();
         assert_eq!(pool.inner.runtime.active_workers(), 0);
@@ -131,7 +132,8 @@ fn initialization_is_concurrent_and_submission_does_not_wait() {
                     INITIALIZED.set(true);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         let task = pool.scheduler().spawn({
             let executed = Arc::clone(&executed);
@@ -166,7 +168,8 @@ fn shared_worker_refreshes_affinity_expanded_during_initialization() {
                     wait_for_release.lock().unwrap().recv().unwrap();
                 }
             })
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
 
         let first = scheduler.spawn({
@@ -213,7 +216,8 @@ fn initializer_can_submit_to_its_pool() {
                         .spawn_and_forget(move || result.send(INITIALIZED.get()).unwrap());
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         scheduler.set(pool.scheduler()).unwrap();
         assert!(block_on(scheduler.get().unwrap().spawn(|| INITIALIZED.get())).unwrap());
@@ -236,7 +240,8 @@ fn initialization_panic_stops_the_pool() {
                     panic!("injected initialization failure");
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         let scheduler = pool.scheduler();
         let executed = Arc::new(AtomicBool::new(false));

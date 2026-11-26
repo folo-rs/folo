@@ -169,7 +169,8 @@ fn group_pool() -> (Pool, WorkerGroup) {
     let pool = Pool::builder()
         .hardware(hardware.clone())
         .worker_policy(policy.clone())
-        .build();
+        .build()
+        .unwrap();
     let group = policy.group();
     let state = group.state();
 

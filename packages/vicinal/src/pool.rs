@@ -74,10 +74,16 @@ impl Pool {
     ///
     /// Use [`Self::builder`] with one of the [`policies`][crate::policies] types to configure
     /// built-in worker counts, or install a custom [`WorkerPolicy`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the default policy cannot finish preparation.
     #[must_use]
     #[inline]
     pub fn new() -> Self {
-        Self::builder().build()
+        Self::builder()
+            .build()
+            .unwrap_or_else(|error| panic_any(error))
     }
 
     /// Creates a builder for configuring the pool.
@@ -177,7 +183,7 @@ impl PoolBuilder {
     /// use vicinal::Pool;
     ///
     /// let processors = SystemHardware::current().processors();
-    /// let pool = Pool::builder().eager(processors).build();
+    /// let pool = Pool::builder().eager(processors).build().unwrap();
     /// ```
     #[must_use]
     pub fn eager(mut self, processors: ProcessorSet) -> Self {
@@ -219,7 +225,7 @@ impl PoolBuilder {
     /// # block_on(async {
     /// let pool = Pool::builder()
     ///     .thread_init(|| WORKER_LABEL.set("background"))
-    ///     .build();
+    ///     .build()?;
     ///
     /// assert_eq!(
     ///     pool.scheduler().spawn(|| WORKER_LABEL.get()).await?,
@@ -251,28 +257,11 @@ impl PoolBuilder {
     /// The default policy starts no workers during construction unless [`Self::eager`] selects
     /// eager destinations. A custom policy may create or wait for workers during `prepare()`.
     ///
-    /// # Panics
-    ///
-    /// Panics if preparation-time worker creation, affinity setup or initialization fails.
-    /// Participating workers leave the worker loop before the panic propagates. The pool does
-    /// not join policy-owned operating-system threads after they leave
-    /// [`Worker::run()`][crate::Worker::run].
-    #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Omitting eager startup can strand initializer coordination.
-    pub fn build(self) -> Pool {
-        self.try_build().unwrap_or_else(|error| panic_any(error))
-    }
-
-    /// Tries to build the pool with the configured worker policy and initialization.
-    ///
-    /// The default policy starts no workers during construction unless [`Self::eager`] selects
-    /// eager destinations. A custom policy may create workers during `prepare()`.
-    ///
     /// # Errors
     ///
     /// Returns an error reported by [`WorkerPolicy::prepare`] after all participating workers
     /// started during preparation have left the worker loop.
-    pub fn try_build(self) -> Result<Pool, PrepareError> {
+    pub fn build(self) -> Result<Pool, PrepareError> {
         let hardware = self
             .hardware
             .unwrap_or_else(|| SystemHardware::current().clone());
@@ -287,7 +276,7 @@ impl PoolBuilder {
         // PoolInner::new therefore owns preparation failure cleanup through the runtime barrier.
         // Ref: docs/implementation.md, "Eager construction".
         Ok(Pool {
-            inner: Arc::new(PoolInner::try_new(
+            inner: Arc::new(PoolInner::new(
                 pool_id,
                 pool_name,
                 &hardware,
@@ -332,22 +321,25 @@ mod tests {
     #[test]
     fn default_and_policy_setter_order() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let default = Pool::builder().hardware(hardware.clone()).build();
+        let default = Pool::builder().hardware(hardware.clone()).build().unwrap();
         let region = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(WorkersPerProcessor::new(nz!(3)))
             .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
-            .build();
+            .build()
+            .unwrap();
         let processor = Pool::builder()
             .hardware(hardware.clone())
             .worker_policy(WorkersPerSystem::new(nz!(1)))
             .worker_policy(WorkersPerProcessor::new(nz!(3)))
-            .build();
+            .build()
+            .unwrap();
         let system = Pool::builder()
             .hardware(hardware)
             .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
             .worker_policy(WorkersPerSystem::new(nz!(3)))
-            .build();
+            .build()
+            .unwrap();
 
         for pool in [&default, &region, &processor, &system] {
             assert_eq!(pool.inner.registry.initialized().count(), 0);
@@ -358,8 +350,12 @@ mod tests {
     #[test]
     fn pool_names() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let default = Pool::builder().hardware(hardware.clone()).build();
-        let named = Pool::builder().hardware(hardware).name("named").build();
+        let default = Pool::builder().hardware(hardware.clone()).build().unwrap();
+        let named = Pool::builder()
+            .hardware(hardware)
+            .name("named")
+            .build()
+            .unwrap();
         assert!(default.inner.pool_name.starts_with("vicinal-"));
         assert_eq!(named.inner.pool_name, "named");
     }

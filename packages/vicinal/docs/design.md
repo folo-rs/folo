@@ -29,13 +29,13 @@ use vicinal::Pool;
 
 let processor_pool = Pool::builder()
     .worker_policy(WorkersPerProcessor::new(nz!(2_u32)))
-    .build();
+    .build().unwrap();
 let regional_pool = Pool::builder()
     .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
-    .build();
+    .build().unwrap();
 let system_pool = Pool::builder()
     .worker_policy(WorkersPerSystem::new(nz!(2_u32)))
-    .build();
+    .build().unwrap();
 ```
 
 The pool calls the selected policy's `prepare()` once with the final hardware, eager selection,

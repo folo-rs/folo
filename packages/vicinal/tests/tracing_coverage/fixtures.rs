@@ -15,6 +15,7 @@ pub(crate) fn pool(policy: impl WorkerPolicy, name: &str) -> Pool {
         .worker_policy(policy)
         .name(name)
         .build()
+        .unwrap()
 }
 
 /// Fails disposal of a user-owned result or capture, outside the task's panic boundary.

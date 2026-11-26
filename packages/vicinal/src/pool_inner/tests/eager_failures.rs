@@ -193,7 +193,8 @@ fn policy_preparation_failure_stops_started_workers() {
                     ready: Mutex::new(Some((ready.clone(), worker_ready))),
                 })
                 .thread_init(move || ready.send(PreparationEvent::Ready).unwrap())
-                .build();
+                .build()
+                .unwrap();
         })
         .unwrap_err();
 
@@ -232,7 +233,8 @@ fn policy_drop_failure_waits_for_preparation_workers() {
                         initializer_entered.send(()).unwrap();
                         initializer_release.lock().unwrap().recv().unwrap();
                     })
-                    .try_build();
+                    .build()
+                    .unwrap();
             }
         });
 
@@ -260,7 +262,8 @@ fn construction_rejects_failure_published_before_prepare_returns() {
                 )))
                 .worker_policy(ReturningFailurePolicy)
                 .thread_init(|| panic_any(InitializationFailure))
-                .build();
+                .build()
+                .unwrap();
         })
         .unwrap_err();
 
@@ -306,7 +309,8 @@ fn eager_partial_initializer_failure_waits_for_started_worker() {
                         _ => unreachable!("the eager fixture starts exactly two workers"),
                     }
                 })
-                .build();
+                .build()
+                .unwrap();
         })
         .unwrap_err();
 
@@ -333,7 +337,8 @@ fn custom_policy_rejects_foreign_eager_hardware() {
                 worker_observer: Arc::clone(&observer),
                 ready: Mutex::new(None),
             })
-            .build();
+            .build()
+            .unwrap();
     });
     // Equal processor counts make hardware identity the only mismatch. The observer proves
     // construction rejected that mismatch before entering the policy's failing preparation.
@@ -360,7 +365,8 @@ fn builder_waits_for_every_custom_preparation_worker() {
                     initialized.fetch_add(1, Ordering::Release);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(initialized.load(Ordering::Acquire), 2);
         drop(pool);
@@ -378,7 +384,8 @@ fn dropping_a_preparation_worker_cancels_its_readiness_target() {
             .worker_policy(DroppedWorkerPolicy {
                 group: OnceLock::new(),
             })
-            .build();
+            .build()
+            .unwrap();
 
         drop(pool);
     });

@@ -38,7 +38,7 @@ async fn memory_region_local() -> Result<(), AppError> {
     let pool = Pool::builder()
         .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
         .eager(processors)
-        .build();
+        .build()?;
 
     assert_eq!(
         pool.scheduler()
@@ -55,7 +55,7 @@ async fn system_wide() -> Result<(), AppError> {
     // Illustrative concurrency shared across every submitting processor in this pool.
     let pool = Pool::builder()
         .worker_policy(WorkersPerSystem::new(nz!(2_u32)))
-        .build();
+        .build()?;
 
     assert_eq!(
         pool.scheduler()

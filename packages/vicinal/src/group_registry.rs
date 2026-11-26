@@ -250,8 +250,8 @@ mod tests {
     #[test]
     fn foreign_group_id_is_rejected() {
         let hardware = || SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let first = Pool::builder().hardware(hardware()).build();
-        let second = Pool::builder().hardware(hardware()).build();
+        let first = Pool::builder().hardware(hardware()).build().unwrap();
+        let second = Pool::builder().hardware(hardware()).build().unwrap();
         let foreign = first.inner.groups.add().id();
 
         assert_panics(|| second.inner.groups.resolve(foreign));
@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn registry_and_group_handles_format() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let group = pool.inner.groups.add();
 
         _ = format!("{:?}", pool.inner.groups);
