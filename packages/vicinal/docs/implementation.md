@@ -127,8 +127,8 @@ executing tasks.
 
 The builder owns its optional processor selection and resolves final configuration only at build
 time. It constructs the runtime and worker-group registry before calling policy `bind()`.
-If preparation unwinds, the runtime stops every registered group and waits for participating
-workers before resuming the failure.
+If binding or worker infrastructure unwinds, the runtime stops every registered group and waits
+for participating workers before converting the contained payload into a `BuildError`.
 
 Pool construction validates an eager selection before invoking any `WorkerPolicy::bind`
 implementation. It checks both supplied processor handles and processors rebuilt through the
@@ -139,13 +139,13 @@ regions or one system mask according to the policy.
 Repeated entries never create additional worker groups. Group masks and shared
 membership are seeded before spawning; no synthetic task is allocated, counted or executed.
 
-Lazy and eager startup share `Worker::run()`. Eager preparation first seeds every selected
+Lazy and eager startup share `Worker::run()`. Eager binding first seeds every selected
 group's mask, then reserves and starts every selected worker. The builder closes the preparation
-reservation phase after `WorkerPolicy::bind()` returns and waits for every outstanding
+binding reservation phase after `WorkerPolicy::bind()` returns and waits for every outstanding
 reservation to reach the end of `thread_init()`. Dropping a reserved `Worker` cancels that
 expectation. Callbacks can overlap across groups. A callback panic records the first payload in
-`PoolRuntime`, stops all groups and wakes the preparation waiter. The builder then retrieves the
-payload after participating workers leave.
+`PoolRuntime`, stops all groups and wakes the binding waiter. The builder converts the retained
+payload into a `BuildError` after participating workers leave.
 
 Workers enter the loop with their already-applied initial affinity revision. The first real
 submission from a selected processor therefore needs neither startup nor membership expansion.

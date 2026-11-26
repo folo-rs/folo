@@ -126,8 +126,8 @@ remains unchanged. An eager processor selection is separate from custom-policy r
 A custom policy must run or drop each `Worker` reserved with `WorkerGroup::add_worker()`
 during `bind()`. After `bind()` returns, the builder waits for each reservation to
 finish initialization or to be cancelled by dropping an unrun worker. Startup failure stops
-and waits for participating workers before construction panics; it does not join policy-owned
-operating-system threads after they leave `Worker::run()`.
+and waits for participating workers before `build()` returns a `BuildError`; it does not join
+policy-owned operating-system threads after they leave `Worker::run()`.
 
 Callbacks run once per worker, may overlap, and must preserve affinity. They must not wait for
 same-pool work, shut down their pool or depend on eager construction returning. In particular,
