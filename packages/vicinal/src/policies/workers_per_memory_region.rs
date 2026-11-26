@@ -2,7 +2,8 @@ use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
-use crate::{BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, WorkerPolicy};
+use crate::BuiltInWorkerPolicy;
+use crate::worker_policy::{BindContext, BindError, BoundPolicy, WorkerPolicy};
 
 /// Creates a fixed worker count for each submitting memory region.
 ///
@@ -27,7 +28,7 @@ impl WorkersPerMemoryRegion {
 
 impl WorkerPolicy for WorkersPerMemoryRegion {
     #[inline]
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         self.policy.bind(context)
     }
 }

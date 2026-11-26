@@ -15,10 +15,10 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{OnDrop, PanickingPayload, TestPolicy, affinity, hardware, probe};
-use crate::{
-    BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, GroupId, PolicyKind, Pool,
-    SubmissionTarget, WorkerGroupId, WorkerGroups, WorkerPolicy,
+use crate::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
+use crate::{BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, SubmissionTarget};
 
 /// Pauses policy selection after a test worker reaches the ordinary participation boundary.
 #[derive(Debug)]
@@ -31,13 +31,13 @@ struct GatedSelectionPolicy {
 }
 
 impl WorkerPolicy for GatedSelectionPolicy {
-    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         self.inner = self.inner.bind_test_policy(context);
         Ok(self)
     }
 }
 
-impl BoundWorkerPolicy for GatedSelectionPolicy {
+impl BoundPolicy for GatedSelectionPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         let id = self.inner.select_group(groups);
         self.worker_started.get_or_init(|| {
@@ -65,13 +65,13 @@ struct PanickingSelectionPolicy {
 }
 
 impl WorkerPolicy for PanickingSelectionPolicy {
-    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         self.inner = self.inner.bind_test_policy(context);
         Ok(self)
     }
 }
 
-impl BoundWorkerPolicy for PanickingSelectionPolicy {
+impl BoundPolicy for PanickingSelectionPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         panic_any(StartupFailure);
     }

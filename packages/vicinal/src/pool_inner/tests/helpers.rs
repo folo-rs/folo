@@ -11,10 +11,12 @@ use futures::FutureExt;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
+use crate::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
+};
 use crate::{
-    BindContext, BindError, BoundBuiltInPolicy, BoundWorkerPolicy, BuiltInWorkerPolicy,
-    ErasedTaskHandle, Scheduler, SubmissionTarget, VicinalTask, WorkerGroup, WorkerGroupId,
-    WorkerGroupState, WorkerGroups, WorkerPolicy, init_task,
+    BoundBuiltInPolicy, BuiltInWorkerPolicy, ErasedTaskHandle, Scheduler, SubmissionTarget,
+    VicinalTask, WorkerGroupState, init_task,
 };
 
 /// Retains the concrete built-in policy for white-box startup tests.
@@ -60,7 +62,7 @@ impl TestBuiltInPolicy {
 }
 
 impl WorkerPolicy for TestBuiltInPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let bound = Arc::new(self.policy.clone().bind_built_in(context));
         *self.bound.lock().unwrap() = Some(Arc::clone(&bound));
         Ok(bound)
@@ -112,12 +114,12 @@ impl TestPolicy {
 }
 
 impl WorkerPolicy for TestPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         Ok(self.bind_test_policy(context))
     }
 }
 
-impl BoundWorkerPolicy for TestPolicy {
+impl BoundPolicy for TestPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         let group = self.group();
         self.state.started.get_or_init(|| {

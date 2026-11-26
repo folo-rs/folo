@@ -13,7 +13,8 @@ use new_zealand::nz;
 use crate::policies::WorkersPerProcessor;
 #[cfg(test)]
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
-use crate::{BuildError, PoolInner, Scheduler, WorkerPolicy, WorkerPolicyBinding};
+use crate::worker_policy::{WorkerPolicy, WorkerPolicyBinding};
+use crate::{BuildError, PoolInner, Scheduler};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -27,8 +28,8 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// [`policies::WorkersPerMemoryRegion`][crate::policies::WorkersPerMemoryRegion] and
 /// [`policies::WorkersPerSystem`][crate::policies::WorkersPerSystem] can instead share a fixed
 /// worker count across each submitting memory region or across the system. A custom
-/// [`WorkerPolicy`] can select and create groups independently. Built-in workers start on first
-/// submission unless
+/// [`WorkerPolicy`][crate::worker_policy::WorkerPolicy] can select and create groups independently.
+/// Built-in workers start on first submission unless
 /// [`PoolBuilder::eager`] initializes their destinations during construction.
 /// Shared workers use the initial selection plus processors included by policy selection in
 /// their pool and destination, refreshing affinity at task boundaries without adding workers.
@@ -37,7 +38,7 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 /// # Lifetime
 ///
 /// Dropping the pool stops accepting work, cancels queued tasks and waits for every worker
-/// participating in [`Worker::run()`][crate::Worker::run] to finish. Policy-owned
+/// participating in [`Worker::run()`][crate::worker_policy::Worker::run] to finish. Policy-owned
 /// operating-system threads may perform cleanup after leaving that method; the pool does not
 /// join them. Cancelled joined tasks return a
 /// [`TaskError`][crate::TaskError] that retains the original body for recovery;
@@ -73,7 +74,8 @@ impl Pool {
     /// Creates a pool with default settings and lazily started processor-local workers.
     ///
     /// Use [`Self::builder`] with one of the [`policies`][crate::policies] types to configure
-    /// built-in worker counts, or install a custom [`WorkerPolicy`].
+    /// built-in worker counts, or install a custom
+    /// [`WorkerPolicy`][crate::worker_policy::WorkerPolicy].
     ///
     /// # Panics
     ///
@@ -151,8 +153,9 @@ impl PoolBuilder {
     ///
     /// Replaces any previously selected policy; the last setter wins.
     ///
-    /// The builder calls [`WorkerPolicy::bind`] once with the final settings. Subsequent
-    /// submissions call the returned [`BoundWorkerPolicy::select_group`][crate::BoundWorkerPolicy::select_group].
+    /// The builder calls [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] once
+    /// with the final settings. Subsequent submissions call the returned
+    /// [`BoundPolicy::select_group`][crate::worker_policy::BoundPolicy::select_group].
     #[must_use]
     pub fn worker_policy(mut self, policy: impl WorkerPolicy) -> Self {
         self.policy = Some(AssertUnwindSafe(Box::new(policy)));
@@ -161,10 +164,13 @@ impl PoolBuilder {
 
     /// Initializes workers for the selected processors during construction.
     ///
-    /// The final selection is passed to [`WorkerPolicy::bind`]. A custom policy reserves its
-    /// required workers with [`WorkerGroup::add_worker`][crate::WorkerGroup::add_worker].
+    /// The final selection is passed to
+    /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind]. A custom policy reserves
+    /// its required workers with
+    /// [`WorkerGroup::add_worker`][crate::worker_policy::WorkerGroup::add_worker].
     /// The builder waits after `bind()` returns for each reserved worker to finish
-    /// initialization; dropping an unrun [`Worker`][crate::Worker] cancels that reservation.
+    /// initialization; dropping an unrun
+    /// [`Worker`][crate::worker_policy::Worker] cancels that reservation.
     /// The setter itself starts no workers and takes ownership of the nonempty processor set.
     /// Repeated calls replace the selection; construction uses the final builder settings.
     ///
@@ -199,8 +205,10 @@ impl PoolBuilder {
     ///
     /// The function runs once on each worker, after its initial affinity is set and before
     /// it executes any tasks. Built-in workers start lazily unless [`Self::eager`] initializes
-    /// selected destinations during construction; a custom [`WorkerPolicy`] controls its own
-    /// startup. After a custom policy's [`WorkerPolicy::bind`] returns, the builder waits
+    /// selected destinations during construction; a custom
+    /// [`WorkerPolicy`][crate::worker_policy::WorkerPolicy] controls its own
+    /// startup. After a custom policy's
+    /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] returns, the builder waits
     /// for every worker reserved during binding to finish initialization or to be cancelled
     /// by dropping its unrun value. Calls on different workers may overlap, without a guaranteed
     /// order. Built-in lazy submission does not wait for initialization.
@@ -263,8 +271,10 @@ impl PoolBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error reported by [`WorkerPolicy::bind`] or a contained worker-infrastructure
-    /// panic, after all participating workers started during binding have left the worker loop.
+    /// Returns an error reported by
+    /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] or a contained
+    /// worker-infrastructure panic, after all participating workers started during binding have
+    /// left the worker loop.
     pub fn build(self) -> Result<Pool, BuildError> {
         let hardware = self
             .hardware

@@ -13,7 +13,8 @@ use crate::{
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
-/// Each task uses the selected [`WorkerPolicy`][crate::WorkerPolicy] to choose a group before
+/// Each task uses the selected
+/// [`WorkerPolicy`][crate::worker_policy::WorkerPolicy] to choose a group before
 /// admission. The built-in processor policy uses the submitting processor, while the regional
 /// and system policies select shared destinations across larger locality scopes.
 /// Built-in shared-worker affinity includes the eager selection and processors that reach

@@ -10,10 +10,10 @@ use new_zealand::nz;
 use testing::with_watchdog;
 
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
-use crate::{
-    BindContext, BindError, BoundWorkerPolicy, GroupId, Pool, Scheduler, WorkerGroup,
-    WorkerGroupId, WorkerGroups, WorkerPolicy,
+use crate::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
+use crate::{GroupId, Pool, Scheduler};
 
 #[derive(Debug)]
 /// Prepares one stable ID-only route for cached-group routing coverage.
@@ -22,7 +22,7 @@ struct SingleGroupPolicy {
 }
 
 impl WorkerPolicy for SingleGroupPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         let id = group.id();
         self.group.set(id).unwrap();
@@ -37,7 +37,7 @@ impl WorkerPolicy for SingleGroupPolicy {
     }
 }
 
-impl BoundWorkerPolicy for SingleGroupPolicy {
+impl BoundPolicy for SingleGroupPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get().unwrap()
     }
@@ -54,7 +54,7 @@ struct ReentrantStartupPolicy {
 }
 
 impl WorkerPolicy for ReentrantStartupPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         assert!(
             group
@@ -85,7 +85,7 @@ impl WorkerPolicy for ReentrantStartupPolicy {
     }
 }
 
-impl BoundWorkerPolicy for ReentrantStartupPolicy {
+impl BoundPolicy for ReentrantStartupPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.started.get_or_init(|| {
             let group = self.group.get().unwrap();

@@ -9,9 +9,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{
-    GroupId, GroupState, NEVER_POISONED, PoolRuntime, WorkerGroup, WorkerGroupId, WorkerGroupState,
-};
+use crate::worker_policy::{WorkerGroup, WorkerGroupId};
+use crate::{GroupId, GroupState, NEVER_POISONED, PoolRuntime, WorkerGroupState};
 
 // Identity values need uniqueness only; the registry-specific validation supplies the
 // synchronization relationship.

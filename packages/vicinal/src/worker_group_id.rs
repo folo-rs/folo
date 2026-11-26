@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use crate::WorkerGroupState;
 
-/// Identifies a worker group within one [`WorkerGroups`][crate::WorkerGroups] collection.
+/// Identifies a worker group within one
+/// [`WorkerGroups`][crate::worker_policy::WorkerGroups] collection.
 ///
 /// This value is [`Copy`], so policies can route tasks without cloning a group handle.
 /// IDs from another pool are rejected when the pool resolves the selected group.

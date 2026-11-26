@@ -5,7 +5,8 @@ use std::panic;
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::Pool;
+use vicinal::worker_policy::WorkerPolicy;
 
 /// Provides deterministic simulated destinations for locality scenarios without real OS affinity.
 pub(crate) fn pool(policy: impl WorkerPolicy, name: &str) -> Pool {

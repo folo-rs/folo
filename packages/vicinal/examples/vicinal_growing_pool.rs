@@ -4,10 +4,10 @@ use std::sync::mpsc::channel;
 use std::thread::spawn;
 
 use futures::executor::block_on;
-use vicinal::{
-    BindContext, BindError, BoundWorkerPolicy, BuildError, Pool, WorkerGroup, WorkerGroupId,
-    WorkerGroups, WorkerPolicy,
+use vicinal::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
+use vicinal::{BuildError, Pool};
 
 fn main() -> Result<(), BuildError> {
     let pool = Pool::builder()
@@ -74,7 +74,7 @@ impl GrowingPolicy {
 }
 
 impl WorkerPolicy for GrowingPolicy {
-    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         spawn_worker(&group);
         self.group = Some(group);
@@ -82,7 +82,7 @@ impl WorkerPolicy for GrowingPolicy {
     }
 }
 
-impl BoundWorkerPolicy for GrowingPolicy {
+impl BoundPolicy for GrowingPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         let group = self.group.as_ref().expect("binding installs the group");
         if group.queue_len() != 0 {

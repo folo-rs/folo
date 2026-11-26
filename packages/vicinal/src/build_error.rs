@@ -5,7 +5,8 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use ohno::OhnoCore;
 
-use crate::{BindError, discard_panic, extract_panic_message};
+use crate::worker_policy::BindError;
+use crate::{discard_panic, extract_panic_message};
 
 /// A worker policy or worker infrastructure failed while building a pool.
 ///

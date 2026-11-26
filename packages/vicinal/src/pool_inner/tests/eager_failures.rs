@@ -11,10 +11,10 @@ use new_zealand::nz;
 use ohno::ErrorExt;
 use testing::{assert_panics, with_watchdog};
 
-use crate::{
-    BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, Pool, WorkerGroup,
-    WorkerGroupId, WorkerGroups, WorkerPolicy,
+use crate::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
+use crate::{BuiltInWorkerPolicy, Pool};
 
 /// Distinguishes a panic from `bind()` from ordinary test synchronization signals.
 struct BindingFailure;
@@ -45,7 +45,7 @@ struct PanickingDropPolicy {
 }
 
 impl WorkerPolicy for PanickingDropPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
         let worker = group.add_worker();
@@ -56,7 +56,7 @@ impl WorkerPolicy for PanickingDropPolicy {
     }
 }
 
-impl BoundWorkerPolicy for PanickingDropPolicy {
+impl BoundPolicy for PanickingDropPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction must reject the binding failure")
     }
@@ -70,7 +70,7 @@ impl Drop for PanickingDropPolicy {
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
         let (returned, ready) = {
@@ -92,7 +92,7 @@ impl WorkerPolicy for StartupFailurePolicy {
     }
 }
 
-impl BoundWorkerPolicy for StartupFailurePolicy {
+impl BoundPolicy for StartupFailurePolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction must reject the binding failure")
     }
@@ -103,7 +103,7 @@ impl BoundWorkerPolicy for StartupFailurePolicy {
 struct ReturningFailurePolicy;
 
 impl WorkerPolicy for ReturningFailurePolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         let (failed, failure) = channel();
         let returned = failed.clone();
@@ -126,7 +126,7 @@ impl WorkerPolicy for ReturningFailurePolicy {
     }
 }
 
-impl BoundWorkerPolicy for ReturningFailurePolicy {
+impl BoundPolicy for ReturningFailurePolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction must reject the recorded worker failure")
     }
@@ -139,7 +139,7 @@ struct EagerCustomPolicy {
 }
 
 impl WorkerPolicy for EagerCustomPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         for _ in 0..2 {
@@ -152,7 +152,7 @@ impl WorkerPolicy for EagerCustomPolicy {
     }
 }
 
-impl BoundWorkerPolicy for EagerCustomPolicy {
+impl BoundPolicy for EagerCustomPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get().unwrap()
     }
@@ -165,7 +165,7 @@ struct DroppedWorkerPolicy {
 }
 
 impl WorkerPolicy for DroppedWorkerPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         drop(group.add_worker());
@@ -173,7 +173,7 @@ impl WorkerPolicy for DroppedWorkerPolicy {
     }
 }
 
-impl BoundWorkerPolicy for DroppedWorkerPolicy {
+impl BoundPolicy for DroppedWorkerPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get().unwrap()
     }
@@ -187,7 +187,7 @@ struct ObservedEagerPolicy {
 }
 
 impl WorkerPolicy for ObservedEagerPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let inner = self.inner.bind(context)?;
         *self.observer.lock().unwrap() = context.groups().iter().next();
         Ok(ObservedBoundPolicy {
@@ -198,10 +198,10 @@ impl WorkerPolicy for ObservedEagerPolicy {
 
 #[derive(Debug)]
 struct ObservedBoundPolicy {
-    inner: Box<dyn BoundWorkerPolicy>,
+    inner: Box<dyn BoundPolicy>,
 }
 
-impl BoundWorkerPolicy for ObservedBoundPolicy {
+impl BoundPolicy for ObservedBoundPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         self.inner.select_group(groups)
     }

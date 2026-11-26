@@ -14,7 +14,8 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{affinity, assert_retained_scheduler, hardware, pin, regional_hardware};
-use crate::{BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, WorkerGroup};
+use crate::worker_policy::WorkerGroup;
+use crate::{BuiltInWorkerPolicy, GroupId, PolicyKind, Pool};
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };

@@ -14,8 +14,9 @@ use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
 use ohno::ErrorExt;
 use testing::with_watchdog;
-use vicinal::{
-    BindContext, BindError, BoundWorkerPolicy, Pool, WorkerGroupId, WorkerGroups, WorkerPolicy,
+use vicinal::Pool;
+use vicinal::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 testing::init_tracing!();
@@ -35,7 +36,7 @@ struct FailingBindingPolicy {
 }
 
 impl WorkerPolicy for FailingBindingPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let worker = context.groups().add().add_worker();
         let exited = self.exited.clone();
         _ = spawn(move || {
@@ -51,19 +52,19 @@ impl WorkerPolicy for FailingBindingPolicy {
     }
 }
 
-impl BoundWorkerPolicy for FailingBindingPolicy {
+impl BoundPolicy for FailingBindingPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction rejects the binding failure")
     }
 }
 
 impl WorkerPolicy for LazySingleGroupPolicy {
-    fn bind(self, _context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, _context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         Ok(self)
     }
 }
 
-impl BoundWorkerPolicy for LazySingleGroupPolicy {
+impl BoundPolicy for LazySingleGroupPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get_or_init(|| {
             let group = groups.add();

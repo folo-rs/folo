@@ -10,17 +10,18 @@ Inside `pool_inner`, admission owns the task-transfer transaction, `PoolRuntime`
 terminal state and worker participation, and the worker loop owns affinity refresh and waiting.
 `WorkerCore` handles a single task iteration independently of thread management.
 
-`WorkerGroups` owns an append-only collection of stable group allocations. `WorkerGroup` is a
-cloneable Arc handle intended for transfer into a policy-created worker thread.
+`vicinal::worker_policy::WorkerGroups` owns an append-only collection of stable group
+allocations. `WorkerGroup` is a cloneable Arc handle intended for transfer into a policy-created
+worker thread.
 `WorkerGroupId` contains the registry identity and stable group address, so its selection and
 resolution are copy-only. The established scheduler path neither clones nor upgrades an Arc;
 reference-count changes happen only through explicit `WorkerGroups` or `WorkerGroup` cloning.
 Group addition is serialized and cold. The registry never relocates or removes a live group.
 The public APIs do not expose mutable queue or registry state.
 
-For binding-time startup, a policy borrows the group to synchronously reserve a `Worker`,
-then moves only that reserved value into the policy-owned thread. This establishes the
-binding reservation before the thread starts.
+For binding-time startup, a policy borrows the group to synchronously reserve a
+`vicinal::worker_policy::Worker`, then moves only that reserved value into the policy-owned
+thread. This establishes the binding reservation before the thread starts.
 
 The runtime separately retains a strong snapshot of each group state for terminal signaling
 and failure cleanup. Group state does not retain the runtime, so these registrations cannot

@@ -99,16 +99,17 @@ Workers refresh affinity at task boundaries, without preempting running tasks. T
 move within their permitted set even during one task. Regional workers never steal work from
 other regions; system workers share all regions' work.
 Configure fixed worker counts with `WorkersPerProcessor`, `WorkersPerMemoryRegion` or
-`WorkersPerSystem`; counts may exceed processor counts for blocking work. Implement
-`WorkerPolicy` and use the same builder setter for custom group selection or thread-pinning
-strategies.
+`WorkersPerSystem`; counts may exceed processor counts for blocking work. The built-in
+policy types live in `vicinal::policies`. Implement `vicinal::worker_policy::WorkerPolicy`
+and use the same builder setter for custom group selection or thread-pinning strategies.
 Each pool counts workers independently, while scheduler clones share their pool's workers.
 Regions describe processor locality, not the task's allocations or data.
 
 ## Custom worker growth
 
-`WorkerPolicy::bind()` consumes the configuration and returns a `BoundWorkerPolicy` shared by
-the pool's schedulers. The bound policy can retain a `WorkerGroup` handle and use `queue_len()`
+The `vicinal::worker_policy` module contains the types used to implement a policy.
+`WorkerPolicy::bind()` consumes the configuration and returns a `BoundPolicy` shared by the
+pool's schedulers. The bound policy can retain a `WorkerGroup` handle and use `queue_len()`
 when deciding whether to create another worker. The standalone
 [`vicinal_growing_pool`](examples/vicinal_growing_pool.rs) example starts one worker and
 adds another whenever a later submission observes queued work. It has no maximum worker

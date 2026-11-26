@@ -10,10 +10,10 @@ use std::sync::{Arc, OnceLock};
 
 use many_cpus::{MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware};
 
-use crate::{
-    BindContext, BindError, BoundWorkerPolicy, GroupId, NEVER_POISONED, SubmissionTarget,
-    WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
+use crate::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
+use crate::{GroupId, NEVER_POISONED, SubmissionTarget};
 /// Owns the common routing and worker-startup implementation for all built-in policies.
 ///
 /// The public policy facades remain small and stable while this type selects the topology
@@ -103,7 +103,7 @@ impl Clone for BuiltInWorkerPolicy {
 }
 
 impl WorkerPolicy for BuiltInWorkerPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         Ok(self.bind_built_in(context))
     }
 }
@@ -120,14 +120,14 @@ impl BuiltInWorkerPolicy {
     }
 }
 
-impl BoundWorkerPolicy for BoundBuiltInPolicy {
+impl BoundPolicy for BoundBuiltInPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         Self::select_group(self, groups, self.count())
     }
 }
 
 #[cfg(test)]
-impl BoundWorkerPolicy for Arc<BoundBuiltInPolicy> {
+impl BoundPolicy for Arc<BoundBuiltInPolicy> {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         BoundBuiltInPolicy::select_group(self.as_ref(), groups, self.count())
     }

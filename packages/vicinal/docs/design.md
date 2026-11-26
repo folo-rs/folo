@@ -10,10 +10,11 @@ the set of processors on which a worker is permitted to run.
 
 ## Worker policies
 
-`WorkerPolicy` is the interface for assigning tasks to groups and for deciding when groups
-and workers are created. The `policies` module supplies processor, memory-region and system
-implementations. The pool does not expose a generic type parameter for either its policy or
-scheduler, so changing policies does not change the rest of the application API.
+`vicinal::worker_policy::WorkerPolicy` is the interface for assigning tasks to groups and for
+deciding when groups and workers are created. The `vicinal::policies` module supplies processor,
+memory-region and system implementations. The pool does not expose a generic type parameter for
+either its policy or scheduler, so changing policies does not change the rest of the application
+API.
 
 The default is processor-local scheduling. Applications configure explicit counts through
 `WorkersPerProcessor`, `WorkersPerMemoryRegion` or `WorkersPerSystem` and the builder's
@@ -39,7 +40,7 @@ let system_pool = Pool::builder()
 ```
 
 The pool consumes the selected policy's `bind()` input once with the final hardware, eager
-selection, worker groups and name. The method returns a `BoundWorkerPolicy`, separating one-time
+selection, worker groups and name. The method returns a `BoundPolicy`, separating one-time
 pool setup from the value that schedulers share. `select_group()` runs for each submission that
 reaches worker-group routing and returns a copyable `WorkerGroupId`. The scheduler resolves that
 ID by borrowing the group; established task submission neither clones `WorkerGroups` nor

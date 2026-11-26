@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use many_cpus::ProcessorSet;
 
-use crate::{PoolRuntime, WorkerGroup};
+use crate::PoolRuntime;
+use crate::worker_policy::WorkerGroup;
 
 /// Runs one reserved worker through the pool's worker lifecycle.
 ///

@@ -7,8 +7,8 @@ use std::sync::mpsc;
 use futures::executor::block_on;
 use new_zealand::nz;
 use testing::TracingCapture;
-use vicinal::WorkerPolicy;
 use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerProcessor};
+use vicinal::worker_policy::WorkerPolicy;
 
 use crate::fixtures::{PanickingPayload, pool};
 

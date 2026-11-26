@@ -19,9 +19,9 @@ use std::thread::{Result as ThreadResult, panicking};
 use many_cpus::{ProcessorSet, SystemHardware};
 use tracing::error;
 
+use crate::worker_policy::{BindContext, BoundPolicy, WorkerGroups, WorkerPolicyBinding};
 use crate::{
-    BindContext, BoundWorkerPolicy, BuildError, PoolRuntime, ThreadInit, WorkerGroups,
-    WorkerPolicyBinding, discard_panic, extract_panic_message, report_diagnostic,
+    BuildError, PoolRuntime, ThreadInit, discard_panic, extract_panic_message, report_diagnostic,
     validate_eager_processors,
 };
 #[cfg(test)]
@@ -63,7 +63,7 @@ pub(crate) struct PoolInner {
     #[cfg(test)]
     // Test fixtures own these OS-thread handles independently of pool participation.
     pub(crate) worker_handles: Mutex<Vec<JoinHandle<()>>>,
-    pub(crate) policy: Box<dyn BoundWorkerPolicy>,
+    pub(crate) policy: Box<dyn BoundPolicy>,
     pub(crate) runtime: Arc<PoolRuntime>,
 }
 
@@ -177,7 +177,7 @@ impl PoolInner {
     /// Publishes shutdown, contains queue cleanup and waits for all participating workers.
     ///
     /// This owns pool destruction cleanup; policy-owned operating-system threads may perform
-    /// cleanup after leaving [`Worker::run()`][crate::Worker::run].
+    /// cleanup after leaving [`Worker::run()`][crate::worker_policy::Worker::run].
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn shutdown_and_wait_for_workers(&self) {
         self.runtime.stop_workers();

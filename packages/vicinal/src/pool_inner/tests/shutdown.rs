@@ -20,10 +20,10 @@ use super::helpers::{
     OnDrop, PanickingPayload, TestPolicy, assert_retained_scheduler, hardware, pin, probe,
     regional_hardware,
 };
-use crate::{
-    BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, GroupId, JoinHandle, Pool,
-    Scheduler, WorkerGroupId, WorkerGroups, WorkerPolicy,
+use crate::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
+use crate::{BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, Scheduler};
 
 /// Records whether terminal admission ever reaches custom policy selection.
 #[derive(Debug)]
@@ -34,12 +34,12 @@ struct RecordingPolicy {
 }
 
 impl WorkerPolicy for RecordingPolicy {
-    fn bind(self, _context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, _context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         Ok(self)
     }
 }
 
-impl BoundWorkerPolicy for RecordingPolicy {
+impl BoundPolicy for RecordingPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         self.selected.fetch_add(1, Ordering::Release);
         panic!("shutdown must prevent policy selection")

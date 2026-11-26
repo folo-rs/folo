@@ -8,9 +8,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::SystemHardware;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use new_zealand::nz;
+use vicinal::Pool;
 use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerProcessor, WorkersPerSystem};
-use vicinal::{
-    BindContext, BindError, BoundWorkerPolicy, Pool, WorkerGroupId, WorkerGroups, WorkerPolicy,
+use vicinal::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 ::testing::set_allocator!();
@@ -37,7 +38,7 @@ impl PolicyCase {
 #[derive(Clone, Debug)]
 struct PolicyProbe {
     kind: PolicyCase,
-    state: Arc<OnceLock<(WorkerGroups, Box<dyn BoundWorkerPolicy>)>>,
+    state: Arc<OnceLock<(WorkerGroups, Box<dyn BoundPolicy>)>>,
 }
 
 impl PolicyProbe {
@@ -58,8 +59,8 @@ impl PolicyProbe {
 }
 
 impl WorkerPolicy for PolicyProbe {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
-        let policy: Box<dyn BoundWorkerPolicy> = match self.kind {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        let policy: Box<dyn BoundPolicy> = match self.kind {
             PolicyCase::Processor => Box::new(WorkersPerProcessor::new(nz!(1)).bind(context)?),
             PolicyCase::MemoryRegion => {
                 Box::new(WorkersPerMemoryRegion::new(nz!(1)).bind(context)?)
@@ -74,7 +75,7 @@ impl WorkerPolicy for PolicyProbe {
     }
 }
 
-impl BoundWorkerPolicy for PolicyProbe {
+impl BoundPolicy for PolicyProbe {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         self.state
             .get()
@@ -91,7 +92,7 @@ struct NoWorkerPolicy {
 }
 
 impl WorkerPolicy for NoWorkerPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         assert!(
             self.group.set(context.groups().add().id()).is_ok(),
             "the benchmark binds the no-worker policy once"
@@ -100,7 +101,7 @@ impl WorkerPolicy for NoWorkerPolicy {
     }
 }
 
-impl BoundWorkerPolicy for NoWorkerPolicy {
+impl BoundPolicy for NoWorkerPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self
             .group

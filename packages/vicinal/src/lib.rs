@@ -12,10 +12,12 @@
 //! the calling thread's current logical processor; this is the task's submitting processor.
 //! Tasks execute synchronously on that processor by default.
 //! [`policies::WorkersPerMemoryRegion`] can share workers across the caller's memory region, and
-//! [`policies::WorkersPerSystem`] can share them across the system. Custom [`WorkerPolicy`]
-//! implementations can select and create their own worker groups. Each built-in-policy destination
-//! starts its fixed worker count on first use.
+//! [`policies::WorkersPerSystem`] can share them across the system. Custom
+//! [`WorkerPolicy`][worker_policy::WorkerPolicy] implementations can select and create their own
+//! worker groups. Each built-in-policy destination starts its fixed worker count on first use.
 //! [`PoolBuilder::eager`] initializes selected destinations during construction instead.
+//! Custom-policy implementation types live in [`worker_policy`], while the ready-to-use
+//! policies are available from [`policies`].
 //!
 //! # Quick start
 //!
@@ -156,7 +158,7 @@ mod worker_core;
 mod worker_group;
 mod worker_group_id;
 mod worker_groups;
-mod worker_policy;
+pub mod worker_policy;
 
 pub use build_error::*;
 #[cfg(test)]
@@ -173,15 +175,10 @@ pub(crate) use task::*;
 pub use task_error::*;
 pub(crate) use task_panic::*;
 pub(crate) use worker::BindingReservation;
-pub use worker::Worker;
 pub(crate) use worker_core::*;
 #[cfg(test)]
 pub(crate) use worker_group::WorkerEntry;
-pub use worker_group::WorkerGroup;
 pub(crate) use worker_group::{GroupState, WorkerGroupState};
-pub use worker_group_id::WorkerGroupId;
-pub use worker_groups::WorkerGroups;
-pub use worker_policy::*;
 
 #[cfg(test)]
 ::testing::set_allocator!();

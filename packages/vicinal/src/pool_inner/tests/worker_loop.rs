@@ -13,7 +13,8 @@ use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{TestPolicy, hardware, probe};
 use crate::pool_inner::worker_loop_with;
-use crate::{GroupId, Pool, WorkerGroup, WorkerGroupState};
+use crate::worker_policy::WorkerGroup;
+use crate::{GroupId, Pool, WorkerGroupState};
 
 /// A worker refreshes an expansion that lands while it is still applying its captured mask.
 #[test]

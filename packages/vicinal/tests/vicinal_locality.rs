@@ -10,8 +10,9 @@ use futures::executor::block_on;
 use many_cpus::{Processor, SystemHardware};
 use new_zealand::nz;
 use testing::with_watchdog;
+use vicinal::Pool;
 use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::worker_policy::WorkerPolicy;
 
 testing::init_tracing!();
 

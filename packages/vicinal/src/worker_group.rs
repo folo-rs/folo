@@ -24,10 +24,8 @@ use plurality::MultiPool;
 use tracing::debug;
 
 use crate::pool_inner::{POOL_LOG_TARGET, worker_loop_with};
-use crate::{
-    BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime, Worker,
-    WorkerGroupId,
-};
+use crate::worker_policy::{Worker, WorkerGroupId};
+use crate::{BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime};
 
 /// A cloneable participation handle for one worker group.
 ///
@@ -68,7 +66,8 @@ impl WorkerGroup {
 
     /// Reserves one worker that a policy must run.
     ///
-    /// A worker reserved while [`WorkerPolicy::bind`][crate::WorkerPolicy::bind] runs
+    /// A worker reserved while
+    /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] runs
     /// remains pending until its [`Worker::run`] call completes initialization. The pool builder
     /// waits for every such reservation after binding returns. Drop the worker to cancel
     /// its binding target when the policy cannot run it. Retaining an unrun worker makes
@@ -634,9 +633,9 @@ mod tests {
     use new_zealand::nz;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-    use crate::{
-        BindContext, BindError, BoundWorkerPolicy, Pool, Worker, WorkerGroupId, WorkerGroups,
-        WorkerPolicy,
+    use crate::Pool;
+    use crate::worker_policy::{
+        BindContext, BindError, BoundPolicy, Worker, WorkerGroupId, WorkerGroups, WorkerPolicy,
     };
 
     assert_impl_all!(Worker: Send, Sync, UnwindSafe, RefUnwindSafe);
@@ -649,7 +648,7 @@ mod tests {
     }
 
     impl WorkerPolicy for NoWorkerPolicy {
-        fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
+        fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
             self.group
                 .set(context.groups().add().id())
                 .expect("the no-worker policy binds once");
@@ -657,7 +656,7 @@ mod tests {
         }
     }
 
-    impl BoundWorkerPolicy for NoWorkerPolicy {
+    impl BoundPolicy for NoWorkerPolicy {
         fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
             *self
                 .group
