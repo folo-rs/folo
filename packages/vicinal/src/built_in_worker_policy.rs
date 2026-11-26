@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock};
 use many_cpus::{MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware};
 
 use crate::{
-    BoundWorkerPolicy, GroupId, NEVER_POISONED, PrepareContext, PrepareError, SubmissionTarget,
+    BindContext, BindError, BoundWorkerPolicy, GroupId, NEVER_POISONED, SubmissionTarget,
     WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 /// Owns the common routing and worker-startup implementation for all built-in policies.
@@ -103,13 +103,13 @@ impl Clone for BuiltInWorkerPolicy {
 }
 
 impl WorkerPolicy for BuiltInWorkerPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         Ok(self.bind_prepared(context))
     }
 }
 
 impl BuiltInWorkerPolicy {
-    pub(crate) fn bind_prepared(self, context: PrepareContext<'_>) -> PreparedPolicy {
+    pub(crate) fn bind_prepared(self, context: BindContext<'_>) -> PreparedPolicy {
         PreparedPolicy::new(
             context.hardware(),
             context.eager(),

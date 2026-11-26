@@ -29,8 +29,7 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// use std::thread::spawn;
 ///
 /// use vicinal::{
-///     BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups,
-///     WorkerPolicy,
+///     BindContext, BindError, BoundWorkerPolicy, Pool, WorkerGroupId, WorkerGroups, WorkerPolicy,
 /// };
 /// # use futures::executor::block_on;
 ///
@@ -40,10 +39,7 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// }
 ///
 /// impl WorkerPolicy for OneGroupPolicy {
-///     fn bind(
-///         mut self,
-///         context: PrepareContext<'_>,
-///     ) -> Result<impl BoundWorkerPolicy, PrepareError> {
+///     fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
 ///         let group = context.groups().add();
 ///         spawn({
 ///             let worker = group.add_worker();
@@ -77,7 +73,7 @@ pub trait WorkerPolicy: Debug + 'static {
     /// counts those reservations and waits for each worker to complete its initialization
     /// callback after this method returns. If the policy cannot run a reserved worker, dropping
     /// it cancels that target.
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError>
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError>
     where
         Self: Sized;
 }
@@ -106,8 +102,8 @@ pub trait BoundWorkerPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 
 pub(crate) trait WorkerPolicyBinding: Debug {
     fn bind(
         self: Box<Self>,
-        context: PrepareContext<'_>,
-    ) -> Result<Box<dyn BoundWorkerPolicy>, PrepareError>;
+        context: BindContext<'_>,
+    ) -> Result<Box<dyn BoundWorkerPolicy>, BindError>;
 }
 
 impl<T> WorkerPolicyBinding for T
@@ -116,8 +112,8 @@ where
 {
     fn bind(
         self: Box<Self>,
-        context: PrepareContext<'_>,
-    ) -> Result<Box<dyn BoundWorkerPolicy>, PrepareError> {
+        context: BindContext<'_>,
+    ) -> Result<Box<dyn BoundWorkerPolicy>, BindError> {
         let bound = (*self).bind(context)?;
         Ok(Box::new(bound))
     }
@@ -129,15 +125,15 @@ where
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("worker policy binding failed")]
-pub struct PrepareError {
+pub struct BindError {
     #[error]
     core: OhnoCore,
 }
 
-impl UnwindSafe for PrepareError {}
-impl RefUnwindSafe for PrepareError {}
+impl UnwindSafe for BindError {}
+impl RefUnwindSafe for BindError {}
 
-impl PrepareError {
+impl BindError {
     /// Creates a binding error from a policy-specific failure.
     #[must_use]
     pub fn new(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
@@ -149,14 +145,14 @@ impl PrepareError {
 
 /// Final pool configuration supplied to [`WorkerPolicy::bind`].
 #[derive(Clone, Copy)]
-pub struct PrepareContext<'a> {
+pub struct BindContext<'a> {
     hardware: &'a SystemHardware,
     eager: Option<&'a ProcessorSet>,
     groups: &'a WorkerGroups,
     pool_name: &'a str,
 }
 
-impl Debug for PrepareContext<'_> {
+impl Debug for BindContext<'_> {
     #[cfg_attr(coverage_nightly, coverage(off))]
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
@@ -171,14 +167,14 @@ impl Debug for PrepareContext<'_> {
     }
 }
 
-impl PrepareContext<'_> {
+impl BindContext<'_> {
     pub(crate) fn new<'a>(
         hardware: &'a SystemHardware,
         eager: Option<&'a ProcessorSet>,
         groups: &'a WorkerGroups,
         pool_name: &'a str,
-    ) -> PrepareContext<'a> {
-        PrepareContext {
+    ) -> BindContext<'a> {
+        BindContext {
             hardware,
             eager,
             groups,
@@ -229,21 +225,20 @@ mod tests {
     use crate::Pool;
 
     assert_impl_all!(
-        PrepareContext<'static>: Copy,
+        BindContext<'static>: Copy,
         Send,
         Sync,
         UnwindSafe,
         RefUnwindSafe
     );
-    assert_impl_all!(PrepareError: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(BindError: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn preparation_context_formats() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let eager = hardware.all_processors();
         let pool = Pool::builder().hardware(hardware.clone()).build().unwrap();
-        let context =
-            PrepareContext::new(&hardware, Some(&eager), &pool.inner.groups, "formatting");
+        let context = BindContext::new(&hardware, Some(&eager), &pool.inner.groups, "formatting");
 
         _ = format!("{context:?}");
     }

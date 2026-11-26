@@ -82,7 +82,7 @@ System workers may move between permitted processors in different memory regions
 Each built-in worker group starts its configured worker count once, on first task use or
 during eager construction. The default policy starts no workers during construction
 unless eager selection is configured. Every policy receives the eager selection during
-`bind()` through `PrepareContext::eager()`. Built-in policies honor it automatically;
+`bind()` through `BindContext::eager()`. Built-in policies honor it automatically;
 a custom policy may interpret or ignore it. Workers persist until shutdown. Shared worker
 counts are not multiplied by the number of submitting processors; a system count is also
 independent of the number of submitting regions. Counts must be nonzero but may exceed the

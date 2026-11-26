@@ -20,7 +20,7 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use tracing::error;
 
 use crate::{
-    BoundWorkerPolicy, PoolRuntime, PrepareContext, PrepareError, ThreadInit, WorkerGroups,
+    BindContext, BoundWorkerPolicy, BuildError, PoolRuntime, ThreadInit, WorkerGroups,
     WorkerPolicyBinding, discard_panic, extract_panic_message, report_diagnostic,
     validate_eager_processors,
 };
@@ -75,7 +75,7 @@ impl PoolInner {
         policy: Box<dyn WorkerPolicyBinding>,
         thread_init: Option<ThreadInit>,
         eager: Option<&ProcessorSet>,
-    ) -> Result<Self, PrepareError> {
+    ) -> Result<Self, BuildError> {
         let runtime = PoolRuntime::new(pool_id, pool_name, thread_init);
         let groups = WorkerGroups::new(Arc::clone(&runtime));
         if let Some(processors) = eager {
@@ -83,7 +83,7 @@ impl PoolInner {
         }
         runtime.begin_worker_binding();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            policy.bind(PrepareContext::new(
+            policy.bind(BindContext::new(
                 hardware,
                 eager,
                 &groups,
@@ -97,16 +97,15 @@ impl PoolInner {
             Err(payload) => {
                 runtime.fail(payload);
                 finish_failed_binding(&runtime);
-                unreachable!(
-                    "runtime.fail records the payload and finish_failed_binding resumes it before returning"
-                )
+                return Err(runtime_build_error(&runtime)
+                    .expect("runtime.fail retained the binding panic before cleanup"));
             }
         };
         let policy = match bound {
             Ok(policy) => policy,
             Err(error) => {
                 finish_failed_binding(&runtime);
-                return Err(error);
+                return Err(runtime_build_error(&runtime).unwrap_or_else(|| error.into()));
             }
         };
         runtime.wait_for_binding_workers();
@@ -115,7 +114,8 @@ impl PoolInner {
         // an already-poisoned pool.
         if runtime.is_poisoned() {
             runtime.wait_for_workers();
-            runtime.resume_failure();
+            return Err(runtime_build_error(&runtime)
+                .expect("poisoned construction retains the first infrastructure failure"));
         }
 
         Ok(Self {
@@ -234,10 +234,11 @@ fn finish_failed_binding(runtime: &PoolRuntime) {
     runtime.stop_workers();
     runtime.wait_for_binding_workers();
     runtime.wait_for_workers();
+}
 
-    if runtime.is_poisoned() {
-        runtime.resume_failure();
-    }
+/// Converts the first retained construction panic without rethrowing it.
+fn runtime_build_error(runtime: &PoolRuntime) -> Option<BuildError> {
+    runtime.take_failure().map(BuildError::from_panic)
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]

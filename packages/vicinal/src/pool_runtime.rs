@@ -5,7 +5,7 @@ use std::mem::replace;
 use std::ops::ControlFlow;
 #[cfg(test)]
 use std::panic::panic_any;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -371,13 +371,6 @@ impl PoolRuntime {
             drain_queue(&group.urgent_queue, &mut record_failure);
             drain_queue(&group.regular_queue, &mut record_failure);
         }
-    }
-
-    pub(crate) fn resume_failure(&self) -> ! {
-        let payload = self
-            .take_failure()
-            .expect("stop_admission is paired with a retained or submission-owned failure");
-        resume_unwind(payload)
     }
 
     /// Transfers a runtime-retained failure exactly once to the current cleanup owner.

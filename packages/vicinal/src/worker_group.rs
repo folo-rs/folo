@@ -635,7 +635,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use crate::{
-        BoundWorkerPolicy, Pool, PrepareContext, PrepareError, Worker, WorkerGroupId, WorkerGroups,
+        BindContext, BindError, BoundWorkerPolicy, Pool, Worker, WorkerGroupId, WorkerGroups,
         WorkerPolicy,
     };
 
@@ -649,7 +649,7 @@ mod tests {
     }
 
     impl WorkerPolicy for NoWorkerPolicy {
-        fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
             self.group
                 .set(context.groups().add().id())
                 .expect("the no-worker policy binds once");

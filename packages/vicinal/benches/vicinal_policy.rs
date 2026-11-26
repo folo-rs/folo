@@ -10,8 +10,7 @@ use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use new_zealand::nz;
 use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerProcessor, WorkersPerSystem};
 use vicinal::{
-    BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups,
-    WorkerPolicy,
+    BindContext, BindError, BoundWorkerPolicy, Pool, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 ::testing::set_allocator!();
@@ -59,7 +58,7 @@ impl PolicyProbe {
 }
 
 impl WorkerPolicy for PolicyProbe {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let policy: Box<dyn BoundWorkerPolicy> = match self.kind {
             PolicyCase::Processor => Box::new(WorkersPerProcessor::new(nz!(1)).bind(context)?),
             PolicyCase::MemoryRegion => {
@@ -92,7 +91,7 @@ struct NoWorkerPolicy {
 }
 
 impl WorkerPolicy for NoWorkerPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         assert!(
             self.group.set(context.groups().add().id()).is_ok(),
             "the benchmark binds the no-worker policy once"

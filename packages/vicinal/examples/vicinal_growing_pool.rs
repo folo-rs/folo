@@ -5,11 +5,11 @@ use std::thread::spawn;
 
 use futures::executor::block_on;
 use vicinal::{
-    BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroup, WorkerGroupId,
+    BindContext, BindError, BoundWorkerPolicy, BuildError, Pool, WorkerGroup, WorkerGroupId,
     WorkerGroups, WorkerPolicy,
 };
 
-fn main() -> Result<(), PrepareError> {
+fn main() -> Result<(), BuildError> {
     let pool = Pool::builder()
         .worker_policy(GrowingPolicy::new())
         .build()?;
@@ -74,7 +74,7 @@ impl GrowingPolicy {
 }
 
 impl WorkerPolicy for GrowingPolicy {
-    fn bind(mut self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         spawn_worker(&group);
         self.group = Some(group);

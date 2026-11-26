@@ -2,7 +2,7 @@ use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
-use crate::{BoundWorkerPolicy, BuiltInWorkerPolicy, PrepareContext, PrepareError, WorkerPolicy};
+use crate::{BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, WorkerPolicy};
 
 /// Creates a fixed worker count shared across the system.
 ///
@@ -26,7 +26,7 @@ impl WorkersPerSystem {
 
 impl WorkerPolicy for WorkersPerSystem {
     #[inline]
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         self.policy.bind(context)
     }
 }

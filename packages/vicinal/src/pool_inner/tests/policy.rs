@@ -11,7 +11,7 @@ use testing::with_watchdog;
 
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
 use crate::{
-    BoundWorkerPolicy, GroupId, Pool, PrepareContext, PrepareError, Scheduler, WorkerGroup,
+    BindContext, BindError, BoundWorkerPolicy, GroupId, Pool, Scheduler, WorkerGroup,
     WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
@@ -22,7 +22,7 @@ struct SingleGroupPolicy {
 }
 
 impl WorkerPolicy for SingleGroupPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         let id = group.id();
         self.group.set(id).unwrap();
@@ -54,7 +54,7 @@ struct ReentrantStartupPolicy {
 }
 
 impl WorkerPolicy for ReentrantStartupPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         assert!(
             group

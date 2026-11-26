@@ -21,8 +21,8 @@ use super::helpers::{
     regional_hardware,
 };
 use crate::{
-    BoundWorkerPolicy, BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, PrepareContext,
-    PrepareError, Scheduler, WorkerGroupId, WorkerGroups, WorkerPolicy,
+    BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, GroupId, JoinHandle, Pool,
+    Scheduler, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 /// Records whether terminal admission ever reaches custom policy selection.
@@ -34,7 +34,7 @@ struct RecordingPolicy {
 }
 
 impl WorkerPolicy for RecordingPolicy {
-    fn bind(self, _context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, _context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         Ok(self)
     }
 }

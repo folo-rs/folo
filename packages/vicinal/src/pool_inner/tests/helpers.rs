@@ -12,7 +12,7 @@ use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
 use crate::{
-    BoundWorkerPolicy, BuiltInWorkerPolicy, ErasedTaskHandle, PrepareContext, PrepareError,
+    BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, ErasedTaskHandle,
     PreparedPolicy, Scheduler, SubmissionTarget, VicinalTask, WorkerGroup, WorkerGroupId,
     WorkerGroupState, WorkerGroups, WorkerPolicy, init_task,
 };
@@ -60,7 +60,7 @@ impl TestBuiltInPolicy {
 }
 
 impl WorkerPolicy for TestBuiltInPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let bound = Arc::new(self.policy.clone().bind_prepared(context));
         *self.bound.lock().unwrap() = Some(Arc::clone(&bound));
         Ok(bound)
@@ -102,7 +102,7 @@ impl TestPolicy {
             .clone()
     }
 
-    pub(crate) fn bind_prepared(self, context: PrepareContext<'_>) -> Self {
+    pub(crate) fn bind_prepared(self, context: BindContext<'_>) -> Self {
         self.state
             .group
             .set(context.groups().add())
@@ -112,7 +112,7 @@ impl TestPolicy {
 }
 
 impl WorkerPolicy for TestPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         Ok(self.bind_prepared(context))
     }
 }

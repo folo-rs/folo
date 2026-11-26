@@ -13,7 +13,7 @@ use new_zealand::nz;
 use crate::policies::WorkersPerProcessor;
 #[cfg(test)]
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
-use crate::{PoolInner, PrepareError, Scheduler, WorkerPolicy, WorkerPolicyBinding};
+use crate::{BuildError, PoolInner, Scheduler, WorkerPolicy, WorkerPolicyBinding};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -77,7 +77,7 @@ impl Pool {
     ///
     /// # Panics
     ///
-    /// Panics if the default policy cannot finish binding.
+    /// Panics if default pool construction fails.
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -263,16 +263,9 @@ impl PoolBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error reported by [`WorkerPolicy::bind`] after all participating workers
-    /// started during binding have left the worker loop.
-    ///
-    /// # Panics
-    ///
-    /// Panics when worker infrastructure fails, including thread creation, initial affinity setup
-    /// and worker initialization. Construction waits for participating workers to leave the
-    /// worker loop before propagating the original failure payload. Policy-returned
-    /// [`PrepareError`] values use the fallible result above instead.
-    pub fn build(self) -> Result<Pool, PrepareError> {
+    /// Returns an error reported by [`WorkerPolicy::bind`] or a contained worker-infrastructure
+    /// panic, after all participating workers started during binding have left the worker loop.
+    pub fn build(self) -> Result<Pool, BuildError> {
         let hardware = self
             .hardware
             .unwrap_or_else(|| SystemHardware::current().clone());

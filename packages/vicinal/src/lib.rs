@@ -137,6 +137,7 @@
 //! [avoiding operating system quota penalties]:
 //!   https://docs.rs/many_cpus/latest/many_cpus/#avoiding-operating-system-quota-penalties
 
+mod build_error;
 mod built_in_worker_policy;
 mod constants;
 mod group_id;
@@ -157,6 +158,7 @@ mod worker_group_id;
 mod worker_groups;
 mod worker_policy;
 
+pub use build_error::*;
 pub(crate) use built_in_worker_policy::{BuiltInWorkerPolicy, validate_eager_processors};
 #[cfg(test)]
 pub(crate) use built_in_worker_policy::{PolicyKind, PreparedPolicy};

@@ -1,6 +1,5 @@
-use std::any::Any;
 use std::io;
-use std::panic::{catch_unwind, panic_any};
+use std::panic::panic_any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -9,19 +8,20 @@ use std::thread::spawn;
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
+use ohno::ErrorExt;
 use testing::{assert_panics, with_watchdog};
 
 use crate::{
-    BoundWorkerPolicy, BuiltInWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroup,
+    BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, Pool, WorkerGroup,
     WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 /// Distinguishes a panic from `bind()` from ordinary test synchronization signals.
 struct PreparationFailure;
-/// Distinguishes a policy destructor panic from the preparation error returned first.
+/// Distinguishes a policy destructor panic from the binding error returned first.
 struct PolicyDropFailure;
 
-/// Distinguishes the expected preparation signal from an unexpected worker return.
+/// Distinguishes the expected binding signal from an unexpected worker return.
 #[derive(Debug, Eq, PartialEq)]
 enum PreparationEvent {
     Ready,
@@ -29,14 +29,14 @@ enum PreparationEvent {
     Returned,
 }
 
-/// Stops a started worker and records preparation failure for cleanup-boundary tests.
+/// Stops a started worker and records binding failure for cleanup-boundary tests.
 #[derive(Debug)]
 struct StartupFailurePolicy {
     worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
     ready: Mutex<Option<(Sender<PreparationEvent>, Receiver<PreparationEvent>)>>,
 }
 
-/// Reports preparation failure and observes whether destructor failure waits for worker exit.
+/// Reports binding failure and observes whether destructor failure waits for worker exit.
 #[derive(Debug)]
 struct PanickingDropPolicy {
     worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
@@ -45,22 +45,20 @@ struct PanickingDropPolicy {
 }
 
 impl WorkerPolicy for PanickingDropPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
         let worker = group.add_worker();
         _ = spawn(move || worker.run());
         self.initializer.lock().unwrap().recv().unwrap();
 
-        Err::<Self, _>(PrepareError::new(io::Error::other(
-            "injected preparation failure",
-        )))
+        Err::<Self, _>(BindError::new(io::Error::other("injected binding failure")))
     }
 }
 
 impl BoundWorkerPolicy for PanickingDropPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        unreachable!("construction must reject the preparation failure")
+        unreachable!("construction must reject the binding failure")
     }
 }
 
@@ -72,7 +70,7 @@ impl Drop for PanickingDropPolicy {
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
         let (returned, ready) = {
@@ -96,7 +94,7 @@ impl WorkerPolicy for StartupFailurePolicy {
 
 impl BoundWorkerPolicy for StartupFailurePolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        unreachable!("construction must reject the preparation failure")
+        unreachable!("construction must reject the binding failure")
     }
 }
 
@@ -105,7 +103,7 @@ impl BoundWorkerPolicy for StartupFailurePolicy {
 struct ReturningFailurePolicy;
 
 impl WorkerPolicy for ReturningFailurePolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         let (failed, failure) = channel();
         let returned = failed.clone();
@@ -141,7 +139,7 @@ struct EagerCustomPolicy {
 }
 
 impl WorkerPolicy for EagerCustomPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         for _ in 0..2 {
@@ -167,7 +165,7 @@ struct DroppedWorkerPolicy {
 }
 
 impl WorkerPolicy for DroppedWorkerPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         drop(group.add_worker());
@@ -189,7 +187,7 @@ struct ObservedEagerPolicy {
 }
 
 impl WorkerPolicy for ObservedEagerPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let inner = self.inner.bind(context)?;
         *self.observer.lock().unwrap() = context.groups().iter().next();
         Ok(ObservedBoundPolicy {
@@ -214,23 +212,24 @@ fn policy_preparation_failure_stops_started_workers() {
     with_watchdog(|| {
         let observer = Arc::new(Mutex::new(None));
         let (ready, worker_ready) = channel();
-        let payload: Box<dyn Any + Send> = catch_unwind(|| {
-            _ = Pool::builder()
-                .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
-                    nz!(1),
-                    nz!(1),
-                )))
-                .worker_policy(StartupFailurePolicy {
-                    worker_observer: Arc::clone(&observer),
-                    ready: Mutex::new(Some((ready.clone(), worker_ready))),
-                })
-                .thread_init(move || ready.send(PreparationEvent::Ready).unwrap())
-                .build()
-                .unwrap();
-        })
-        .unwrap_err();
+        let error = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .worker_policy(StartupFailurePolicy {
+                worker_observer: Arc::clone(&observer),
+                ready: Mutex::new(Some((ready.clone(), worker_ready))),
+            })
+            .thread_init(move || ready.send(PreparationEvent::Ready).unwrap())
+            .build()
+            .unwrap_err();
 
-        assert!(payload.is::<PreparationFailure>());
+        assert!(
+            error
+                .find_source::<crate::build_error::BuildPanicked>()
+                .is_some()
+        );
         let group = observer
             .lock()
             .unwrap()
@@ -251,7 +250,7 @@ fn policy_drop_failure_waits_for_preparation_workers() {
         let construction = spawn({
             let observer = Arc::clone(&observer);
             move || {
-                _ = Pool::builder()
+                Pool::builder()
                     .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
                         nz!(1),
                         nz!(1),
@@ -266,7 +265,7 @@ fn policy_drop_failure_waits_for_preparation_workers() {
                         initializer_release.lock().unwrap().recv().unwrap();
                     })
                     .build()
-                    .unwrap();
+                    .map(drop)
             }
         });
 
@@ -274,8 +273,12 @@ fn policy_drop_failure_waits_for_preparation_workers() {
         assert!(!construction.is_finished());
         release_initializer.send(()).unwrap();
 
-        let payload = construction.join().unwrap_err();
-        assert!(payload.is::<PolicyDropFailure>());
+        let error = construction.join().unwrap().unwrap_err();
+        assert!(
+            error
+                .find_source::<crate::build_error::BuildPanicked>()
+                .is_some()
+        );
         let group = observer.lock().unwrap().take().unwrap();
         assert_eq!(group.worker_count(), 0);
     });
@@ -287,20 +290,21 @@ fn construction_rejects_failure_published_before_prepare_returns() {
     struct InitializationFailure;
 
     with_watchdog(|| {
-        let payload = catch_unwind(|| {
-            _ = Pool::builder()
-                .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
-                    nz!(1),
-                    nz!(1),
-                )))
-                .worker_policy(ReturningFailurePolicy)
-                .thread_init(|| panic_any(InitializationFailure))
-                .build()
-                .unwrap();
-        })
-        .unwrap_err();
+        let error = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .worker_policy(ReturningFailurePolicy)
+            .thread_init(|| panic_any(InitializationFailure))
+            .build()
+            .unwrap_err();
 
-        assert!(payload.is::<InitializationFailure>());
+        assert!(
+            error
+                .find_source::<crate::build_error::BuildPanicked>()
+                .is_some()
+        );
     });
 }
 
@@ -319,36 +323,37 @@ fn eager_partial_initializer_failure_waits_for_started_worker() {
         let (first_completed, first_completion) = channel();
         let first_entry = Mutex::new(first_entry);
         let wait_for_release = Mutex::new(wait_for_release);
-        let payload = catch_unwind(|| {
-            _ = Pool::builder()
-                .hardware(hardware)
-                .eager(processors)
-                .worker_policy(ObservedEagerPolicy {
-                    inner: BuiltInWorkerPolicy::per_system(nz!(2)),
-                    observer: Arc::clone(&observer),
-                })
-                .thread_init({
-                    let initialized = Arc::clone(&initialized);
-                    move || match initialized.fetch_add(1, Ordering::Relaxed) {
-                        0 => {
-                            first_entered.send(()).unwrap();
-                            wait_for_release.lock().unwrap().recv().unwrap();
-                            first_completed.send(()).unwrap();
-                        }
-                        1 => {
-                            first_entry.lock().unwrap().recv().unwrap();
-                            release_first.send(()).unwrap();
-                            panic_any(InitializationFailure);
-                        }
-                        _ => unreachable!("the eager fixture starts exactly two workers"),
+        let error = Pool::builder()
+            .hardware(hardware)
+            .eager(processors)
+            .worker_policy(ObservedEagerPolicy {
+                inner: BuiltInWorkerPolicy::per_system(nz!(2)),
+                observer: Arc::clone(&observer),
+            })
+            .thread_init({
+                let initialized = Arc::clone(&initialized);
+                move || match initialized.fetch_add(1, Ordering::Relaxed) {
+                    0 => {
+                        first_entered.send(()).unwrap();
+                        wait_for_release.lock().unwrap().recv().unwrap();
+                        first_completed.send(()).unwrap();
                     }
-                })
-                .build()
-                .unwrap();
-        })
-        .unwrap_err();
+                    1 => {
+                        first_entry.lock().unwrap().recv().unwrap();
+                        release_first.send(()).unwrap();
+                        panic_any(InitializationFailure);
+                    }
+                    _ => unreachable!("the eager fixture starts exactly two workers"),
+                }
+            })
+            .build()
+            .unwrap_err();
 
-        assert!(payload.is::<InitializationFailure>());
+        assert!(
+            error
+                .find_source::<crate::build_error::BuildPanicked>()
+                .is_some()
+        );
         first_completion.recv().unwrap();
         assert_eq!(initialized.load(Ordering::Relaxed), 2);
         let group = observer.lock().unwrap().take().unwrap();

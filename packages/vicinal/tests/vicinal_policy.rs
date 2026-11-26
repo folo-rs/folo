@@ -15,8 +15,7 @@ use new_zealand::nz;
 use ohno::ErrorExt;
 use testing::with_watchdog;
 use vicinal::{
-    BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups,
-    WorkerPolicy,
+    BindContext, BindError, BoundWorkerPolicy, Pool, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 testing::init_tracing!();
@@ -27,7 +26,7 @@ struct LazySingleGroupPolicy {
     group: OnceLock<WorkerGroupId>,
 }
 
-/// Reports an ordinary policy-specific preparation failure.
+/// Reports an ordinary policy-specific binding failure.
 #[derive(Debug)]
 struct FailingPreparationPolicy {
     initializer: Mutex<Receiver<()>>,
@@ -36,7 +35,7 @@ struct FailingPreparationPolicy {
 }
 
 impl WorkerPolicy for FailingPreparationPolicy {
-    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let worker = context.groups().add().add_worker();
         let exited = self.exited.clone();
         _ = spawn(move || {
@@ -46,20 +45,20 @@ impl WorkerPolicy for FailingPreparationPolicy {
         self.initializer.lock().unwrap().recv().unwrap();
         self.prepared.send(()).unwrap();
 
-        Err::<Self, _>(PrepareError::new(io::Error::other(
-            "injected policy preparation failure",
+        Err::<Self, _>(BindError::new(io::Error::other(
+            "injected policy binding failure",
         )))
     }
 }
 
 impl BoundWorkerPolicy for FailingPreparationPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        unreachable!("construction rejects the preparation failure")
+        unreachable!("construction rejects the binding failure")
     }
 }
 
 impl WorkerPolicy for LazySingleGroupPolicy {
-    fn bind(self, _context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+    fn bind(self, _context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         Ok(self)
     }
 }
@@ -96,7 +95,7 @@ fn custom_policy_lazily_creates_and_runs_worker() {
 }
 
 #[test]
-fn preparation_failure_is_returned_after_started_workers_leave() {
+fn binding_failure_is_returned_after_started_workers_leave() {
     with_watchdog(|| {
         let (initializer_entered, initializer_arrival) = channel();
         let (prepared, policy_prepared) = channel();
