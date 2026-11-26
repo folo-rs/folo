@@ -13,7 +13,7 @@ use new_zealand::nz;
 use crate::policies::WorkersPerProcessor;
 #[cfg(test)]
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
-use crate::{PoolInner, PrepareError, Scheduler, WorkerPolicy};
+use crate::{PoolInner, PrepareError, Scheduler, WorkerPolicy, WorkerPolicyBinding};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.
@@ -121,7 +121,7 @@ impl Drop for Pool {
 /// a policy error before publishing a usable pool.
 pub struct PoolBuilder {
     name: Option<String>,
-    policy: Option<Box<dyn WorkerPolicy>>,
+    policy: Option<AssertUnwindSafe<Box<dyn WorkerPolicyBinding>>>,
     hardware: Option<SystemHardware>,
     thread_init: Option<ThreadInit>,
     eager: Option<ProcessorSet>,
@@ -151,19 +151,19 @@ impl PoolBuilder {
     ///
     /// Replaces any previously selected policy; the last setter wins.
     ///
-    /// The builder calls [`WorkerPolicy::prepare`] once with the final settings. Subsequent
-    /// submissions call [`WorkerPolicy::select_group`].
+    /// The builder calls [`WorkerPolicy::bind`] once with the final settings. Subsequent
+    /// submissions call the returned [`BoundWorkerPolicy::select_group`][crate::BoundWorkerPolicy::select_group].
     #[must_use]
     pub fn worker_policy(mut self, policy: impl WorkerPolicy) -> Self {
-        self.policy = Some(Box::new(policy));
+        self.policy = Some(AssertUnwindSafe(Box::new(policy)));
         self
     }
 
     /// Initializes workers for the selected processors during construction.
     ///
-    /// The final selection is passed to [`WorkerPolicy::prepare`]. A custom policy reserves its
+    /// The final selection is passed to [`WorkerPolicy::bind`]. A custom policy reserves its
     /// required workers with [`WorkerGroup::add_worker`][crate::WorkerGroup::add_worker].
-    /// The builder waits after `prepare()` returns for each reserved worker to finish
+    /// The builder waits after `bind()` returns for each reserved worker to finish
     /// initialization; dropping an unrun [`Worker`][crate::Worker] cancels that reservation.
     /// The setter itself starts no workers and takes ownership of the nonempty processor set.
     /// Repeated calls replace the selection; construction uses the final builder settings.
@@ -200,7 +200,7 @@ impl PoolBuilder {
     /// The function runs once on each worker, after its initial affinity is set and before
     /// it executes any tasks. Built-in workers start lazily unless [`Self::eager`] initializes
     /// selected destinations during construction; a custom [`WorkerPolicy`] controls its own
-    /// startup. After a custom policy's [`WorkerPolicy::prepare`] returns, the builder waits
+    /// startup. After a custom policy's [`WorkerPolicy::bind`] returns, the builder waits
     /// for every worker reserved during preparation to finish initialization or to be cancelled
     /// by dropping its unrun value. Calls on different workers may overlap, without a guaranteed
     /// order. Built-in lazy submission does not wait for initialization.
@@ -259,11 +259,11 @@ impl PoolBuilder {
     /// Builds the pool with the configured worker policy and initialization.
     ///
     /// The default policy starts no workers during construction unless [`Self::eager`] selects
-    /// eager destinations. A custom policy may create or wait for workers during `prepare()`.
+    /// eager destinations. A custom policy may create or wait for workers during `bind()`.
     ///
     /// # Errors
     ///
-    /// Returns an error reported by [`WorkerPolicy::prepare`] after all participating workers
+    /// Returns an error reported by [`WorkerPolicy::bind`] after all participating workers
     /// started during preparation have left the worker loop.
     pub fn build(self) -> Result<Pool, PrepareError> {
         let hardware = self
@@ -272,12 +272,13 @@ impl PoolBuilder {
         let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
         let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
         // Deferring the default box avoids allocating it for custom or abandoned builders.
-        let policy = self
-            .policy
-            .unwrap_or_else(|| Box::new(WorkersPerProcessor::new(DEFAULT_WORKERS_PER_PROCESSOR)));
+        let policy: Box<dyn WorkerPolicyBinding> = match self.policy {
+            Some(policy) => policy.0,
+            None => Box::new(WorkersPerProcessor::new(DEFAULT_WORKERS_PER_PROCESSOR)),
+        };
 
-        // Policy preparation can start participating workers before the outer Pool exists.
-        // PoolInner::new therefore owns preparation failure cleanup through the runtime barrier.
+        // Policy binding can start participating workers before the outer Pool exists.
+        // PoolInner::new therefore owns binding failure cleanup through the runtime barrier.
         // Ref: docs/implementation.md, "Eager construction".
         Ok(Pool {
             inner: Arc::new(PoolInner::new(

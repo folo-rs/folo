@@ -157,9 +157,9 @@ mod worker_group_id;
 mod worker_groups;
 mod worker_policy;
 
-#[cfg(test)]
-pub(crate) use built_in_worker_policy::PolicyKind;
 pub(crate) use built_in_worker_policy::{BuiltInWorkerPolicy, validate_eager_processors};
+#[cfg(test)]
+pub(crate) use built_in_worker_policy::{PolicyKind, PreparedPolicy};
 pub(crate) use constants::NEVER_POISONED;
 pub(crate) use group_id::*;
 pub use join_handle::*;

@@ -214,7 +214,7 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
     });
 }
 
-/// Every admission path must publish membership before its task observes the worker mask.
+/// Every admission path must publish membership before its task observes permitted processors.
 #[test]
 fn every_submission_variant_grows_the_region_mask() {
     with_watchdog(|| {
@@ -298,6 +298,51 @@ fn membership_is_isolated_by_pool_and_region() {
 #[test]
 fn concurrent_additions_preserve_busy_workers_and_fixed_count() {
     assert_concurrent_additions(BuiltInWorkerPolicy::per_memory_region(nz!(1)), [1, 2]);
+}
+
+/// Concurrent first use must publish the creating submitter before exposing a shared route.
+#[test]
+fn concurrent_first_use_preserves_every_initial_processor() {
+    with_watchdog(|| {
+        let hardware = regional_hardware();
+        let pool = Pool::builder()
+            .hardware(hardware.clone())
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
+            .build()
+            .unwrap();
+        let scheduler = pool.scheduler();
+
+        let first_selection = AtomicBool::new(true);
+        let (blocked, first_blocked) = mpsc::channel();
+        let (release_first, first_release) = mpsc::channel();
+        let first_release = Mutex::new(first_release);
+        pool.inner.groups.set_before_membership_selection(move || {
+            if first_selection.swap(false, Ordering::Relaxed) {
+                blocked.send(()).unwrap();
+                first_release.lock().unwrap().recv().unwrap();
+            }
+        });
+
+        let submit = |processor| {
+            let scheduler = scheduler.clone();
+            let hardware = hardware.clone();
+            thread::spawn(move || {
+                pin(&hardware, processor);
+                scheduler.spawn(move || affinity(&hardware))
+            })
+        };
+        let first = submit(0);
+        first_blocked.recv().unwrap();
+        let second = submit(1);
+
+        let second_task = second.join().unwrap();
+        assert_eq!(block_on(second_task).unwrap(), BTreeSet::from([0, 1]));
+        release_first.send(()).unwrap();
+        assert_eq!(
+            block_on(first.join().unwrap()).unwrap(),
+            BTreeSet::from([0, 1])
+        );
+    });
 }
 
 /// First-time submissions from one processor cannot bypass affinity publication.

@@ -2,14 +2,13 @@ use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
-use crate::{
-    BuiltInWorkerPolicy, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy,
-};
+use crate::{BoundWorkerPolicy, BuiltInWorkerPolicy, PrepareContext, PrepareError, WorkerPolicy};
 
 /// Creates a fixed worker count for each submitting memory region.
 ///
-/// The region's affinity starts with its eager processors or first submitter and expands
-/// cumulatively when processors in that region reach policy selection.
+/// Workers initially run on that region's eager processors or its first submitting processor.
+/// When another processor in the same region submits work, the existing workers may run there
+/// too without increasing the configured worker count.
 #[derive(Clone)]
 pub struct WorkersPerMemoryRegion {
     policy: BuiltInWorkerPolicy,
@@ -28,13 +27,8 @@ impl WorkersPerMemoryRegion {
 
 impl WorkerPolicy for WorkersPerMemoryRegion {
     #[inline]
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        WorkerPolicy::prepare(&mut self.policy, context)
-    }
-
-    #[inline]
-    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        WorkerPolicy::select_group(&self.policy, groups)
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        self.policy.bind(context)
     }
 }
 

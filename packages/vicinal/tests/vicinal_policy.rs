@@ -14,7 +14,10 @@ use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
 use ohno::ErrorExt;
 use testing::with_watchdog;
-use vicinal::{Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy};
+use vicinal::{
+    BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups,
+    WorkerPolicy,
+};
 
 testing::init_tracing!();
 
@@ -33,7 +36,7 @@ struct FailingPreparationPolicy {
 }
 
 impl WorkerPolicy for FailingPreparationPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let worker = context.groups().add().add_worker();
         let exited = self.exited.clone();
         _ = spawn(move || {
@@ -43,21 +46,25 @@ impl WorkerPolicy for FailingPreparationPolicy {
         self.initializer.lock().unwrap().recv().unwrap();
         self.prepared.send(()).unwrap();
 
-        Err(PrepareError::new(io::Error::other(
+        Err::<Self, _>(PrepareError::new(io::Error::other(
             "injected policy preparation failure",
         )))
     }
+}
 
+impl BoundWorkerPolicy for FailingPreparationPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction rejects the preparation failure")
     }
 }
 
 impl WorkerPolicy for LazySingleGroupPolicy {
-    fn prepare(&mut self, _context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        Ok(())
+    fn bind(self, _context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for LazySingleGroupPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get_or_init(|| {
             let group = groups.add();

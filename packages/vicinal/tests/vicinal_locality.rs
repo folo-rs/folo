@@ -68,7 +68,7 @@ fn eager_system_initializers_have_selected_affinity() {
 }
 
 /// Bounded native coverage complements simulated sparse/multi-region unit tests.
-fn assert_eager_affinity(policy: impl WorkerPolicy, regional: bool) {
+fn assert_eager_affinity(policy: impl WorkerPolicy + Send, regional: bool) {
     with_watchdog(move || {
         let hardware = SystemHardware::current();
         // A small selection tests multi-CPU affinity without creating machine-sized pools.
@@ -118,7 +118,7 @@ fn assert_eager_affinity(policy: impl WorkerPolicy, regional: bool) {
 }
 
 /// Verifies actual OS affinity, including cross-region masks on multi-region machines.
-fn assert_submitting_processor_affinity(policy: impl WorkerPolicy, regional: bool) {
+fn assert_submitting_processor_affinity(policy: impl WorkerPolicy + Send, regional: bool) {
     with_watchdog(move || {
         let hardware = SystemHardware::current();
         let processors = hardware.all_processors();

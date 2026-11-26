@@ -68,7 +68,7 @@ impl WorkerGroup {
 
     /// Reserves one worker that a policy must run.
     ///
-    /// A worker reserved while [`WorkerPolicy::prepare`][crate::WorkerPolicy::prepare] runs
+    /// A worker reserved while [`WorkerPolicy::bind`][crate::WorkerPolicy::bind] runs
     /// remains pending until its [`Worker::run`] call completes initialization. The pool builder
     /// waits for every such reservation after preparation returns. Drop the worker to cancel
     /// its preparation target when the policy cannot run it. Retaining an unrun worker makes
@@ -106,6 +106,7 @@ impl WorkerGroup {
         reservation: PreparationReservation,
         initial_setup: impl FnOnce(),
         pin: impl FnMut(&ProcessorSet) + Send,
+        applied_revision: Option<usize>,
     ) {
         if self.runtime.begin_worker().is_break() {
             return;
@@ -115,11 +116,11 @@ impl WorkerGroup {
             self.runtime.end_worker();
             return;
         }
-        // Acquire observes the mask revision that was released before this worker applied its
-        // initial pin. The caller prevents route publication until this worker records the
-        // revision before participation; later task-boundary refreshes advance only its local
-        // cursor.
-        let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
+        // Built-in startup carries the revision paired with its captured initial mask, so an
+        // expansion between pinning and this load cannot hide a refresh. Public Worker::run
+        // has no captured mask to pair and observes the current revision after its user setup.
+        let applied_revision = applied_revision
+            .unwrap_or_else(|| self.state.affinity_revision.load(Ordering::Acquire));
         self.run_worker(reservation, pin, applied_revision);
     }
 
@@ -278,10 +279,12 @@ impl WorkerGroup {
     // Removing thread creation leaves the lazy readiness wait without a producer.
     #[cfg_attr(test, mutants::skip)]
     fn spawn_workers(&self, destination: GroupId, affinity: &ProcessorSet, count: NonZero<u32>) {
+        let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
         for worker_index in 0..count.get() {
             let entry = worker_entry(
                 self.add_worker(),
                 affinity.clone(),
+                applied_revision,
                 ProcessorSet::pin_current_thread_to,
             );
             let builder = Builder::new().name(format!(
@@ -424,11 +427,13 @@ impl WorkerGroup {
             .load(Ordering::Acquire)
             .checked_add(count.get() as usize)
             .expect("worker reservation is bounded by the topology implementation");
+        let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
 
         for worker_index in 0..count.get() {
             let entry: WorkerEntry = Box::new(worker_entry(
                 self.add_worker(),
                 affinity.clone(),
+                applied_revision,
                 pin.clone(),
             ));
             let builder = Builder::new().name(format!(
@@ -469,11 +474,12 @@ impl Debug for WorkerGroup {
 fn worker_entry(
     worker: Worker,
     affinity: ProcessorSet,
+    applied_revision: usize,
     pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
 ) -> impl FnOnce() + Send + 'static {
     let initial_pin = pin.clone();
 
-    move || worker.run_with(move || initial_pin(&affinity), pin)
+    move || worker.run_with(move || initial_pin(&affinity), pin, Some(applied_revision))
 }
 
 /// Owns all synchronized state shared by the workers in one destination group.
@@ -524,6 +530,9 @@ pub(crate) struct WorkerGroupState {
     #[cfg(test)]
     pub(crate) before_membership_lock:
         OnceLock<Box<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
+    #[cfg(test)]
+    pub(crate) before_membership_selection:
+        OnceLock<Arc<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
     initialization: Mutex<()>,
     initialization_changed: Condvar,
 }
@@ -557,6 +566,8 @@ impl WorkerGroupState {
             before_membership_publish: OnceLock::new(),
             #[cfg(test)]
             before_membership_lock: OnceLock::new(),
+            #[cfg(test)]
+            before_membership_selection: OnceLock::new(),
             initialization: Mutex::new(()),
             initialization_changed: Condvar::new(),
         }
@@ -620,7 +631,8 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use crate::{
-        Pool, PrepareContext, PrepareError, Worker, WorkerGroupId, WorkerGroups, WorkerPolicy,
+        BoundWorkerPolicy, Pool, PrepareContext, PrepareError, Worker, WorkerGroupId, WorkerGroups,
+        WorkerPolicy,
     };
 
     assert_impl_all!(Worker: Send, Sync, UnwindSafe, RefUnwindSafe);
@@ -633,18 +645,20 @@ mod tests {
     }
 
     impl WorkerPolicy for NoWorkerPolicy {
-        fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+        fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
             self.group
                 .set(context.groups().add().id())
-                .expect("the no-worker policy prepares once");
-            Ok(())
+                .expect("the no-worker policy binds once");
+            Ok(self)
         }
+    }
 
+    impl BoundWorkerPolicy for NoWorkerPolicy {
         fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
             *self
                 .group
                 .get()
-                .expect("the builder prepares the no-worker policy")
+                .expect("the builder binds the no-worker policy")
         }
     }
 

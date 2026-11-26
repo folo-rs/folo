@@ -1,16 +1,86 @@
 //! Deterministic shutdown and failure races through the production worker loop.
 
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 
-use many_cpus::ProcessorSet;
+use many_cpus::{Processor, ProcessorSet};
+use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{TestPolicy, hardware, probe};
 use crate::pool_inner::worker_loop_with;
-use crate::{Pool, WorkerGroup, WorkerGroupState};
+use crate::{GroupId, Pool, WorkerGroup, WorkerGroupState};
+
+/// A worker refreshes an expansion that lands while it is still applying its captured mask.
+#[test]
+fn worker_pairs_initial_revision_with_captured_affinity() {
+    with_watchdog(|| {
+        let (pool, group) = group_pool();
+        let state = group.state();
+        let initial = state.affinity_revision.load(Ordering::Acquire);
+        assert_eq!(initial, 1);
+
+        let (pinned, initial_pin) = mpsc::channel();
+        let (release_pin, wait_for_release) = mpsc::channel();
+        let (refreshed, refresh) = mpsc::channel();
+        let wait_for_release = Arc::new(Mutex::new(wait_for_release));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let pin = move |set: &ProcessorSet| {
+            let processors = set.iter().map(Processor::id).collect::<BTreeSet<_>>();
+            if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                pinned.send(()).unwrap();
+                wait_for_release.lock().unwrap().recv().unwrap();
+            } else {
+                refreshed.send(processors).unwrap();
+            }
+        };
+
+        let starter = thread::spawn({
+            let group = group.clone();
+            let hardware = hardware();
+            move || {
+                let affinity = hardware
+                    .all_processors()
+                    .to_builder()
+                    .filter(|processor| processor.id() == 0)
+                    .take_all()
+                    .unwrap();
+                let mut handles = Vec::new();
+                group.start_workers_with(
+                    GroupId::Processor(0),
+                    &affinity,
+                    nz!(1),
+                    &mut handles,
+                    thread::Builder::spawn,
+                    pin,
+                );
+                for handle in handles {
+                    handle.join().unwrap();
+                }
+            }
+        });
+
+        initial_pin.recv().unwrap();
+        publish_affinity(
+            state,
+            hardware()
+                .all_processors()
+                .to_builder()
+                .filter(|processor| processor.id() < 2)
+                .take_all()
+                .unwrap(),
+        );
+        release_pin.send(()).unwrap();
+        assert_eq!(refresh.recv().unwrap(), BTreeSet::from([0, 1]));
+
+        pool.inner.runtime.stop_workers();
+        starter.join().unwrap();
+    });
+}
 
 /// The pool-wide stop must abandon dequeued work even before its group receives a stop signal.
 #[test]

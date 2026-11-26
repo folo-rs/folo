@@ -2,6 +2,10 @@
 
 use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
+#[cfg(test)]
+use std::panic::{RefUnwindSafe, UnwindSafe};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -31,7 +35,7 @@ impl WorkerGroups {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |owner| {
                 owner.checked_add(1)
             })
-            .expect("worker registry identity space must not wrap");
+            .expect("pool construction cannot continue after exhausting 2^64 registry identities");
         runtime.set_registry_owner(owner);
 
         Self {
@@ -39,6 +43,8 @@ impl WorkerGroups {
                 owner,
                 runtime,
                 groups: Mutex::new(Vec::new()),
+                #[cfg(test)]
+                before_membership_selection: OnceLock::new(),
             }),
         }
     }
@@ -61,6 +67,17 @@ impl WorkerGroups {
 
     fn add_inner(&self, destination: Option<GroupId>) -> WorkerGroup {
         let group = WorkerGroup::new(Arc::clone(&self.inner.runtime), destination);
+        #[cfg(test)]
+        if let Some(before_membership) = self.inner.before_membership_selection.get() {
+            assert!(
+                group
+                    .state()
+                    .before_membership_selection
+                    .set(Arc::clone(before_membership))
+                    .is_ok(),
+                "a newly created group has no membership hook"
+            );
+        }
 
         let mut groups = self.inner.groups.lock().expect(NEVER_POISONED);
         groups.push(group.clone());
@@ -115,6 +132,20 @@ impl WorkerGroups {
 
     pub(crate) fn snapshot(&self) -> Vec<WorkerGroup> {
         self.inner.groups.lock().expect(NEVER_POISONED).clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_before_membership_selection(
+        &self,
+        hook: impl Fn() + Send + Sync + UnwindSafe + RefUnwindSafe + 'static,
+    ) {
+        assert!(
+            self.inner
+                .before_membership_selection
+                .set(Arc::new(hook))
+                .is_ok(),
+            "test membership hook is installed once"
+        );
     }
 
     #[cfg(test)]
@@ -201,6 +232,8 @@ struct WorkerGroupsInner {
     owner: u64,
     runtime: Arc<PoolRuntime>,
     groups: Mutex<Vec<WorkerGroup>>,
+    #[cfg(test)]
+    before_membership_selection: OnceLock<Arc<dyn Fn() + Send + Sync + UnwindSafe + RefUnwindSafe>>,
 }
 
 #[cfg(test)]

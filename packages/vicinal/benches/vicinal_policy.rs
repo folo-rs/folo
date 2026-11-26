@@ -9,7 +9,10 @@ use many_cpus::SystemHardware;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use new_zealand::nz;
 use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerProcessor, WorkersPerSystem};
-use vicinal::{Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy};
+use vicinal::{
+    BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups,
+    WorkerPolicy,
+};
 
 ::testing::set_allocator!();
 
@@ -35,7 +38,7 @@ impl PolicyCase {
 #[derive(Clone, Debug)]
 struct PolicyProbe {
     kind: PolicyCase,
-    state: Arc<OnceLock<(WorkerGroups, PreparedPolicy)>>,
+    state: Arc<OnceLock<(WorkerGroups, Box<dyn BoundWorkerPolicy>)>>,
 }
 
 impl PolicyProbe {
@@ -56,56 +59,29 @@ impl PolicyProbe {
 }
 
 impl WorkerPolicy for PolicyProbe {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        let mut policy = PreparedPolicy::new(self.kind);
-        policy.prepare(context)?;
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        let policy: Box<dyn BoundWorkerPolicy> = match self.kind {
+            PolicyCase::Processor => Box::new(WorkersPerProcessor::new(nz!(1)).bind(context)?),
+            PolicyCase::MemoryRegion => {
+                Box::new(WorkersPerMemoryRegion::new(nz!(1)).bind(context)?)
+            }
+            PolicyCase::System => Box::new(WorkersPerSystem::new(nz!(1)).bind(context)?),
+        };
         assert!(
             self.state.set((context.groups().clone(), policy)).is_ok(),
-            "the benchmark prepares each policy once"
+            "the benchmark binds each policy once"
         );
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for PolicyProbe {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         self.state
             .get()
-            .expect("PoolBuilder prepares the retained policy")
+            .expect("PoolBuilder binds the retained policy")
             .1
             .select_group(groups)
-    }
-}
-
-/// The public built-in policy values hidden behind the pluggable `WorkerPolicy` API.
-#[derive(Debug)]
-enum PreparedPolicy {
-    Processor(WorkersPerProcessor),
-    MemoryRegion(WorkersPerMemoryRegion),
-    System(WorkersPerSystem),
-}
-
-impl PreparedPolicy {
-    fn new(kind: PolicyCase) -> Self {
-        match kind {
-            PolicyCase::Processor => Self::Processor(WorkersPerProcessor::new(nz!(1))),
-            PolicyCase::MemoryRegion => Self::MemoryRegion(WorkersPerMemoryRegion::new(nz!(1))),
-            PolicyCase::System => Self::System(WorkersPerSystem::new(nz!(1))),
-        }
-    }
-
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        match self {
-            Self::Processor(policy) => WorkerPolicy::prepare(policy, context),
-            Self::MemoryRegion(policy) => WorkerPolicy::prepare(policy, context),
-            Self::System(policy) => WorkerPolicy::prepare(policy, context),
-        }
-    }
-
-    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        match self {
-            Self::Processor(policy) => WorkerPolicy::select_group(policy, groups),
-            Self::MemoryRegion(policy) => WorkerPolicy::select_group(policy, groups),
-            Self::System(policy) => WorkerPolicy::select_group(policy, groups),
-        }
     }
 }
 
@@ -116,19 +92,21 @@ struct NoWorkerPolicy {
 }
 
 impl WorkerPolicy for NoWorkerPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         assert!(
             self.group.set(context.groups().add().id()).is_ok(),
-            "the benchmark prepares the no-worker policy once"
+            "the benchmark binds the no-worker policy once"
         );
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for NoWorkerPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self
             .group
             .get()
-            .expect("PoolBuilder prepares the no-worker policy")
+            .expect("PoolBuilder binds the no-worker policy")
     }
 }
 

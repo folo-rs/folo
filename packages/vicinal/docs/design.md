@@ -38,18 +38,20 @@ let system_pool = Pool::builder()
     .build().unwrap();
 ```
 
-The pool calls the selected policy's `prepare()` once with the final hardware, eager selection,
-worker groups and name. `select_group()` runs for each submission that reaches worker-group
-routing and returns a copyable `WorkerGroupId`. The scheduler resolves that ID by borrowing the
-group; established task submission neither clones `WorkerGroups` nor `WorkerGroup`.
+The pool consumes the selected policy's `bind()` input once with the final hardware, eager
+selection, worker groups and name. The method returns a `BoundWorkerPolicy`, separating one-time
+pool setup from the value that schedulers share. `select_group()` runs for each submission that
+reaches worker-group routing and returns a copyable `WorkerGroupId`. The scheduler resolves that
+ID by borrowing the group; established task submission neither clones `WorkerGroups` nor
+`WorkerGroup`.
 
-A policy may add groups during preparation or selection and may clone a `WorkerGroups`
+A policy may add groups during binding or selection and may clone a `WorkerGroups`
 handle to add groups later. To add a worker, the policy calls `WorkerGroup::add_worker()`,
 moves the returned `Worker` into the new thread, applies the intended affinity and calls
 the blocking `Worker::run()` method. Vicinal then owns task execution, worker initialization,
 failure containment and worker lifetime through shutdown.
 
-Preparation-time worker reservations and their readiness boundary follow the rules in
+Binding-time worker reservations and their readiness boundary follow the rules in
 [Eager construction](#eager-construction).
 
 A policy may retain a `WorkerGroup` handle and inspect its participating worker count with
@@ -73,14 +75,14 @@ submitting processor expands the permitted set without adding workers. Repeated 
 from known processors do not change the set. The policy cannot remove processors from that set.
 
 Workers refresh their affinity at task boundaries; executing tasks may finish with the
-previous narrower mask. Migration within the permitted mask is allowed even during a task,
+previous narrower processor set. Migration within the permitted set is allowed even during a task,
 but is not required. Regional work never moves to another region to obtain an idle worker.
 System workers may move between permitted processors in different memory regions.
 
 Each built-in worker group starts its configured worker count once, on first task use or
 during eager construction. The default policy starts no workers during construction
 unless eager selection is configured. Every policy receives the eager selection during
-`prepare()` through `PrepareContext::eager()`. Built-in policies honor it automatically;
+`bind()` through `PrepareContext::eager()`. Built-in policies honor it automatically;
 a custom policy may interpret or ignore it. Workers persist until shutdown. Shared worker
 counts are not multiplied by the number of submitting processors; a system count is also
 independent of the number of submitting regions. Counts must be nonzero but may exceed the
@@ -89,17 +91,17 @@ processor count, supporting blocking workloads.
 ## Eager construction
 
 `PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` and passes it to the
-selected policy during `prepare()`. The setter records the selection without starting workers.
+selected policy during `bind()`. The setter records the selection without starting workers.
 Repeated calls replace the selection; `build()` uses the final policy, hardware, name and
 initialization callback regardless of setter order. A custom policy decides how the eager
 selection maps to worker groups and may ignore it.
 
-Every `Worker` created with `WorkerGroup::add_worker()` while `prepare()` runs creates an
+Every `Worker` created with `WorkerGroup::add_worker()` while `bind()` runs creates an
 individual preparation-time initialization reservation. The policy must run or drop each
-reserved `Worker`. After `prepare()` returns, the builder waits until each exact reservation
+reserved `Worker`. After `bind()` returns, the builder waits until each exact reservation
 finishes initialization or its unrun worker is dropped to cancel it. A policy must not wait
 for `build()` to return before resolving an outstanding reservation. Workers created after
-`prepare()` returns do not participate in this wait, even if construction is still waiting
+`bind()` returns do not participate in this wait, even if construction is still waiting
 for earlier reservations.
 
 The selection must belong to the pool's hardware instance. The pool validates the complete

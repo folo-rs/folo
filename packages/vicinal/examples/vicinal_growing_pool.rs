@@ -5,7 +5,8 @@ use std::thread::spawn;
 
 use futures::executor::block_on;
 use vicinal::{
-    Pool, PrepareContext, PrepareError, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
+    BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroup, WorkerGroupId,
+    WorkerGroups, WorkerPolicy,
 };
 
 fn main() -> Result<(), PrepareError> {
@@ -57,7 +58,10 @@ fn main() -> Result<(), PrepareError> {
 ///
 /// Policy selection precedes queue admission, so the incoming task itself is not visible in
 /// `queue_len()`. This policy starts one worker eagerly and grows when a later submission
-/// observes backlog. It deliberately never removes workers or imposes a maximum.
+/// observes backlog. A later task can observe the earlier task in the queue even when a worker
+/// is idle. That brief visibility keeps this example simple; a production policy needs a
+/// smarter way to distinguish transient admission from sustained backlog. This policy
+/// deliberately never removes workers or imposes a maximum.
 #[derive(Debug)]
 struct GrowingPolicy {
     group: Option<WorkerGroup>,
@@ -70,15 +74,17 @@ impl GrowingPolicy {
 }
 
 impl WorkerPolicy for GrowingPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(mut self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         spawn_worker(&group);
         self.group = Some(group);
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for GrowingPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        let group = self.group.as_ref().expect("build prepares the policy");
+        let group = self.group.as_ref().expect("binding installs the group");
         if group.queue_len() != 0 {
             spawn_worker(group);
         }

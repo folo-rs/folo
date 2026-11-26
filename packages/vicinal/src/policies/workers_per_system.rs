@@ -2,14 +2,12 @@ use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::num::NonZero;
 
-use crate::{
-    BuiltInWorkerPolicy, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy,
-};
+use crate::{BoundWorkerPolicy, BuiltInWorkerPolicy, PrepareContext, PrepareError, WorkerPolicy};
 
 /// Creates a fixed worker count shared across the system.
 ///
-/// The worker mask starts with eager processors or the first submitter and expands
-/// cumulatively across memory-region boundaries.
+/// Workers initially run on the eager processors or the first submitting processor. As tasks
+/// arrive from other processors, the same fixed worker set also becomes permitted to run there.
 #[derive(Clone)]
 pub struct WorkersPerSystem {
     policy: BuiltInWorkerPolicy,
@@ -28,13 +26,8 @@ impl WorkersPerSystem {
 
 impl WorkerPolicy for WorkersPerSystem {
     #[inline]
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        WorkerPolicy::prepare(&mut self.policy, context)
-    }
-
-    #[inline]
-    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        WorkerPolicy::select_group(&self.policy, groups)
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        self.policy.bind(context)
     }
 }
 

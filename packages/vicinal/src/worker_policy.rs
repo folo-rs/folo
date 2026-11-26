@@ -7,18 +7,20 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use ohno::OhnoCore;
 
 use crate::{WorkerGroupId, WorkerGroups};
-/// Defines one pool's task routing and policy-owned worker topology.
+/// Defines one pool's task routing and policy-owned worker topology before pool binding.
 ///
-/// Policies are prepared once while the pool is built and then shared by all schedulers.
-/// [`select_group`](Self::select_group) should keep established routing lock-free and avoid
-/// cloning [`WorkerGroup`][crate::WorkerGroup] handles. Group creation and worker startup may
-/// clone handles because those operations occur off the ordinary task-routing path.
+/// Binding consumes this configuration and returns a separate [`BoundWorkerPolicy`] owned by
+/// the completed pool. This keeps configuration-time setup distinct from the policy value used
+/// for subsequent task routing.
 ///
 /// A policy reserves a worker with
 /// [`WorkerGroup::add_worker`][crate::WorkerGroup::add_worker], moves the returned
 /// [`Worker`][crate::Worker] into a thread, applies its intended affinity and calls
 /// [`Worker::run`][crate::Worker::run]. That method blocks until the worker leaves the pool.
-/// Implementations expose [`Debug`] state so pool diagnostics can identify the active policy.
+/// `Debug` lets builders and pools identify the configured policy. The unbound configuration is
+/// consumed during construction, so it needs none of the thread-safety contracts required by
+/// the value returned from [`bind`][Self::bind]. The static lifetime lets the builder erase the
+/// concrete configuration until its one binding call.
 ///
 /// # Example
 ///
@@ -26,7 +28,10 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// # use std::error::Error;
 /// use std::thread::spawn;
 ///
-/// use vicinal::{Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy};
+/// use vicinal::{
+///     BoundWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups,
+///     WorkerPolicy,
+/// };
 /// # use futures::executor::block_on;
 ///
 /// #[derive(Debug, Default)]
@@ -35,18 +40,23 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// }
 ///
 /// impl WorkerPolicy for OneGroupPolicy {
-///     fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+///     fn bind(
+///         mut self,
+///         context: PrepareContext<'_>,
+///     ) -> Result<impl BoundWorkerPolicy, PrepareError> {
 ///         let group = context.groups().add();
 ///         spawn({
 ///             let worker = group.add_worker();
 ///             move || worker.run()
 ///         });
 ///         self.group = Some(group.id());
-///         Ok(())
+///         Ok(self)
 ///     }
+/// }
 ///
+/// impl BoundWorkerPolicy for OneGroupPolicy {
 ///     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-///         self.group.expect("the builder prepares the policy once")
+///         self.group.expect("binding installs the policy state once")
 ///     }
 /// }
 ///
@@ -58,8 +68,8 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// # Ok::<(), Box<dyn Error>>(())
 /// # }).unwrap();
 /// ```
-pub trait WorkerPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
-    /// Performs one-time initialization using the pool's final configuration.
+pub trait WorkerPolicy: Debug + 'static {
+    /// Consumes the configuration and returns the policy used for task routing.
     ///
     /// A policy creates preparation-time workers with
     /// [`WorkerGroup::add_worker`][crate::WorkerGroup::add_worker] and may clone
@@ -67,8 +77,20 @@ pub trait WorkerPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'stat
     /// counts those reservations and waits for each worker to complete its initialization
     /// callback after this method returns. If the policy cannot run a reserved worker, dropping
     /// it cancels that target.
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError>;
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError>
+    where
+        Self: Sized;
+}
 
+/// Selects task destinations after a [`WorkerPolicy`] binds to one pool.
+///
+/// This type is shared by schedulers, so `Send + Sync` make concurrent selection part of its
+/// contract. The `Pool` public API preserves its unwind-safety contract across shutdown and
+/// submission boundaries, so bound policies are also `UnwindSafe + RefUnwindSafe`. `Debug`
+/// exposes the active policy in pool diagnostics. Selection should keep the established routing
+/// path lock-free and avoid cloning [`WorkerGroup`][crate::WorkerGroup] handles; group creation
+/// and worker startup may clone handles because they occur off that path.
+pub trait BoundWorkerPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// Selects the group for one submitted task.
     ///
     /// The returned ID is pool-specific and copied into the scheduler's enqueue path
@@ -78,6 +100,27 @@ pub trait WorkerPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'stat
     /// [`WorkerGroup::queue_len`][crate::WorkerGroup::queue_len] to observe existing
     /// backlog, but selection runs before the incoming task is added to that queue.
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId;
+}
+
+/// Erases an unbound policy while preserving a by-value binding operation.
+pub(crate) trait WorkerPolicyBinding: Debug {
+    fn bind(
+        self: Box<Self>,
+        context: PrepareContext<'_>,
+    ) -> Result<Box<dyn BoundWorkerPolicy>, PrepareError>;
+}
+
+impl<T> WorkerPolicyBinding for T
+where
+    T: WorkerPolicy,
+{
+    fn bind(
+        self: Box<Self>,
+        context: PrepareContext<'_>,
+    ) -> Result<Box<dyn BoundWorkerPolicy>, PrepareError> {
+        let bound = (*self).bind(context)?;
+        Ok(Box::new(bound))
+    }
 }
 
 /// A worker policy failed while preparing a pool.
@@ -104,7 +147,7 @@ impl PrepareError {
     }
 }
 
-/// Final pool configuration supplied to [`WorkerPolicy::prepare`].
+/// Final pool configuration supplied to [`WorkerPolicy::bind`].
 #[derive(Clone, Copy)]
 pub struct PrepareContext<'a> {
     hardware: &'a SystemHardware,

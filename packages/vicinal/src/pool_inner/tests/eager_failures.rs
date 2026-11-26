@@ -12,11 +12,11 @@ use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
 use crate::{
-    BuiltInWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroup, WorkerGroupId,
-    WorkerGroups, WorkerPolicy,
+    BoundWorkerPolicy, BuiltInWorkerPolicy, Pool, PrepareContext, PrepareError, WorkerGroup,
+    WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
-/// Distinguishes a panic from `prepare()` from ordinary test synchronization signals.
+/// Distinguishes a panic from `bind()` from ordinary test synchronization signals.
 struct PreparationFailure;
 /// Distinguishes a policy destructor panic from the preparation error returned first.
 struct PolicyDropFailure;
@@ -45,18 +45,20 @@ struct PanickingDropPolicy {
 }
 
 impl WorkerPolicy for PanickingDropPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
         let worker = group.add_worker();
         _ = spawn(move || worker.run());
         self.initializer.lock().unwrap().recv().unwrap();
 
-        Err(PrepareError::new(io::Error::other(
+        Err::<Self, _>(PrepareError::new(io::Error::other(
             "injected preparation failure",
         )))
     }
+}
 
+impl BoundWorkerPolicy for PanickingDropPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction must reject the preparation failure")
     }
@@ -70,7 +72,7 @@ impl Drop for PanickingDropPolicy {
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         *self.worker_observer.lock().unwrap() = Some(group.clone());
         let (returned, ready) = {
@@ -84,8 +86,15 @@ impl WorkerPolicy for StartupFailurePolicy {
         });
         assert_eq!(ready.recv().unwrap(), PreparationEvent::Ready);
         panic_any(PreparationFailure);
+        #[allow(
+            unreachable_code,
+            reason = "panic_any proves the failure path while this gives the opaque return a concrete type"
+        )]
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for StartupFailurePolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction must reject the preparation failure")
     }
@@ -96,7 +105,7 @@ impl WorkerPolicy for StartupFailurePolicy {
 struct ReturningFailurePolicy;
 
 impl WorkerPolicy for ReturningFailurePolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         let (failed, failure) = channel();
         let returned = failed.clone();
@@ -115,9 +124,11 @@ impl WorkerPolicy for ReturningFailurePolicy {
             _ = returned.send(PreparationEvent::Returned);
         });
         assert_eq!(failure.recv().unwrap(), PreparationEvent::Failed);
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for ReturningFailurePolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction must reject the recorded worker failure")
     }
@@ -130,7 +141,7 @@ struct EagerCustomPolicy {
 }
 
 impl WorkerPolicy for EagerCustomPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         for _ in 0..2 {
@@ -139,9 +150,11 @@ impl WorkerPolicy for EagerCustomPolicy {
                 move || worker.run()
             });
         }
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for EagerCustomPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get().unwrap()
     }
@@ -154,13 +167,15 @@ struct DroppedWorkerPolicy {
 }
 
 impl WorkerPolicy for DroppedWorkerPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
         drop(group.add_worker());
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for DroppedWorkerPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get().unwrap()
     }
@@ -174,12 +189,21 @@ struct ObservedEagerPolicy {
 }
 
 impl WorkerPolicy for ObservedEagerPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        self.inner.prepare(context)?;
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        let inner = self.inner.bind(context)?;
         *self.observer.lock().unwrap() = context.groups().iter().next();
-        Ok(())
+        Ok(ObservedBoundPolicy {
+            inner: Box::new(inner),
+        })
     }
+}
 
+#[derive(Debug)]
+struct ObservedBoundPolicy {
+    inner: Box<dyn BoundWorkerPolicy>,
+}
+
+impl BoundWorkerPolicy for ObservedBoundPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         self.inner.select_group(groups)
     }

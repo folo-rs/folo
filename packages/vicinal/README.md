@@ -107,8 +107,9 @@ Regions describe processor locality, not the task's allocations or data.
 
 ## Custom worker growth
 
-`WorkerPolicy` can retain a `WorkerGroup` handle and use `queue_len()` when deciding whether
-to create another worker. The standalone
+`WorkerPolicy::bind()` consumes the configuration and returns a `BoundWorkerPolicy` shared by
+the pool's schedulers. The bound policy can retain a `WorkerGroup` handle and use `queue_len()`
+when deciding whether to create another worker. The standalone
 [`vicinal_growing_pool`](examples/vicinal_growing_pool.rs) example starts one worker and
 adds another whenever a later submission observes queued work. It has no maximum worker
 count and never shrinks. Policy selection happens before the incoming task is queued, so
@@ -123,7 +124,7 @@ It waits for initial affinity and every configured `thread_init` callback to com
 Initialization effects are visible when construction returns, and the calling thread's affinity
 remains unchanged. An eager processor selection is separate from custom-policy readiness.
 A custom policy must run or drop each `Worker` reserved with `WorkerGroup::add_worker()`
-during `prepare()`. After `prepare()` returns, the builder waits for each reservation to
+during `bind()`. After `bind()` returns, the builder waits for each reservation to
 finish initialization or to be cancelled by dropping an unrun worker. Startup failure stops
 and waits for participating workers before construction panics; it does not join policy-owned
 operating-system threads after they leave `Worker::run()`.

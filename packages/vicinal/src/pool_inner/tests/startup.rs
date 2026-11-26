@@ -16,8 +16,8 @@ use testing::{assert_panics, with_watchdog};
 
 use super::helpers::{OnDrop, PanickingPayload, TestPolicy, affinity, hardware, probe};
 use crate::{
-    BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, PrepareContext, PrepareError, SubmissionTarget,
-    WorkerGroupId, WorkerGroups, WorkerPolicy,
+    BoundWorkerPolicy, BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, PrepareContext,
+    PrepareError, SubmissionTarget, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 /// Pauses policy selection after a test worker reaches the ordinary participation boundary.
@@ -31,10 +31,13 @@ struct GatedSelectionPolicy {
 }
 
 impl WorkerPolicy for GatedSelectionPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        self.inner.prepare(context)
+    fn bind(mut self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        self.inner = self.inner.bind_prepared(context);
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for GatedSelectionPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         let id = self.inner.select_group(groups);
         self.worker_started.get_or_init(|| {
@@ -62,10 +65,13 @@ struct PanickingSelectionPolicy {
 }
 
 impl WorkerPolicy for PanickingSelectionPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        self.inner.prepare(context)
+    fn bind(mut self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        self.inner = self.inner.bind_prepared(context);
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for PanickingSelectionPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         panic_any(StartupFailure);
     }

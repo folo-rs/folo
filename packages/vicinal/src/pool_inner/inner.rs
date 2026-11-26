@@ -20,8 +20,9 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use tracing::error;
 
 use crate::{
-    PoolRuntime, PrepareContext, PrepareError, ThreadInit, WorkerGroups, WorkerPolicy,
-    discard_panic, extract_panic_message, report_diagnostic, validate_eager_processors,
+    BoundWorkerPolicy, PoolRuntime, PrepareContext, PrepareError, ThreadInit, WorkerGroups,
+    WorkerPolicyBinding, discard_panic, extract_panic_message, report_diagnostic,
+    validate_eager_processors,
 };
 #[cfg(test)]
 use crate::{SubmissionTarget, WorkerEntry};
@@ -62,7 +63,7 @@ pub(crate) struct PoolInner {
     #[cfg(test)]
     // Test fixtures own these OS-thread handles independently of pool participation.
     pub(crate) worker_handles: Mutex<Vec<JoinHandle<()>>>,
-    pub(crate) policy: Box<dyn WorkerPolicy>,
+    pub(crate) policy: Box<dyn BoundWorkerPolicy>,
     pub(crate) runtime: Arc<PoolRuntime>,
 }
 
@@ -71,7 +72,7 @@ impl PoolInner {
         pool_id: u64,
         pool_name: String,
         hardware: &SystemHardware,
-        mut policy: Box<dyn WorkerPolicy>,
+        policy: Box<dyn WorkerPolicyBinding>,
         thread_init: Option<ThreadInit>,
         eager: Option<&ProcessorSet>,
     ) -> Result<Self, PrepareError> {
@@ -82,7 +83,7 @@ impl PoolInner {
         }
         runtime.begin_worker_preparation();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            policy.prepare(PrepareContext::new(
+            policy.bind(PrepareContext::new(
                 hardware,
                 eager,
                 &groups,
@@ -91,20 +92,23 @@ impl PoolInner {
         }));
         runtime.end_worker_preparation();
 
-        let preparation = match result {
-            Ok(preparation) => preparation,
+        let bound = match result {
+            Ok(bound) => bound,
             Err(payload) => {
                 runtime.fail(payload);
-                finish_failed_preparation(&runtime, policy);
-                unreachable!("failed preparation resumes the retained worker failure")
+                finish_failed_binding(&runtime);
+                unreachable!("failed binding resumes the retained worker failure")
             }
         };
-        if let Err(error) = preparation {
-            finish_failed_preparation(&runtime, policy);
-            return Err(error);
-        }
+        let policy = match bound {
+            Ok(policy) => policy,
+            Err(error) => {
+                finish_failed_binding(&runtime);
+                return Err(error);
+            }
+        };
         runtime.wait_for_preparation_workers();
-        // Custom preparation can return after a participating worker independently records
+        // Custom binding can return after a participating worker independently records
         // a failure. Construction must propagate that published failure rather than returning
         // an already-poisoned pool.
         if runtime.is_poisoned() {
@@ -219,16 +223,13 @@ impl PoolInner {
     }
 }
 
-/// Stops policy-owned workers and contains policy destruction before propagating failure.
+/// Stops policy-owned workers and waits for every binding reservation before returning failure.
 ///
-/// Policy destructors can re-enter the pool or unwind while preparation workers remain active.
-/// The runtime therefore records a destructor failure before the cleanup barriers, preserving
-/// the original failure when one was already retained.
-fn finish_failed_preparation(runtime: &PoolRuntime, policy: Box<dyn WorkerPolicy>) {
+/// A panic during the consumed policy's binding or destruction is contained by the caller's
+/// unwind boundary before this helper runs. Both payload and ordinary error paths therefore
+/// share the same worker cleanup barrier.
+fn finish_failed_binding(runtime: &PoolRuntime) {
     runtime.stop_workers();
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(policy))) {
-        runtime.fail(payload);
-    }
     runtime.wait_for_preparation_workers();
     runtime.wait_for_workers();
 

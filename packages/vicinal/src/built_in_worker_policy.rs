@@ -11,8 +11,8 @@ use std::sync::{Arc, OnceLock};
 use many_cpus::{MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware};
 
 use crate::{
-    GroupId, NEVER_POISONED, PrepareContext, PrepareError, SubmissionTarget, WorkerGroup,
-    WorkerGroupId, WorkerGroups, WorkerPolicy,
+    BoundWorkerPolicy, GroupId, NEVER_POISONED, PrepareContext, PrepareError, SubmissionTarget,
+    WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 /// Owns the common routing and worker-startup implementation for all built-in policies.
 ///
@@ -21,13 +21,18 @@ use crate::{
 /// built-in routing choices without making the shared implementation part of the public API.
 #[derive(Debug)]
 pub(crate) struct BuiltInWorkerPolicy {
+    /// Selects processor-local, regional or system-wide routing semantics.
     kind: PolicyKind,
+    /// Fixed concurrency assigned to each destination selected by this policy kind.
     count: NonZero<u32>,
-    prepared: Option<PreparedPolicy>,
 }
 
 impl BuiltInWorkerPolicy {
     #[cfg(test)]
+    /// Returns a destination matching the current processor for white-box startup fixtures.
+    ///
+    /// Production selection routes through the bound policy; this helper lets tests arrange the
+    /// same internal destination without duplicating the sampled topology mapping.
     pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
         match self.kind {
             PolicyKind::Processor => {
@@ -60,9 +65,8 @@ impl BuiltInWorkerPolicy {
 
     /// Uses a fixed worker count per submitting memory region.
     ///
-    /// A region's worker mask starts with its eager processors or first submitter and
-    /// expands cumulatively when processors in that region reach policy selection.
-    /// Adding a processor changes affinity without adding workers.
+    /// Workers initially run on the region's eager processors or first submitting processor.
+    /// Other submitting processors in that region become permitted without increasing workers.
     #[must_use]
     pub(crate) fn per_memory_region(count: NonZero<u32>) -> Self {
         Self::new(PolicyKind::MemoryRegion, count)
@@ -70,9 +74,9 @@ impl BuiltInWorkerPolicy {
 
     /// Uses one fixed worker count across the system's submitting processors.
     ///
-    /// The worker mask starts with eager processors or the first submitter and expands
-    /// cumulatively when processors reach selection across memory-region boundaries. The
-    /// count is per pool rather than per processor or memory region.
+    /// Workers initially run on eager processors or the first submitting processor. They become
+    /// permitted on later submitting processors across the system without adding workers.
+    /// The count is per pool rather than per processor or memory region.
     #[must_use]
     pub(crate) fn per_system(count: NonZero<u32>) -> Self {
         Self::new(PolicyKind::System, count)
@@ -83,19 +87,12 @@ impl BuiltInWorkerPolicy {
     }
 
     #[cfg(test)]
-    pub(crate) fn install_test_group(&self, group: &WorkerGroup, affinity: &ProcessorSet) {
-        self.prepared
-            .as_ref()
-            .expect("the builder prepares a policy before installation")
-            .install_test_group(group, self.kind, affinity);
+    pub(crate) fn kind(&self) -> PolicyKind {
+        self.kind
     }
 
     fn new(kind: PolicyKind, count: NonZero<u32>) -> Self {
-        Self {
-            kind,
-            count,
-            prepared: None,
-        }
+        Self { kind, count }
     }
 }
 
@@ -106,22 +103,33 @@ impl Clone for BuiltInWorkerPolicy {
 }
 
 impl WorkerPolicy for BuiltInWorkerPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        self.prepared = Some(PreparedPolicy::new(
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        Ok(self.bind_prepared(context))
+    }
+}
+
+impl BuiltInWorkerPolicy {
+    pub(crate) fn bind_prepared(self, context: PrepareContext<'_>) -> PreparedPolicy {
+        PreparedPolicy::new(
             context.hardware(),
             context.eager(),
             context.groups(),
             self.kind,
             self.count,
-        ));
-        Ok(())
+        )
     }
+}
 
+impl BoundWorkerPolicy for PreparedPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        self.prepared
-            .as_ref()
-            .expect("the builder prepares a policy before scheduling")
-            .select_group(groups, self.count)
+        Self::select_group(self, groups, self.count())
+    }
+}
+
+#[cfg(test)]
+impl BoundWorkerPolicy for Arc<PreparedPolicy> {
+    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
+        PreparedPolicy::select_group(self.as_ref(), groups, self.count())
     }
 }
 
@@ -156,25 +164,36 @@ pub(crate) enum PolicyKind {
 /// Processor routes use indexed slots, regional routes add compact ordered topology IDs, and
 /// system routing uses one slot. Each variant also owns the readiness facts that let task
 /// submission avoid the registry lock after a route has been published.
-enum PreparedPolicy {
+pub(crate) enum PreparedPolicy {
     Processor {
         hardware: SystemHardware,
+        count: NonZero<u32>,
         groups: Box<[OnceLock<WorkerGroupId>]>,
     },
     MemoryRegion {
         hardware: SystemHardware,
+        count: NonZero<u32>,
         ids: Box<[MemoryRegionId]>,
         groups: Box<[OnceLock<WorkerGroupId>]>,
         members: Box<[(ProcessorId, AtomicBool)]>,
     },
     System {
         hardware: SystemHardware,
+        count: NonZero<u32>,
         group: OnceLock<WorkerGroupId>,
         members: Box<[(ProcessorId, AtomicBool)]>,
     },
 }
 
 impl PreparedPolicy {
+    fn count(&self) -> NonZero<u32> {
+        match self {
+            Self::Processor { count, .. }
+            | Self::MemoryRegion { count, .. }
+            | Self::System { count, .. } => *count,
+        }
+    }
+
     fn new(
         hardware: &SystemHardware,
         eager: Option<&ProcessorSet>,
@@ -185,6 +204,7 @@ impl PreparedPolicy {
         let prepared = match kind {
             PolicyKind::Processor => Self::Processor {
                 hardware: hardware.clone(),
+                count,
                 groups: repeat_with(OnceLock::new)
                     .take(hardware.max_processor_count())
                     .collect(),
@@ -199,6 +219,7 @@ impl PreparedPolicy {
                     .collect::<Box<[_]>>();
                 Self::MemoryRegion {
                     hardware: hardware.clone(),
+                    count,
                     groups: repeat_with(OnceLock::new).take(ids.len()).collect(),
                     ids,
                     members: member_processors(hardware),
@@ -206,6 +227,7 @@ impl PreparedPolicy {
             }
             PolicyKind::System => Self::System {
                 hardware: hardware.clone(),
+                count,
                 group: OnceLock::new(),
                 members: member_processors(hardware),
             },
@@ -245,7 +267,9 @@ impl PreparedPolicy {
 
     fn select_group(&self, registry: &WorkerGroups, count: NonZero<u32>) -> WorkerGroupId {
         match self {
-            Self::Processor { hardware, groups } => {
+            Self::Processor {
+                hardware, groups, ..
+            } => {
                 let processor = hardware.current_processor_id();
                 let id = groups
                     .get(processor as usize)
@@ -262,6 +286,7 @@ impl PreparedPolicy {
                 ids,
                 groups,
                 members,
+                ..
             } => {
                 let (region_id, processor_id) = hardware.with_current_processor(|processor| {
                     (processor.memory_region_id(), processor.id())
@@ -277,8 +302,19 @@ impl PreparedPolicy {
                     .get(index)
                     .expect("binary search identifies an existing region slot")
                     .get_or_init(|| {
-                        self.create_group(registry, count, target.group, target.processor)
+                        let id = self.create_group(registry, count, target.group, target.processor);
+                        // The first mask exists before the route can be observed. Publish its
+                        // submitter before OnceLock exposes the ID, otherwise another first
+                        // submitter could rebuild a mask without this processor.
+                        membership(members, target.processor).store(true, Ordering::Release);
+                        id
                     });
+                #[cfg(test)]
+                if let Some(before_selection) =
+                    registry.resolve(*id).before_membership_selection.get()
+                {
+                    before_selection();
+                }
                 self.expand_if_needed(registry, members, target, *id);
                 *id
             }
@@ -286,14 +322,25 @@ impl PreparedPolicy {
                 hardware,
                 group,
                 members,
+                ..
             } => {
                 let target = SubmissionTarget {
                     group: GroupId::System,
                     processor: hardware.current_processor_id(),
                 };
                 let id = group.get_or_init(|| {
-                    self.create_group(registry, count, target.group, target.processor)
+                    let id = self.create_group(registry, count, target.group, target.processor);
+                    // OnceLock exposes the route only after the initial member participates in
+                    // future mask reconstruction, preventing concurrent first-use shrinkage.
+                    membership(members, target.processor).store(true, Ordering::Release);
+                    id
                 });
+                #[cfg(test)]
+                if let Some(before_selection) =
+                    registry.resolve(*id).before_membership_selection.get()
+                {
+                    before_selection();
+                }
                 self.expand_if_needed(registry, members, target, *id);
                 *id
             }
@@ -450,7 +497,7 @@ impl PreparedPolicy {
                 )
                 .expect("region search identifies a group"),
             (Self::System { group, .. }, GroupId::System) => group,
-            _ => panic!("the destination must match the prepared policy"),
+            _ => panic!("the destination must match the bound policy"),
         }
     }
 
@@ -470,7 +517,17 @@ impl PreparedPolicy {
     }
 
     #[cfg(test)]
-    fn install_test_group(&self, group: &WorkerGroup, kind: PolicyKind, affinity: &ProcessorSet) {
+    /// Installs a controlled group after a test has arranged its exact destination.
+    ///
+    /// Production code creates and publishes routes through `bind()` and `select_group()`.
+    /// Startup and failure fixtures use this test-only path to reuse real route slots without
+    /// depending on whichever processor the test runner happens to execute on.
+    pub(crate) fn install_test_group(
+        &self,
+        group: &WorkerGroup,
+        kind: PolicyKind,
+        affinity: &ProcessorSet,
+    ) {
         let first = affinity.processors().first();
         let destination = match kind {
             PolicyKind::Processor => GroupId::Processor(first.id()),

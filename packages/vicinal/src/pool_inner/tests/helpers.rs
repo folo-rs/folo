@@ -12,26 +12,28 @@ use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
 use crate::{
-    BuiltInWorkerPolicy, ErasedTaskHandle, PrepareContext, PrepareError, Scheduler,
-    SubmissionTarget, VicinalTask, WorkerGroup, WorkerGroupId, WorkerGroupState, WorkerGroups,
-    WorkerPolicy, init_task,
+    BoundWorkerPolicy, BuiltInWorkerPolicy, ErasedTaskHandle, PrepareContext, PrepareError,
+    PreparedPolicy, Scheduler, SubmissionTarget, VicinalTask, WorkerGroup, WorkerGroupId,
+    WorkerGroupState, WorkerGroups, WorkerPolicy, init_task,
 };
 
 /// Retains the concrete built-in policy for white-box startup tests.
 #[derive(Clone, Debug)]
 pub(crate) struct TestBuiltInPolicy {
-    policy: Arc<Mutex<BuiltInWorkerPolicy>>,
+    policy: BuiltInWorkerPolicy,
+    bound: Arc<Mutex<Option<Arc<PreparedPolicy>>>>,
 }
 
 impl TestBuiltInPolicy {
     pub(crate) fn new(policy: BuiltInWorkerPolicy) -> Self {
         Self {
-            policy: Arc::new(Mutex::new(policy)),
+            policy,
+            bound: Arc::new(Mutex::new(None)),
         }
     }
 
     pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
-        self.policy.lock().unwrap().destination(hardware)
+        self.policy.destination(hardware)
     }
 
     pub(crate) fn install_test_group(
@@ -48,20 +50,20 @@ impl TestBuiltInPolicy {
             })
             .take_all()
             .expect("a test target has one eligible processor");
-        self.policy
+        self.bound
             .lock()
             .unwrap()
-            .install_test_group(&groups.group(target.group), &affinity);
+            .as_ref()
+            .expect("the builder binds a test policy before installation")
+            .install_test_group(&groups.group(target.group), self.policy.kind(), &affinity);
     }
 }
 
 impl WorkerPolicy for TestBuiltInPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        self.policy.lock().unwrap().prepare(context)
-    }
-
-    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        self.policy.lock().unwrap().select_group(groups)
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        let bound = Arc::new(self.policy.clone().bind_prepared(context));
+        *self.bound.lock().unwrap() = Some(Arc::clone(&bound));
+        Ok(bound)
     }
 }
 
@@ -96,20 +98,26 @@ impl TestPolicy {
         self.state
             .group
             .get()
-            .expect("the builder prepares a test policy before inspection")
+            .expect("the builder binds a test policy before inspection")
             .clone()
+    }
+
+    pub(crate) fn bind_prepared(self, context: PrepareContext<'_>) -> Self {
+        self.state
+            .group
+            .set(context.groups().add())
+            .expect("a test policy is bound once");
+        self
     }
 }
 
 impl WorkerPolicy for TestPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
-        self.state
-            .group
-            .set(context.groups().add())
-            .expect("a test policy is prepared once");
-        Ok(())
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
+        Ok(self.bind_prepared(context))
     }
+}
 
+impl BoundWorkerPolicy for TestPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         let group = self.group();
         self.state.started.get_or_init(|| {

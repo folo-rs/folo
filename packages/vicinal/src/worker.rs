@@ -32,16 +32,17 @@ impl Worker {
     /// The policy must apply the intended initial affinity before calling this method.
     #[inline]
     pub fn run(self) {
-        self.run_with(|| {}, ProcessorSet::pin_current_thread_to);
+        self.run_with(|| {}, ProcessorSet::pin_current_thread_to, None);
     }
 
     pub(crate) fn run_with(
         self,
         initial_setup: impl FnOnce(),
         pin: impl FnMut(&ProcessorSet) + Send,
+        applied_revision: Option<usize>,
     ) {
         let Self { group, reservation } = self;
-        group.execute_worker(reservation, initial_setup, pin);
+        group.execute_worker(reservation, initial_setup, pin, applied_revision);
     }
 }
 

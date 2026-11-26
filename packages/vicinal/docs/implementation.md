@@ -18,9 +18,9 @@ reference-count changes happen only through explicit `WorkerGroups` or `WorkerGr
 Group addition is serialized and cold. The registry never relocates or removes a live group.
 The public APIs do not expose mutable queue or registry state.
 
-For preparation-time startup, a policy borrows the group to synchronously reserve a `Worker`,
+For binding-time startup, a policy borrows the group to synchronously reserve a `Worker`,
 then moves only that reserved value into the policy-owned thread. This establishes the
-preparation reservation before the thread starts.
+binding reservation before the thread starts.
 
 The runtime separately retains a strong snapshot of each group state for terminal signaling
 and failure cleanup. Group state does not retain the runtime, so these registrations cannot
@@ -126,11 +126,11 @@ executing tasks.
 ### Eager construction
 
 The builder owns its optional processor selection and resolves final configuration only at build
-time. It constructs the runtime and worker-group registry before calling policy `prepare()`.
+time. It constructs the runtime and worker-group registry before calling policy `bind()`.
 If preparation unwinds, the runtime stops every registered group and waits for participating
 workers before resuming the failure.
 
-Pool construction validates an eager selection before invoking any `WorkerPolicy::prepare`
+Pool construction validates an eager selection before invoking any `WorkerPolicy::bind`
 implementation. It checks both supplied processor handles and processors rebuilt through the
 selection's backing hardware against the pool's eligible set. Full processor equality includes
 hardware-instance identity; supplied handles alone do not establish the backend used for pinning.
@@ -141,7 +141,7 @@ membership are seeded before spawning; no synthetic task is allocated, counted o
 
 Lazy and eager startup share `Worker::run()`. Eager preparation first seeds every selected
 group's mask, then reserves and starts every selected worker. The builder closes the preparation
-reservation phase after `WorkerPolicy::prepare()` returns and waits for every outstanding
+reservation phase after `WorkerPolicy::bind()` returns and waits for every outstanding
 reservation to reach the end of `thread_init()`. Dropping a reserved `Worker` cancels that
 expectation. Callbacks can overlap across groups. A callback panic records the first payload in
 `PoolRuntime`, stops all groups and wakes the preparation waiter. The builder then retrieves the

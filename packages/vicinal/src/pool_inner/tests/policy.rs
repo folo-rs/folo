@@ -11,8 +11,8 @@ use testing::with_watchdog;
 
 use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
 use crate::{
-    GroupId, Pool, PrepareContext, PrepareError, Scheduler, WorkerGroup, WorkerGroupId,
-    WorkerGroups, WorkerPolicy,
+    BoundWorkerPolicy, GroupId, Pool, PrepareContext, PrepareError, Scheduler, WorkerGroup,
+    WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
 
 #[derive(Debug)]
@@ -22,7 +22,7 @@ struct SingleGroupPolicy {
 }
 
 impl WorkerPolicy for SingleGroupPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         let id = group.id();
         self.group.set(id).unwrap();
@@ -33,9 +33,11 @@ impl WorkerPolicy for SingleGroupPolicy {
             affinity.pin_current_thread_to();
             worker.run();
         });
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for SingleGroupPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.group.get().unwrap()
     }
@@ -52,7 +54,7 @@ struct ReentrantStartupPolicy {
 }
 
 impl WorkerPolicy for ReentrantStartupPolicy {
-    fn prepare(&mut self, context: PrepareContext<'_>) -> Result<(), PrepareError> {
+    fn bind(self, context: PrepareContext<'_>) -> Result<impl BoundWorkerPolicy, PrepareError> {
         let group = context.groups().add();
         assert!(
             group
@@ -79,9 +81,11 @@ impl WorkerPolicy for ReentrantStartupPolicy {
         );
         self.group.set(group).unwrap();
         self.affinity.set(context.hardware().processors()).unwrap();
-        Ok(())
+        Ok(self)
     }
+}
 
+impl BoundWorkerPolicy for ReentrantStartupPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.started.get_or_init(|| {
             let group = self.group.get().unwrap();
