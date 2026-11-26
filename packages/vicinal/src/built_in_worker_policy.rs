@@ -17,7 +17,7 @@ use crate::{
 /// Owns the common routing and worker-startup implementation for all built-in policies.
 ///
 /// The public policy facades remain small and stable while this type selects the topology
-/// strategy and stores only its pool-specific prepared form. That lets the crate add or refine
+/// strategy and stores only its pool-specific bound form. That lets the crate add or refine
 /// built-in routing choices without making the shared implementation part of the public API.
 #[derive(Debug)]
 pub(crate) struct BuiltInWorkerPolicy {
@@ -104,13 +104,13 @@ impl Clone for BuiltInWorkerPolicy {
 
 impl WorkerPolicy for BuiltInWorkerPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
-        Ok(self.bind_prepared(context))
+        Ok(self.bind_built_in(context))
     }
 }
 
 impl BuiltInWorkerPolicy {
-    pub(crate) fn bind_prepared(self, context: BindContext<'_>) -> PreparedPolicy {
-        PreparedPolicy::new(
+    pub(crate) fn bind_built_in(self, context: BindContext<'_>) -> BoundBuiltInPolicy {
+        BoundBuiltInPolicy::new(
             context.hardware(),
             context.eager(),
             context.groups(),
@@ -120,16 +120,16 @@ impl BuiltInWorkerPolicy {
     }
 }
 
-impl BoundWorkerPolicy for PreparedPolicy {
+impl BoundWorkerPolicy for BoundBuiltInPolicy {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
         Self::select_group(self, groups, self.count())
     }
 }
 
 #[cfg(test)]
-impl BoundWorkerPolicy for Arc<PreparedPolicy> {
+impl BoundWorkerPolicy for Arc<BoundBuiltInPolicy> {
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        PreparedPolicy::select_group(self.as_ref(), groups, self.count())
+        BoundBuiltInPolicy::select_group(self.as_ref(), groups, self.count())
     }
 }
 
@@ -160,12 +160,12 @@ pub(crate) enum PolicyKind {
     System,
 }
 
-/// Holds the pool-specific caches required for one built-in policy after preparation.
+/// Holds the pool-specific caches required for one bound built-in policy.
 ///
 /// Processor routes use indexed slots, regional routes add compact ordered topology IDs, and
 /// system routing uses one slot. Each variant also owns the readiness facts that let task
 /// submission avoid the registry lock after a route has been published.
-pub(crate) enum PreparedPolicy {
+pub(crate) enum BoundBuiltInPolicy {
     Processor {
         hardware: SystemHardware,
         count: NonZero<u32>,
@@ -186,7 +186,7 @@ pub(crate) enum PreparedPolicy {
     },
 }
 
-impl PreparedPolicy {
+impl BoundBuiltInPolicy {
     fn count(&self) -> NonZero<u32> {
         match self {
             Self::Processor { count, .. }
@@ -202,7 +202,7 @@ impl PreparedPolicy {
         kind: PolicyKind,
         count: NonZero<u32>,
     ) -> Self {
-        let prepared = match kind {
+        let bound = match kind {
             PolicyKind::Processor => Self::Processor {
                 hardware: hardware.clone(),
                 count,
@@ -235,10 +235,10 @@ impl PreparedPolicy {
         };
 
         if let Some(processors) = eager {
-            prepared.prepare_eager(groups, kind, count, processors.clone());
+            bound.bind_eager(groups, kind, count, processors.clone());
         }
 
-        prepared
+        bound
     }
 
     /// Seeds all eager destinations before starting and waiting for their workers.
@@ -247,7 +247,7 @@ impl PreparedPolicy {
     /// Each worker applies its startup pin and records the published revision before it joins
     /// participation, so construction cannot expose an expandable route before those facts
     /// agree. Ref: docs/implementation.md, "Affinity and failure coordination".
-    fn prepare_eager(
+    fn bind_eager(
         &self,
         registry: &WorkerGroups,
         kind: PolicyKind,
@@ -561,7 +561,7 @@ impl PreparedPolicy {
     }
 }
 
-impl Debug for PreparedPolicy {
+impl Debug for BoundBuiltInPolicy {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str(type_name::<Self>())
     }

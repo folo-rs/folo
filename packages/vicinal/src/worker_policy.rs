@@ -234,7 +234,7 @@ mod tests {
     assert_impl_all!(BindError: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
-    fn preparation_context_formats() {
+    fn binding_context_formats() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
         let eager = hardware.all_processors();
         let pool = Pool::builder().hardware(hardware.clone()).build().unwrap();

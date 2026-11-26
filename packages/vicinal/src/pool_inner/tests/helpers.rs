@@ -12,8 +12,8 @@ use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
 use crate::{
-    BindContext, BindError, BoundWorkerPolicy, BuiltInWorkerPolicy, ErasedTaskHandle,
-    PreparedPolicy, Scheduler, SubmissionTarget, VicinalTask, WorkerGroup, WorkerGroupId,
+    BindContext, BindError, BoundBuiltInPolicy, BoundWorkerPolicy, BuiltInWorkerPolicy,
+    ErasedTaskHandle, Scheduler, SubmissionTarget, VicinalTask, WorkerGroup, WorkerGroupId,
     WorkerGroupState, WorkerGroups, WorkerPolicy, init_task,
 };
 
@@ -21,7 +21,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct TestBuiltInPolicy {
     policy: BuiltInWorkerPolicy,
-    bound: Arc<Mutex<Option<Arc<PreparedPolicy>>>>,
+    bound: Arc<Mutex<Option<Arc<BoundBuiltInPolicy>>>>,
 }
 
 impl TestBuiltInPolicy {
@@ -61,7 +61,7 @@ impl TestBuiltInPolicy {
 
 impl WorkerPolicy for TestBuiltInPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
-        let bound = Arc::new(self.policy.clone().bind_prepared(context));
+        let bound = Arc::new(self.policy.clone().bind_built_in(context));
         *self.bound.lock().unwrap() = Some(Arc::clone(&bound));
         Ok(bound)
     }
@@ -73,7 +73,7 @@ pub(crate) struct TestPolicy {
     state: Arc<TestPolicyState>,
 }
 
-/// Retains the prepared group and startup state shared with the test controller.
+/// Retains the bound group and startup state shared with the test controller.
 #[derive(Debug)]
 struct TestPolicyState {
     group: OnceLock<WorkerGroup>,
@@ -93,7 +93,7 @@ impl TestPolicy {
         }
     }
 
-    /// Returns the group created while the pool prepared this policy.
+    /// Returns the group created while the pool bound this policy.
     pub(crate) fn group(&self) -> WorkerGroup {
         self.state
             .group
@@ -102,7 +102,7 @@ impl TestPolicy {
             .clone()
     }
 
-    pub(crate) fn bind_prepared(self, context: BindContext<'_>) -> Self {
+    pub(crate) fn bind_test_policy(self, context: BindContext<'_>) -> Self {
         self.state
             .group
             .set(context.groups().add())
@@ -113,7 +113,7 @@ impl TestPolicy {
 
 impl WorkerPolicy for TestPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
-        Ok(self.bind_prepared(context))
+        Ok(self.bind_test_policy(context))
     }
 }
 

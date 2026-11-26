@@ -97,7 +97,7 @@ initialization callback regardless of setter order. A custom policy decides how 
 selection maps to worker groups and may ignore it.
 
 Every `Worker` created with `WorkerGroup::add_worker()` while `bind()` runs creates an
-individual preparation-time initialization reservation. The policy must run or drop each
+individual binding-time initialization reservation. The policy must run or drop each
 reserved `Worker`. After `bind()` returns, the builder waits until each exact reservation
 finishes initialization or its unrun worker is dropped to cancel it. A policy must not wait
 for `build()` to return before resolving an outstanding reservation. Workers created after

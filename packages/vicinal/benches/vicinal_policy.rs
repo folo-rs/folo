@@ -15,7 +15,7 @@ use vicinal::{
 
 ::testing::set_allocator!();
 
-/// Built-in policies with distinct preparation and established-selection paths.
+/// Built-in policies with distinct binding and established-selection paths.
 #[derive(Clone, Copy, Debug)]
 enum PolicyCase {
     Processor,
@@ -33,7 +33,7 @@ impl PolicyCase {
     }
 }
 
-/// Retains prepared public policy state after `PoolBuilder` moves one clone into the pool.
+/// Retains bound public policy state after `PoolBuilder` moves one clone into the pool.
 #[derive(Clone, Debug)]
 struct PolicyProbe {
     kind: PolicyCase,
@@ -52,7 +52,7 @@ impl PolicyProbe {
         let (groups, policy) = self
             .state
             .get()
-            .expect("PoolBuilder prepares the retained policy");
+            .expect("PoolBuilder binds the retained policy");
         policy.select_group(groups)
     }
 }
@@ -133,8 +133,8 @@ fn pin_to(hardware: &SystemHardware, processor: u32) {
         .pin_current_thread_to();
 }
 
-fn preparation(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("vicinal_policy/preparation");
+fn binding(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("vicinal_policy/binding");
     let hardware = hardware();
 
     for kind in [
@@ -283,7 +283,7 @@ fn admission(criterion: &mut Criterion) {
 }
 
 fn entrypoint(criterion: &mut Criterion) {
-    preparation(criterion);
+    binding(criterion);
     established_selection(criterion);
     membership_expansion(criterion);
     admission(criterion);

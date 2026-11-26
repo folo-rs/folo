@@ -170,7 +170,7 @@ impl PoolRuntime {
     }
 
     /// Cancels one worker-initialization target without running that worker.
-    // Omitting this decrement and notification can leave preparation waiting forever.
+    // Omitting this decrement and notification can leave binding waiting forever.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn cancel_binding_worker(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
@@ -182,14 +182,14 @@ impl PoolRuntime {
     }
 
     /// Completes one tracked binding worker after its initializer returns.
-    // Omitting this decrement and notification can leave preparation waiting forever.
+    // Omitting this decrement and notification can leave binding waiting forever.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn initialize_binding_worker(&self) {
         let mut workers = self.workers.lock().expect(NEVER_POISONED);
         workers.binding_workers = workers
             .binding_workers
             .checked_sub(1)
-            .expect("each initialized preparation worker owns exactly one reservation");
+            .expect("each initialized binding worker owns exactly one reservation");
         self.workers_changed.notify_all();
     }
 

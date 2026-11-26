@@ -28,13 +28,13 @@ struct LazySingleGroupPolicy {
 
 /// Reports an ordinary policy-specific binding failure.
 #[derive(Debug)]
-struct FailingPreparationPolicy {
+struct FailingBindingPolicy {
     initializer: Mutex<Receiver<()>>,
-    prepared: Sender<()>,
+    bound: Sender<()>,
     exited: Sender<()>,
 }
 
-impl WorkerPolicy for FailingPreparationPolicy {
+impl WorkerPolicy for FailingBindingPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
         let worker = context.groups().add().add_worker();
         let exited = self.exited.clone();
@@ -43,7 +43,7 @@ impl WorkerPolicy for FailingPreparationPolicy {
             exited.send(()).unwrap();
         });
         self.initializer.lock().unwrap().recv().unwrap();
-        self.prepared.send(()).unwrap();
+        self.bound.send(()).unwrap();
 
         Err::<Self, _>(BindError::new(io::Error::other(
             "injected policy binding failure",
@@ -51,7 +51,7 @@ impl WorkerPolicy for FailingPreparationPolicy {
     }
 }
 
-impl BoundWorkerPolicy for FailingPreparationPolicy {
+impl BoundWorkerPolicy for FailingBindingPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         unreachable!("construction rejects the binding failure")
     }
@@ -98,7 +98,7 @@ fn custom_policy_lazily_creates_and_runs_worker() {
 fn binding_failure_is_returned_after_started_workers_leave() {
     with_watchdog(|| {
         let (initializer_entered, initializer_arrival) = channel();
-        let (prepared, policy_prepared) = channel();
+        let (bound, policy_bound) = channel();
         let (release_initializer, initializer_release) = channel();
         let (exited, worker_exited) = channel();
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
@@ -107,9 +107,9 @@ fn binding_failure_is_returned_after_started_workers_leave() {
             let initializer_release = Mutex::new(initializer_release);
             Pool::builder()
                 .hardware(hardware)
-                .worker_policy(FailingPreparationPolicy {
+                .worker_policy(FailingBindingPolicy {
                     initializer: Mutex::new(initializer_arrival),
-                    prepared,
+                    bound,
                     exited,
                 })
                 .thread_init(move || {
@@ -120,7 +120,7 @@ fn binding_failure_is_returned_after_started_workers_leave() {
                 .map(drop)
         });
 
-        policy_prepared.recv().unwrap();
+        policy_bound.recv().unwrap();
         assert!(!construction.is_finished());
         release_initializer.send(()).unwrap();
         let error = construction.join().unwrap().unwrap_err();

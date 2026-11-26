@@ -32,7 +32,7 @@ struct GatedSelectionPolicy {
 
 impl WorkerPolicy for GatedSelectionPolicy {
     fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
-        self.inner = self.inner.bind_prepared(context);
+        self.inner = self.inner.bind_test_policy(context);
         Ok(self)
     }
 }
@@ -58,7 +58,7 @@ impl BoundWorkerPolicy for GatedSelectionPolicy {
     }
 }
 
-/// Fails exactly at the custom policy boundary after pool preparation.
+/// Fails exactly at custom policy selection after the pool has bound that policy.
 #[derive(Debug)]
 struct PanickingSelectionPolicy {
     inner: TestPolicy,
@@ -66,7 +66,7 @@ struct PanickingSelectionPolicy {
 
 impl WorkerPolicy for PanickingSelectionPolicy {
     fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundWorkerPolicy, BindError> {
-        self.inner = self.inner.bind_prepared(context);
+        self.inner = self.inner.bind_test_policy(context);
         Ok(self)
     }
 }

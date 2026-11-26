@@ -140,8 +140,8 @@ Repeated entries never create additional worker groups. Group masks and shared
 membership are seeded before spawning; no synthetic task is allocated, counted or executed.
 
 Lazy and eager startup share `Worker::run()`. Eager binding first seeds every selected
-group's mask, then reserves and starts every selected worker. The builder closes the preparation
-binding reservation phase after `WorkerPolicy::bind()` returns and waits for every outstanding
+group's permitted processor set, then reserves and starts every selected worker. The builder
+closes the binding reservation phase after `WorkerPolicy::bind()` returns and waits for every outstanding
 reservation to reach the end of `thread_init()`. Dropping a reserved `Worker` cancels that
 expectation. Callbacks can overlap across groups. A callback panic records the first payload in
 `PoolRuntime`, stops all groups and wakes the binding waiter. The builder converts the retained

@@ -17,13 +17,13 @@ use crate::{
 };
 
 /// Distinguishes a panic from `bind()` from ordinary test synchronization signals.
-struct PreparationFailure;
+struct BindingFailure;
 /// Distinguishes a policy destructor panic from the binding error returned first.
 struct PolicyDropFailure;
 
 /// Distinguishes the expected binding signal from an unexpected worker return.
 #[derive(Debug, Eq, PartialEq)]
-enum PreparationEvent {
+enum BindingEvent {
     Ready,
     Failed,
     Returned,
@@ -33,7 +33,7 @@ enum PreparationEvent {
 #[derive(Debug)]
 struct StartupFailurePolicy {
     worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
-    ready: Mutex<Option<(Sender<PreparationEvent>, Receiver<PreparationEvent>)>>,
+    ready: Mutex<Option<(Sender<BindingEvent>, Receiver<BindingEvent>)>>,
 }
 
 /// Reports binding failure and observes whether destructor failure waits for worker exit.
@@ -80,10 +80,10 @@ impl WorkerPolicy for StartupFailurePolicy {
         let worker = group.add_worker();
         _ = spawn(move || {
             worker.run();
-            _ = returned.send(PreparationEvent::Returned);
+            _ = returned.send(BindingEvent::Returned);
         });
-        assert_eq!(ready.recv().unwrap(), PreparationEvent::Ready);
-        panic_any(PreparationFailure);
+        assert_eq!(ready.recv().unwrap(), BindingEvent::Ready);
+        panic_any(BindingFailure);
         #[allow(
             unreachable_code,
             reason = "panic_any proves the failure path while this gives the opaque return a concrete type"
@@ -98,7 +98,7 @@ impl BoundWorkerPolicy for StartupFailurePolicy {
     }
 }
 
-/// Starts a failing worker, observes published failure, then returns from preparation.
+/// Starts a failing worker, observes published failure, then returns from binding.
 #[derive(Debug)]
 struct ReturningFailurePolicy;
 
@@ -112,16 +112,16 @@ impl WorkerPolicy for ReturningFailurePolicy {
                 .state()
                 .before_failure_exit
                 .set(Box::new(move || {
-                    failed.send(PreparationEvent::Failed).unwrap();
+                    failed.send(BindingEvent::Failed).unwrap();
                 }))
                 .is_ok()
         );
         let worker = group.add_worker();
         _ = spawn(move || {
             worker.run();
-            _ = returned.send(PreparationEvent::Returned);
+            _ = returned.send(BindingEvent::Returned);
         });
-        assert_eq!(failure.recv().unwrap(), PreparationEvent::Failed);
+        assert_eq!(failure.recv().unwrap(), BindingEvent::Failed);
         Ok(self)
     }
 }
@@ -132,7 +132,7 @@ impl BoundWorkerPolicy for ReturningFailurePolicy {
     }
 }
 
-/// Reserves multiple custom workers during preparation for builder-owned readiness tracking.
+/// Reserves multiple custom workers during binding for builder-owned readiness tracking.
 #[derive(Debug)]
 struct EagerCustomPolicy {
     group: OnceLock<WorkerGroupId>,
@@ -158,7 +158,7 @@ impl BoundWorkerPolicy for EagerCustomPolicy {
     }
 }
 
-/// Records whether preparation can abandon a worker that will never run.
+/// Records whether binding can abandon a worker that will never run.
 #[derive(Debug)]
 struct DroppedWorkerPolicy {
     group: OnceLock<WorkerGroupId>,
@@ -208,7 +208,7 @@ impl BoundWorkerPolicy for ObservedBoundPolicy {
 }
 
 #[test]
-fn policy_preparation_failure_stops_started_workers() {
+fn policy_binding_failure_stops_started_workers() {
     with_watchdog(|| {
         let observer = Arc::new(Mutex::new(None));
         let (ready, worker_ready) = channel();
@@ -221,7 +221,7 @@ fn policy_preparation_failure_stops_started_workers() {
                 worker_observer: Arc::clone(&observer),
                 ready: Mutex::new(Some((ready.clone(), worker_ready))),
             })
-            .thread_init(move || ready.send(PreparationEvent::Ready).unwrap())
+            .thread_init(move || ready.send(BindingEvent::Ready).unwrap())
             .build()
             .unwrap_err();
 
@@ -234,13 +234,13 @@ fn policy_preparation_failure_stops_started_workers() {
             .lock()
             .unwrap()
             .take()
-            .expect("preparation retained the created group for observation");
+            .expect("binding retained the created group for observation");
         assert_eq!(group.worker_count(), 0);
     });
 }
 
 #[test]
-fn policy_drop_failure_waits_for_preparation_workers() {
+fn policy_drop_failure_waits_for_binding_workers() {
     with_watchdog(|| {
         let observer = Arc::new(Mutex::new(None));
         let (initializer_entered, worker_initialized) = channel();
@@ -285,7 +285,7 @@ fn policy_drop_failure_waits_for_preparation_workers() {
 }
 
 #[test]
-fn construction_rejects_failure_published_before_prepare_returns() {
+fn construction_rejects_failure_published_before_bind_returns() {
     /// Distinguishes the worker initializer panic from construction or cleanup failures.
     struct InitializationFailure;
 
@@ -380,12 +380,12 @@ fn custom_policy_rejects_foreign_eager_hardware() {
             .unwrap();
     });
     // Equal processor counts make hardware identity the only mismatch. The observer proves
-    // construction rejected that mismatch before entering the policy's failing preparation.
+    // Construction rejected that mismatch before entering the policy's failing bind call.
     assert!(observer.lock().unwrap().is_none());
 }
 
 #[test]
-fn builder_waits_for_every_custom_preparation_worker() {
+fn builder_waits_for_every_custom_binding_worker() {
     with_watchdog(|| {
         let initialized = Arc::new(AtomicUsize::new(0));
         let pool = Pool::builder()
@@ -413,7 +413,7 @@ fn builder_waits_for_every_custom_preparation_worker() {
 }
 
 #[test]
-fn dropping_a_preparation_worker_cancels_its_readiness_target() {
+fn dropping_a_binding_worker_cancels_its_readiness_target() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
