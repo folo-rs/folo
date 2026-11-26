@@ -48,6 +48,7 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
 /// A rejected admission must not claim a failure that a worker already published.
 #[test]
 fn poisoned_enqueue_preserves_existing_runtime_failure() {
+    /// Identifies the worker-published payload that a rejected admission must preserve.
     struct OriginalFailure;
 
     let policy = TestPolicy::new(0);

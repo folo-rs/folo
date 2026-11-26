@@ -14,7 +14,7 @@ use vicinal::{Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, W
 ::testing::set_allocator!();
 
 /// Built-in policies with distinct preparation and established-selection paths.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum PolicyCase {
     Processor,
     MemoryRegion,
@@ -32,7 +32,7 @@ impl PolicyCase {
 }
 
 /// Retains prepared public policy state after `PoolBuilder` moves one clone into the pool.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct PolicyProbe {
     kind: PolicyCase,
     state: Arc<OnceLock<(WorkerGroups, PreparedPolicy)>>,
@@ -76,6 +76,7 @@ impl WorkerPolicy for PolicyProbe {
 }
 
 /// The public built-in policy values hidden behind the pluggable `WorkerPolicy` API.
+#[derive(Debug)]
 enum PreparedPolicy {
     Processor(WorkersPerProcessor),
     MemoryRegion(WorkersPerMemoryRegion),
@@ -109,6 +110,7 @@ impl PreparedPolicy {
 }
 
 /// Prepares one stable group without creating workers, isolating scheduler admission.
+#[derive(Debug)]
 struct NoWorkerPolicy {
     group: OnceLock<WorkerGroupId>,
 }

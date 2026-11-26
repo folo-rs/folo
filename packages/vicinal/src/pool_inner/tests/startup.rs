@@ -21,6 +21,7 @@ use crate::{
 };
 
 /// Pauses policy selection after a test worker reaches the ordinary participation boundary.
+#[derive(Debug)]
 struct GatedSelectionPolicy {
     inner: TestPolicy,
     worker_started: OnceLock<()>,
@@ -55,6 +56,7 @@ impl WorkerPolicy for GatedSelectionPolicy {
 }
 
 /// Fails exactly at the custom policy boundary after pool preparation.
+#[derive(Debug)]
 struct PanickingSelectionPolicy {
     inner: TestPolicy,
 }
@@ -69,6 +71,7 @@ impl WorkerPolicy for PanickingSelectionPolicy {
     }
 }
 
+/// Distinguishes the injected custom-policy selection failure from cleanup panics.
 struct StartupFailure;
 
 /// Processor-local startup must serialize concurrent first submitters.

@@ -42,7 +42,10 @@ pub(crate) struct PoolRuntime {
     pub(crate) result_channel_pool: EventLake,
 }
 
-/// Retains terminal and affinity access to one group.
+/// Keeps one group state alive for runtime-wide signaling and terminal cleanup.
+///
+/// Registration decouples worker lifecycle management from policy-owned `WorkerGroup` handles,
+/// so shutdown can reach every created group even if a policy drops its own handle.
 struct RegisteredGroup {
     state: Arc<WorkerGroupState>,
 }
@@ -397,13 +400,20 @@ impl PoolRuntime {
     }
 }
 
-/// Tracks whether infrastructure-failure ownership remains in runtime or an active caller.
+/// Tracks which boundary owns propagation of the first infrastructure failure.
+///
+/// Keeping ownership explicit prevents a worker panic, submission panic, and later cleanup
+/// panic from competing to replace or consume the same arbitrary payload.
 enum FailureState {
     Vacant,
     Retained(Box<dyn Any + Send>),
     Unavailable,
 }
 
+/// Counts live participation and outstanding preparation targets for shutdown barriers.
+///
+/// The runtime uses one synchronized lifecycle so policy preparation, worker startup and
+/// pool destruction agree on when every participating thread has left the pool.
 #[derive(Default)]
 struct WorkerLifecycle {
     active: usize,
@@ -479,6 +489,7 @@ mod tests {
         ignore = "subscriber panic payload retention intentionally leaks arbitrary callback state"
     )]
     fn failure_state_precedes_panicking_diagnostics() {
+        /// Identifies the root infrastructure payload across subscriber and cleanup panics.
         struct OriginalFailure;
 
         let runtime = PoolRuntime::new(1, "test".to_string(), None);

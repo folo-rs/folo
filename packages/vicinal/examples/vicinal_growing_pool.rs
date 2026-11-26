@@ -58,6 +58,7 @@ fn main() -> Result<(), PrepareError> {
 /// Policy selection precedes queue admission, so the incoming task itself is not visible in
 /// `queue_len()`. This policy starts one worker eagerly and grows when a later submission
 /// observes backlog. It deliberately never removes workers or imposes a maximum.
+#[derive(Debug)]
 struct GrowingPolicy {
     group: Option<WorkerGroup>,
 }

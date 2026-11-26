@@ -105,6 +105,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
 /// Dequeued-task destruction must see the worker loop's real pool-wide rejection callback.
 #[test]
 fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
+    /// Identifies the injected refresh failure from task and cleanup panic paths.
     struct AffinityFailure;
 
     with_watchdog(|| {

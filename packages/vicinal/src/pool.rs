@@ -114,7 +114,11 @@ impl Drop for Pool {
     }
 }
 
-/// Builder for configuring a [`Pool`].
+/// Collects pool configuration before one fallible preparation phase.
+///
+/// The builder chooses the concrete policy, topology and initialization callback before
+/// construction, so preparation starts with the final immutable configuration and can return
+/// a policy error before publishing a usable pool.
 pub struct PoolBuilder {
     name: Option<String>,
     policy: Option<Box<dyn WorkerPolicy>>,
@@ -294,6 +298,7 @@ impl fmt::Debug for PoolBuilder {
         f.debug_struct(type_name::<Self>())
             .field("name", &self.name)
             .field("hardware", &self.hardware)
+            .field("policy", &self.policy)
             .field("has_thread_init", &self.thread_init.is_some())
             .field("eager", &self.eager)
             .finish_non_exhaustive()

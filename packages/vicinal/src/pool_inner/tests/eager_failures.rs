@@ -16,7 +16,9 @@ use crate::{
     WorkerGroups, WorkerPolicy,
 };
 
+/// Distinguishes a panic from `prepare()` from ordinary test synchronization signals.
 struct PreparationFailure;
+/// Distinguishes a policy destructor panic from the preparation error returned first.
 struct PolicyDropFailure;
 
 /// Distinguishes the expected preparation signal from an unexpected worker return.
@@ -28,12 +30,14 @@ enum PreparationEvent {
 }
 
 /// Stops a started worker and records preparation failure for cleanup-boundary tests.
+#[derive(Debug)]
 struct StartupFailurePolicy {
     worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
     ready: Mutex<Option<(Sender<PreparationEvent>, Receiver<PreparationEvent>)>>,
 }
 
 /// Reports preparation failure and observes whether destructor failure waits for worker exit.
+#[derive(Debug)]
 struct PanickingDropPolicy {
     worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
     initializer: Mutex<Receiver<()>>,
@@ -88,6 +92,7 @@ impl WorkerPolicy for StartupFailurePolicy {
 }
 
 /// Starts a failing worker, observes published failure, then returns from preparation.
+#[derive(Debug)]
 struct ReturningFailurePolicy;
 
 impl WorkerPolicy for ReturningFailurePolicy {
@@ -119,6 +124,7 @@ impl WorkerPolicy for ReturningFailurePolicy {
 }
 
 /// Reserves multiple custom workers during preparation for builder-owned readiness tracking.
+#[derive(Debug)]
 struct EagerCustomPolicy {
     group: OnceLock<WorkerGroupId>,
 }
@@ -142,6 +148,7 @@ impl WorkerPolicy for EagerCustomPolicy {
 }
 
 /// Records whether preparation can abandon a worker that will never run.
+#[derive(Debug)]
 struct DroppedWorkerPolicy {
     group: OnceLock<WorkerGroupId>,
 }
@@ -160,6 +167,7 @@ impl WorkerPolicy for DroppedWorkerPolicy {
 }
 
 /// Retains a built-in eager group for observing construction failure cleanup.
+#[derive(Debug)]
 struct ObservedEagerPolicy {
     inner: BuiltInWorkerPolicy,
     observer: Arc<Mutex<Option<WorkerGroup>>>,
@@ -251,6 +259,7 @@ fn policy_drop_failure_waits_for_preparation_workers() {
 
 #[test]
 fn construction_rejects_failure_published_before_prepare_returns() {
+    /// Distinguishes the worker initializer panic from construction or cleanup failures.
     struct InitializationFailure;
 
     with_watchdog(|| {
@@ -273,6 +282,7 @@ fn construction_rejects_failure_published_before_prepare_returns() {
 
 #[test]
 fn eager_partial_initializer_failure_waits_for_started_worker() {
+    /// Distinguishes the eager worker initializer panic from construction coordination.
     struct InitializationFailure;
 
     with_watchdog(|| {

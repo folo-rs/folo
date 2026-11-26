@@ -100,6 +100,7 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
 /// Pool destruction must not finish between a caught failure and participation release.
 #[test]
 fn shutdown_waits_for_failure_publication_to_finish() {
+    /// Identifies the initializer panic shared by the race's synchronization assertions.
     struct InitializationFailure;
 
     with_watchdog(|| {

@@ -26,6 +26,7 @@ use crate::{
 };
 
 /// Records whether terminal admission ever reaches custom policy selection.
+#[derive(Debug)]
 struct RecordingPolicy {
     // This observes whether selection ran; runtime shutdown ordering is established by the
     // completed submission result rather than this counter.
@@ -235,6 +236,7 @@ fn shutdown_drains_both_queues_despite_a_destructor_panic() {
 /// A secondary payload's destructor cannot stop queue draining or replace the first error.
 #[test]
 fn shutdown_contains_secondary_payload_destruction() {
+    /// Identifies the first queued cleanup failure that must outrank later diagnostics.
     struct FirstFailure;
 
     let policy = TestPolicy::new(0);
@@ -270,6 +272,7 @@ fn shutdown_contains_secondary_payload_destruction() {
 /// Suppressing cleanup failure during an outer unwind must also contain its payload destructor.
 #[test]
 fn shutdown_contains_payload_destruction_during_outer_unwind() {
+    /// Identifies the caller's active unwind that cleanup must preserve.
     struct OuterFailure;
 
     with_watchdog(|| {

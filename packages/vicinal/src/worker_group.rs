@@ -9,7 +9,6 @@ use std::num::NonZero;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -25,53 +24,10 @@ use plurality::MultiPool;
 use tracing::debug;
 
 use crate::pool_inner::{POOL_LOG_TARGET, worker_loop_with};
-use crate::{ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime};
-
-/// Identifies a worker group within one [`WorkerGroups`][crate::WorkerGroups] collection.
-///
-/// This value is [`Copy`], so policies can route tasks without cloning a group handle.
-/// IDs from another pool are rejected when the pool resolves the selected group.
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub struct WorkerGroupId {
-    pub(crate) owner: u64,
-    /// Stable address used by the owning registry for lock-free, ref-count-free resolution.
-    ///
-    /// An index into the registry's `Vec<WorkerGroup>` would be an alternative safe identity.
-    /// Resolving it would require locking that vector and cloning its `Arc` on every submission
-    /// because the vector may grow and references to its elements cannot outlive its guard.
-    /// Each state is instead independently heap-allocated and retained for the registry's
-    /// lifetime, so only the pointer and the registry owner check cross the routing boundary.
-    pub(crate) state: NonNull<WorkerGroupState>,
-}
-
-impl WorkerGroupId {
-    pub(crate) fn new(owner: u64, state: &Arc<WorkerGroupState>) -> Self {
-        Self {
-            owner,
-            state: NonNull::from(Arc::as_ref(state)),
-        }
-    }
-}
-
-// SAFETY: Moving an ID copies only its owner and address; the ID does not dereference or own
-// the pointee. The pointer is dereferenced only by WorkerGroups::resolve, after checking the
-// registry owner. That registry retains the Arc-backed state for the returned shared reference's
-// entire lifetime. Future direct dereferences must preserve the same checked-resolution boundary.
-unsafe impl Send for WorkerGroupId {}
-// SAFETY: Sharing an ID copies only its owner and address. No operation on the ID reads the
-// pointee: WorkerGroups::resolve performs the sole dereference after owner validation and under
-// the registry borrow that keeps the Arc-backed state alive. Sharing the ID itself neither prolongs
-// nor assumes the pointee's lifetime.
-unsafe impl Sync for WorkerGroupId {}
-
-impl Debug for WorkerGroupId {
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_struct(type_name::<Self>())
-            .field("owner", &self.owner)
-            .finish_non_exhaustive()
-    }
-}
+use crate::{
+    ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime, PreparationReservation, Worker,
+    WorkerGroupId,
+};
 
 /// A cloneable participation handle for one worker group.
 ///
@@ -119,13 +75,11 @@ impl WorkerGroup {
     /// pool construction wait indefinitely.
     #[inline]
     pub fn add_worker(&self) -> Worker {
-        Worker {
-            group: self.clone(),
-            reservation: PreparationReservation::new(
-                Arc::clone(&self.runtime),
-                self.runtime.reserve_preparation_worker(),
-            ),
-        }
+        Worker::new(
+            self.clone(),
+            Arc::clone(&self.runtime),
+            self.runtime.reserve_preparation_worker(),
+        )
     }
 
     /// Returns the combined number of urgent and regular tasks currently queued in this group.
@@ -147,7 +101,7 @@ impl WorkerGroup {
             .expect("two VecDeque lengths cannot exceed addressable memory")
     }
 
-    fn execute_worker(
+    pub(crate) fn execute_worker(
         &self,
         reservation: PreparationReservation,
         initial_setup: impl FnOnce(),
@@ -522,77 +476,12 @@ fn worker_entry(
     move || worker.run_with(move || initial_pin(&affinity), pin)
 }
 
-/// Runs one reserved worker through the pool's worker lifecycle.
+/// Owns all synchronized state shared by the workers in one destination group.
 ///
-/// A policy moves this value into a thread and calls [`run`][Self::run] once.
-/// Dropping it before that call cancels any worker-initialization target created during
-/// policy preparation.
-#[must_use = "reserved workers must be run or explicitly dropped"]
-pub struct Worker {
-    group: WorkerGroup,
-    reservation: PreparationReservation,
-}
-
-impl Debug for Worker {
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_struct(type_name::<Self>())
-            .field("group", &self.group)
-            .field(
-                "preparation_pending",
-                &self.reservation.is_preparation_pending(),
-            )
-            .finish()
-    }
-}
-
-impl Worker {
-    /// Runs this worker on the current thread until the pool shuts down.
-    ///
-    /// The policy must apply the intended initial affinity before calling this method.
-    #[inline]
-    pub fn run(self) {
-        self.run_with(|| {}, ProcessorSet::pin_current_thread_to);
-    }
-
-    fn run_with(self, initial_setup: impl FnOnce(), pin: impl FnMut(&ProcessorSet) + Send) {
-        let Self { group, reservation } = self;
-        group.execute_worker(reservation, initial_setup, pin);
-    }
-}
-
-/// Releases an outstanding preparation target when a reserved worker is dropped.
-struct PreparationReservation {
-    runtime: Option<Arc<PoolRuntime>>,
-}
-
-impl PreparationReservation {
-    fn new(runtime: Arc<PoolRuntime>, active: bool) -> Self {
-        Self {
-            runtime: if active { Some(runtime) } else { None },
-        }
-    }
-
-    fn initialize(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            runtime.initialize_preparation_worker();
-        }
-    }
-
-    fn is_preparation_pending(&self) -> bool {
-        self.runtime.is_some()
-    }
-}
-
-impl Drop for PreparationReservation {
-    fn drop(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            runtime.cancel_preparation_worker();
-        }
-    }
-}
-
-/// Everything a group's worker threads share.
+/// `WorkerGroup` handles retain this allocation, while worker threads and schedulers access
+/// its queues, affinity, readiness and participation state through narrow synchronization
+/// boundaries. Keeping this state separate makes group handles cloneable without copying the
+/// destination's queues or worker-lifecycle accounting.
 pub(crate) struct WorkerGroupState {
     pub(crate) destination: Option<GroupId>,
 
@@ -738,7 +627,7 @@ mod tests {
     assert_not_impl_any!(Worker: Copy, Clone);
 
     /// Supplies one routable group without workers so admitted tasks remain observable.
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct NoWorkerPolicy {
         group: OnceLock<WorkerGroupId>,
     }

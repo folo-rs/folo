@@ -14,7 +14,11 @@ use crate::{
     GroupId, NEVER_POISONED, PrepareContext, PrepareError, SubmissionTarget, WorkerGroup,
     WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
-/// Shares the implementation used by the public built-in policy facades.
+/// Owns the common routing and worker-startup implementation for all built-in policies.
+///
+/// The public policy facades remain small and stable while this type selects the topology
+/// strategy and stores only its pool-specific prepared form. That lets the crate add or refine
+/// built-in routing choices without making the shared implementation part of the public API.
 #[derive(Debug)]
 pub(crate) struct BuiltInWorkerPolicy {
     kind: PolicyKind,
@@ -136,7 +140,10 @@ pub(crate) fn validate_eager_processors(hardware: &SystemHardware, processors: &
     );
 }
 
-/// Keeps built-in policy variants private so future choices need not become exhaustive APIs.
+/// Selects the topology semantics used by one built-in policy facade.
+///
+/// Keeping this enum private lets the public facade types present independent choices while
+/// sharing one implementation without exposing future variants as an exhaustive contract.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PolicyKind {
     Processor,
@@ -144,7 +151,11 @@ pub(crate) enum PolicyKind {
     System,
 }
 
-/// Stores pool-specific routing slots, hardware and membership publication state.
+/// Holds the pool-specific caches required for one built-in policy after preparation.
+///
+/// Processor routes use indexed slots, regional routes add compact ordered topology IDs, and
+/// system routing uses one slot. Each variant also owns the readiness facts that let task
+/// submission avoid the registry lock after a route has been published.
 enum PreparedPolicy {
     Processor {
         hardware: SystemHardware,

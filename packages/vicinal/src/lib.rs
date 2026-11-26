@@ -140,7 +140,6 @@
 mod built_in_worker_policy;
 mod constants;
 mod group_id;
-mod group_registry;
 mod join_handle;
 mod metrics;
 pub mod policies;
@@ -152,7 +151,10 @@ mod task;
 mod task_error;
 mod task_panic;
 mod worker;
+mod worker_core;
 mod worker_group;
+mod worker_group_id;
+mod worker_groups;
 mod worker_policy;
 
 #[cfg(test)]
@@ -160,7 +162,6 @@ pub(crate) use built_in_worker_policy::PolicyKind;
 pub(crate) use built_in_worker_policy::{BuiltInWorkerPolicy, validate_eager_processors};
 pub(crate) use constants::NEVER_POISONED;
 pub(crate) use group_id::*;
-pub use group_registry::WorkerGroups;
 pub use join_handle::*;
 pub use pool::*;
 pub(crate) use pool_inner::PoolInner;
@@ -169,11 +170,15 @@ pub use scheduler::*;
 pub(crate) use task::*;
 pub use task_error::*;
 pub(crate) use task_panic::*;
-pub(crate) use worker::*;
+pub(crate) use worker::PreparationReservation;
+pub use worker::Worker;
+pub(crate) use worker_core::*;
 #[cfg(test)]
 pub(crate) use worker_group::WorkerEntry;
+pub use worker_group::WorkerGroup;
 pub(crate) use worker_group::{GroupState, WorkerGroupState};
-pub use worker_group::{Worker, WorkerGroup, WorkerGroupId};
+pub use worker_group_id::WorkerGroupId;
+pub use worker_groups::WorkerGroups;
 pub use worker_policy::*;
 
 #[cfg(test)]

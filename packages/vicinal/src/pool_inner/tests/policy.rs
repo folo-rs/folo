@@ -42,6 +42,7 @@ impl WorkerPolicy for SingleGroupPolicy {
 }
 
 /// Models a startup tracing subscriber that submits through the route still being created.
+#[derive(Debug)]
 struct ReentrantStartupPolicy {
     group: OnceLock<WorkerGroup>,
     affinity: OnceLock<ProcessorSet>,

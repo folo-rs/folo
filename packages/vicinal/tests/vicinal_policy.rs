@@ -25,6 +25,7 @@ struct LazySingleGroupPolicy {
 }
 
 /// Reports an ordinary policy-specific preparation failure.
+#[derive(Debug)]
 struct FailingPreparationPolicy {
     initializer: Mutex<Receiver<()>>,
     prepared: Sender<()>,

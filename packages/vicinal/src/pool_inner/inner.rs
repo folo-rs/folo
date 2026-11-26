@@ -243,6 +243,7 @@ impl Debug for PoolInner {
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
             .field("pool_name", &self.runtime.pool_name())
+            .field("policy", &self.policy)
             .finish_non_exhaustive()
     }
 }

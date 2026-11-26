@@ -7,7 +7,7 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use ohno::OhnoCore;
 
 use crate::{WorkerGroupId, WorkerGroups};
-/// Controls how submitted tasks are assigned to worker groups.
+/// Defines one pool's task routing and policy-owned worker topology.
 ///
 /// Policies are prepared once while the pool is built and then shared by all schedulers.
 /// [`select_group`](Self::select_group) should keep established routing lock-free and avoid
@@ -18,6 +18,7 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// [`WorkerGroup::add_worker`][crate::WorkerGroup::add_worker], moves the returned
 /// [`Worker`][crate::Worker] into a thread, applies its intended affinity and calls
 /// [`Worker::run`][crate::Worker::run]. That method blocks until the worker leaves the pool.
+/// Implementations expose [`Debug`] state so pool diagnostics can identify the active policy.
 ///
 /// # Example
 ///
@@ -28,7 +29,7 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// use vicinal::{Pool, PrepareContext, PrepareError, WorkerGroupId, WorkerGroups, WorkerPolicy};
 /// # use futures::executor::block_on;
 ///
-/// #[derive(Default)]
+/// #[derive(Debug, Default)]
 /// struct OneGroupPolicy {
 ///     group: Option<WorkerGroupId>,
 /// }
@@ -57,7 +58,7 @@ use crate::{WorkerGroupId, WorkerGroups};
 /// # Ok::<(), Box<dyn Error>>(())
 /// # }).unwrap();
 /// ```
-pub trait WorkerPolicy: Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
+pub trait WorkerPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// Performs one-time initialization using the pool's final configuration.
     ///
     /// A policy creates preparation-time workers with

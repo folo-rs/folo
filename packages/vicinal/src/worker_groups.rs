@@ -13,10 +13,11 @@ use crate::{
 // synchronization relationship.
 static NEXT_REGISTRY_ID: AtomicU64 = AtomicU64::new(1);
 
-/// A cloneable collection of worker groups owned by one pool.
+/// Owns the append-only worker-group collection shared by one pool's policies.
 ///
-/// Cloning this collection does not clone or start any workers. Policies may retain
-/// a clone to add groups later.
+/// Policies use this handle to add groups asynchronously while schedulers resolve copyable
+/// group IDs without retaining or cloning policy-owned worker handles. Cloning this collection
+/// shares the collection and does not clone or start any workers.
 #[derive(Clone)]
 pub struct WorkerGroups {
     inner: Arc<WorkerGroupsInner>,
@@ -192,7 +193,10 @@ impl IntoIterator for WorkerGroups {
     }
 }
 
-/// Retains one pool's unique owner, runtime and append-only group storage.
+/// Supplies the lifetime and synchronization domain for all public worker-group handles.
+///
+/// The unique owner makes pointer-bearing IDs pool-specific, while the retained runtime and
+/// group handles keep every resolved state allocation alive for as long as the registry exists.
 struct WorkerGroupsInner {
     owner: u64,
     runtime: Arc<PoolRuntime>,
