@@ -265,6 +265,13 @@ impl PoolBuilder {
     ///
     /// Returns an error reported by [`WorkerPolicy::bind`] after all participating workers
     /// started during binding have left the worker loop.
+    ///
+    /// # Panics
+    ///
+    /// Panics when worker infrastructure fails, including thread creation, initial affinity setup
+    /// and worker initialization. Construction waits for participating workers to leave the
+    /// worker loop before propagating the original failure payload. Policy-returned
+    /// [`PrepareError`] values use the fallible result above instead.
     pub fn build(self) -> Result<Pool, PrepareError> {
         let hardware = self
             .hardware
