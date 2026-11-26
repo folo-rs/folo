@@ -34,6 +34,13 @@ use crate::{ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime};
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct WorkerGroupId {
     pub(crate) owner: u64,
+    /// Stable address used by the owning registry for lock-free, ref-count-free resolution.
+    ///
+    /// An index into the registry's `Vec<WorkerGroup>` would be an alternative safe identity.
+    /// Resolving it would require locking that vector and cloning its `Arc` on every submission
+    /// because the vector may grow and references to its elements cannot outlive its guard.
+    /// Each state is instead independently heap-allocated and retained for the registry's
+    /// lifetime, so only the pointer and the registry owner check cross the routing boundary.
     pub(crate) state: NonNull<WorkerGroupState>,
 }
 
