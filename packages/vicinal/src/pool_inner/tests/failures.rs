@@ -41,11 +41,13 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
         });
         pool.inner.runtime.wait_for_workers();
         assert!(pool.inner.runtime.is_poisoned());
-        assert_panics(|| scheduler.spawn(|| {}));
         assert_panics_with(
-            || drop(pool),
+            || {
+                _ = scheduler.spawn(|| {});
+            },
             |message| assert!(message.contains("destructor failure")),
         );
+        drop(pool);
 
         let pool = Pool::builder()
             .hardware(hardware())
@@ -86,13 +88,8 @@ fn poisoned_enqueue_preserves_existing_runtime_failure() {
     }))
     .unwrap_err();
 
-    assert!(!payload.is::<OriginalFailure>());
-    let failure = pool
-        .inner
-        .runtime
-        .take_failure()
-        .expect("the existing failure remains runtime-owned");
-    assert!(failure.is::<OriginalFailure>());
+    assert!(payload.is::<OriginalFailure>());
+    assert!(pool.inner.runtime.is_poisoned());
 }
 
 /// Ordinary disconnected task panics do not poison the pool.
@@ -216,7 +213,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         assert_panics(|| scheduler.spawn_and_forget(|| {}));
         other_release.send(()).unwrap();
         block_on(other_running).unwrap();
-        assert_panics(|| drop(pool));
+        drop(pool);
         assert_panics(|| scheduler.spawn(|| {}));
     });
 }

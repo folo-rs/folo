@@ -331,7 +331,9 @@ impl PoolRuntime {
         };
 
         if let Some(mut retained) = retained {
-            retained.push(payload);
+            if let Err(cleanup) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+                retained.push(cleanup);
+            }
             return retained;
         }
 
