@@ -16,7 +16,7 @@ pub struct WorkersPerMemoryRegion {
 }
 
 impl WorkersPerMemoryRegion {
-    /// Creates a memory-region-local policy with the given worker count.
+    /// Creates a policy with the given count per active submitting memory region.
     #[must_use]
     #[inline]
     pub fn new(count: NonZero<u32>) -> Self {
@@ -45,14 +45,19 @@ impl Debug for WorkersPerMemoryRegion {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use futures::executor::block_on;
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
     use testing::with_watchdog;
 
     use super::*;
     use crate::Pool;
+
+    assert_impl_all!(WorkersPerMemoryRegion: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn executes_tasks() {

@@ -150,7 +150,6 @@ mod task_panic;
 mod worker;
 mod worker_core;
 mod worker_group;
-mod worker_group_id;
 mod worker_groups;
 pub mod worker_policy;
 
@@ -173,7 +172,7 @@ pub(crate) use worker::BindingReservation;
 pub(crate) use worker_core::*;
 #[cfg(test)]
 pub(crate) use worker_group::WorkerEntry;
-pub(crate) use worker_group::{GroupState, WorkerGroupState};
+pub(crate) use worker_group::WorkerGroupState;
 
 #[cfg(test)]
 ::testing::set_allocator!();

@@ -63,7 +63,7 @@ impl TestBuiltInPolicy {
 
 impl WorkerPolicy for TestBuiltInPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
-        let bound = Arc::new(self.policy.clone().bind_built_in(context));
+        let bound = Arc::new(self.policy.clone().bind_built_in(context)?);
         *self.bound.lock().unwrap() = Some(Arc::clone(&bound));
         Ok(bound)
     }

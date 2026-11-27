@@ -44,14 +44,19 @@ impl Debug for WorkersPerSystem {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use futures::executor::block_on;
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
     use testing::with_watchdog;
 
     use super::*;
     use crate::Pool;
+
+    assert_impl_all!(WorkersPerSystem: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn executes_tasks() {

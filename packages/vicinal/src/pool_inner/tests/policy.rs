@@ -47,7 +47,7 @@ impl BoundPolicy for SingleGroupPolicy {
 #[derive(Debug)]
 struct ReentrantStartupPolicy {
     group: OnceLock<WorkerGroup>,
-    affinity: OnceLock<ProcessorSet>,
+    affinity: OnceLock<Arc<ProcessorSet>>,
     started: OnceLock<WorkerGroupId>,
     scheduler: Arc<Mutex<Option<Scheduler>>>,
     reentrant_completed: Sender<()>,
@@ -80,7 +80,9 @@ impl WorkerPolicy for ReentrantStartupPolicy {
                 .is_ok()
         );
         self.group.set(group).unwrap();
-        self.affinity.set(context.hardware().processors()).unwrap();
+        self.affinity
+            .set(Arc::new(context.hardware().processors()))
+            .unwrap();
         Ok(self)
     }
 }

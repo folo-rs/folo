@@ -165,7 +165,7 @@ impl PoolInner {
             .take_all()
             .unwrap_or_else(|| panic!("no eligible processors for worker group {destination:?}"));
         let group = self.registry.group(destination);
-        group.start_workers_with(destination, &affinity, count, handles, spawn, pin);
+        group.start_workers_with(destination, &Arc::new(affinity), count, handles, spawn, pin);
     }
 
     /// Terminates admission, drains accepted work and propagates the prevailing failure.

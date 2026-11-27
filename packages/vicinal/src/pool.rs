@@ -315,11 +315,6 @@ impl PoolBuilder {
     }
 }
 
-/// Converts hardware-discovery panics before worker participation into a fallible build result.
-fn contain_build_setup<T>(setup: impl FnOnce() -> T) -> Result<T, BuildError> {
-    catch_unwind(AssertUnwindSafe(setup)).map_err(BuildError::from_panic)
-}
-
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for PoolBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -331,6 +326,11 @@ impl fmt::Debug for PoolBuilder {
             .field("eager", &self.eager)
             .finish_non_exhaustive()
     }
+}
+
+/// Converts hardware-discovery panics before worker participation into a fallible build result.
+fn contain_build_setup<T>(setup: impl FnOnce() -> T) -> Result<T, BuildError> {
+    catch_unwind(AssertUnwindSafe(setup)).map_err(BuildError::from_panic)
 }
 
 /// Shared configuration invoked only on workers, behind their pool-poisoning unwind boundary.

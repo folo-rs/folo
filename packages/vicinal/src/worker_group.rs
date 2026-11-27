@@ -3,7 +3,6 @@
 use std::any::type_name;
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
-#[cfg(test)]
 use std::io;
 use std::num::NonZero;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -26,6 +25,7 @@ use plurality::MultiPool;
 use tracing::debug;
 
 use crate::pool_inner::{POOL_LOG_TARGET, worker_loop_with};
+use crate::worker_groups::GroupRegistration;
 use crate::worker_policy::{Worker, WorkerGroupId};
 use crate::{
     BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PanicFailures, PoolRuntime,
@@ -38,49 +38,24 @@ use crate::{
 /// this value.
 #[derive(Clone)]
 pub struct WorkerGroup {
+    id: WorkerGroupId,
     state: Arc<WorkerGroupState>,
     runtime: Arc<PoolRuntime>,
 }
 
-/// Releases worker lifecycle accounting if failure handling starts unwinding.
-struct WorkerExitGuard<'a> {
-    group: &'a WorkerGroup,
-    participating: bool,
-    #[cfg(test)]
-    initialized: bool,
-}
-
-impl Drop for WorkerExitGuard<'_> {
-    fn drop(&mut self) {
-        #[cfg(test)]
-        if self.initialized {
-            self.group
-                .state
-                .initialized_workers
-                .fetch_sub(1, Ordering::Release);
-        }
-
-        if self.participating {
-            self.group.mark_worker_finished();
-        }
-        self.group.runtime.end_worker();
-    }
-}
-
 impl WorkerGroup {
-    pub(crate) fn new(runtime: Arc<PoolRuntime>, destination: Option<GroupId>) -> Self {
-        let state = Arc::new(WorkerGroupState::new(destination));
+    pub(crate) fn new(runtime: Arc<PoolRuntime>, registration: GroupRegistration) -> Self {
+        let (id, state) = registration.into_parts();
         runtime.register_group(&state);
 
-        Self { state, runtime }
+        Self { id, state, runtime }
     }
 
     /// Returns the copyable identity of this group.
     #[must_use]
     #[inline]
     pub fn id(&self) -> WorkerGroupId {
-        let owner = self.runtime.registry_owner();
-        WorkerGroupId::new(owner, &self.state)
+        self.id
     }
 
     /// Returns the number of workers currently participating in this group.
@@ -114,6 +89,19 @@ impl WorkerGroup {
     #[cfg(test)]
     pub(crate) fn observe_binding_wait(&self, waiting: Sender<()>) {
         self.runtime.before_binding_wait.set(waiting).unwrap();
+    }
+
+    /// Lets a parked fixture worker resume once failed construction waits for its departure.
+    #[cfg(test)]
+    pub(crate) fn observe_worker_wait(&self, waiting: Sender<()>) {
+        assert!(
+            self.runtime
+                .before_worker_wait
+                .set(Box::new(move || {
+                    _ = waiting.send(());
+                }))
+                .is_ok()
+        );
     }
 
     /// Returns the combined number of urgent and regular tasks currently queued in this group.
@@ -275,21 +263,12 @@ impl WorkerGroup {
     pub(crate) fn start_workers(
         &self,
         destination: GroupId,
-        affinity: &ProcessorSet,
+        affinity: &Arc<ProcessorSet>,
         count: NonZero<u32>,
     ) {
-        // Ref: docs/implementation.md, "Worker initialization".
-        // Lazy startup reserves participation only; initializer completion remains a separate
-        // eager/custom policy target.
-        let expected = self
-            .state
-            .worker_count
-            .load(Ordering::Acquire)
-            .checked_add(count.get() as usize)
-            .expect(
-                "the topology count and existing workers both fit in the process's Vec capacity",
-            );
-        self.spawn_workers(destination, affinity, count);
+        let expected = self.participation_target(count);
+        self.spawn_workers(destination, affinity, count)
+            .unwrap_or_else(|error| panic!("failed to start worker in {destination:?}: {error}"));
         self.wait_for_workers(expected);
         #[cfg(test)]
         {
@@ -297,38 +276,64 @@ impl WorkerGroup {
         }
     }
 
-    // Omitting eager startup can leave a successfully constructed policy-selected route with
-    // no worker to execute admitted tasks.
-    #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn start_eager_workers(
-        &self,
-        destination: GroupId,
-        affinity: &ProcessorSet,
-        count: NonZero<u32>,
-    ) {
-        self.spawn_workers(destination, affinity, count);
+    /// Counts all participants the lazy readiness wait must account for after spawning.
+    fn participation_target(&self, count: NonZero<u32>) -> usize {
+        // Ref: docs/implementation.md, "Worker initialization".
+        // Lazy startup reserves participation only; initializer completion remains a separate
+        // eager/custom policy target.
+        self.state
+            .worker_count
+            .load(Ordering::Acquire)
+            .checked_add(count.get() as usize)
+            .expect(
+                "the topology count and existing workers both fit in the process's Vec capacity",
+            )
     }
 
+    /// Starts detached workers, leaving readiness and refusal handling to the caller.
     // Removing thread creation leaves the lazy readiness wait without a producer.
     #[cfg_attr(test, mutants::skip)]
-    fn spawn_workers(&self, destination: GroupId, affinity: &ProcessorSet, count: NonZero<u32>) {
+    pub(crate) fn spawn_workers(
+        &self,
+        destination: GroupId,
+        affinity: &Arc<ProcessorSet>,
+        count: NonZero<u32>,
+    ) -> io::Result<()> {
+        for (builder, entry) in self.prepare_workers(
+            destination,
+            affinity,
+            count,
+            ProcessorSet::pin_current_thread_to,
+        ) {
+            _ = builder.spawn(entry)?;
+        }
+        Ok(())
+    }
+
+    /// Prepares concrete entries that share one startup mask and its captured revision.
+    fn prepare_workers(
+        &self,
+        destination: GroupId,
+        affinity: &Arc<ProcessorSet>,
+        count: NonZero<u32>,
+        pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
+    ) -> impl Iterator<Item = (Builder, impl FnOnce() + Send + 'static)> {
+        // Pair the revision with the shared startup snapshot before any worker is spawned.
+        // Ref: docs/implementation.md, "Affinity and failure coordination".
         let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
-        for worker_index in 0..count.get() {
+        (0..count.get()).map(move |worker_index| {
             let entry = worker_entry(
                 self.add_worker(),
-                affinity.clone(),
+                Arc::clone(affinity),
                 applied_revision,
-                ProcessorSet::pin_current_thread_to,
+                pin.clone(),
             );
             let builder = Builder::new().name(format!(
                 "{}-{destination}-{worker_index}",
                 self.runtime.pool_name()
             ));
-            let handle = builder.spawn(entry).unwrap_or_else(|error| {
-                panic!("failed to start worker in {destination:?}: {error}")
-            });
-            _ = handle;
-        }
+            (builder, entry)
+        })
     }
 
     // Omitting the participation publication can leave lazy startup waiting forever.
@@ -434,41 +439,36 @@ impl WorkerGroup {
     pub(crate) fn start_workers_with(
         &self,
         destination: GroupId,
-        affinity: &ProcessorSet,
+        affinity: &Arc<ProcessorSet>,
         count: NonZero<u32>,
         handles: &mut Vec<JoinHandle<()>>,
         mut spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<JoinHandle<()>>,
         pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
     ) {
-        let expected = self
-            .state
-            .worker_count
-            .load(Ordering::Acquire)
-            .checked_add(count.get() as usize)
-            .expect(
-                "the topology count and existing workers both fit in the process's Vec capacity",
-            );
-        let applied_revision = self.state.affinity_revision.load(Ordering::Acquire);
-
-        for worker_index in 0..count.get() {
-            let entry: WorkerEntry = Box::new(worker_entry(
-                self.add_worker(),
-                affinity.clone(),
-                applied_revision,
-                pin.clone(),
-            ));
-            let builder = Builder::new().name(format!(
-                "{}-{destination}-{worker_index}",
-                self.runtime.pool_name()
-            ));
-            let handle = spawn(builder, entry).unwrap_or_else(|error| {
-                panic!("failed to start worker in {destination:?}: {error}")
-            });
-            handles.push(handle);
-        }
-
+        let expected = self.participation_target(count);
+        self.spawn_workers_with(destination, affinity, count, pin, |builder, entry| {
+            handles.push(spawn(builder, entry)?);
+            Ok(())
+        })
+        .unwrap_or_else(|error| panic!("failed to start worker in {destination:?}: {error}"));
         self.wait_for_workers(expected);
         _ = self.state.startup.get_or_init(|| Ok(()));
+    }
+
+    /// Erases worker entries only at the test boundary, where spawning can be intercepted.
+    #[cfg(test)]
+    pub(crate) fn spawn_workers_with(
+        &self,
+        destination: GroupId,
+        affinity: &Arc<ProcessorSet>,
+        count: NonZero<u32>,
+        pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
+        mut spawn: impl FnMut(Builder, WorkerEntry) -> io::Result<()>,
+    ) -> io::Result<()> {
+        for (builder, entry) in self.prepare_workers(destination, affinity, count, pin) {
+            spawn(builder, Box::new(entry))?;
+        }
+        Ok(())
     }
 
     pub(crate) fn state(&self) -> &WorkerGroupState {
@@ -491,10 +491,35 @@ impl Debug for WorkerGroup {
     }
 }
 
+/// Releases worker lifecycle accounting if failure handling starts unwinding.
+struct WorkerExitGuard<'a> {
+    group: &'a WorkerGroup,
+    participating: bool,
+    #[cfg(test)]
+    initialized: bool,
+}
+
+impl Drop for WorkerExitGuard<'_> {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        if self.initialized {
+            self.group
+                .state
+                .initialized_workers
+                .fetch_sub(1, Ordering::Release);
+        }
+
+        if self.participating {
+            self.group.mark_worker_finished();
+        }
+        self.group.runtime.end_worker();
+    }
+}
+
 /// Builds the concrete thread entry before the chosen spawn boundary.
 fn worker_entry(
     worker: Worker,
-    affinity: ProcessorSet,
+    affinity: Arc<ProcessorSet>,
     applied_revision: usize,
     pin: impl Fn(&ProcessorSet) + Clone + Send + 'static,
 ) -> impl FnOnce() + Send + 'static {
@@ -632,9 +657,6 @@ impl WorkerGroupState {
         }
     }
 }
-
-/// Public group handles expose only participation and identity; queue internals stay borrowed.
-pub(crate) type GroupState = WorkerGroupState;
 
 /// Erases the shared worker-spawn entry only at injected test spawn boundaries.
 #[cfg(test)]

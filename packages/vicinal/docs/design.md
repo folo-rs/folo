@@ -216,9 +216,11 @@ poison the pool.
 
 Built-in policy startup establishes every configured worker for a worker group and applies its
 initial affinity before accepting work for that group. Eager construction failures, including
-initializer panics, propagate on the constructing call after stopping and waiting for every
-running worker. No partial pool is returned. User initialization side effects are not reversible, and the
-pool cannot forcibly terminate a callback that does not return.
+initializer panics, return a `BuildError` after stopping and waiting for every running worker.
+If the operating system refuses to create an eager worker thread, the error retains the
+destination and the original I/O error in its source chain. No partial pool is returned.
+User initialization side effects are not reversible, and the pool cannot forcibly terminate
+a callback that does not return.
 Failures detected during task submission, including thread creation and initial affinity setup,
 panic on the submitting call. A failure while a worker applies a later permitted affinity set
 can occur after task submission has already returned.

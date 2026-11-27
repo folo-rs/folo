@@ -14,7 +14,7 @@ pub struct WorkersPerProcessor {
 }
 
 impl WorkersPerProcessor {
-    /// Creates a processor-local policy with the given worker count.
+    /// Creates a policy with the given count per active submitting processor.
     #[must_use]
     #[inline]
     pub fn new(count: NonZero<u32>) -> Self {
@@ -43,14 +43,19 @@ impl Debug for WorkersPerProcessor {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use futures::executor::block_on;
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
     use testing::with_watchdog;
 
     use super::*;
     use crate::Pool;
+
+    assert_impl_all!(WorkersPerProcessor: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn executes_tasks() {

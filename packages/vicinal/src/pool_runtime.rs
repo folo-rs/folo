@@ -8,10 +8,12 @@ use std::panic::panic_any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::Result as ThreadResult;
 
 use events_once::EventLake;
@@ -30,7 +32,6 @@ use crate::{
 pub(crate) struct PoolRuntime {
     pool_id: u64,
     pool_name: Arc<str>,
-    registry_owner: OnceLock<u64>,
     // Failed construction must release the callback on the builder, even while
     // a departed policy thread still owns a runtime handle.
     thread_init: Mutex<Option<Arc<ThreadInit>>>,
@@ -49,14 +50,6 @@ pub(crate) struct PoolRuntime {
     pub(crate) result_channel_pool: EventLake,
 }
 
-/// Keeps one group state alive for runtime-wide signaling and terminal cleanup.
-///
-/// Registration decouples worker lifecycle management from policy-owned `WorkerGroup` handles,
-/// so shutdown can reach every created group even if a policy drops its own handle.
-struct RegisteredGroup {
-    state: Arc<WorkerGroupState>,
-}
-
 impl PoolRuntime {
     pub(crate) fn new(
         pool_id: u64,
@@ -66,7 +59,6 @@ impl PoolRuntime {
         Arc::new(Self {
             pool_id,
             pool_name: Arc::from(pool_name),
-            registry_owner: OnceLock::new(),
             thread_init: Mutex::new(thread_init.map(Arc::new)),
             shutdown: AtomicBool::new(false),
             poisoned: AtomicBool::new(false),
@@ -80,19 +72,6 @@ impl PoolRuntime {
             failure: Mutex::new(FailureState::Vacant),
             result_channel_pool: EventLake::new(),
         })
-    }
-
-    pub(crate) fn set_registry_owner(&self, owner: u64) {
-        self.registry_owner
-            .set(owner)
-            .expect("PoolRuntime::new creates one registry and calls set_registry_owner once");
-    }
-
-    pub(crate) fn registry_owner(&self) -> u64 {
-        *self
-            .registry_owner
-            .get()
-            .expect("WorkerGroups::new installs the owner before add() can create a group")
     }
 
     pub(crate) fn pool_id(&self) -> u64 {
@@ -410,6 +389,14 @@ impl PoolRuntime {
             FailureState::Unavailable => None,
         }
     }
+}
+
+/// Keeps one group state alive for runtime-wide signaling and terminal cleanup.
+///
+/// Registration decouples worker lifecycle management from policy-owned `WorkerGroup` handles,
+/// so shutdown can reach every created group even if a policy drops its own handle.
+struct RegisteredGroup {
+    state: Arc<WorkerGroupState>,
 }
 
 /// Tracks which boundary owns propagation of infrastructure and incidental failures.

@@ -11,5 +11,4 @@ pub use policy::{BoundPolicy, WorkerPolicy};
 
 pub use crate::worker::Worker;
 pub use crate::worker_group::WorkerGroup;
-pub use crate::worker_group_id::WorkerGroupId;
-pub use crate::worker_groups::WorkerGroups;
+pub use crate::worker_groups::{WorkerGroupId, WorkerGroups};

@@ -17,6 +17,8 @@ worker thread.
 resolution are copy-only. The established scheduler path neither clones nor upgrades an Arc;
 reference-count changes happen only through explicit `WorkerGroups` or `WorkerGroup` cloning.
 Group addition is serialized and cold. The registry never relocates or removes a live group.
+It pairs its own identity with the address of the exact state it retains, then retains
+the new handle before exposing the ID. The runtime has no role in routing identity.
 The public APIs do not expose mutable queue or registry state.
 
 For binding-time startup, a policy borrows the group to synchronously reserve a
@@ -102,9 +104,9 @@ the route's `OnceLock` serializes group creation, thread spawning and initial pi
 That lock is absent from established routes. Shared-policy membership uses sorted atomic
 membership entries so a known submitting processor takes no registry lock and builds no mask.
 
-Built-in policy pinning happens in each newly spawned thread before `Worker::run()`.
-`Worker::run()` registers participation, runs initialization and then enters the worker
-loop. Lazy startup waits for affinity readiness but not for `thread_init` completion.
+Built-in workers apply their captured pin in the worker entry path before announcing group
+participation. `Worker::run()` registers participation, runs initialization and then enters
+the worker loop. Lazy startup waits for group participation but not for `thread_init` completion.
 Preparation-time worker reservations wait for initialization too. A custom policy owns
 its operating-system thread handles, but every thread that reaches `Worker::run()`
 participates in the pool's shutdown barrier and failure state.
@@ -153,6 +155,9 @@ reservation to reach the end of `thread_init()`. Dropping a reserved `Worker` ca
 expectation. Callbacks can overlap across groups. A callback panic records the first payload in
 `PoolRuntime`, stops all groups and wakes the binding waiter. The builder converts the retained
 payload into a `BuildError` after participating workers leave.
+An eager thread creation refusal instead returns a `BindError` carrying the destination and
+original I/O error. The failed-binding path stops and waits for participating workers before
+returning a `BuildError`. Lazy thread creation refusals still use the submission failure path.
 
 Workers enter the loop with their already-applied initial affinity revision. The first real
 submission from a selected processor therefore needs neither startup nor membership expansion.
@@ -172,6 +177,21 @@ Processor-local pools do not allocate this table. Expansion selects initial memb
 admitted CPUs plus the current submitting processor from the destination. The system destination
 admits eligible processors regardless of their memory region, reusing the same membership
 and refresh protocol as regional groups.
+
+Startup and expansion use distinct publication handoffs:
+
+- Startup installs the initial shared mask before advancing its revision. Each worker entry
+  receives the same immutable `Arc` and the revision captured before spawning. Thread startup
+  transfers those inputs to the worker, which applies the mask before announcing participation.
+- Lazy selection publishes the route through `OnceLock` after participation and after marking
+  the initial processor ready. Eager binding seeds the mask, revision and all initial membership
+  before installing the route slot or spawning workers. The bound policy becomes available to
+  callers only after binding readiness.
+- Under the affinity write lock, expansion installs the larger snapshot, advances its revision
+  and then publishes membership with `Release`. A matching `Acquire` on the membership flag
+  certifies that the mask and revision are available without looking at the lock. Workers
+  separately acquire the revision to observe a published snapshot; they apply the pin afterward.
+  Neither revision visibility nor membership readiness means a worker has already applied a pin.
 
 Membership and snapshot publication happen during policy selection, before the task is
 enqueued. Workers refresh after dequeueing but before invoking task code, so they

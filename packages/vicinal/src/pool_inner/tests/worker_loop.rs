@@ -52,7 +52,7 @@ fn worker_pairs_initial_revision_with_captured_affinity() {
                 let mut handles = Vec::new();
                 group.start_workers_with(
                     GroupId::Processor(0),
-                    &affinity,
+                    &Arc::new(affinity),
                     nz!(1),
                     &mut handles,
                     thread::Builder::spawn,

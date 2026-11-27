@@ -4,16 +4,17 @@ use std::any::type_name;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::worker_policy::{WorkerGroup, WorkerGroupId};
-use crate::{GroupId, GroupState, NEVER_POISONED, PoolRuntime, WorkerGroupState};
+use crate::worker_policy::WorkerGroup;
+use crate::{GroupId, NEVER_POISONED, PoolRuntime, WorkerGroupState};
 
-// Identity values need uniqueness only; the registry-specific validation supplies the
-// synchronization relationship.
+// The starting value is arbitrary: identities need uniqueness only, and a registry
+// receives its owner at construction rather than using a numeric initialization sentinel.
 static NEXT_REGISTRY_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Owns the append-only worker-group collection shared by one pool's policies.
@@ -37,8 +38,6 @@ impl WorkerGroups {
             .expect(
                 "registry IDs wrap only after 2^64 allocations, beyond the finite process lifetime",
             );
-        runtime.set_registry_owner(owner);
-
         Self {
             inner: Arc::new(WorkerGroupsInner {
                 owner,
@@ -67,7 +66,15 @@ impl WorkerGroups {
     }
 
     fn add_inner(&self, destination: Option<GroupId>) -> WorkerGroup {
-        let group = WorkerGroup::new(Arc::clone(&self.inner.runtime), destination);
+        let state = Arc::new(WorkerGroupState::new(destination));
+        let id = WorkerGroupId {
+            owner: self.inner.owner,
+            state: NonNull::from(Arc::as_ref(&state)),
+        };
+        let group = WorkerGroup::new(
+            Arc::clone(&self.inner.runtime),
+            GroupRegistration { id, state },
+        );
         #[cfg(test)]
         if let Some(before_membership) = self.inner.before_membership_selection.get() {
             assert!(
@@ -116,19 +123,16 @@ impl WorkerGroups {
     pub(crate) fn resolve(&self, group: WorkerGroupId) -> &WorkerGroupState {
         assert!(
             group.owner == self.inner.owner,
-            "policy returned a WorkerGroupId from another pool; return IDs created by this WorkerGroups"
+            "policy returned a worker group ID from another pool; return an ID from this registry"
         );
 
-        // IDs contain stable addresses owned by this registry, and group removal is not
-        // supported. The returned reference cannot outlive the registry borrow.
-        // SAFETY: The pointer is aligned to an initialized WorkerGroupState in this
-        // registry-owned Arc allocation. Owner validation prevents cross-registry reuse, groups
-        // are never removed or relocated, and the registry borrow outlives the shared reference.
-        // The registry and every WorkerGroup retain the state only through Arc. Their mutable
-        // fields use interior synchronization, so no &mut WorkerGroupState exists while this &T
-        // is borrowed.
-        let state: &GroupState = unsafe { group.state.as_ref() };
-        state
+        // SAFETY: With the matching unique owner, this ID came from our add_inner. That
+        // method takes a non-null, aligned pointer to the initialized Arc state, passes the
+        // exact pair to the handle and retains its clone in this registry before exposing it.
+        // The registry never removes a group, so its borrow keeps that allocation alive.
+        // State is shared through Arc and modified only via interior synchronization; no
+        // exclusive reference exists alongside the returned shared reference.
+        unsafe { group.state.as_ref() }
     }
 
     pub(crate) fn snapshot(&self) -> Vec<WorkerGroup> {
@@ -222,6 +226,50 @@ impl IntoIterator for WorkerGroups {
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+/// Identifies a worker group within one [`WorkerGroups`] collection.
+///
+/// This value is [`Copy`], so policies can route tasks without cloning a group handle.
+/// IDs from another pool are rejected when the pool resolves the selected group.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub struct WorkerGroupId {
+    owner: u64,
+    /// Stable address used by the owning registry for lock-free, ref-count-free resolution.
+    ///
+    /// An index into the registry's `Vec<WorkerGroup>` would require locking the vector and
+    /// cloning its `Arc` on every submission because references cannot outlive the guard.
+    /// Each state is instead independently allocated and retained for the registry's lifetime.
+    state: NonNull<WorkerGroupState>,
+}
+
+// SAFETY: Moving an ID copies only its owner and address; it does not dereference or own
+// the pointee. Resolution checks the registry owner and borrows the registry-retained state.
+unsafe impl Send for WorkerGroupId {}
+
+// SAFETY: Sharing an ID does not access the pointee. Only the matching registry can resolve
+// it, returning a shared reference to state it retains for the duration of that borrow.
+unsafe impl Sync for WorkerGroupId {}
+
+impl Debug for WorkerGroupId {
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct(type_name::<Self>())
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Transfers the registry-created identity and exact state together to a participation handle.
+pub(crate) struct GroupRegistration {
+    id: WorkerGroupId,
+    state: Arc<WorkerGroupState>,
+}
+
+impl GroupRegistration {
+    pub(crate) fn into_parts(self) -> (WorkerGroupId, Arc<WorkerGroupState>) {
+        (self.id, self.state)
     }
 }
 

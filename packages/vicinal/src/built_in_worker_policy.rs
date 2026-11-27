@@ -3,6 +3,7 @@
 use std::any::type_name;
 use std::collections::BTreeSet;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::io;
 use std::iter::repeat_with;
 use std::num::NonZero;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -94,6 +95,26 @@ impl BuiltInWorkerPolicy {
     fn new(kind: PolicyKind, count: NonZero<u32>) -> Self {
         Self { kind, count }
     }
+
+    pub(crate) fn bind_built_in(
+        self,
+        context: BindContext<'_>,
+    ) -> Result<BoundBuiltInPolicy, BindError> {
+        self.bind_built_in_with(context, WorkerGroup::spawn_workers)
+    }
+
+    /// Builds the route cache and starts eager workers through the supplied spawn adapter.
+    fn bind_built_in_with(
+        self,
+        context: BindContext<'_>,
+        spawn: impl FnMut(&WorkerGroup, GroupId, &Arc<ProcessorSet>, NonZero<u32>) -> io::Result<()>,
+    ) -> Result<BoundBuiltInPolicy, BindError> {
+        let bound = BoundBuiltInPolicy::new(context.hardware(), self.kind, self.count);
+        if let Some(processors) = context.eager() {
+            bound.bind_eager(context.groups(), self.kind, self.count, processors, spawn)?;
+        }
+        Ok(bound)
+    }
 }
 
 impl Clone for BuiltInWorkerPolicy {
@@ -104,64 +125,8 @@ impl Clone for BuiltInWorkerPolicy {
 
 impl WorkerPolicy for BuiltInWorkerPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
-        Ok(self.bind_built_in(context))
+        self.bind_built_in(context)
     }
-}
-
-impl BuiltInWorkerPolicy {
-    pub(crate) fn bind_built_in(self, context: BindContext<'_>) -> BoundBuiltInPolicy {
-        BoundBuiltInPolicy::new(
-            context.hardware(),
-            context.eager(),
-            context.groups(),
-            self.kind,
-            self.count,
-        )
-    }
-}
-
-impl BoundPolicy for BoundBuiltInPolicy {
-    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        Self::select_group(self, groups, self.count())
-    }
-}
-
-#[cfg(test)]
-impl BoundPolicy for Arc<BoundBuiltInPolicy> {
-    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
-        BoundBuiltInPolicy::select_group(self.as_ref(), groups, self.count())
-    }
-}
-
-/// Verifies eager handles against both selected and backing hardware identities.
-pub(crate) fn validate_eager_processors(
-    hardware: &SystemHardware,
-    processors: &ProcessorSet,
-) -> Result<(), EagerProcessorHardwareMismatch> {
-    let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
-    let Some(backing_processors) = processors.to_builder().take_all() else {
-        return Err(EagerProcessorHardwareMismatch::new());
-    };
-    let belongs_to_pool_hardware = processors
-        .iter()
-        .chain(backing_processors.iter())
-        .all(|processor| eligible.contains(processor));
-    if !belongs_to_pool_hardware {
-        return Err(EagerProcessorHardwareMismatch::new());
-    }
-
-    Ok(())
-}
-
-/// Selects the topology semantics used by one built-in policy facade.
-///
-/// Keeping this enum private lets the public facade types present independent choices while
-/// sharing one implementation without exposing future variants as an exhaustive contract.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum PolicyKind {
-    Processor,
-    MemoryRegion,
-    System,
 }
 
 /// Holds the pool-specific caches required for one bound built-in policy.
@@ -178,14 +143,18 @@ pub(crate) enum BoundBuiltInPolicy {
     MemoryRegion {
         hardware: SystemHardware,
         count: NonZero<u32>,
+        // Sorted region IDs whose positions index the parallel groups table.
         ids: Box<[MemoryRegionId]>,
+        // Route slots in the same order as ids.
         groups: Box<[OnceLock<WorkerGroupId>]>,
+        // Processor-keyed readiness certifies snapshot and revision publication, not pinning.
         members: Box<[(ProcessorId, AtomicBool)]>,
     },
     System {
         hardware: SystemHardware,
         count: NonZero<u32>,
         group: OnceLock<WorkerGroupId>,
+        // Processor-keyed readiness certifies snapshot and revision publication, not pinning.
         members: Box<[(ProcessorId, AtomicBool)]>,
     },
 }
@@ -199,14 +168,8 @@ impl BoundBuiltInPolicy {
         }
     }
 
-    fn new(
-        hardware: &SystemHardware,
-        eager: Option<&ProcessorSet>,
-        groups: &WorkerGroups,
-        kind: PolicyKind,
-        count: NonZero<u32>,
-    ) -> Self {
-        let bound = match kind {
+    fn new(hardware: &SystemHardware, kind: PolicyKind, count: NonZero<u32>) -> Self {
+        match kind {
             PolicyKind::Processor => Self::Processor {
                 hardware: hardware.clone(),
                 count,
@@ -236,38 +199,38 @@ impl BoundBuiltInPolicy {
                 group: OnceLock::new(),
                 members: member_processors(hardware),
             },
-        };
-
-        if let Some(processors) = eager {
-            bound.bind_eager(groups, kind, count, processors.clone());
         }
-
-        bound
     }
 
-    /// Seeds all eager destinations before starting and waiting for their workers.
+    /// Seeds all eager destinations before starting their workers.
     ///
     /// Shared masks, revisions and membership readiness are complete before worker startup.
-    /// Each worker applies its startup pin and records the published revision before it joins
-    /// participation, so construction cannot expose an expandable route before those facts
-    /// agree. Ref: docs/implementation.md, "Affinity and failure coordination".
+    /// Each worker applies the captured mask before announcing group participation. The builder
+    /// waits for initialization before exposing the bound policy. Ref: docs/implementation.md,
+    /// "Affinity and failure coordination".
     fn bind_eager(
         &self,
         registry: &WorkerGroups,
         kind: PolicyKind,
         count: NonZero<u32>,
-        processors: ProcessorSet,
-    ) {
+        processors: &ProcessorSet,
+        mut spawn: impl FnMut(&WorkerGroup, GroupId, &Arc<ProcessorSet>, NonZero<u32>) -> io::Result<()>,
+    ) -> Result<(), BindError> {
         let mut groups = Vec::new();
         for_each_eager_group(kind, processors, |destination, affinity| {
             let group = registry.add_for(destination);
-            self.publish_initial(&group, destination, &affinity);
+            let affinity = Arc::new(affinity);
+            Self::publish_startup_affinity(&group, destination, &affinity);
+            self.mark_initial_members(destination, &affinity);
             self.install_eager_group(destination, group.id());
             groups.push((destination, group, affinity));
         });
         for (destination, group, affinity) in groups {
-            group.start_eager_workers(destination, &affinity, count);
+            spawn(&group, destination, &affinity, count).map_err(|error| {
+                BindError::new(EagerWorkerSpawnRefused::caused_by(destination, error))
+            })?;
         }
+        Ok(())
     }
 
     fn select_group(&self, registry: &WorkerGroups, count: NonZero<u32>) -> WorkerGroupId {
@@ -301,27 +264,10 @@ impl BoundBuiltInPolicy {
                     group: GroupId::MemoryRegion(region_id),
                     processor: processor_id,
                 };
-                let id = groups
-                    .get(index)
-                    .expect(
-                        "binary_search returned an index from groups built at the same ids length",
-                    )
-                    .get_or_init(|| {
-                        let id = self.create_group(registry, count, target.group, target.processor);
-                        // The first mask exists before the route can be observed. Publish its
-                        // submitter before OnceLock exposes the ID, otherwise another first
-                        // submitter could rebuild a mask without this processor.
-                        membership(members, target.processor).store(true, Ordering::Release);
-                        id
-                    });
-                #[cfg(test)]
-                if let Some(before_selection) =
-                    registry.resolve(*id).before_membership_selection.get()
-                {
-                    before_selection();
-                }
-                self.expand_if_needed(registry, members, target, *id);
-                *id
+                let slot = groups.get(index).expect(
+                    "binary_search returned an index from groups built at the same ids length",
+                );
+                self.select_shared_group(registry, count, slot, members, target)
             }
             Self::System {
                 hardware,
@@ -333,23 +279,34 @@ impl BoundBuiltInPolicy {
                     group: GroupId::System,
                     processor: hardware.current_processor_id(),
                 };
-                let id = group.get_or_init(|| {
-                    let id = self.create_group(registry, count, target.group, target.processor);
-                    // OnceLock exposes the route only after the initial member participates in
-                    // future mask reconstruction, preventing concurrent first-use shrinkage.
-                    membership(members, target.processor).store(true, Ordering::Release);
-                    id
-                });
-                #[cfg(test)]
-                if let Some(before_selection) =
-                    registry.resolve(*id).before_membership_selection.get()
-                {
-                    before_selection();
-                }
-                self.expand_if_needed(registry, members, target, *id);
-                *id
+                self.select_shared_group(registry, count, group, members, target)
             }
         }
+    }
+
+    /// Publishes shared routes only after their first processor is ready for mask reconstruction.
+    fn select_shared_group(
+        &self,
+        registry: &WorkerGroups,
+        count: NonZero<u32>,
+        slot: &OnceLock<WorkerGroupId>,
+        members: &[(ProcessorId, AtomicBool)],
+        target: SubmissionTarget,
+    ) -> WorkerGroupId {
+        let id = *slot.get_or_init(|| {
+            let id = self.create_group(registry, count, target.group, target.processor);
+            // Publish readiness before the slot exposes the route so a competing submitter
+            // cannot reconstruct the mask without its first processor. Ref: docs/implementation.md,
+            // "Affinity and failure coordination".
+            membership(members, target.processor).store(true, Ordering::Release);
+            id
+        });
+        #[cfg(test)]
+        if let Some(before_selection) = registry.resolve(id).before_membership_selection.get() {
+            before_selection();
+        }
+        self.expand_if_needed(registry, members, target, id);
+        id
     }
 
     /// Creates a lazily selected destination and starts its full worker count.
@@ -374,21 +331,9 @@ impl BoundBuiltInPolicy {
         );
         let group = registry.add_for(destination);
 
-        if !matches!(destination, GroupId::Processor(_)) {
-            // Regional and system routes may widen, so their workers need a shared snapshot
-            // and revision. Processor routes receive a fixed singleton startup pin and never
-            // use this shared-publication path. Ref: docs/implementation.md, "Affinity and
-            // failure coordination".
-            *group.state().affinity.write().expect(NEVER_POISONED) = Some(Arc::clone(&affinity));
-            group
-                .state()
-                .affinity_revision
-                .fetch_add(1, Ordering::Release);
-        }
-
-        // The worker applies this pin and reads its initial revision before publishing
-        // participation. Lazy startup waits for that participation before exposing the route,
-        // so the worker-local revision cannot refer to a wider mask than the pin it applied.
+        Self::publish_startup_affinity(&group, destination, &affinity);
+        // Lazy startup waits for participation after the worker applies its captured mask.
+        // Ref: docs/implementation.md, "Affinity and failure coordination".
         group.start_workers(destination, &affinity, count);
         group.id()
     }
@@ -427,18 +372,6 @@ impl BoundBuiltInPolicy {
         if member.load(Ordering::Acquire) {
             return;
         }
-        if current.as_ref().is_some_and(|current| {
-            current
-                .iter()
-                .any(|processor| processor.id() == target.processor)
-        }) {
-            // Lazy group creation installed its singleton mask and revision but intentionally
-            // left readiness unpublished. Only readiness remains; no revision or wakeup is
-            // needed until a later submission widens the mask.
-            member.store(true, Ordering::Release);
-            return;
-        }
-
         // The publication lock serializes mask construction with membership observations. The
         // current processor is included explicitly before readiness reaches the lock-free path.
         let affinity = self
@@ -467,20 +400,35 @@ impl BoundBuiltInPolicy {
         state.wake_event.notify(usize::MAX);
     }
 
-    fn publish_initial(&self, group: &WorkerGroup, destination: GroupId, affinity: &ProcessorSet) {
+    /// Publishes the startup mask from which shared-route workers can later refresh.
+    fn publish_startup_affinity(
+        group: &WorkerGroup,
+        destination: GroupId,
+        affinity: &Arc<ProcessorSet>,
+    ) {
         if matches!(destination, GroupId::Processor(_)) {
             // Processor-local workers keep the fixed singleton pin applied by startup. Their
             // route cannot widen, so it needs neither a shared revision nor membership readiness.
             return;
         }
 
-        *group.state().affinity.write().expect(NEVER_POISONED) = Some(Arc::new(affinity.clone()));
+        *group.state().affinity.write().expect(NEVER_POISONED) = Some(Arc::clone(affinity));
+        // Publish the snapshot before its revision. Ref: docs/implementation.md,
+        // "Affinity and failure coordination".
         group
             .state()
             .affinity_revision
             .fetch_add(1, Ordering::Release);
+    }
+
+    /// Makes every processor in an already-published shared startup mask ready for selection.
+    fn mark_initial_members(&self, destination: GroupId, affinity: &ProcessorSet) {
+        if matches!(destination, GroupId::Processor(_)) {
+            return;
+        }
+
         for processor in affinity {
-            // The mask and revision above are published before this readiness flag.
+            // The mask and revision are published before this readiness flag.
             membership(self.members(), processor.id()).store(true, Ordering::Release);
         }
     }
@@ -545,23 +493,33 @@ impl BoundBuiltInPolicy {
             PolicyKind::MemoryRegion => GroupId::MemoryRegion(first.memory_region_id()),
             PolicyKind::System => GroupId::System,
         };
-        let missing_affinity = group
-            .state()
-            .affinity
-            .read()
-            .expect(NEVER_POISONED)
-            .is_none();
-        if missing_affinity {
-            self.publish_initial(group, destination, affinity);
-        }
-
         let slot = self.route_slot(destination);
         if let Some(existing) = slot.get() {
             assert_eq!(*existing, group.id());
         } else {
+            let published_affinity = group.state().affinity.read().unwrap().clone();
+            let affinity = published_affinity.unwrap_or_else(|| {
+                let affinity = Arc::new(affinity.clone());
+                Self::publish_startup_affinity(group, destination, &affinity);
+                affinity
+            });
+            self.mark_initial_members(destination, &affinity);
             slot.set(group.id())
                 .expect("the test route is initially empty");
         }
+    }
+}
+
+impl BoundPolicy for BoundBuiltInPolicy {
+    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
+        Self::select_group(self, groups, self.count())
+    }
+}
+
+#[cfg(test)]
+impl BoundPolicy for Arc<BoundBuiltInPolicy> {
+    fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId {
+        BoundBuiltInPolicy::select_group(self.as_ref(), groups, self.count())
     }
 }
 
@@ -569,6 +527,44 @@ impl Debug for BoundBuiltInPolicy {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str(type_name::<Self>())
     }
+}
+
+/// Selects the topology semantics used by one built-in policy facade.
+///
+/// Keeping this enum private lets the public facade types present independent choices while
+/// sharing one implementation without exposing future variants as an exhaustive contract.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PolicyKind {
+    Processor,
+    MemoryRegion,
+    System,
+}
+
+/// Identifies the eager destination whose worker the operating system could not start.
+#[ohno::error]
+#[display("failed to start an eager worker in {destination:?}")]
+struct EagerWorkerSpawnRefused {
+    destination: GroupId,
+}
+
+/// Verifies eager handles against both selected and backing hardware identities.
+pub(crate) fn validate_eager_processors(
+    hardware: &SystemHardware,
+    processors: &ProcessorSet,
+) -> Result<(), EagerProcessorHardwareMismatch> {
+    let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
+    let Some(backing_processors) = processors.to_builder().take_all() else {
+        return Err(EagerProcessorHardwareMismatch::new());
+    };
+    let belongs_to_pool_hardware = processors
+        .iter()
+        .chain(backing_processors.iter())
+        .all(|processor| eligible.contains(processor));
+    if !belongs_to_pool_hardware {
+        return Err(EagerProcessorHardwareMismatch::new());
+    }
+
+    Ok(())
 }
 
 fn member_processors(hardware: &SystemHardware) -> Box<[(ProcessorId, AtomicBool)]> {
@@ -597,7 +593,7 @@ fn membership(members: &[(ProcessorId, AtomicBool)], processor: ProcessorId) -> 
 /// tuples instead of first allocating a destination buffer.
 fn for_each_eager_group(
     policy: PolicyKind,
-    processors: ProcessorSet,
+    processors: &ProcessorSet,
     mut visit: impl FnMut(GroupId, ProcessorSet),
 ) {
     match policy {
@@ -622,6 +618,110 @@ fn for_each_eager_group(
                 visit(GroupId::MemoryRegion(region), affinity);
             }
         }
-        PolicyKind::System => visit(GroupId::System, processors),
+        PolicyKind::System => visit(GroupId::System, processors.clone()),
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::sync::Mutex;
+    use std::sync::mpsc::{Receiver, Sender, channel};
+
+    use many_cpus::fake::HardwareBuilder;
+    use new_zealand::nz;
+    use ohno::ErrorExt;
+    use testing::with_watchdog;
+
+    use super::*;
+    use crate::{BuildPanicked, Pool};
+
+    // Checks preservation of an original raw code without depending on its platform-specific kind.
+    const REFUSAL_CODE: i32 = 1234;
+
+    /// Starts one eager destination and injects refusal for the next destination.
+    #[derive(Debug)]
+    struct RefusingEagerPolicy {
+        started: Arc<OnceLock<WorkerGroup>>,
+        refused: Arc<OnceLock<GroupId>>,
+        release_worker: Sender<()>,
+        resume: Receiver<()>,
+    }
+
+    impl WorkerPolicy for RefusingEagerPolicy {
+        fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+            let (parked, worker_parked) = channel();
+            let mut gate = Some((parked, Mutex::new(self.resume)));
+            BuiltInWorkerPolicy::per_memory_region(nz!(1)).bind_built_in_with(
+                context,
+                |group, destination, affinity, count| {
+                    group.spawn_workers_with(
+                        destination,
+                        affinity,
+                        count,
+                        |_| {},
+                        |builder, entry| {
+                            let Some((parked, resume)) = gate.take() else {
+                                self.refused.set(destination).unwrap();
+                                return Err(io::Error::from_raw_os_error(REFUSAL_CODE));
+                            };
+                            assert!(
+                                group
+                                    .state()
+                                    .before_wait
+                                    .set(Box::new(move |_, _| {
+                                        // Park after the reservation has completed, but keep
+                                        // the worker participating until the builder's exit wait.
+                                        parked.send(()).unwrap();
+                                        resume.lock().unwrap().recv().unwrap();
+                                    }))
+                                    .is_ok()
+                            );
+                            self.started.set(group.clone()).unwrap();
+                            group.observe_worker_wait(self.release_worker.clone());
+                            _ = builder.spawn(entry)?;
+                            worker_parked.recv().unwrap();
+                            assert_eq!(group.worker_count(), 1);
+                            Ok(())
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn eager_spawn_refusal_preserves_error_and_waits_for_started_worker() {
+        with_watchdog(|| {
+            let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(2), nz!(2)));
+            let started = Arc::new(OnceLock::new());
+            let refused = Arc::new(OnceLock::new());
+            let (release_worker, resume) = channel();
+
+            let result = Pool::builder()
+                .eager(hardware.all_processors())
+                .hardware(hardware)
+                .worker_policy(RefusingEagerPolicy {
+                    started: Arc::clone(&started),
+                    refused: Arc::clone(&refused),
+                    release_worker: release_worker.clone(),
+                    resume,
+                })
+                .build();
+            let active_at_return = started.get().unwrap().worker_count();
+            // Release the worker even when a regression made construction return too early.
+            _ = release_worker.send(());
+
+            let error = result.unwrap_err();
+            assert_eq!(active_at_return, 0);
+            assert!(error.find_source::<BuildPanicked>().is_none());
+            assert!(error.find_source::<BindError>().is_some());
+            let refusal = error.find_source::<EagerWorkerSpawnRefused>().unwrap();
+            assert_eq!(refusal.destination, *refused.get().unwrap());
+            assert_eq!(
+                refusal.find_source::<io::Error>().unwrap().raw_os_error(),
+                Some(REFUSAL_CODE)
+            );
+        });
     }
 }
