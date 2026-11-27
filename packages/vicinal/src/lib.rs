@@ -74,10 +74,6 @@
 //! Later submissions from other eligible processors still start missing processor-local
 //! workers or expand the processors on which shared workers may run.
 //!
-//! Initializers may overlap and must not depend on construction returning, including to publish
-//! the pool's scheduler. Eager construction leaves the calling thread's affinity unchanged.
-//! It starts workers; it does not prepare task-specific allocations or caches.
-//!
 //! # Receiving task results
 //!
 //! Awaiting a [`JoinHandle`] returns `Result<R, TaskError<R>>`:
