@@ -1,0 +1,19 @@
+flowchart TB
+    subgraph Processor1["Processor 1"]
+        direction TB
+        App11["Application thread 1"]
+        App12["Application thread 2"]
+        Worker11["Worker thread 1"]
+        Worker12["Worker thread 2"]
+
+        App11 -->|"submits tasks"| Worker11
+        App11 -->|"submits tasks"| Worker12
+    end
+
+    subgraph Processor2["Processor 2"]
+        direction TB
+        App21["Application thread 1"]
+        App22["Application thread 2"]
+        Worker21["Worker thread 1"]
+        Worker22["Worker thread 2"]
+    end
