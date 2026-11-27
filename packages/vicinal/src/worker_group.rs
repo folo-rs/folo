@@ -12,6 +12,8 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 #[cfg(test)]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::Builder;
 #[cfg(test)]
@@ -25,7 +27,9 @@ use tracing::debug;
 
 use crate::pool_inner::{POOL_LOG_TARGET, worker_loop_with};
 use crate::worker_policy::{Worker, WorkerGroupId};
-use crate::{BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PoolRuntime};
+use crate::{
+    BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PanicFailures, PoolRuntime,
+};
 
 /// A cloneable participation handle for one worker group.
 ///
@@ -106,6 +110,12 @@ impl WorkerGroup {
         )
     }
 
+    /// Lets the cancellation fixture wait for a live builder readiness wait.
+    #[cfg(test)]
+    pub(crate) fn observe_binding_wait(&self, waiting: Sender<()>) {
+        self.runtime.before_binding_wait.set(waiting).unwrap();
+    }
+
     /// Returns the combined number of urgent and regular tasks currently queued in this group.
     ///
     /// This is an instantaneous observation for policy decisions, not a reservation. Tasks
@@ -142,7 +152,7 @@ impl WorkerGroup {
             initialized: false,
         };
         if let Err(payload) = catch_unwind(AssertUnwindSafe(initial_setup)) {
-            self.runtime.fail(payload);
+            self.runtime.fail(PanicFailures::new(payload));
             return;
         }
         // Built-in startup carries the revision paired with its captured initial mask, so an
@@ -184,9 +194,12 @@ impl WorkerGroup {
                 (thread_init.0)();
             }
 
-            self.mark_worker_initialized(&mut reservation);
+            #[cfg(test)]
+            let binding_pending = reservation.is_binding_pending();
+            reservation.initialize();
             #[cfg(test)]
             {
+                self.observe_worker_initialized(binding_pending);
                 exit.initialized = true;
             }
             worker_loop_with(
@@ -195,13 +208,14 @@ impl WorkerGroup {
                 worker_index,
                 applied_revision,
                 &mut pin,
-            );
+            )?;
 
             self.trace_worker_exiting(worker_index);
+            Ok(())
         }));
 
-        if let Err(payload) = result {
-            self.runtime.fail(payload);
+        if let Err(failures) = result.map_err(PanicFailures::new).flatten() {
+            self.runtime.fail(failures);
             self.state.notify_initialization_failure();
             #[cfg(test)]
             if let Some(before_exit) = self.state.before_failure_exit.get() {
@@ -332,39 +346,25 @@ impl WorkerGroup {
         drop(progress);
     }
 
-    // Omitting the initializer-completion publication can strand eager waiters indefinitely.
+    /// Publishes test readiness only after the production reservation has completed.
+    #[cfg(test)]
+    // Omitting the initializer observation can strand fixture waiters indefinitely.
     #[cfg_attr(test, mutants::skip)]
-    fn mark_worker_initialized(&self, reservation: &mut BindingReservation) {
-        #[cfg(test)]
-        {
-            // The test-only counter is published under the mutex and before its notification.
-            // Its waiter acquires while holding the same mutex, closing the predicate/wait gap.
-            let progress = self
-                .state
-                .initialization
-                .lock()
-                .expect("worker initialization state remains valid");
-            self.state
-                .initialized_workers
-                .fetch_add(1, Ordering::Release);
-            self.state.initialization_changed.notify_all();
-            if reservation.is_binding_pending() {
-                _ = self.state.startup.get_or_init(|| Ok(()));
-            }
-
-            // Preserve the original test-build ordering: the initialization waiter cannot
-            // observe the published count until the production reservation is complete too.
-            reservation.initialize();
-            drop(progress);
+    fn observe_worker_initialized(&self, binding_pending: bool) {
+        // The group mutex closes the predicate/wait gap only for the test observer.
+        let progress = self
+            .state
+            .initialization
+            .lock()
+            .expect("worker initialization state remains valid");
+        if binding_pending {
+            _ = self.state.startup.get_or_init(|| Ok(()));
         }
-
-        // The runtime reservation carries the production initialization barrier independently
-        // of the test-only initialized-worker counter.
-        #[cfg(not(test))]
-        {
-            _ = self;
-            reservation.initialize();
-        }
+        self.state
+            .initialized_workers
+            .fetch_add(1, Ordering::Release);
+        self.state.initialization_changed.notify_all();
+        drop(progress);
     }
 
     // Omitting worker-count removal can make shutdown wait forever for a nonexistent decrement.

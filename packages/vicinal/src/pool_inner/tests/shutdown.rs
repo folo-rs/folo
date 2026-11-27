@@ -5,9 +5,10 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Wake};
+use std::thread::spawn;
 
 use futures::FutureExt;
 use futures::executor::block_on;
@@ -22,7 +23,7 @@ use super::helpers::{
 use crate::worker_policy::{
     BindContext, BindError, BoundPolicy, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
-use crate::{BuiltInWorkerPolicy, GroupId, JoinHandle, Pool, Scheduler};
+use crate::{BuiltInWorkerPolicy, GroupId, JoinHandle, PanicFailures, Pool, Scheduler};
 
 /// Records whether terminal admission ever reaches custom policy selection.
 #[derive(Debug)]
@@ -269,6 +270,83 @@ fn shutdown_prioritizes_secondary_payload_destruction() {
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.task_pool.lock().unwrap().is_empty());
     assert!(inner.runtime.is_poisoned());
+}
+
+/// A superseded runtime payload cannot unwind past shutdown while a worker participates.
+#[test]
+fn shutdown_waits_for_workers_before_disposing_of_retained_failures() {
+    /// Releases the running task even if payload disposal incorrectly precedes the wait.
+    #[derive(Debug, PartialEq, Eq)]
+    enum ShutdownEvent {
+        WaitingForWorker,
+        DisposingPayload { active_workers: usize },
+    }
+
+    /// Distinguishes the payload destructor panic from the retained primary panic.
+    struct PayloadDropFailure;
+
+    with_watchdog(|| {
+        let policy = TestPolicy::new(0);
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(policy.clone())
+            .build()
+            .unwrap();
+        let inner = Arc::clone(&pool.inner);
+        let worker = policy.group().add_worker();
+        let worker = spawn(move || worker.run());
+        let (entered, arrival) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let running = pool.scheduler().spawn(move || {
+            entered.send(()).unwrap();
+            wait.recv().unwrap();
+        });
+        arrival.recv().unwrap();
+
+        let (event, events) = mpsc::channel();
+        inner
+            .runtime
+            .before_worker_wait
+            .set(Box::new({
+                let event = event.clone();
+                let notified = AtomicBool::new(false);
+                move || {
+                    if !notified.swap(true, Ordering::Relaxed) {
+                        _ = event.send(ShutdownEvent::WaitingForWorker);
+                    }
+                }
+            }))
+            .unwrap_or_else(|_| panic!("the shutdown wait observer has not been installed"));
+        let runtime = Arc::downgrade(&inner.runtime);
+        inner
+            .runtime
+            .fail(PanicFailures::new(Box::new(OnDrop(Some(Box::new(
+                move || {
+                    let active_workers = runtime.upgrade().unwrap().active_workers();
+                    event
+                        .send(ShutdownEvent::DisposingPayload { active_workers })
+                        .unwrap();
+                    panic::panic_any(PayloadDropFailure);
+                },
+            ))))));
+        inner
+            .runtime
+            .fail(PanicFailures::new(Box::new("retained primary panic")));
+
+        let shutdown = spawn(move || panic::catch_unwind(AssertUnwindSafe(|| drop(pool))));
+        let first = events.recv().unwrap();
+        release.send(()).unwrap();
+        let result = shutdown.join().unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(first, ShutdownEvent::WaitingForWorker);
+        assert_eq!(
+            events.try_recv().unwrap(),
+            ShutdownEvent::DisposingPayload { active_workers: 0 }
+        );
+        assert!(result.unwrap_err().is::<PayloadDropFailure>());
+        block_on(running).unwrap();
+    });
 }
 
 /// A queued destructor re-enters admission and releases the running task during clean shutdown.

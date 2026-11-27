@@ -140,11 +140,11 @@ fn shutdown_waits_for_failure_publication_to_finish() {
                 .is_ok()
         );
 
-        let worker = spawn({
-            let worker = group.add_worker();
-            move || worker.run()
-        });
+        let reservation = group.add_worker();
+        let count_before_run = group.worker_count();
+        let worker = spawn(move || reservation.run());
         initializer_arrival.recv().unwrap();
+        let count_during_initialization = group.worker_count();
 
         let scheduler = pool.scheduler();
         let pending = scheduler.spawn(|| ());
@@ -179,6 +179,8 @@ fn shutdown_waits_for_failure_publication_to_finish() {
         release_failure.send(()).unwrap();
         assert!(shutdown.join().unwrap().is_err());
         worker.join().unwrap();
+        assert_eq!(count_before_run, 0);
+        assert_eq!(count_during_initialization, 1);
         assert_panics(|| block_on(pending).unwrap());
         assert_eq!(inner.runtime.active_workers(), 0);
     });

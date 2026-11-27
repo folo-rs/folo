@@ -21,8 +21,8 @@ use tracing::error;
 
 use crate::worker_policy::{BindContext, BoundPolicy, WorkerGroups, WorkerPolicyBinding};
 use crate::{
-    BuildError, PoolRuntime, ThreadInit, extract_panic_message, record_diagnostic_panic,
-    resume_latest_failure, validate_eager_processors,
+    BuildError, PanicFailures, PoolRuntime, ThreadInit, extract_panic_message,
+    validate_eager_processors,
 };
 #[cfg(test)]
 use crate::{SubmissionTarget, WorkerEntry};
@@ -97,7 +97,7 @@ impl PoolInner {
         let bound = match result {
             Ok(bound) => bound,
             Err(payload) => {
-                runtime.fail(payload);
+                runtime.fail(PanicFailures::new(payload));
                 finish_failed_binding(&runtime);
                 let error = runtime_build_error(&runtime)
                     .expect("runtime.fail retained the binding panic before cleanup");
@@ -118,6 +118,7 @@ impl PoolInner {
         // an already-poisoned pool.
         if runtime.is_poisoned() {
             runtime.wait_for_workers();
+            drop(policy);
             let error = runtime_build_error(&runtime)
                 .expect("poisoned construction retains the first infrastructure failure");
             return Err(error);
@@ -167,22 +168,18 @@ impl PoolInner {
         group.start_workers_with(destination, &affinity, count, handles, spawn, pin);
     }
 
-    /// Terminates admission for a submission-owned failure and resumes its original payload.
+    /// Terminates admission, drains accepted work and propagates the prevailing failure.
     ///
     /// Ref: docs/implementation.md, "Task storage" and "Affinity and failure coordination".
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn poison(
-        &self,
-        payload: Box<dyn Any + Send>,
-        cleanup: Option<Box<dyn Any + Send>>,
-    ) -> ! {
-        let mut failures = self.runtime.fail_for_submission(payload);
-        if let Some(cleanup) = cleanup {
-            failures.push(cleanup);
-        }
-        self.runtime
-            .drain_groups(|result| record_failure(&mut failures, result, &self.runtime));
-        resume_latest_failure(failures);
+    pub(crate) fn poison(&self, failure: Box<dyn Any + Send>, cleanup: Option<PanicFailures>) -> ! {
+        let mut failures = self.runtime.fail_for_submission(failure, cleanup);
+        self.runtime.drain_groups(|result| {
+            if let Some(cleanup) = cleanup_failure(result, &self.runtime) {
+                failures.append(cleanup);
+            }
+        });
+        failures.resume();
     }
 
     /// Publishes shutdown, contains queue cleanup and waits for all participating workers.
@@ -193,31 +190,24 @@ impl PoolInner {
     pub(crate) fn shutdown_and_wait_for_workers(&self) {
         self.runtime.stop_workers();
 
-        let mut failures = self.runtime.take_failure().into_iter().collect::<Vec<_>>();
-        if !failures.is_empty() {
-            let message = extract_panic_message(
-                failures
-                    .first()
-                    .expect("the nonempty branch contains a runtime failure"),
-            );
-            record_diagnostic_panic(&mut failures, || {
-                error!(message, "failure during worker pool cleanup");
-            });
+        let mut failures = self.runtime.take_failure();
+        if let Some(retained) = &mut failures {
+            report_cleanup_failure(retained);
         }
-        self.runtime
-            .drain_groups(|result| record_failure(&mut failures, result, &self.runtime));
+        self.runtime.drain_groups(|result| {
+            if let Some(cleanup) = cleanup_failure(result, &self.runtime) {
+                PanicFailures::accumulate(&mut failures, cleanup);
+            }
+        });
         self.runtime.wait_for_workers();
 
-        if let Some(payload) = self.runtime.take_failure() {
-            let message = extract_panic_message(&payload);
-            failures.push(payload);
-            record_diagnostic_panic(&mut failures, || {
-                error!(message, "failure during worker pool cleanup");
-            });
+        if let Some(mut retained) = self.runtime.take_failure() {
+            report_cleanup_failure(&mut retained);
+            PanicFailures::accumulate(&mut failures, retained);
         }
 
-        if !failures.is_empty() {
-            resume_latest_failure(failures);
+        if let Some(failures) = failures {
+            failures.resume();
         }
     }
 }
@@ -233,9 +223,11 @@ fn finish_failed_binding(runtime: &PoolRuntime) {
     runtime.wait_for_workers();
 }
 
-/// Converts the first retained construction panic without rethrowing it.
+/// Releases builder-owned initialization state before processing retained payloads.
 fn runtime_build_error(runtime: &PoolRuntime) -> Option<BuildError> {
-    runtime.take_failure().map(BuildError::from_panic)
+    let failure = runtime.take_failure();
+    runtime.release_thread_init();
+    failure.map(|failures| BuildError::from_panic(failures.into_latest()))
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -250,17 +242,18 @@ impl Debug for PoolInner {
 }
 
 /// Records each cleanup failure and continues the required terminal-state cleanup.
-fn record_failure(
-    failures: &mut Vec<Box<dyn Any + Send>>,
-    result: ThreadResult<()>,
-    runtime: &PoolRuntime,
-) {
-    if let Err(payload) = result {
-        runtime.stop_admission();
-        let message = extract_panic_message(&payload);
-        failures.push(payload);
-        record_diagnostic_panic(failures, || {
-            error!(message, "failure during worker pool cleanup");
-        });
-    }
+fn cleanup_failure(result: ThreadResult<()>, runtime: &PoolRuntime) -> Option<PanicFailures> {
+    let payload = result.err()?;
+    runtime.stop_admission();
+    let mut failures = PanicFailures::new(payload);
+    report_cleanup_failure(&mut failures);
+    Some(failures)
+}
+
+/// Reports cleanup failures without letting a tracing panic bypass remaining cleanup.
+fn report_cleanup_failure(failures: &mut PanicFailures) {
+    let message = extract_panic_message(failures.latest());
+    failures.record_diagnostic(|| {
+        error!(message, "failure during worker pool cleanup");
+    });
 }

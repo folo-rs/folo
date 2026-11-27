@@ -8,7 +8,9 @@ use many_cpus::ProcessorSet;
 use tracing::trace;
 
 use crate::pool_inner::POOL_LOG_TARGET;
-use crate::{IterationResult, NEVER_POISONED, PoolRuntime, WorkerCore, WorkerGroupState};
+use crate::{
+    IterationResult, NEVER_POISONED, PanicFailures, PoolRuntime, WorkerCore, WorkerGroupState,
+};
 
 /// Runs one worker through affinity refresh, task dispatch and wake/lost-notification handling.
 ///
@@ -21,7 +23,7 @@ pub(crate) fn worker_loop_with(
     worker_index: u32,
     mut revision: usize,
     pin: impl FnMut(&ProcessorSet),
-) {
+) -> Result<(), PanicFailures> {
     let core = WorkerCore::new(
         &state.urgent_queue,
         &state.regular_queue,
@@ -47,7 +49,7 @@ pub(crate) fn worker_loop_with(
                 !runtime.is_shutdown()
             },
             || runtime.stop_admission(),
-        );
+        )?;
 
         match outcome {
             IterationResult::ExecutedUrgent | IterationResult::ExecutedRegular => {
@@ -92,6 +94,7 @@ pub(crate) fn worker_loop_with(
             }
         }
     }
+    Ok(())
 }
 
 /// Applies a newly published shared affinity snapshot and advances this worker's local cursor.

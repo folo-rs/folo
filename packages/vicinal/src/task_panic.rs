@@ -1,11 +1,71 @@
 //! Panic payload ownership and bounded disposal during task and pool cleanup.
 
 use std::any::Any;
+use std::mem::replace;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use tracing::error;
 
 use crate::TASK_LOG_TARGET;
+
+/// Carries caught panics to the boundary that can release superseded payloads.
+#[derive(Debug)]
+pub(crate) struct PanicFailures {
+    earlier: Vec<Box<dyn Any + Send>>,
+    latest: Box<dyn Any + Send>,
+}
+
+impl PanicFailures {
+    pub(crate) fn new(payload: Box<dyn Any + Send>) -> Self {
+        Self {
+            earlier: Vec::new(),
+            latest: payload,
+        }
+    }
+
+    pub(crate) fn latest(&self) -> &Box<dyn Any + Send> {
+        &self.latest
+    }
+
+    /// Appends later failures without running any payload destructors.
+    pub(crate) fn append(&mut self, mut later: Self) {
+        self.push(later.latest);
+        self.earlier.append(&mut later.earlier);
+    }
+
+    /// Records failure at a boundary where cleanup may also succeed.
+    pub(crate) fn accumulate(target: &mut Option<Self>, failures: Self) {
+        if let Some(retained) = target {
+            retained.append(failures);
+        } else {
+            *target = Some(failures);
+        }
+    }
+
+    /// Lets diagnostics fail independently of the remaining cleanup work.
+    pub(crate) fn record_diagnostic(&mut self, diagnostic: impl FnOnce()) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(diagnostic)) {
+            self.push(payload);
+        }
+    }
+
+    /// Releases superseded payloads once the owning boundary has completed cleanup.
+    pub(crate) fn into_latest(self) -> Box<dyn Any + Send> {
+        for payload in self.earlier {
+            drop(payload);
+        }
+        self.latest
+    }
+
+    /// Propagates after cleanup, allowing a payload destructor panic to take precedence.
+    pub(crate) fn resume(self) -> ! {
+        resume_unwind(self.into_latest());
+    }
+
+    fn push(&mut self, payload: Box<dyn Any + Send>) {
+        self.earlier.push(replace(&mut self.latest, payload));
+    }
+}
 
 /// Keeps discarded task panics isolated from infrastructure, on either result-channel endpoint.
 #[derive(Debug)]
@@ -49,55 +109,30 @@ pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
 /// Drops a captured panic and re-raises a destructor panic after reporting it.
 pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
     if let Err(replacement) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
-        let mut failures = vec![replacement];
-        record_diagnostic_panic(&mut failures, || {
+        let mut failures = PanicFailures::new(replacement);
+        failures.record_diagnostic(|| {
             error!(
                 target: TASK_LOG_TARGET,
                 "panic payload destruction failed"
             );
         });
-        resume_latest_failure(failures);
+        failures.resume();
     }
 }
 
 /// Drops task state after a failure and returns any incidental cleanup panic.
-pub(crate) fn discard_task_after_failure<T>(task: T) -> Option<Box<dyn Any + Send>> {
+pub(crate) fn discard_task_after_failure<T>(task: T) -> Option<PanicFailures> {
     let payload = catch_unwind(AssertUnwindSafe(|| drop(task))).err()?;
     let message = extract_panic_message(&payload);
-    let mut failures = vec![payload];
-    record_diagnostic_panic(&mut failures, || {
+    let mut failures = PanicFailures::new(payload);
+    failures.record_diagnostic(|| {
         error!(
             target: TASK_LOG_TARGET,
             message,
             "task cleanup failed while handling an infrastructure failure"
         );
     });
-    let latest = failures.pop()?;
-    for earlier in failures {
-        drop(earlier);
-    }
-    Some(latest)
-}
-
-/// Records an incidental diagnostic panic without interrupting the required cleanup.
-pub(crate) fn record_diagnostic_panic(
-    failures: &mut Vec<Box<dyn Any + Send>>,
-    diagnostic: impl FnOnce(),
-) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(diagnostic)) {
-        failures.push(payload);
-    }
-}
-
-/// Re-raises the most recent incidental panic after releasing earlier payloads.
-pub(crate) fn resume_latest_failure(mut failures: Vec<Box<dyn Any + Send>>) -> ! {
-    let latest = failures
-        .pop()
-        .expect("failure cleanup retains at least the initiating panic");
-    for failure in failures {
-        drop(failure);
-    }
-    resume_unwind(latest);
+    Some(failures)
 }
 
 #[cfg(test)]

@@ -100,7 +100,6 @@ fn assert_ready(kind: PolicyKind) {
         assert_eq!(affinity(&hardware), BTreeSet::from([1]));
         assert!(!INITIALIZED.get());
         for state in pool.inner.registry.initialized() {
-            assert_eq!(state.startup.get(), Some(&Ok(())));
             assert_eq!(state.get_tasks_spawned(), 0);
             assert!(state.regular_queue.lock().unwrap().is_empty());
             assert!(state.urgent_queue.lock().unwrap().is_empty());

@@ -12,7 +12,8 @@ use ohno::ErrorExt;
 use testing::with_watchdog;
 
 use crate::worker_policy::{
-    BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
+    BindContext, BindError, BoundPolicy, Worker, WorkerGroup, WorkerGroupId, WorkerGroups,
+    WorkerPolicy,
 };
 use crate::{BuiltInWorkerPolicy, Pool};
 
@@ -201,13 +202,16 @@ impl BoundPolicy for EagerCustomPolicy {
 #[derive(Debug)]
 struct DroppedWorkerPolicy {
     group: OnceLock<WorkerGroupId>,
+    reserved: Sender<Worker>,
+    waiting: Sender<()>,
 }
 
 impl WorkerPolicy for DroppedWorkerPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         self.group.set(group.id()).unwrap();
-        drop(group.add_worker());
+        group.observe_binding_wait(self.waiting.clone());
+        self.reserved.send(group.add_worker()).unwrap();
         Ok(self)
     }
 }
@@ -392,9 +396,15 @@ fn worker_failure_prioritizes_initializer_drop_panic() {
     let marker = PanickingInitializerDrop { dropped };
     let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     let eager = hardware.all_processors();
+    // A surviving group handle must not delay the failed builder's initializer cleanup.
+    let observer = Arc::new(Mutex::new(None));
     let builder = Pool::builder()
         .hardware(hardware)
         .eager(eager)
+        .worker_policy(ObservedEagerPolicy {
+            inner: BuiltInWorkerPolicy::per_processor(nz!(1)),
+            observer: Arc::clone(&observer),
+        })
         .thread_init(move || {
             _ = &marker;
             panic_any(InitializationFailure);
@@ -402,6 +412,7 @@ fn worker_failure_prioritizes_initializer_drop_panic() {
 
     let payload = catch_unwind(AssertUnwindSafe(|| builder.build())).unwrap_err();
     initializer_dropped.recv().unwrap();
+    drop(observer);
     assert!(payload.is::<PolicyDropFailure>());
 }
 
@@ -539,17 +550,25 @@ fn builder_waits_for_every_custom_binding_worker() {
 #[test]
 fn dropping_a_binding_worker_cancels_its_readiness_target() {
     with_watchdog(|| {
-        let pool = Pool::builder()
-            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
-                nz!(1),
-                nz!(1),
-            )))
-            .worker_policy(DroppedWorkerPolicy {
-                group: OnceLock::new(),
-            })
-            .build()
-            .unwrap();
+        let (reserved, reservation) = channel();
+        let (waiting, wait) = channel();
+        let builder = spawn(move || {
+            Pool::builder()
+                .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                    nz!(1),
+                    nz!(1),
+                )))
+                .worker_policy(DroppedWorkerPolicy {
+                    group: OnceLock::new(),
+                    reserved,
+                    waiting,
+                })
+                .build()
+        });
 
-        drop(pool);
+        let worker = reservation.recv().unwrap();
+        wait.recv().unwrap();
+        drop(worker);
+        drop(builder.join().unwrap().unwrap());
     });
 }

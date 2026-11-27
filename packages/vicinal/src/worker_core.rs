@@ -5,7 +5,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
-use crate::{ErasedTaskHandle, NEVER_POISONED, discard_task_after_failure, resume_latest_failure};
+use crate::{ErasedTaskHandle, NEVER_POISONED, PanicFailures, discard_task_after_failure};
 
 /// The body of a worker thread's main loop, isolated from thread management.
 ///
@@ -33,7 +33,7 @@ impl<'a> WorkerCore<'a> {
 
     #[cfg(test)]
     pub(crate) fn run_one_iteration(&self) -> IterationResult {
-        self.run_one_iteration_with(|| true, || {})
+        self.run_one_iteration_with(|| true, || {}).unwrap()
     }
 
     /// Refreshes thread-local state and confirms admission outside the queue lock after dequeueing.
@@ -43,35 +43,35 @@ impl<'a> WorkerCore<'a> {
         &self,
         before_task: impl FnOnce() -> bool,
         stop_pool: impl FnOnce(),
-    ) -> IterationResult {
+    ) -> Result<IterationResult, PanicFailures> {
         // We first check with Relaxed to minimize overhead, as this will be called often.
         if self.shutdown_flag.load(Ordering::Relaxed) {
             // Acquire ordering synchronizes with Release in signal_shutdown, ensuring we see
             // the latest value of the shutdown flag after all prior writes from the signaler.
             atomic::fence(Ordering::Acquire);
 
-            return IterationResult::Shutdown;
+            return Ok(IterationResult::Shutdown);
         }
 
         let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(task) = task {
-            if !execute_task(task, before_task, stop_pool) {
-                return IterationResult::Shutdown;
+            if !execute_task(task, before_task, stop_pool)? {
+                return Ok(IterationResult::Shutdown);
             }
 
-            return IterationResult::ExecutedUrgent;
+            return Ok(IterationResult::ExecutedUrgent);
         }
 
         let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(task) = task {
-            if !execute_task(task, before_task, stop_pool) {
-                return IterationResult::Shutdown;
+            if !execute_task(task, before_task, stop_pool)? {
+                return Ok(IterationResult::Shutdown);
             }
 
-            return IterationResult::ExecutedRegular;
+            return Ok(IterationResult::ExecutedRegular);
         }
 
-        IterationResult::WaitingForWork
+        Ok(IterationResult::WaitingForWork)
     }
 }
 
@@ -94,7 +94,7 @@ fn execute_task(
     mut task: ErasedTaskHandle,
     before_task: impl FnOnce() -> bool,
     stop_pool: impl FnOnce(),
-) -> bool {
+) -> Result<bool, PanicFailures> {
     match panic::catch_unwind(AssertUnwindSafe(|| {
         if before_task() {
             task.as_pin_mut().call();
@@ -103,16 +103,16 @@ fn execute_task(
             false
         }
     })) {
-        Ok(executed) => executed,
+        Ok(executed) => Ok(executed),
         Err(payload) => {
             // Publish terminal state before a capture destructor can re-enter submission.
             // Only state publication occurs here; worker entry owns draining and propagation.
             stop_pool();
-            let mut failures = vec![payload];
+            let mut failures = PanicFailures::new(payload);
             if let Some(cleanup) = discard_task_after_failure(task) {
-                failures.push(cleanup);
+                failures.append(cleanup);
             }
-            resume_latest_failure(failures);
+            Err(failures)
         }
     }
 }
@@ -204,7 +204,8 @@ mod tests {
                         false
                     },
                     || panic!("clean shutdown must not poison the pool"),
-                ),
+                )
+                .unwrap(),
                 IterationResult::Shutdown
             );
             assert_eq!(COUNTER.load(Ordering::Relaxed), 0);
@@ -230,8 +231,8 @@ mod tests {
             ));
             let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
-            let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-                core.run_one_iteration_with(
+            let payload = core
+                .run_one_iteration_with(
                     || {
                         drop(urgent.try_lock().unwrap());
                         drop(regular.try_lock().unwrap());
@@ -239,8 +240,8 @@ mod tests {
                     },
                     || {},
                 )
-            }))
-            .unwrap_err();
+                .unwrap_err()
+                .into_latest();
 
             assert!(payload.is::<PanickingPayload>());
             std::mem::forget(payload);
@@ -261,10 +262,9 @@ mod tests {
         let task = alloc_task(&pool, wrapped);
 
         let payload = CLOCK
-            .with_borrow_mut(|_| {
-                panic::catch_unwind(AssertUnwindSafe(|| execute_task(task, || true, || {})))
-            })
-            .unwrap_err();
+            .with_borrow_mut(|_| execute_task(task, || true, || {}))
+            .unwrap_err()
+            .into_latest();
         assert!(payload.is::<PanickingPayload>());
         std::mem::forget(payload);
 

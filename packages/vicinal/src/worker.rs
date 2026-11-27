@@ -74,8 +74,13 @@ impl BindingReservation {
     }
 
     pub(crate) fn initialize(&mut self) {
+        self.complete();
+    }
+
+    /// Consumes the same readiness target whether initialization finished or was abandoned.
+    fn complete(&mut self) {
         if let Some(runtime) = self.runtime.take() {
-            runtime.initialize_binding_worker();
+            runtime.complete_binding_worker();
         }
     }
 
@@ -86,8 +91,6 @@ impl BindingReservation {
 
 impl Drop for BindingReservation {
     fn drop(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            runtime.cancel_binding_worker();
-        }
+        self.complete();
     }
 }

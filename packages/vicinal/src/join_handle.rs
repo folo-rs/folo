@@ -49,7 +49,7 @@ where
         Pin::new(&mut self.receiver).poll(cx).map(|result| {
             // Every unexecuted wrapper sends cancellation before releasing its sender.
             result.expect(
-                "JoinedTask sends completion, and its cancellation path sends before sender drop",
+                "joined tasks deliver completion or cancellation before dropping the result sender",
             )
         })
     }

@@ -111,9 +111,11 @@ participates in the pool's shutdown barrier and failure state.
 
 ### Worker initialization
 
-The pool's shared configuration owns an optional boxed initialization callback. Workers
-borrow it once before entering the task loop; task execution has no callback lookup or
-additional allocation. The builder and schedulers do not expose the callback for invocation.
+The pool's shared configuration owns an optional initialization callback. Workers
+take a temporary shared reference before entering the task loop; task execution has no
+callback lookup or additional allocation. Failed construction releases the callback after
+the participation barrier, independently of any policy-owned worker handles that still
+exist. The builder and schedulers do not expose the callback for invocation.
 Its captures need not be unwind-safe because invocation happens only within the worker's
 infrastructure-failure boundary, which stops and poisons the pool on panic.
 
@@ -195,16 +197,18 @@ the wrapper only after slot reservation succeeds. That boundary also retains the
 receiver, so a cancelled body with panicking captures is disposed of outside the original unwind
 when submission fails before returning a handle. Infrastructure failures stop admission
 before separately destroying retained captures, so reentrant destructors cannot submit work.
-The worker's dequeued-task boundary publishes the same pool-wide failure state before releasing
-its task; worker entry then signals groups, drains queued work and propagates the original failure.
+The worker's dequeued-task boundary stops admission before releasing its task and passes all
+caught payloads to worker entry, which owns failure publication and queue cleanup.
 Task wrappers separately catch user-task panics, keeping them out of the
 infrastructure boundary. Cleanup failures also poison the pool while cleanup continues.
 Failure diagnostics run after terminal publication and outside the retained-failure lock;
 submission threads can reserve ownership of the original payload before diagnostics. Reentrant
-pool destruction therefore cannot consume that payload. A diagnostic or cleanup panic is
-contained only until the pool has completed required terminal transitions and queue cleanup.
-The latest incidental panic then propagates or becomes the construction error. A worker
-participation guard releases its accounting while that incidental panic unwinds.
+pool destruction therefore cannot consume that payload. A nonempty failure accumulator
+transfers all caught payloads to the boundary that owns cleanup. That boundary releases
+superseded payloads only after draining queues and, for shutdown or failed construction,
+waiting for participating workers. The latest incidental panic propagates or becomes the
+construction error unless payload destruction itself panics. A worker participation guard
+releases its accounting while an incidental panic unwinds.
 Workers check the pool-wide stop flag before task execution, rather than waiting for the
 group signal scan to reach their group.
 

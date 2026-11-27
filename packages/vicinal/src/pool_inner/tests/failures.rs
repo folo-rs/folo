@@ -13,7 +13,7 @@ use super::helpers::{
     CountOnDrop, NoopTask, OnDrop, PanickingPayload, TestBuiltInPolicy, TestPolicy, hardware, pin,
     regional_hardware,
 };
-use crate::{BuiltInWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
+use crate::{BuiltInWorkerPolicy, GroupId, PanicFailures, Pool, SubmissionTarget, init_task};
 
 /// Submission failures stop admission, whereas caught user-task panics leave it operational.
 #[test]
@@ -80,7 +80,9 @@ fn poisoned_enqueue_preserves_existing_runtime_failure() {
         .unwrap();
     let group = policy.group();
     let state = group.state();
-    pool.inner.runtime.fail(Box::new(OriginalFailure));
+    pool.inner
+        .runtime
+        .fail(PanicFailures::new(Box::new(OriginalFailure)));
     let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
 
     let payload = panic::catch_unwind(panic::AssertUnwindSafe(|| {

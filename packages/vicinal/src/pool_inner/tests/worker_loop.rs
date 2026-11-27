@@ -2,10 +2,9 @@
 
 use std::cell::Cell;
 use std::collections::BTreeSet;
-use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
+use std::{panic, thread};
 
 use many_cpus::{Processor, ProcessorSet};
 use new_zealand::nz;
@@ -114,7 +113,8 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
             // A pending revision makes an unnecessary post-stop refresh observable.
             publish_expansion(&pool, &group);
             pool.inner.runtime.publish_shutdown_without_group_signals();
-        });
+        })
+        .unwrap();
 
         pool.inner.shutdown_and_wait_for_workers();
         assert_eq!(pins.get(), 1);
@@ -164,7 +164,8 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
                 }
                 _ => panic!("the worker must exit after abandoning the dequeued task"),
             }
-        });
+        })
+        .unwrap();
 
         assert_eq!(pins.get(), 2);
         assert!(dropped.load(Ordering::Acquire));
@@ -205,26 +206,25 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
         }));
 
         let pins = Cell::new(0);
-        let payload = panic::catch_unwind(AssertUnwindSafe(|| {
-            worker_loop_with(&pool.inner.runtime, state, 0, 0, |set| {
-                pins.set(pins.get() + 1);
-                match pins.get() {
-                    1 => {
-                        assert_eq!(set.len(), 1);
-                        let queued = state.regular_queue.lock().unwrap().len();
-                        assert_eq!(queued, 1);
-                        publish_expansion(&pool, &group);
-                    }
-                    2 => {
-                        assert_eq!(set.len(), 2);
-                        assert!(state.regular_queue.lock().unwrap().is_empty());
-                        panic::panic_any(AffinityFailure);
-                    }
-                    _ => panic!("a failed refresh must terminate the worker"),
+        let payload = worker_loop_with(&pool.inner.runtime, state, 0, 0, |set| {
+            pins.set(pins.get() + 1);
+            match pins.get() {
+                1 => {
+                    assert_eq!(set.len(), 1);
+                    let queued = state.regular_queue.lock().unwrap().len();
+                    assert_eq!(queued, 1);
+                    publish_expansion(&pool, &group);
                 }
-            });
-        }))
-        .unwrap_err();
+                2 => {
+                    assert_eq!(set.len(), 2);
+                    assert!(state.regular_queue.lock().unwrap().is_empty());
+                    panic::panic_any(AffinityFailure);
+                }
+                _ => panic!("a failed refresh must terminate the worker"),
+            }
+        })
+        .unwrap_err()
+        .into_latest();
 
         assert!(payload.is::<AffinityFailure>());
         assert_eq!(pins.get(), 2);
