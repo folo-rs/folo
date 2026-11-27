@@ -8,8 +8,8 @@
 //! independently on a worker thread. Await the handle when the result or completion matters.
 //! Use a fire-and-forget spawn method when the result does not matter.
 //!
-//! A worker policy decides which destination receives each task and which processors that
-//! destination's workers may run on. The default policy uses the submitting thread's logical
+//! A worker policy defines how tasks are distributed between worker threads and on which
+//! processors those threads may execute. The default policy uses the submitting thread's logical
 //! processor. Applications can instead share a fixed worker count across a memory region with
 //! [`policies::WorkersPerMemoryRegion`] or across the whole system with
 //! [`policies::WorkersPerSystem`]. Implement custom policies with the types in [`worker_policy`].
