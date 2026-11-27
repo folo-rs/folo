@@ -4493,7 +4493,6 @@ dependencies = [
  "ohno",
  "pin-project",
  "plurality",
- "simple-mermaid",
  "static_assertions",
  "testing",
  "threadpool",

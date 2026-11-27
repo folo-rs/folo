@@ -44,7 +44,6 @@
 //! threads for the processor that submits the first task. Work submitted from another processor
 //! uses another set of worker threads created for that processor. Implement custom policies with
 //! the types in [`worker_policy`].
-#![doc = simple_mermaid::mermaid!("../docs/diagrams/default_processor_policy.mermaid")]
 //!
 //! [`policies::WorkersPerMemoryRegion`] creates one set of worker threads per submitting region.
 //! Submissions from processors in that region share those workers.
