@@ -13,7 +13,7 @@ use many_cpus::{MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHard
 use crate::worker_policy::{
     BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
 };
-use crate::{GroupId, NEVER_POISONED, SubmissionTarget};
+use crate::{EagerProcessorHardwareMismatch, GroupId, NEVER_POISONED, SubmissionTarget};
 /// Owns the common routing and worker-startup implementation for all built-in policies.
 ///
 /// The public policy facades remain small and stable while this type selects the topology
@@ -134,19 +134,24 @@ impl BoundPolicy for Arc<BoundBuiltInPolicy> {
 }
 
 /// Verifies eager handles against both selected and backing hardware identities.
-pub(crate) fn validate_eager_processors(hardware: &SystemHardware, processors: &ProcessorSet) {
+pub(crate) fn validate_eager_processors(
+    hardware: &SystemHardware,
+    processors: &ProcessorSet,
+) -> Result<(), EagerProcessorHardwareMismatch> {
     let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
     let backing_processors = processors
         .to_builder()
         .take_all()
         .expect("ProcessorSet::to_builder retains the nonempty set's backing candidates");
-    assert!(
-        processors
-            .iter()
-            .chain(backing_processors.iter())
-            .all(|processor| eligible.contains(processor)),
-        "the eager set's processor values and backing topology must both belong to this hardware"
-    );
+    let belongs_to_pool_hardware = processors
+        .iter()
+        .chain(backing_processors.iter())
+        .all(|processor| eligible.contains(processor));
+    if !belongs_to_pool_hardware {
+        return Err(EagerProcessorHardwareMismatch::new());
+    }
+
+    Ok(())
 }
 
 /// Selects the topology semantics used by one built-in policy facade.

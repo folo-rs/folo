@@ -130,4 +130,17 @@ fn binding_failure_is_returned_after_started_workers_leave() {
     });
 }
 
+#[test]
+fn foreign_eager_hardware_returns_build_error() {
+    let pool_hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+    let eager_hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+
+    let result = Pool::builder()
+        .hardware(pool_hardware)
+        .eager(eager_hardware.all_processors())
+        .build();
+
+    _ = result.unwrap_err();
+}
+
 ::testing::set_allocator!();

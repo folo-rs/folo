@@ -9,7 +9,7 @@ use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
 use ohno::ErrorExt;
-use testing::{assert_panics, with_watchdog};
+use testing::with_watchdog;
 
 use crate::worker_policy::{
     BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
@@ -368,17 +368,20 @@ fn custom_policy_rejects_foreign_eager_hardware() {
     let foreign = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     let observer = Arc::new(Mutex::new(None));
 
-    assert_panics(|| {
-        _ = Pool::builder()
-            .hardware(first)
-            .eager(foreign.all_processors())
-            .worker_policy(StartupFailurePolicy {
-                worker_observer: Arc::clone(&observer),
-                ready: Mutex::new(None),
-            })
-            .build()
-            .unwrap();
-    });
+    let error = Pool::builder()
+        .hardware(first)
+        .eager(foreign.all_processors())
+        .worker_policy(StartupFailurePolicy {
+            worker_observer: Arc::clone(&observer),
+            ready: Mutex::new(None),
+        })
+        .build()
+        .unwrap_err();
+    assert!(
+        error
+            .find_source::<crate::build_error::EagerProcessorHardwareMismatch>()
+            .is_some()
+    );
     // Equal processor counts make hardware identity the only mismatch. The observer proves
     // Construction rejected that mismatch before entering the policy's failing bind call.
     assert!(observer.lock().unwrap().is_none());

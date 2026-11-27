@@ -79,7 +79,7 @@ impl PoolInner {
         let runtime = PoolRuntime::new(pool_id, pool_name, thread_init);
         let groups = WorkerGroups::new(Arc::clone(&runtime));
         if let Some(processors) = eager {
-            validate_eager_processors(hardware, processors);
+            validate_eager_processors(hardware, processors)?;
         }
         runtime.begin_worker_binding();
         let result = catch_unwind(AssertUnwindSafe(|| {

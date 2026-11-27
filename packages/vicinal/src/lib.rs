@@ -154,6 +154,7 @@ mod worker_group_id;
 mod worker_groups;
 pub mod worker_policy;
 
+pub(crate) use build_error::EagerProcessorHardwareMismatch;
 pub use build_error::*;
 #[cfg(test)]
 pub(crate) use built_in_worker_policy::{BoundBuiltInPolicy, PolicyKind};

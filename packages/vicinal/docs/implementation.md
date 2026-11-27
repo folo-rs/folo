@@ -135,6 +135,8 @@ Pool construction validates an eager selection before invoking any `WorkerPolicy
 implementation. It checks both supplied processor handles and processors rebuilt through the
 selection's backing hardware against the pool's eligible set. Full processor equality includes
 hardware-instance identity; supplied handles alone do not establish the backend used for pinning.
+Validation converts a foreign selection into the private hardware-mismatch leaf under
+`BuildError` without starting the policy.
 Built-in policies partition the selection into singletons for distinct processors, distinct
 regions or one system mask according to the policy.
 Repeated entries never create additional worker groups. Group masks and shared

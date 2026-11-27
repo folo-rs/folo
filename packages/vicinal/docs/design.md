@@ -107,7 +107,8 @@ for earlier reservations.
 
 The selection must belong to the pool's hardware instance. The pool validates the complete
 selection before starting workers, including hardware identity rather than only numeric CPU IDs.
-Construction leaves the calling thread's affinity unchanged.
+A mismatch returns `BuildError` without invoking the selected policy. Construction leaves the
+calling thread's affinity unchanged.
 
 Processor-local pools start the configured count for every selected processor, pinned individually.
 Regional pools start the count for each distinct represented region, with affinity limited to

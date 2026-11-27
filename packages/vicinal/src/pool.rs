@@ -275,10 +275,10 @@ impl PoolBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error reported by
-    /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] or a contained
-    /// worker-infrastructure panic, after all participating workers started during binding have
-    /// left the worker loop.
+    /// Returns an error if the eager selection belongs to different hardware, if
+    /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] reports a failure or if
+    /// worker infrastructure panics. After a binding failure, all participating workers have
+    /// left the worker loop before this method returns.
     pub fn build(self) -> Result<Pool, BuildError> {
         let hardware = self
             .hardware

@@ -10,11 +10,12 @@ use crate::{discard_panic, extract_panic_message};
 
 /// A worker policy or worker infrastructure failed while building a pool.
 ///
-/// A build error retains a policy-specific binding error or a contained infrastructure panic.
-/// Construction has stopped participating workers before this value reaches the caller.
+/// A build error retains an invalid eager processor selection, a policy-specific binding error
+/// or a contained infrastructure panic. Construction has stopped participating workers before
+/// this value reaches the caller.
 #[derive(ohno::Error)]
 #[no_constructors]
-#[from(BindError, BuildPanicked)]
+#[from(BindError, BuildPanicked, EagerProcessorHardwareMismatch)]
 #[display("worker pool build failed")]
 pub struct BuildError {
     #[error]
@@ -39,6 +40,14 @@ pub(crate) struct BuildPanicked {
     message: String,
 }
 
+/// The eager processor selection belongs to different hardware than the pool.
+#[ohno::error]
+#[display("eager processors belong to different hardware than the pool")]
+pub(crate) struct EagerProcessorHardwareMismatch;
+
+impl UnwindSafe for EagerProcessorHardwareMismatch {}
+impl RefUnwindSafe for EagerProcessorHardwareMismatch {}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -49,4 +58,10 @@ mod tests {
     use super::*;
 
     assert_impl_all!(BuildError: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(
+        EagerProcessorHardwareMismatch: Send,
+        Sync,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 }

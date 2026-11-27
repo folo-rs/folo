@@ -11,7 +11,8 @@ use futures::executor::block_on;
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
-use testing::{assert_panics, with_watchdog};
+use ohno::ErrorExt;
+use testing::with_watchdog;
 
 use super::helpers::{affinity, assert_retained_scheduler, hardware, pin, regional_hardware};
 use crate::worker_policy::WorkerGroup;
@@ -288,7 +289,12 @@ fn eager_selection_rejects_foreign_hardware_before_initialization() {
                 initialized.fetch_add(1, Ordering::Relaxed);
             }
         });
-    assert_panics(|| builder.build().unwrap());
+    let error = builder.build().unwrap_err();
+    assert!(
+        error
+            .find_source::<crate::build_error::EagerProcessorHardwareMismatch>()
+            .is_some()
+    );
     assert_eq!(initialized.load(Ordering::Relaxed), 0);
 }
 
@@ -320,7 +326,12 @@ fn eager_selection_rejects_foreign_backing_hardware_before_initialization() {
                         initialized.fetch_add(1, Ordering::Relaxed);
                     }
                 });
-            assert_panics(|| builder.build().unwrap());
+            let error = builder.build().unwrap_err();
+            assert!(
+                error
+                    .find_source::<crate::build_error::EagerProcessorHardwareMismatch>()
+                    .is_some()
+            );
             assert_eq!(initialized.load(Ordering::Relaxed), 0);
         }
     });
