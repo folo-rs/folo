@@ -298,6 +298,7 @@ mod tests {
     use static_assertions::assert_impl_all;
     use testing::{assert_panics, assert_panics_with, with_watchdog};
     use tracing::span::{Attributes, Id, Record};
+    use tracing::subscriber::with_default;
     use tracing::{Event, Metadata, Subscriber};
 
     use crate::metrics::CLOCK;
@@ -527,7 +528,7 @@ mod tests {
                 dropped: Arc::clone(&dropped),
             };
 
-            tracing::subscriber::with_default(subscriber, || {
+            with_default(subscriber, || {
                 assert_panics_with(
                     || {
                         _ = scheduler.spawn(|| 42);

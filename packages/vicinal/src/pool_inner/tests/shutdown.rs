@@ -276,7 +276,7 @@ fn shutdown_prioritizes_secondary_payload_destruction() {
 #[test]
 fn shutdown_waits_for_workers_before_disposing_of_retained_failures() {
     /// Releases the running task even if payload disposal incorrectly precedes the wait.
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, Eq, PartialEq)]
     enum ShutdownEvent {
         WaitingForWorker,
         DisposingPayload { active_workers: usize },

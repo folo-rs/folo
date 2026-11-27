@@ -1,4 +1,7 @@
-#![expect(missing_docs, reason = "benchmarks")]
+#![expect(
+    missing_docs,
+    reason = "this benchmark executable exposes no consumer-facing API to document"
+)]
 
 use std::hint::black_box;
 use std::sync::{Arc, OnceLock};
@@ -38,6 +41,8 @@ impl PolicyCase {
 #[derive(Clone, Debug)]
 struct PolicyProbe {
     kind: PolicyCase,
+    // Clones share a single binding. Retain its registry so direct selection uses the same
+    // registry that bound the policy, without going through the scheduler.
     state: Arc<OnceLock<(WorkerGroups, Box<dyn BoundPolicy>)>>,
 }
 
@@ -60,12 +65,15 @@ impl PolicyProbe {
 
 impl WorkerPolicy for PolicyProbe {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        // Use the smallest supported worker count for every policy to control multiplicity
+        // and limit incidental startup work.
+        let workers = nz!(1);
         let policy: Box<dyn BoundPolicy> = match self.kind {
-            PolicyCase::Processor => Box::new(WorkersPerProcessor::new(nz!(1)).bind(context)?),
+            PolicyCase::Processor => Box::new(WorkersPerProcessor::new(workers).bind(context)?),
             PolicyCase::MemoryRegion => {
-                Box::new(WorkersPerMemoryRegion::new(nz!(1)).bind(context)?)
+                Box::new(WorkersPerMemoryRegion::new(workers).bind(context)?)
             }
-            PolicyCase::System => Box::new(WorkersPerSystem::new(nz!(1)).bind(context)?),
+            PolicyCase::System => Box::new(WorkersPerSystem::new(workers).bind(context)?),
         };
         assert!(
             self.state.set((context.groups().clone(), policy)).is_ok(),
@@ -111,8 +119,8 @@ impl BoundPolicy for BoundNoWorkerPolicy {
 
 /// Supplies stable fake topology without OS hardware discovery or affinity syscalls.
 ///
-/// Processors 0 and 1 intentionally share a region so the membership benchmark expands an
-/// established regional route instead of starting an unused route.
+/// The processors used for membership expansion share a region so the second selection
+/// expands an established route rather than creating a new one.
 fn hardware() -> SystemHardware {
     SystemHardware::fake(
         HardwareBuilder::new()
@@ -133,6 +141,9 @@ fn pin_to(hardware: &SystemHardware, processor: u32) {
         .pin_current_thread_to();
 }
 
+/// Times pool construction from builder configuration through `build()` returning.
+///
+/// Probe creation, hardware setup, and shutdown stay outside measurement.
 fn binding(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("vicinal_policy/binding");
     let hardware = hardware();
@@ -167,6 +178,8 @@ fn binding(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Times a direct policy selection on a prepared route, excluding pool setup, initial
+/// selection, scheduler admission, and shutdown.
 fn established_selection(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("vicinal_policy/selection");
 
@@ -194,6 +207,8 @@ fn established_selection(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Times the second direct selection, including publication of the expanded membership.
+/// Initial selection, pool shutdown, and switching processors happen before measurement.
 fn membership_expansion(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("vicinal_policy/membership");
 
@@ -229,6 +244,9 @@ fn membership_expansion(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Times submission through return from the scheduler.
+///
+/// The pool has no workers, so no task runs. Setup and shutdown stay outside measurement.
 fn admission(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("vicinal_policy/admission");
 

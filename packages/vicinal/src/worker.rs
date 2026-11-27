@@ -47,7 +47,6 @@ impl Worker {
 }
 
 impl Debug for Worker {
-    #[cfg_attr(coverage_nightly, coverage(off))]
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct(type_name::<Self>())
             .field("group", &self.group)

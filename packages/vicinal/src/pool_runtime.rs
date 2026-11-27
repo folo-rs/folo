@@ -1,6 +1,7 @@
 //! Pool-wide terminal state shared by every policy-created worker group.
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::mem::replace;
 use std::ops::ControlFlow;
 #[cfg(test)]
@@ -417,7 +418,7 @@ struct WorkerLifecycle {
 }
 
 fn drain_queue(
-    queue: &Mutex<std::collections::VecDeque<ErasedTaskHandle>>,
+    queue: &Mutex<VecDeque<ErasedTaskHandle>>,
     record_failure: &mut impl FnMut(ThreadResult<()>),
 ) {
     loop {
@@ -438,6 +439,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use tracing::span::{Attributes, Id, Record};
+    use tracing::subscriber::with_default;
     use tracing::{Event, Metadata, Subscriber};
 
     use super::*;
@@ -468,7 +470,7 @@ mod tests {
                 self.runtime.is_shutdown()
                     && self.runtime.is_poisoned()
                     && self.runtime.failure.try_lock().is_ok(),
-                Ordering::Release,
+                Ordering::Relaxed,
             );
             panic_any("failure subscriber panicked");
         }
@@ -490,12 +492,12 @@ mod tests {
             state_was_ready: Arc::clone(&state_was_ready),
         };
 
-        tracing::subscriber::with_default(subscriber, || {
+        with_default(subscriber, || {
             let failure: Box<dyn Any + Send> = Box::new(OriginalFailure);
             runtime.fail(PanicFailures::new(failure));
         });
 
-        assert!(state_was_ready.load(Ordering::Acquire));
+        assert!(state_was_ready.load(Ordering::Relaxed));
         let failure = runtime
             .take_failure()
             .expect("the diagnostic panic becomes the retained primary failure")

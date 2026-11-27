@@ -36,7 +36,8 @@ impl<'a> WorkerCore<'a> {
         self.run_one_iteration_with(|| true, || {}).unwrap()
     }
 
-    /// Refreshes thread-local state and confirms admission outside the queue lock after dequeueing.
+    /// Refreshes worker affinity and checks whether execution can start after dequeueing,
+    /// outside the queue lock.
     // Mutating worker-exit decisions can strand independently scheduled lifecycle tests.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn run_one_iteration_with(
@@ -120,6 +121,7 @@ fn execute_task(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::mem::forget;
     use std::pin::Pin;
     use std::sync::atomic::AtomicU32;
 
@@ -213,7 +215,9 @@ mod tests {
         }
     }
 
-    /// Preparation failure must survive a capture that also fails while being abandoned.
+    /// Releases the task before propagating the incidental cleanup panic.
+    ///
+    /// The capture's `PanickingPayload` takes precedence over the preparation panic.
     #[test]
     fn boundary_failure_contains_panicking_capture_and_payload() {
         /// Identifies the injected pinning failure while task cleanup crosses the boundary.
@@ -244,7 +248,7 @@ mod tests {
                 .into_latest();
 
             assert!(payload.is::<PanickingPayload>());
-            std::mem::forget(payload);
+            forget(payload);
             assert!(queue.lock().unwrap().is_empty());
             assert!(pool.is_empty());
         }
@@ -266,7 +270,7 @@ mod tests {
             .unwrap_err()
             .into_latest();
         assert!(payload.is::<PanickingPayload>());
-        std::mem::forget(payload);
+        forget(payload);
 
         assert!(pool.is_empty());
     }

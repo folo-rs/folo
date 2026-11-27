@@ -9,6 +9,7 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::vec::IntoIter as VecIntoIter;
 
 use crate::worker_policy::WorkerGroup;
 use crate::{GroupId, NEVER_POISONED, PoolRuntime, WorkerGroupState};
@@ -115,7 +116,7 @@ impl WorkerGroups {
     /// task should cache [`WorkerGroupId`] values instead of taking snapshots repeatedly.
     #[must_use]
     #[inline]
-    pub fn iter(&self) -> std::vec::IntoIter<WorkerGroup> {
+    pub fn iter(&self) -> VecIntoIter<WorkerGroup> {
         self.snapshot().into_iter()
     }
 
@@ -210,7 +211,7 @@ impl Debug for WorkerGroups {
 
 impl IntoIterator for &WorkerGroups {
     type Item = WorkerGroup;
-    type IntoIter = std::vec::IntoIter<WorkerGroup>;
+    type IntoIter = VecIntoIter<WorkerGroup>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -220,7 +221,7 @@ impl IntoIterator for &WorkerGroups {
 
 impl IntoIterator for WorkerGroups {
     type Item = WorkerGroup;
-    type IntoIter = std::vec::IntoIter<WorkerGroup>;
+    type IntoIter = VecIntoIter<WorkerGroup>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -287,7 +288,7 @@ struct WorkerGroupsInner {
 /// Iterates copied group identities while retaining the registry borrow that owns their state.
 pub(crate) struct InitializedGroups<'a> {
     groups: &'a WorkerGroups,
-    ids: std::vec::IntoIter<WorkerGroupId>,
+    ids: VecIntoIter<WorkerGroupId>,
 }
 
 #[cfg(test)]
@@ -350,5 +351,8 @@ mod tests {
         _ = format!("{:?}", pool.inner.groups);
         _ = format!("{group:?}");
         _ = format!("{:?}", group.id());
+        let worker = group.add_worker();
+        _ = format!("{worker:?}");
+        drop(worker);
     }
 }

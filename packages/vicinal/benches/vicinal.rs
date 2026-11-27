@@ -106,7 +106,7 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
             b.iter_batched(
                 &builder,
                 |builder| black_box(builder.build().unwrap()),
-                // Drop and join each returned pool outside measurement before creating another.
+                // Drop each pool and wait for worker shutdown outside measurement.
                 // Larger batches would leave idle worker pools competing with later iterations.
                 BatchSize::PerIteration,
             );
@@ -617,8 +617,8 @@ fn region_contention(criterion: &mut Criterion, caller: &ProcessorSet) {
     // A single submitter is the control; competing submitters expose regional queue contention.
     for callers in [1_usize, 2] {
         group.bench_function(format!("callers/{callers}"), |b| {
-            // Use the same fixed destination capacity as policy_dispatch so contention is
-            // measured without changing the amount of worker parallelism.
+            // Keep destination worker capacity fixed across submitter counts to isolate
+            // producer contention.
             let pool = Pool::builder()
                 .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
                 .build()

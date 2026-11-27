@@ -262,10 +262,12 @@ submitted task so missing submission disconnects the receiver.
 Panic fixtures raise a safely droppable terminal replacement when their destructor fails:
 missing containment must not cause unbounded recursive payload destruction.
 
-The live-group and worker-participation terminal paths retain mutation exclusions for
-uninterruptible sleeping states. Omitting one can strand a worker or queued capture, and
-detecting that absence would require a timing-based failure. Normal shutdown, poisoning,
-queue-draining and participation tests retain ordinary behavior coverage.
+Worker entry, readiness publication and terminal coordination retain narrow mutation
+exclusions where omitting an operation leaves a blocking waiter with no way to proceed.
+These include waits for an initializer signal, binding reservation completion, or worker
+exit accounting. Detecting the missing transition in these cases would require a timeout.
+Ordinary tests continue to exercise startup, participation, poisoning, queue draining and
+shutdown.
 
 The native admission forwarder and task execution wrapper share their underlying coordination
 exclusions. Removing either can omit an initializer or task-provided handshake. Cancellation
