@@ -5,7 +5,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
-use crate::{ErasedTaskHandle, NEVER_POISONED, discard_task_after_failure};
+use crate::{ErasedTaskHandle, NEVER_POISONED, discard_task_after_failure, resume_latest_failure};
 
 /// The body of a worker thread's main loop, isolated from thread management.
 ///
@@ -108,8 +108,11 @@ fn execute_task(
             // Publish terminal state before a capture destructor can re-enter submission.
             // Only state publication occurs here; worker entry owns draining and propagation.
             stop_pool();
-            discard_task_after_failure(task);
-            panic::resume_unwind(payload);
+            let mut failures = vec![payload];
+            if let Some(cleanup) = discard_task_after_failure(task) {
+                failures.push(cleanup);
+            }
+            resume_latest_failure(failures);
         }
     }
 }

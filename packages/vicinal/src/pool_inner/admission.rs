@@ -1,7 +1,7 @@
 //! Submission ownership, policy selection and queue admission.
 
 use std::ops::ControlFlow;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 #[cfg(test)]
 use std::thread::JoinHandle as ThreadJoinHandle;
@@ -32,16 +32,9 @@ impl PoolInner {
         match result {
             Ok(result) => result,
             Err(payload) => {
-                let already_stopped = self.runtime.is_shutdown() && self.runtime.is_poisoned();
-
                 self.stop_admission();
-                discard_task_after_failure(task);
-
-                if already_stopped {
-                    resume_unwind(payload);
-                }
-
-                self.poison(payload);
+                let cleanup = task.and_then(discard_task_after_failure);
+                self.poison(payload, cleanup);
             }
         }
     }
@@ -81,17 +74,9 @@ impl PoolInner {
         let admitted = match admitted {
             Ok(admitted) => admitted,
             Err(payload) => {
-                let already_stopped = self.runtime.is_shutdown() && self.runtime.is_poisoned();
-
                 self.stop_admission();
-                if let Some(task) = task.take() {
-                    discard_task_after_failure(task);
-                }
-                if already_stopped {
-                    resume_unwind(payload);
-                }
-
-                self.poison(payload);
+                let cleanup = task.take().and_then(discard_task_after_failure);
+                self.poison(payload, cleanup);
             }
         };
 
@@ -153,11 +138,11 @@ impl PoolInner {
         }
         if let Err(payload) = result {
             self.stop_admission();
-            discard_task_after_failure(
+            let cleanup = discard_task_after_failure(
                 task.take()
                     .expect("startup failure occurs before the task can leave its Option"),
             );
-            self.poison(payload);
+            self.poison(payload, cleanup);
         }
 
         let selected = self.registry.group_id(target.group);

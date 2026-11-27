@@ -60,20 +60,23 @@ pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
     }
 }
 
-/// Releases task captures outside an active unwind while preserving an earlier failure.
-pub(crate) fn discard_task_after_failure<T>(task: T) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(task))) {
-        let message = extract_panic_message(&payload);
-        let mut failures = vec![payload];
-        record_diagnostic_panic(&mut failures, || {
-            error!(
-                target: TASK_LOG_TARGET,
-                message,
-                "task cleanup failed while handling an infrastructure failure"
-            );
-        });
-        resume_latest_failure(failures);
+/// Drops task state after a failure and returns any incidental cleanup panic.
+pub(crate) fn discard_task_after_failure<T>(task: T) -> Option<Box<dyn Any + Send>> {
+    let payload = catch_unwind(AssertUnwindSafe(|| drop(task))).err()?;
+    let message = extract_panic_message(&payload);
+    let mut failures = vec![payload];
+    record_diagnostic_panic(&mut failures, || {
+        error!(
+            target: TASK_LOG_TARGET,
+            message,
+            "task cleanup failed while handling an infrastructure failure"
+        );
+    });
+    let latest = failures.pop()?;
+    for earlier in failures {
+        drop(earlier);
     }
+    Some(latest)
 }
 
 /// Records an incidental diagnostic panic without interrupting the required cleanup.

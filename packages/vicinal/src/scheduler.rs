@@ -427,6 +427,31 @@ mod tests {
         assert_eq!(pool.inner.runtime.active_workers(), 0);
     }
 
+    #[test]
+    fn preparation_cleanup_drains_queued_tasks_before_panicking() {
+        let pool = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .worker_policy(TestPolicy::new(0))
+            .build()
+            .unwrap();
+        let scheduler = pool.scheduler();
+        let queued = scheduler.spawn(|| 42);
+        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+
+        CLOCK.with_borrow_mut(|_| {
+            assert_incidental_panic(|| {
+                _ = scheduler.spawn(move || drop(capture));
+            });
+        });
+
+        assert!(block_on(queued).unwrap_err().is_cancel());
+        assert!(pool.inner.runtime.is_poisoned());
+        assert!(pool.inner.runtime.is_shutdown());
+    }
+
     /// Shutdown-time clock failure must still retain the unconsumed task for cleanup.
     #[test]
     fn shutdown_preparation_failure_contains_unwrapped_capture() {

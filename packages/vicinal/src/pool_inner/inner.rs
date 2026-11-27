@@ -171,9 +171,15 @@ impl PoolInner {
     ///
     /// Ref: docs/implementation.md, "Task storage" and "Affinity and failure coordination".
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
-        let payload = self.runtime.fail_for_submission(payload);
-        let mut failures = vec![payload];
+    pub(crate) fn poison(
+        &self,
+        payload: Box<dyn Any + Send>,
+        cleanup: Option<Box<dyn Any + Send>>,
+    ) -> ! {
+        let mut failures = self.runtime.fail_for_submission(payload);
+        if let Some(cleanup) = cleanup {
+            failures.push(cleanup);
+        }
         self.runtime
             .drain_groups(|result| record_failure(&mut failures, result, &self.runtime));
         resume_latest_failure(failures);

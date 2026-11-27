@@ -317,7 +317,10 @@ impl PoolRuntime {
     /// precedence and propagates after releasing the retained payloads. An unavailable failure
     /// remains submission-owned, so this call returns its payload without publishing or draining
     /// again. Only first publication completes failure cleanup.
-    pub(crate) fn fail_for_submission(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
+    pub(crate) fn fail_for_submission(
+        &self,
+        payload: Box<dyn Any + Send>,
+    ) -> Vec<Box<dyn Any + Send>> {
         let (message, retained) = {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
             match replace(&mut *failure, FailureState::Unavailable) {
@@ -329,14 +332,14 @@ impl PoolRuntime {
 
         if let Some(mut retained) = retained {
             retained.push(payload);
-            resume_latest_failure(retained);
+            return retained;
         }
 
         if let Some(message) = message {
             self.complete_failure(&message);
         }
 
-        payload
+        vec![payload]
     }
 
     fn complete_failure(&self, message: &str) {
