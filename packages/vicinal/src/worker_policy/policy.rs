@@ -18,14 +18,14 @@ use crate::worker_policy::{BindContext, BindError, WorkerGroupId, WorkerGroups};
 /// `Debug` lets callers format policy values directly. Builder diagnostics report only whether
 /// a policy was explicitly configured, without calling its formatter. The unbound configuration is
 /// consumed during construction, so it needs none of the thread-safety contracts required by
-/// the value returned from [`bind`][Self::bind]. The static lifetime lets the builder erase the
-/// concrete configuration until its one binding call.
+/// the value returned from [`bind`][Self::bind]. The configuration must be `'static` so binding
+/// can be called when the builder is consumed.
 ///
 /// # Example
 ///
 /// ```
 /// # use std::error::Error;
-/// use std::thread::spawn;
+/// use std::thread::Builder;
 ///
 /// use vicinal::Pool;
 /// use vicinal::worker_policy::{
@@ -33,33 +33,33 @@ use crate::worker_policy::{BindContext, BindError, WorkerGroupId, WorkerGroups};
 /// };
 /// # use futures::executor::block_on;
 ///
-/// #[derive(Debug, Default)]
-/// struct OneGroupPolicy {
-///     group: Option<WorkerGroupId>,
-/// }
+/// #[derive(Debug)]
+/// struct OneGroupPolicy;
 ///
 /// impl WorkerPolicy for OneGroupPolicy {
-///     fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+///     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
 ///         let group = context.groups().add();
-///         spawn({
-///             let worker = group.add_worker();
-///             move || worker.run()
-///         });
-///         self.group = Some(group.id());
-///         Ok(self)
+///         let worker = group.add_worker();
+///         _ = Builder::new()
+///             .spawn(move || worker.run())
+///             .map_err(BindError::new)?;
+///         Ok(BoundOneGroupPolicy { group: group.id() })
 ///     }
 /// }
 ///
-/// impl BoundPolicy for OneGroupPolicy {
+/// #[derive(Debug)]
+/// struct BoundOneGroupPolicy {
+///     group: WorkerGroupId,
+/// }
+///
+/// impl BoundPolicy for BoundOneGroupPolicy {
 ///     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-///         self.group.expect("binding installs the policy state once")
+///         self.group
 ///     }
 /// }
 ///
 /// # block_on(async {
-/// let pool = Pool::builder()
-///     .worker_policy(OneGroupPolicy::default())
-///     .build()?;
+/// let pool = Pool::builder().worker_policy(OneGroupPolicy).build()?;
 /// assert_eq!(pool.scheduler().spawn(|| 42).await?, 42);
 /// # Ok::<(), Box<dyn Error>>(())
 /// # }).unwrap();
@@ -70,9 +70,9 @@ pub trait WorkerPolicy: Debug + 'static {
     /// A policy creates binding-time workers with
     /// [`WorkerGroup::add_worker`][crate::worker_policy::WorkerGroup::add_worker] and may clone
     /// the supplied [`WorkerGroups`] to support later asynchronous group creation. The builder
-    /// counts those reservations and waits for each worker to complete its initialization
-    /// callback after this method returns. If the policy cannot run a reserved worker, dropping
-    /// it cancels that target.
+    /// waits for reserved workers to finish initialization before returning a pool. Dropping
+    /// an unrun worker cancels its reservation. The policy must resolve each reservation
+    /// without waiting for pool construction to return.
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError>
     where
         Self: Sized;
@@ -90,12 +90,13 @@ pub trait WorkerPolicy: Debug + 'static {
 pub trait BoundPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
     /// Selects the group for one submitted task.
     ///
-    /// The returned ID is pool-specific and copied into the scheduler's enqueue path
-    /// without cloning a worker group. The first selection may create groups or workers;
-    /// established selection should remain on the ordinary task fast path. Policies that
-    ///     retain a [`WorkerGroup`][crate::worker_policy::WorkerGroup] can use
-    ///     [`WorkerGroup::queue_len`][crate::worker_policy::WorkerGroup::queue_len] to observe
-    ///     existing backlog, but selection runs before the incoming task is added to that queue.
+    /// Return an ID belonging to the supplied pool. Selection runs before admission and does
+    /// not guarantee that the scheduler will enqueue the task.
+    ///
+    /// Selection may create groups or workers, but keep established routing fast. Policies
+    /// that retain a [`WorkerGroup`][crate::worker_policy::WorkerGroup] can use
+    /// [`WorkerGroup::queue_len`][crate::worker_policy::WorkerGroup::queue_len] to observe
+    /// existing backlog without counting the incoming task.
     fn select_group(&self, groups: &WorkerGroups) -> WorkerGroupId;
 }
 

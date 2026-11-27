@@ -61,11 +61,11 @@ takes precedence over the runtime error that the failure path was handling.
 Higher layers may observe and react to the propagated panic.
 
 This applies to runtime-error handling, caught-panic handling and cleanup during
-unwinding. At a containment boundary, first perform the state transitions and
-cleanup required to keep the system valid. It may then convert the incidental
-panic into an error when its public contract is fallible, but the panic-derived
-error must replace the ordinary error. Re-raise the panic after cleanup when
-practical.
+unwinding. The operation that catches an incidental panic first performs the
+state transitions and cleanup required to keep the system valid. If that
+operation's public contract is fallible, it may then convert the panic into an
+error, but the panic-derived error must replace the ordinary error. Re-raise
+the panic after cleanup when practical.
 
 Keep cleanup code small and avoid panicking destructors. If an incidental panic
 occurs while another panic is already active, Rust's normal double-panic behavior

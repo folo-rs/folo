@@ -20,9 +20,11 @@ fn main() -> Result<(), AppError> {
     let scheduler = pool.scheduler();
     let callers = submitters.spawn_threads(move |processor| -> Result<(), AppError> {
         let caller_region = processor.memory_region_id();
-        let task_hardware = hardware.clone();
-        let region = block_on(scheduler.spawn(move || task_hardware.current_memory_region_id()))
-            .map_err(TaskError::into_diagnostic)?;
+        let region = block_on(scheduler.spawn({
+            let hardware = hardware.clone();
+            move || hardware.current_memory_region_id()
+        }))
+        .map_err(TaskError::into_diagnostic)?;
         assert_eq!(region, caller_region);
         println!("Task executed in memory region {region}");
         Ok(())

@@ -10,8 +10,11 @@ the set of processors on which a worker is permitted to run.
 
 ## Worker policies
 
-`vicinal::worker_policy::WorkerPolicy` is the interface for assigning tasks to groups and for
-deciding when groups and workers are created. The `vicinal::policies` module supplies processor,
+A worker group is a task destination with its own queues; its participating workers consume
+only those queues.
+
+`vicinal::worker_policy::WorkerPolicy` assigns tasks to worker groups and decides when groups
+and workers are created. The `vicinal::policies` module supplies processor,
 memory-region and system implementations. The pool does not expose a generic type parameter for
 either its policy or scheduler, so changing policies does not change the rest of the application
 API.
@@ -39,12 +42,10 @@ let system_pool = Pool::builder()
     .build().unwrap();
 ```
 
-The pool consumes the selected policy's `bind()` input once with the final hardware, eager
-selection, worker groups and name. The method returns a `BoundPolicy`, separating one-time
-pool setup from the value that schedulers share. `select_group()` runs for each submission that
-reaches worker-group routing and returns a copyable `WorkerGroupId`. The scheduler resolves that
-ID by borrowing the group; established task submission neither clones `WorkerGroups` nor
-`WorkerGroup`.
+The pool calls `bind()` once, consuming the configured `WorkerPolicy` and passing the final
+pool settings in a `BindContext`. The call returns the `BoundPolicy` shared by schedulers.
+For each submission that reaches routing, `BoundPolicy::select_group()` returns a
+`WorkerGroupId` belonging to the pool. Selection does not guarantee admission.
 
 A policy may add groups during binding or selection and may clone a `WorkerGroups`
 handle to add groups later. To add a worker, the policy calls `WorkerGroup::add_worker()`,
@@ -59,8 +60,9 @@ A policy may retain a `WorkerGroup` handle and inspect its participating worker 
 `worker_count()` or its combined urgent/regular backlog with `queue_len()`. These are instantaneous
 observations rather than reservations. Selection runs before the incoming task is admitted,
 so `queue_len()` does not include that task. The stand-alone `vicinal_growing_pool` example
-uses this boundary to add a worker whenever a later task submission observes existing backlog.
-It starts with one worker and grows without a configured maximum. Once a worker enters
+uses this boundary to attempt growth whenever a later task submission observes existing backlog.
+It requires one worker at binding time and leaves existing workers to drain the queue if later
+growth fails. It has no configured maximum. Once a worker enters
 `Worker::run()`, the API keeps it alive until the pool shuts down; policies cannot remove it.
 
 The built-in policies assign a task using one processor observation during task submission;
@@ -91,19 +93,16 @@ processor count, supporting blocking workloads.
 
 ## Eager construction
 
-`PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` and passes it to the
-selected policy during `bind()`. The setter records the selection without starting workers.
+`PoolBuilder::eager` takes ownership of a nonempty `ProcessorSet` without starting workers.
+`build()` passes the selection to the selected policy during `bind()`.
 Repeated calls replace the selection; `build()` uses the final policy, hardware, name and
 initialization callback regardless of setter order. A custom policy decides how the eager
 selection maps to worker groups and may ignore it.
 
-Every `Worker` created with `WorkerGroup::add_worker()` while `bind()` runs creates an
-individual binding-time initialization reservation. The policy must run or drop each
-reserved `Worker`. After `bind()` returns, the builder waits until each exact reservation
-finishes initialization or its unrun worker is dropped to cancel it. A policy must not wait
-for `build()` to return before resolving an outstanding reservation. Workers created after
-`bind()` returns do not participate in this wait, even if construction is still waiting
-for earlier reservations.
+Regardless of eager selection, the builder waits after `bind()` returns for workers reserved
+during binding to finish initialization or for the policy to cancel their reservations by
+dropping the unrun workers. The policy must run or drop those workers without waiting for
+`build()` to return. Workers reserved after `bind()` returns are not part of this wait.
 
 The selection must belong to the pool's hardware instance. The pool validates the complete
 selection before starting workers, including hardware identity rather than only numeric CPU IDs.
@@ -128,22 +127,23 @@ built-in shared groups never remove processors from the set on which their worke
 
 ## Worker thread names
 
-`PoolBuilder::name` supplies an identifier included in worker thread names.
-The naming format and the identifier's position within it are unspecified.
+`PoolBuilder::name` supplies an identifier included in thread names created by built-in policies.
+The naming format and the identifier's position within it are unspecified. Custom policies can
+read the identifier with `BindContext::pool_name()` when naming their own threads.
 
 ## Worker initialization
 
 `PoolBuilder::thread_init` lets the pool owner configure thread-local state on each worker.
 The optional function runs once per worker, after initial affinity setup and before that
-worker executes any tasks. Building an unused lazy pool does not invoke it; eager construction
-initializes every selected worker, including idle siblings. Repeated setters replace the function.
+worker executes any tasks. Built-in policies do not invoke it when building a lazy pool;
+with eager selection, they initialize every selected worker. Repeated setters replace the function.
 
 Initialization on different workers may overlap without a guaranteed order, and task submission
-does not wait for it. Eager construction waits for all selected workers to finish initialization.
+does not wait for it. Construction waits for workers reserved during binding to finish initialization.
 Workers can therefore initialize independently, and an initializer may submit work to its
 pool. Initializers must preserve affinity, must not wait for work submitted to the same
-pool and must not shut down that pool. Eager initializers must not depend on construction
-returning, including to publish a scheduler for their own pool. They run with the worker
+pool and must not shut down that pool. Initializers for binding-time workers must not depend on
+construction returning, including to publish a scheduler for their own pool. They run with the worker
 group's full initial permitted processor set. A panic is an infrastructure failure that stops and
 poisons the pool, rather than a task failure.
 
@@ -194,7 +194,8 @@ retains the message, source chain, backtrace and enrichment. Recovery state itse
 
 ## Shutdown
 
-Dropping the pool stops accepting work and waits for every running worker to leave.
+Dropping the pool stops accepting work and waits for participating workers to leave `Worker::run()`.
+It does not join policy-owned operating-system threads.
 Queued tasks may be cancelled. Callers that require completion await the corresponding
 join handles before dropping the pool. Cancellation completes joined handles even when
 schedulers remain alive. Joined task captures remain available until their handle, error or
@@ -202,8 +203,8 @@ recovered body is dropped, or the recovered body executes. Fire-and-forget cance
 captures during shutdown.
 Task submissions through retained schedulers after clean shutdown are immediately cancelled
 without execution. A submission returns normally; a joined task submission yields a recoverable
-cancellation. A worker callback must not synchronously drop its own pool because shutdown
-waits for that worker to return from the callback.
+cancellation. Keep a pool owner until required work finishes and do not release the last
+owner from one of its worker callbacks. Capture a scheduler for follow-up submissions.
 
 ## Infrastructure failures
 
@@ -215,15 +216,15 @@ even after the pool is dropped. Task panics retain their separate behavior and d
 poison the pool.
 
 Built-in policy startup establishes every configured worker for a worker group and applies its
-initial affinity before accepting work for that group. Eager construction failures, including
-initializer panics, return a `BuildError` after stopping and waiting for every running worker.
-If the operating system refuses to create an eager worker thread, the error retains the
-destination and the original I/O error in its source chain. No partial pool is returned.
+initial affinity before accepting work for that group. On ordinary startup failures during
+construction, including initializer panics, `build()` stops the pool, waits for all participating
+workers to leave `Worker::run()` and returns a `BuildError` without returning a partial pool.
+If the operating system refuses to create an eager worker thread for a built-in policy, the
+error retains the destination and the original I/O error in its source chain. Incidental
+panics, for example when dropping rejected custom policy state, may still unwind.
 User initialization side effects are not reversible, and the pool cannot forcibly terminate
 a callback that does not return.
-Failures detected during task submission, including thread creation and initial affinity setup,
-panic on the submitting call. A failure while a worker applies a later permitted affinity set
-can occur after task submission has already returned.
-Dropping the pool waits for every running worker and propagates worker failures
-after cleanup. A custom policy owns the operating-system thread handles, if it needs them,
-while `Worker::run()` supplies the pool's worker-lifetime and failure boundaries.
+Built-in startup failures detected during task submission, including thread creation and initial
+affinity setup, panic on the submitting call. A failure while a worker applies a later permitted
+affinity set can occur after task submission has already returned.
+Dropping the pool propagates worker failures after cleanup.

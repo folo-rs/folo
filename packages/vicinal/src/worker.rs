@@ -12,8 +12,7 @@ use crate::worker_policy::WorkerGroup;
 /// Runs one reserved worker through the pool's worker lifecycle.
 ///
 /// A policy moves this value into a thread and calls [`run`][Self::run] once.
-/// Dropping it before that call cancels any worker-initialization target created during
-/// policy binding.
+/// Dropping it before that call cancels any reservation created during policy binding.
 #[must_use = "reserved workers must be run or explicitly dropped"]
 pub struct Worker {
     group: WorkerGroup,

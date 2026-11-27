@@ -87,26 +87,25 @@ impl BoundPolicy for PolicyProbe {
 
 /// Prepares one stable group without creating workers, isolating scheduler admission.
 #[derive(Debug)]
-struct NoWorkerPolicy {
-    group: OnceLock<WorkerGroupId>,
-}
+struct NoWorkerPolicy;
 
 impl WorkerPolicy for NoWorkerPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
-        assert!(
-            self.group.set(context.groups().add().id()).is_ok(),
-            "the benchmark binds the no-worker policy once"
-        );
-        Ok(self)
+        Ok(BoundNoWorkerPolicy {
+            group: context.groups().add().id(),
+        })
     }
 }
 
-impl BoundPolicy for NoWorkerPolicy {
+/// Routes admission benchmarks to the group prepared during binding.
+#[derive(Debug)]
+struct BoundNoWorkerPolicy {
+    group: WorkerGroupId,
+}
+
+impl BoundPolicy for BoundNoWorkerPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        *self
-            .group
-            .get()
-            .expect("PoolBuilder binds the no-worker policy")
+        self.group
     }
 }
 
@@ -239,9 +238,7 @@ fn admission(criterion: &mut Criterion) {
             for _ in 0..iterations {
                 let pool = Pool::builder()
                     .hardware(hardware())
-                    .worker_policy(NoWorkerPolicy {
-                        group: OnceLock::new(),
-                    })
+                    .worker_policy(NoWorkerPolicy)
                     .build()
                     .unwrap();
                 let scheduler = pool.scheduler();
@@ -262,9 +259,7 @@ fn admission(criterion: &mut Criterion) {
             for _ in 0..iterations {
                 let pool = Pool::builder()
                     .hardware(hardware())
-                    .worker_policy(NoWorkerPolicy {
-                        group: OnceLock::new(),
-                    })
+                    .worker_policy(NoWorkerPolicy)
                     .build()
                     .unwrap();
                 let scheduler = pool.scheduler();

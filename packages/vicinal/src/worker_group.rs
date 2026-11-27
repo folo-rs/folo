@@ -31,11 +31,10 @@ use crate::{
     BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PanicFailures, PoolRuntime,
 };
 
-/// A cloneable participation handle for one worker group.
+/// A cloneable policy handle for reserving workers and observing a worker group.
 ///
-/// Cloning a handle is intended for transferring it to a newly created worker thread.
-/// Task routing uses [`WorkerGroupId`] instead, so ordinary scheduling does not clone
-/// this value.
+/// Reserve a worker with [`Self::add_worker`] and move the returned [`Worker`] into its thread.
+/// Use [`WorkerGroupId`] for task routing.
 #[derive(Clone)]
 pub struct WorkerGroup {
     id: WorkerGroupId,
@@ -68,14 +67,13 @@ impl WorkerGroup {
         self.state.worker_count.load(Ordering::Acquire)
     }
 
-    /// Reserves one worker that a policy must run.
+    /// Reserves a worker for the policy to run or drop.
     ///
     /// A worker reserved while
     /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] runs
-    /// remains pending until its [`Worker::run`] call completes initialization. The pool builder
-    /// waits for every such reservation after binding returns. Drop the worker to cancel
-    /// its binding target when the policy cannot run it. Retaining an unrun worker makes
-    /// pool construction wait indefinitely.
+    /// contributes a reservation that [`Worker::run`] completes upon initialization.
+    /// Dropping the unrun worker cancels the reservation. Resolve every binding-time
+    /// reservation without waiting for pool construction to return.
     #[inline]
     pub fn add_worker(&self) -> Worker {
         Worker::new(
@@ -666,7 +664,6 @@ pub(crate) type WorkerEntry = Box<dyn FnOnce() + Send>;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
-    use std::sync::OnceLock;
 
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
@@ -682,26 +679,26 @@ mod tests {
     assert_not_impl_any!(Worker: Copy, Clone);
 
     /// Supplies one routable group without workers so admitted tasks remain observable.
-    #[derive(Debug, Default)]
-    struct NoWorkerPolicy {
-        group: OnceLock<WorkerGroupId>,
-    }
+    #[derive(Debug)]
+    struct NoWorkerPolicy;
 
     impl WorkerPolicy for NoWorkerPolicy {
         fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
-            self.group
-                .set(context.groups().add().id())
-                .expect("the no-worker policy binds once");
-            Ok(self)
+            Ok(BoundNoWorkerPolicy {
+                group: context.groups().add().id(),
+            })
         }
     }
 
-    impl BoundPolicy for NoWorkerPolicy {
+    /// Keeps tasks in the empty group so tests can observe queued work.
+    #[derive(Debug)]
+    struct BoundNoWorkerPolicy {
+        group: WorkerGroupId,
+    }
+
+    impl BoundPolicy for BoundNoWorkerPolicy {
         fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-            *self
-                .group
-                .get()
-                .expect("the builder binds the no-worker policy")
+            self.group
         }
     }
 
@@ -712,7 +709,7 @@ mod tests {
                 nz!(1),
                 nz!(1),
             )))
-            .worker_policy(NoWorkerPolicy::default())
+            .worker_policy(NoWorkerPolicy)
             .build()
             .unwrap();
         let group = pool

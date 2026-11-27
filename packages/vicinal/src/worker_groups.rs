@@ -19,9 +19,8 @@ static NEXT_REGISTRY_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Owns the append-only worker-group collection shared by one pool's policies.
 ///
-/// Policies use this handle to add groups asynchronously while schedulers resolve copyable
-/// group IDs without retaining or cloning policy-owned worker handles. Cloning this collection
-/// shares the collection and does not clone or start any workers.
+/// Policies can clone this handle to share the collection and add groups after binding.
+/// Cloning it does not start any workers.
 #[derive(Clone)]
 pub struct WorkerGroups {
     inner: Arc<WorkerGroupsInner>,
@@ -49,11 +48,11 @@ impl WorkerGroups {
         }
     }
 
-    /// Adds one empty group and returns a cloneable participation handle.
+    /// Adds one empty group and returns a cloneable handle for reserving and observing workers.
     ///
-    /// Use this during policy setup or when adding capacity. Cloning the returned handle
-    /// into newly spawned worker threads is expected; task routing should return
-    /// [`WorkerGroupId`] instead.
+    /// To include a worker in binding-time readiness, reserve it with
+    /// [`WorkerGroup::add_worker`] during binding before spawning its thread. Move the returned
+    /// worker into the thread. Use [`WorkerGroupId`] for task routing.
     ///
     /// # Panics
     ///
@@ -231,8 +230,7 @@ impl IntoIterator for WorkerGroups {
 
 /// Identifies a worker group within one [`WorkerGroups`] collection.
 ///
-/// This value is [`Copy`], so policies can route tasks without cloning a group handle.
-/// IDs from another pool are rejected when the pool resolves the selected group.
+/// Policies return this ID to select a group in the pool they are bound to.
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct WorkerGroupId {
     owner: u64,

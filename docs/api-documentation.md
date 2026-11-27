@@ -105,7 +105,8 @@ all-features = true
 
 `doc(cfg(...))` (via the `doc_cfg` feature) controls the "available on feature X"
 *badge* rustdoc renders next to an item; it does not make an intra-doc link
-conditional. For the link-side of the problem, see the next section.
+conditional. For the link-side of the problem, see
+[Intra-doc links to feature-gated items](#intra-doc-links-to-feature-gated-items).
 
 ## Cross-crate links
 

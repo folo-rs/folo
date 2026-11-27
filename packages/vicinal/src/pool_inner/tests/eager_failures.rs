@@ -2,7 +2,7 @@ use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 use many_cpus::SystemHardware;
@@ -174,34 +174,36 @@ impl BoundPolicy for ReturningFailurePolicy {
 
 /// Reserves multiple custom workers during binding for builder-owned readiness tracking.
 #[derive(Debug)]
-struct EagerCustomPolicy {
-    group: OnceLock<WorkerGroupId>,
-}
+struct EagerCustomPolicy;
 
 impl WorkerPolicy for EagerCustomPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
-        self.group.set(group.id()).unwrap();
         for _ in 0..2 {
             _ = spawn({
                 let worker = group.add_worker();
                 move || worker.run()
             });
         }
-        Ok(self)
+        Ok(BoundCustomPolicy { group: group.id() })
     }
 }
 
-impl BoundPolicy for EagerCustomPolicy {
+/// Retains the route independently of how the test resolves its binding reservations.
+#[derive(Debug)]
+struct BoundCustomPolicy {
+    group: WorkerGroupId,
+}
+
+impl BoundPolicy for BoundCustomPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        *self.group.get().unwrap()
+        self.group
     }
 }
 
 /// Records whether binding can abandon a worker that will never run.
 #[derive(Debug)]
 struct DroppedWorkerPolicy {
-    group: OnceLock<WorkerGroupId>,
     reserved: Sender<Worker>,
     waiting: Sender<()>,
 }
@@ -209,16 +211,9 @@ struct DroppedWorkerPolicy {
 impl WorkerPolicy for DroppedWorkerPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
-        self.group.set(group.id()).unwrap();
-        group.observe_binding_wait(self.waiting.clone());
+        group.observe_binding_wait(self.waiting);
         self.reserved.send(group.add_worker()).unwrap();
-        Ok(self)
-    }
-}
-
-impl BoundPolicy for DroppedWorkerPolicy {
-    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        *self.group.get().unwrap()
+        Ok(BoundCustomPolicy { group: group.id() })
     }
 }
 
@@ -528,9 +523,7 @@ fn builder_waits_for_every_custom_binding_worker() {
                 nz!(1),
                 nz!(1),
             )))
-            .worker_policy(EagerCustomPolicy {
-                group: OnceLock::new(),
-            })
+            .worker_policy(EagerCustomPolicy)
             .thread_init({
                 let initialized = Arc::clone(&initialized);
                 // The builder waits for the policy's reserved worker; this flag only observes
@@ -558,11 +551,7 @@ fn dropping_a_binding_worker_cancels_its_readiness_target() {
                     nz!(1),
                     nz!(1),
                 )))
-                .worker_policy(DroppedWorkerPolicy {
-                    group: OnceLock::new(),
-                    reserved,
-                    waiting,
-                })
+                .worker_policy(DroppedWorkerPolicy { reserved, waiting })
                 .build()
         });
 

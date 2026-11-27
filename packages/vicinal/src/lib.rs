@@ -3,7 +3,8 @@
 
 //! Worker pool for running closures with configurable processor locality.
 //!
-//! A [`Pool`] owns worker threads and the queues shared by its cloned [`Scheduler`] values.
+//! A [`Pool`] coordinates worker participation and owns the queues shared by its cloned
+//! [`Scheduler`] values.
 //! Submitting a closure returns a [`JoinHandle`] immediately, while a worker runs the closure
 //! independently on a worker thread. Await the handle when the result or completion matters.
 //! Use a fire-and-forget spawn method when the result does not matter.
@@ -59,15 +60,16 @@
 //!
 //! # Starting workers
 //!
-//! Worker threads start lazily when their processor, region or pool first receives work. This
-//! avoids creating threads an application never uses. Scheduler clones share the same pool and
-//! therefore share its workers.
+//! By default, built-in policies start workers lazily when their processor, region or pool first
+//! receives work. This avoids creating threads an application never uses.
 //!
-//! [`PoolBuilder::eager`] takes ownership of a
+//! [`PoolBuilder::eager`] records a
 //! [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
-//! and starts every worker required by the selected processors, regions or system-wide workers.
-//! It waits for each worker to apply its initial affinity and finish the configured
-//! [`PoolBuilder::thread_init`] callback.
+//! for built-in policies to use during binding. [`PoolBuilder::build`] binds the policy and
+//! waits for binding-time worker initialization or cancellation. Custom policies own their
+//! threads, may ignore the selection and must run or drop each
+//! [`Worker`][worker_policy::Worker] they reserve during binding. See the [pool lifetime
+//! contract](Pool#lifetime) for shutdown.
 //!
 //! For optimal task locality, use the same processor set for eager selection and the application's
 //! submitting threads.

@@ -13,12 +13,14 @@ use crate::{
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
-/// Each task uses the selected
-/// [`WorkerPolicy`][crate::worker_policy::WorkerPolicy] to choose a group before
-/// admission. The built-in processor policy uses the submitting processor, while the regional
+/// Submissions that reach [routing][crate::worker_policy::BoundPolicy::select_group] use the
+/// [`BoundPolicy`][crate::worker_policy::BoundPolicy] to choose a group before admission.
+/// Submissions that observe clean shutdown before routing skip policy selection and do not
+/// enter the pool. Selection does not guarantee admission.
+/// The built-in processor policy uses the submitting processor, while the regional
 /// and system policies select shared destinations across larger locality scopes.
 /// Built-in shared-worker affinity includes the eager selection and processors that reach
-/// policy selection for that destination. All submission methods use the same policy.
+/// policy selection for that destination.
 /// Tasks execute synchronously and must preserve worker affinity.
 ///
 /// # Cloning

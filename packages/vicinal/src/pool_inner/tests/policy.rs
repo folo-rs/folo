@@ -15,17 +15,14 @@ use crate::worker_policy::{
 };
 use crate::{GroupId, Pool, Scheduler};
 
-#[derive(Debug)]
 /// Prepares one stable ID-only route for cached-group routing coverage.
-struct SingleGroupPolicy {
-    group: OnceLock<WorkerGroupId>,
-}
+#[derive(Debug)]
+struct SingleGroupPolicy;
 
 impl WorkerPolicy for SingleGroupPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
         let id = group.id();
-        self.group.set(id).unwrap();
 
         let affinity = context.hardware().processors();
         let worker = group.add_worker();
@@ -33,22 +30,25 @@ impl WorkerPolicy for SingleGroupPolicy {
             affinity.pin_current_thread_to();
             worker.run();
         });
-        Ok(self)
+        Ok(BoundSingleGroupPolicy { group: id })
     }
 }
 
-impl BoundPolicy for SingleGroupPolicy {
+/// Routes using the ID obtained while binding.
+#[derive(Debug)]
+struct BoundSingleGroupPolicy {
+    group: WorkerGroupId,
+}
+
+impl BoundPolicy for BoundSingleGroupPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        *self.group.get().unwrap()
+        self.group
     }
 }
 
 /// Models a startup tracing subscriber that submits through the route still being created.
 #[derive(Debug)]
 struct ReentrantStartupPolicy {
-    group: OnceLock<WorkerGroup>,
-    affinity: OnceLock<Arc<ProcessorSet>>,
-    started: OnceLock<WorkerGroupId>,
     scheduler: Arc<Mutex<Option<Scheduler>>>,
     reentrant_completed: Sender<()>,
 }
@@ -61,8 +61,8 @@ impl WorkerPolicy for ReentrantStartupPolicy {
                 .state()
                 .before_startup_trace
                 .set(Box::new({
-                    let scheduler = Arc::clone(&self.scheduler);
-                    let reentrant_completed = self.reentrant_completed.clone();
+                    let scheduler = self.scheduler;
+                    let reentrant_completed = self.reentrant_completed;
                     move || {
                         let scheduler = scheduler
                             .lock()
@@ -79,24 +79,28 @@ impl WorkerPolicy for ReentrantStartupPolicy {
                 }))
                 .is_ok()
         );
-        self.group.set(group).unwrap();
-        self.affinity
-            .set(Arc::new(context.hardware().processors()))
-            .unwrap();
-        Ok(self)
+        Ok(BoundReentrantStartupPolicy {
+            group,
+            affinity: Arc::new(context.hardware().processors()),
+            started: OnceLock::new(),
+        })
     }
 }
 
-impl BoundPolicy for ReentrantStartupPolicy {
+/// Defers the first startup so the test can install a scheduler after construction.
+#[derive(Debug)]
+struct BoundReentrantStartupPolicy {
+    group: WorkerGroup,
+    affinity: Arc<ProcessorSet>,
+    started: OnceLock<WorkerGroupId>,
+}
+
+impl BoundPolicy for BoundReentrantStartupPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
         *self.started.get_or_init(|| {
-            let group = self.group.get().unwrap();
-            group.start_workers(
-                GroupId::Processor(0),
-                self.affinity.get().unwrap(),
-                nz!(1_u32),
-            );
-            group.id()
+            self.group
+                .start_workers(GroupId::Processor(0), &self.affinity, nz!(1_u32));
+            self.group.id()
         })
     }
 }
@@ -109,9 +113,7 @@ fn custom_policy_routes_tasks_using_a_cached_group_id() {
                 nz!(1),
                 nz!(1),
             )))
-            .worker_policy(SingleGroupPolicy {
-                group: OnceLock::new(),
-            })
+            .worker_policy(SingleGroupPolicy)
             .build()
             .unwrap();
 
@@ -130,9 +132,6 @@ fn startup_trace_can_submit_through_participating_route() {
                 nz!(1),
             )))
             .worker_policy(ReentrantStartupPolicy {
-                group: OnceLock::new(),
-                affinity: OnceLock::new(),
-                started: OnceLock::new(),
                 scheduler: Arc::clone(&scheduler),
                 reentrant_completed,
             })

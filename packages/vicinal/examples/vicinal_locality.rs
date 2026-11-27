@@ -28,10 +28,12 @@ fn main() -> Result<(), AppError> {
     let scheduler = pool.scheduler();
 
     loop {
-        let task_hardware = hardware.clone();
-        let handle = scheduler.spawn(move || {
-            let processor_id = task_hardware.current_processor_id();
-            println!("Task executed on processor {processor_id}");
+        let handle = scheduler.spawn({
+            let hardware = hardware.clone();
+            move || {
+                let processor_id = hardware.current_processor_id();
+                println!("Task executed on processor {processor_id}");
+            }
         });
 
         block_on(handle).map_err(TaskError::into_diagnostic)?;

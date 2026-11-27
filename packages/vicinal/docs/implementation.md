@@ -11,8 +11,9 @@ terminal state and worker participation, and the worker loop owns affinity refre
 `WorkerCore` handles a single task iteration independently of thread management.
 
 `vicinal::worker_policy::WorkerGroups` owns an append-only collection of stable group
-allocations. `WorkerGroup` is a cloneable Arc handle intended for transfer into a policy-created
-worker thread.
+allocations. `WorkerGroup` is a cloneable Arc handle that a policy uses to reserve workers
+and observe its group. Policies can clone it for group-level operations, but need not clone
+it to start a worker.
 `WorkerGroupId` contains the registry identity and stable group address, so its selection and
 resolution are copy-only. The established scheduler path neither clones nor upgrades an Arc;
 reference-count changes happen only through explicit `WorkerGroups` or `WorkerGroup` cloning.
@@ -109,9 +110,12 @@ membership entries so a known submitting processor takes no registry lock and bu
 Built-in workers apply their captured pin in the worker entry path before announcing group
 participation. `Worker::run()` registers participation, runs initialization and then enters
 the worker loop. Lazy startup waits for group participation but not for `thread_init` completion.
-Preparation-time worker reservations wait for initialization too. A custom policy owns
-its operating-system thread handles, but every thread that reaches `Worker::run()`
-participates in the pool's shutdown barrier and failure state.
+After binding, the builder waits for each worker reserved during `bind()` to finish
+initialization or for its unrun reservation to be cancelled, whether or not an eager selection
+was configured. A worker failure ends the readiness wait; failed construction still waits
+for active participation to end. A custom policy owns its operating-system thread handles.
+The pool waits for workers to leave `Worker::run()` at shutdown, not for the underlying
+threads to exit.
 
 ### Worker initialization
 
