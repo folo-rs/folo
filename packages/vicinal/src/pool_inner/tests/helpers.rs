@@ -75,14 +75,6 @@ pub(crate) struct TestPolicy {
     state: Arc<TestPolicyState>,
 }
 
-/// Retains the bound group and startup state shared with the test controller.
-#[derive(Debug)]
-struct TestPolicyState {
-    group: OnceLock<WorkerGroup>,
-    started: OnceLock<()>,
-    workers: usize,
-}
-
 impl TestPolicy {
     /// Creates a test policy with a fixed worker count and no processor-affinity setup.
     pub(crate) fn new(workers: usize) -> Self {
@@ -132,6 +124,14 @@ impl BoundPolicy for TestPolicy {
         });
         group.id()
     }
+}
+
+/// Retains the bound group and startup state shared with the test controller.
+#[derive(Debug)]
+struct TestPolicyState {
+    group: OnceLock<WorkerGroup>,
+    started: OnceLock<()>,
+    workers: usize,
 }
 
 /// Sparse regions with multiple eligible CPUs and a quota that excludes some of them.

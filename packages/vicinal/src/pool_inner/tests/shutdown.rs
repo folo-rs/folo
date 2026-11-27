@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::future::Future;
+use std::mem::forget;
 use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -25,11 +26,10 @@ use crate::worker_policy::{
 };
 use crate::{BuiltInWorkerPolicy, GroupId, JoinHandle, PanicFailures, Pool, Scheduler};
 
-/// Records whether terminal admission ever reaches custom policy selection.
+/// Records whether submissions after shutdown reach custom policy selection.
 #[derive(Debug)]
 struct RecordingPolicy {
-    // This observes whether selection ran; runtime shutdown ordering is established by the
-    // completed submission result rather than this counter.
+    // This counter only observes synchronous selection; it publishes no other state.
     selected: Arc<AtomicUsize>,
 }
 
@@ -41,7 +41,7 @@ impl WorkerPolicy for RecordingPolicy {
 
 impl BoundPolicy for RecordingPolicy {
     fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        self.selected.fetch_add(1, Ordering::Release);
+        self.selected.fetch_add(1, Ordering::Relaxed);
         panic!("shutdown must prevent policy selection")
     }
 }
@@ -167,7 +167,7 @@ fn shutdown_before_lazy_state_creation_starts_no_workers() {
 
     let error = scheduler.spawn(|| {}).now_or_never().unwrap().unwrap_err();
     assert!(error.is_cancel());
-    assert_eq!(selected.load(Ordering::Acquire), 0);
+    assert_eq!(selected.load(Ordering::Relaxed), 0);
     assert_eq!(inner.runtime.active_workers(), 0);
 }
 
@@ -238,7 +238,7 @@ fn shutdown_drains_both_queues_despite_a_destructor_panic() {
 /// A secondary payload destructor panic takes precedence over the retained failure.
 #[test]
 fn shutdown_prioritizes_secondary_payload_destruction() {
-    /// Identifies the first queued cleanup failure that must outrank later diagnostics.
+    /// Marks the earlier retained payload that the next queued cleanup panic supersedes.
     struct FirstFailure;
 
     let policy = TestPolicy::new(0);
@@ -266,7 +266,7 @@ fn shutdown_prioritizes_secondary_payload_destruction() {
     let payload = panic::catch_unwind(AssertUnwindSafe(|| drop(pool))).unwrap_err();
 
     assert!(payload.is::<PanickingPayload>());
-    std::mem::forget(payload);
+    forget(payload);
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.task_pool.lock().unwrap().is_empty());
     assert!(inner.runtime.is_poisoned());

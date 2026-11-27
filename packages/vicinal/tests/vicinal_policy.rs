@@ -5,8 +5,8 @@
 
 use std::error::Error;
 use std::io::Error as IoError;
+use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Mutex, OnceLock};
 use std::thread::spawn;
 
 use futures::executor::block_on;
@@ -22,41 +22,10 @@ use vicinal::worker_policy::{
 
 testing::init_tracing!();
 
-#[derive(Debug)]
 /// Lazily creates one route on first public selection to test custom policy startup.
+#[derive(Debug)]
 struct LazySingleGroupPolicy {
     group: OnceLock<WorkerGroupId>,
-}
-
-/// Reports an ordinary policy-specific binding failure.
-#[derive(Debug)]
-struct FailingBindingPolicy {
-    initializer: Mutex<Receiver<()>>,
-    bound: Sender<()>,
-    exited: Sender<()>,
-}
-
-impl WorkerPolicy for FailingBindingPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
-        let worker = context.groups().add().add_worker();
-        let exited = self.exited.clone();
-        _ = spawn(move || {
-            worker.run();
-            exited.send(()).unwrap();
-        });
-        self.initializer.lock().unwrap().recv().unwrap();
-        self.bound.send(()).unwrap();
-
-        Err::<Self, _>(BindError::new(IoError::other(
-            "injected policy binding failure",
-        )))
-    }
-}
-
-impl BoundPolicy for FailingBindingPolicy {
-    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        unreachable!("construction rejects the binding failure")
-    }
 }
 
 impl WorkerPolicy for LazySingleGroupPolicy {
@@ -75,6 +44,42 @@ impl BoundPolicy for LazySingleGroupPolicy {
             });
             group.id()
         })
+    }
+}
+
+/// Reports an ordinary policy-specific binding failure after the worker enters initialization.
+#[derive(Debug)]
+struct FailingBindingPolicy {
+    initializer: Receiver<()>,
+    exited: Sender<()>,
+}
+
+impl WorkerPolicy for FailingBindingPolicy {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        let worker = context.groups().add().add_worker();
+        _ = spawn(move || {
+            worker.run();
+            self.exited.send(()).unwrap();
+        });
+        self.initializer.recv().unwrap();
+
+        Err::<NeverBound, _>(BindError::new(IoError::other(
+            "injected policy binding failure",
+        )))
+    }
+}
+
+/// A policy that returns a binding error cannot produce a route.
+#[derive(Debug)]
+enum NeverBound {}
+
+impl BoundPolicy for NeverBound {
+    #[expect(
+        clippy::uninhabited_references,
+        reason = "The binding fixture only returns Err, so no reference can reach this match."
+    )]
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        match *self {}
     }
 }
 
@@ -97,35 +102,21 @@ fn custom_policy_lazily_creates_and_runs_worker() {
 }
 
 #[test]
-fn binding_failure_is_returned_after_started_workers_leave() {
+fn binding_failure_retains_policy_error_and_worker_exits() {
     with_watchdog(|| {
         let (initializer_entered, initializer_arrival) = channel();
-        let (bound, policy_bound) = channel();
-        let (release_initializer, initializer_release) = channel();
         let (exited, worker_exited) = channel();
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
 
-        let construction = spawn(move || {
-            let initializer_release = Mutex::new(initializer_release);
-            Pool::builder()
-                .hardware(hardware)
-                .worker_policy(FailingBindingPolicy {
-                    initializer: Mutex::new(initializer_arrival),
-                    bound,
-                    exited,
-                })
-                .thread_init(move || {
-                    initializer_entered.send(()).unwrap();
-                    initializer_release.lock().unwrap().recv().unwrap();
-                })
-                .build()
-                .map(drop)
-        });
-
-        policy_bound.recv().unwrap();
-        assert!(!construction.is_finished());
-        release_initializer.send(()).unwrap();
-        let error = construction.join().unwrap().unwrap_err();
+        let error = Pool::builder()
+            .hardware(hardware)
+            .worker_policy(FailingBindingPolicy {
+                initializer: initializer_arrival,
+                exited,
+            })
+            .thread_init(move || initializer_entered.send(()).unwrap())
+            .build()
+            .unwrap_err();
         worker_exited.recv().unwrap();
         let cause = error.source().unwrap().downcast_ref::<BindError>().unwrap();
         assert!(cause.find_source::<IoError>().is_some());

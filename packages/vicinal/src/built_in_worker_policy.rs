@@ -678,7 +678,7 @@ mod tests {
                                     .is_ok()
                             );
                             self.started.set(group.clone()).unwrap();
-                            group.observe_worker_wait(self.release_worker.clone());
+                            group.observe_worker_wait(self.release_worker.clone(), ());
                             _ = builder.spawn(entry)?;
                             worker_parked.recv().unwrap();
                             assert_eq!(group.worker_count(), 1);

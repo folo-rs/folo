@@ -1,6 +1,7 @@
 //! Submission, execution and shutdown diagnostics for each locality policy.
 
 use std::any::Any;
+use std::mem::forget;
 use std::panic;
 use std::sync::mpsc;
 
@@ -56,7 +57,7 @@ fn exercise_payload_destruction() {
     }))
     .unwrap_err();
     assert!(payload.is::<PanickingPayload>());
-    std::mem::forget(payload);
+    forget(payload);
     drop(pool);
 }
 

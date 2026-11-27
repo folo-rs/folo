@@ -1,9 +1,9 @@
-use std::io;
+use std::io::Error as IoError;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::thread::spawn;
+use std::thread::{JoinHandle, spawn};
 
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
@@ -11,11 +11,12 @@ use new_zealand::nz;
 use ohno::ErrorExt;
 use testing::with_watchdog;
 
+use crate::build_error::BuildPanicked;
 use crate::worker_policy::{
     BindContext, BindError, BoundPolicy, Worker, WorkerGroup, WorkerGroupId, WorkerGroups,
     WorkerPolicy,
 };
-use crate::{BuiltInWorkerPolicy, Pool};
+use crate::{BuiltInWorkerPolicy, EagerProcessorHardwareMismatch, Pool};
 
 /// Distinguishes a panic from `bind()` from ordinary test synchronization signals.
 struct BindingFailure;
@@ -30,25 +31,101 @@ enum BindingEvent {
     Returned,
 }
 
-/// Stops a started worker and records binding failure for cleanup-boundary tests.
+/// Reports an ordinary binding error, optionally superseded by a policy destructor panic.
 #[derive(Debug)]
-struct StartupFailurePolicy {
-    worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
-    ready: Mutex<Option<(Sender<BindingEvent>, Receiver<BindingEvent>)>>,
+struct FailingBindingPolicy {
+    worker: Option<BindingWorker>,
+    dropped: Option<Sender<()>>,
 }
 
-/// Reports binding failure and observes whether destructor failure waits for worker exit.
-#[derive(Debug)]
-struct PanickingDropPolicy {
-    worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
-    initializer: Mutex<Receiver<()>>,
-    dropped: Sender<()>,
+impl WorkerPolicy for FailingBindingPolicy {
+    fn bind(mut self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        if let Some(worker) = self.worker.take() {
+            worker.start(context.groups().add());
+        }
+
+        // Run the fixture's destructor before allocating the error so a panic cannot strand it
+        // in the return place.
+        drop(self);
+        Err::<NeverBound, _>(BindError::new(IoError::other("injected binding failure")))
+    }
 }
 
-/// Panics while dropping the bound policy after a worker failure.
+/// Keeps an initialized worker participating until the controller releases cleanup.
 #[derive(Debug)]
-struct PanickingBoundDropPolicy {
-    dropped: Sender<()>,
+struct BindingWorker {
+    started: Sender<(WorkerGroup, JoinHandle<()>)>,
+    build_events: Sender<BuildEvent>,
+    release: Receiver<()>,
+}
+
+impl BindingWorker {
+    fn start(self, group: WorkerGroup) {
+        let (events, progress) = channel();
+        let release = Mutex::new(Some(self.release));
+        assert!(
+            group
+                .state()
+                .before_wait
+                .set(Box::new({
+                    let events = events.clone();
+                    move |_, _| {
+                        // Ordinary binding failure resolves readiness before waiting for
+                        // participation. Parking in the initializer would block that first wait.
+                        if let Some(release) = release.lock().unwrap().take() {
+                            events.send(BindingEvent::Ready).unwrap();
+                            _ = release.recv();
+                        }
+                    }
+                }))
+                .is_ok()
+        );
+        group.observe_worker_wait(self.build_events, BuildEvent::Waiting);
+        let worker = group.add_worker();
+        self.started
+            .send((
+                group,
+                spawn(move || {
+                    let result = catch_unwind(|| worker.run());
+                    _ = events.send(BindingEvent::Returned);
+                    result.unwrap();
+                }),
+            ))
+            .unwrap();
+        // An early worker return also releases binding; the controller rejects a build
+        // that returns without observing live participation.
+        _ = progress.recv().unwrap();
+    }
+}
+
+impl Drop for FailingBindingPolicy {
+    fn drop(&mut self) {
+        if let Some(dropped) = &self.dropped {
+            dropped.send(()).unwrap();
+            panic_any(PolicyDropFailure);
+        }
+    }
+}
+
+/// A policy that returns a binding error cannot produce a route.
+#[derive(Debug)]
+enum NeverBound {}
+
+impl BoundPolicy for NeverBound {
+    #[expect(
+        clippy::uninhabited_references,
+        reason = "The binding fixture only returns Err, so no reference can reach this match."
+    )]
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        match *self {}
+    }
+}
+
+/// Orders entry to the participation wait against completion of construction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildEvent {
+    Waiting,
+    Returned,
 }
 
 /// Panics if cleanup drops the worker initializer's capture.
@@ -63,29 +140,10 @@ impl Drop for PanickingInitializerDrop {
     }
 }
 
-impl WorkerPolicy for PanickingDropPolicy {
-    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
-        let group = context.groups().add();
-        *self.worker_observer.lock().unwrap() = Some(group.clone());
-        let worker = group.add_worker();
-        _ = spawn(move || worker.run());
-        self.initializer.lock().unwrap().recv().unwrap();
-
-        Err::<Self, _>(BindError::new(io::Error::other("injected binding failure")))
-    }
-}
-
-impl BoundPolicy for PanickingDropPolicy {
-    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
-        unreachable!("construction must reject the binding failure")
-    }
-}
-
-impl Drop for PanickingDropPolicy {
-    fn drop(&mut self) {
-        self.dropped.send(()).unwrap();
-        panic_any(PolicyDropFailure);
-    }
+/// Panics while dropping the bound policy after a worker failure.
+#[derive(Debug)]
+struct PanickingBoundDropPolicy {
+    dropped: Sender<()>,
 }
 
 impl WorkerPolicy for PanickingBoundDropPolicy {
@@ -107,6 +165,13 @@ impl Drop for PanickingBoundDropPolicy {
         self.dropped.send(()).unwrap();
         panic_any(PolicyDropFailure);
     }
+}
+
+/// Stops a started worker and records binding failure for cleanup-boundary tests.
+#[derive(Debug)]
+struct StartupFailurePolicy {
+    worker_observer: Arc<Mutex<Option<WorkerGroup>>>,
+    ready: Mutex<Option<(Sender<BindingEvent>, Receiver<BindingEvent>)>>,
 }
 
 impl WorkerPolicy for StartupFailurePolicy {
@@ -145,21 +210,21 @@ struct ReturningFailurePolicy;
 impl WorkerPolicy for ReturningFailurePolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
-        let (failed, failure) = channel();
-        let returned = failed.clone();
+        let (events, failure) = channel();
         assert!(
             group
                 .state()
                 .before_failure_exit
-                .set(Box::new(move || {
-                    failed.send(BindingEvent::Failed).unwrap();
+                .set(Box::new({
+                    let events = events.clone();
+                    move || events.send(BindingEvent::Failed).unwrap()
                 }))
                 .is_ok()
         );
         let worker = group.add_worker();
         _ = spawn(move || {
             worker.run();
-            _ = returned.send(BindingEvent::Returned);
+            _ = events.send(BindingEvent::Returned);
         });
         assert_eq!(failure.recv().unwrap(), BindingEvent::Failed);
         Ok(self)
@@ -263,11 +328,7 @@ fn policy_binding_failure_stops_started_workers() {
             .build()
             .unwrap_err();
 
-        assert!(
-            error
-                .find_source::<crate::build_error::BuildPanicked>()
-                .is_some()
-        );
+        assert!(error.find_source::<BuildPanicked>().is_some());
         let group = observer
             .lock()
             .unwrap()
@@ -279,46 +340,62 @@ fn policy_binding_failure_stops_started_workers() {
 
 #[test]
 fn policy_drop_failure_waits_for_binding_workers() {
-    with_watchdog(|| {
-        let observer = Arc::new(Mutex::new(None));
-        let (initializer_entered, worker_initialized) = channel();
-        let (release_initializer, initializer_release) = channel();
-        let initializer_release = Mutex::new(initializer_release);
+    assert_failed_binding_waits_for_workers(true);
+}
+
+#[test]
+fn ordinary_binding_error_waits_for_binding_workers() {
+    assert_failed_binding_waits_for_workers(false);
+}
+
+/// Keeps one initialized worker in participation until construction reaches its cleanup wait.
+fn assert_failed_binding_waits_for_workers(panic_on_drop: bool) {
+    with_watchdog(move || {
+        let (release_worker, worker_release) = channel();
+        let (events, build_events) = channel();
+        let (started, worker_observer) = channel();
         let (dropped, policy_dropped) = channel();
-        let construction = spawn({
-            let observer = Arc::clone(&observer);
-            move || {
+        let construction = spawn(move || {
+            let result = catch_unwind(AssertUnwindSafe(|| {
                 Pool::builder()
                     .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
                         nz!(1),
                         nz!(1),
                     )))
-                    .worker_policy(PanickingDropPolicy {
-                        worker_observer: observer,
-                        initializer: Mutex::new(worker_initialized),
-                        dropped,
-                    })
-                    .thread_init(move || {
-                        initializer_entered.send(()).unwrap();
-                        initializer_release.lock().unwrap().recv().unwrap();
+                    .worker_policy(FailingBindingPolicy {
+                        worker: Some(BindingWorker {
+                            started,
+                            build_events: events.clone(),
+                            release: worker_release,
+                        }),
+                        dropped: panic_on_drop.then_some(dropped),
                     })
                     .build()
-                    .map(drop)
-            }
+            }));
+            events.send(BuildEvent::Returned).unwrap();
+            result.map(|result| result.map(drop))
         });
 
-        policy_dropped.recv().unwrap();
-        assert!(!construction.is_finished());
-        release_initializer.send(()).unwrap();
+        // A return before the wait is a failing outcome, not a reason to leave a worker gated.
+        let first = build_events.recv();
+        let released = release_worker.send(());
+        let construction = construction.join();
+        let (group, worker) = worker_observer.recv().unwrap();
+        let worker = worker.join();
 
-        let error = construction.join().unwrap().unwrap_err();
-        assert!(
-            error
-                .find_source::<crate::build_error::BuildPanicked>()
-                .is_some()
-        );
-        let group = observer.lock().unwrap().take().unwrap();
+        assert_eq!(first, Ok(BuildEvent::Waiting));
+        released.unwrap();
+        let error = construction.unwrap().unwrap().unwrap_err();
+        worker.unwrap();
         assert_eq!(group.worker_count(), 0);
+        if panic_on_drop {
+            policy_dropped.recv().unwrap();
+            assert!(error.find_source::<BuildPanicked>().is_some());
+        } else {
+            assert!(error.find_source::<BuildPanicked>().is_none());
+            assert!(error.find_source::<BindError>().is_some());
+            assert!(error.find_source::<IoError>().is_some());
+        }
     });
 }
 
@@ -326,17 +403,14 @@ fn policy_drop_failure_waits_for_binding_workers() {
 fn eager_rejection_prioritizes_unbound_policy_drop_panic() {
     let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     let foreign = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-    let observer = Arc::new(Mutex::new(None));
-    let (_initializer_sender, initializer) = channel();
     let (dropped, policy_dropped) = channel();
 
     let builder = Pool::builder()
         .hardware(hardware)
         .eager(foreign.all_processors())
-        .worker_policy(PanickingDropPolicy {
-            worker_observer: observer,
-            initializer: Mutex::new(initializer),
-            dropped,
+        .worker_policy(FailingBindingPolicy {
+            worker: None,
+            dropped: Some(dropped),
         });
 
     let payload = catch_unwind(AssertUnwindSafe(|| builder.build())).unwrap_err();
@@ -427,16 +501,12 @@ fn construction_rejects_failure_published_before_bind_returns() {
             .build()
             .unwrap_err();
 
-        assert!(
-            error
-                .find_source::<crate::build_error::BuildPanicked>()
-                .is_some()
-        );
+        assert!(error.find_source::<BuildPanicked>().is_some());
     });
 }
 
 #[test]
-fn eager_partial_initializer_failure_waits_for_started_worker() {
+fn eager_partial_initializer_failure_leaves_no_participating_workers() {
     /// Distinguishes the eager worker initializer panic from construction coordination.
     struct InitializationFailure;
 
@@ -459,6 +529,7 @@ fn eager_partial_initializer_failure_waits_for_started_worker() {
             })
             .thread_init({
                 let initialized = Arc::clone(&initialized);
+                // This counter only assigns roles; channels and cleanup coordinate the workers.
                 move || match initialized.fetch_add(1, Ordering::Relaxed) {
                     0 => {
                         first_entered.send(()).unwrap();
@@ -476,11 +547,7 @@ fn eager_partial_initializer_failure_waits_for_started_worker() {
             .build()
             .unwrap_err();
 
-        assert!(
-            error
-                .find_source::<crate::build_error::BuildPanicked>()
-                .is_some()
-        );
+        assert!(error.find_source::<BuildPanicked>().is_some());
         first_completion.recv().unwrap();
         assert_eq!(initialized.load(Ordering::Relaxed), 2);
         let group = observer.lock().unwrap().take().unwrap();
@@ -490,7 +557,7 @@ fn eager_partial_initializer_failure_waits_for_started_worker() {
 
 /// A custom policy receives eager selections only after pool-level provenance validation.
 #[test]
-fn custom_policy_rejects_foreign_eager_hardware() {
+fn builder_rejects_foreign_eager_hardware_before_policy_binding() {
     let first = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     let foreign = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     let observer = Arc::new(Mutex::new(None));
@@ -506,11 +573,11 @@ fn custom_policy_rejects_foreign_eager_hardware() {
         .unwrap_err();
     assert!(
         error
-            .find_source::<crate::build_error::EagerProcessorHardwareMismatch>()
+            .find_source::<EagerProcessorHardwareMismatch>()
             .is_some()
     );
     // Equal processor counts make hardware identity the only mismatch. The observer proves
-    // Construction rejected that mismatch before entering the policy's failing bind call.
+    // construction rejected that mismatch before entering the policy's failing bind call.
     assert!(observer.lock().unwrap().is_none());
 }
 
@@ -526,16 +593,16 @@ fn builder_waits_for_every_custom_binding_worker() {
             .worker_policy(EagerCustomPolicy)
             .thread_init({
                 let initialized = Arc::clone(&initialized);
-                // The builder waits for the policy's reserved worker; this flag only observes
-                // that every initializer ran before construction returned.
+                // The reservation mutex and condition variable provide the handoff. This
+                // counter only observes completed initializers.
                 move || {
-                    initialized.fetch_add(1, Ordering::Release);
+                    initialized.fetch_add(1, Ordering::Relaxed);
                 }
             })
             .build()
             .unwrap();
 
-        assert_eq!(initialized.load(Ordering::Acquire), 2);
+        assert_eq!(initialized.load(Ordering::Relaxed), 2);
         drop(pool);
     });
 }

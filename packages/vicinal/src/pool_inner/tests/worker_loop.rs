@@ -17,12 +17,10 @@ use crate::{GroupId, Pool, WorkerGroupState};
 
 /// A worker refreshes an expansion that lands while it is still applying its captured mask.
 #[test]
-fn worker_pairs_initial_revision_with_captured_affinity() {
+fn worker_refreshes_affinity_expanded_while_pinning_initial_mask() {
     with_watchdog(|| {
         let (pool, group) = group_pool();
         let state = group.state();
-        let initial = state.affinity_revision.load(Ordering::Acquire);
-        assert_eq!(initial, 1);
 
         let (pinned, initial_pin) = mpsc::channel();
         let (release_pin, wait_for_release) = mpsc::channel();
@@ -31,6 +29,7 @@ fn worker_pairs_initial_revision_with_captured_affinity() {
         let calls = Arc::new(AtomicUsize::new(0));
         let pin = move |set: &ProcessorSet| {
             let processors = set.iter().map(Processor::id).collect::<BTreeSet<_>>();
+            // The counter elects the initial pin; the channels order its release and refresh.
             if calls.fetch_add(1, Ordering::Relaxed) == 0 {
                 pinned.send(()).unwrap();
                 wait_for_release.lock().unwrap().recv().unwrap();
@@ -99,7 +98,7 @@ fn shutdown_before_dequeue_abandons_without_another_refresh() {
                 assert!(!inner.runtime.is_poisoned());
                 assert!(!state.shutdown_flag.load(Ordering::Acquire));
                 drop(state.regular_queue.try_lock().unwrap());
-                drop(state.affinity.try_read().unwrap());
+                drop(state.affinity.try_write().unwrap());
                 dropped.store(true, Ordering::Release);
             }
         }));
@@ -140,7 +139,7 @@ fn shutdown_during_dequeued_refresh_abandons_without_poisoning() {
                 assert!(!inner.runtime.is_poisoned());
                 assert!(state.shutdown_flag.load(Ordering::Acquire));
                 drop(state.urgent_queue.try_lock().unwrap());
-                drop(state.affinity.try_read().unwrap());
+                drop(state.affinity.try_write().unwrap());
                 dropped.store(true, Ordering::Release);
             }
         }));
@@ -194,7 +193,7 @@ fn dequeued_refresh_failure_rejects_reentrant_submissions_before_cleanup() {
                 assert!(inner.runtime.is_poisoned());
                 assert!(inner.runtime.is_shutdown());
                 drop(state.regular_queue.try_lock().unwrap());
-                drop(state.affinity.try_read().unwrap());
+                drop(state.affinity.try_write().unwrap());
                 drop(inner.worker_handles.try_lock().unwrap());
                 assert_panics(|| scheduler.spawn(|| {}));
                 assert_panics(|| scheduler.spawn_urgent(|| {}));

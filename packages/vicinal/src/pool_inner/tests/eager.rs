@@ -16,7 +16,7 @@ use testing::with_watchdog;
 
 use super::helpers::{affinity, assert_retained_scheduler, hardware, pin, regional_hardware};
 use crate::worker_policy::WorkerGroup;
-use crate::{BuiltInWorkerPolicy, GroupId, PolicyKind, Pool};
+use crate::{BuiltInWorkerPolicy, EagerProcessorHardwareMismatch, GroupId, PolicyKind, Pool};
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
@@ -291,7 +291,7 @@ fn eager_selection_rejects_foreign_hardware_before_initialization() {
     let error = builder.build().unwrap_err();
     assert!(
         error
-            .find_source::<crate::build_error::EagerProcessorHardwareMismatch>()
+            .find_source::<EagerProcessorHardwareMismatch>()
             .is_some()
     );
     assert_eq!(initialized.load(Ordering::Relaxed), 0);
@@ -328,7 +328,7 @@ fn eager_selection_rejects_foreign_backing_hardware_before_initialization() {
             let error = builder.build().unwrap_err();
             assert!(
                 error
-                    .find_source::<crate::build_error::EagerProcessorHardwareMismatch>()
+                    .find_source::<EagerProcessorHardwareMismatch>()
                     .is_some()
             );
             assert_eq!(initialized.load(Ordering::Relaxed), 0);

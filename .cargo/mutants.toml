@@ -42,4 +42,15 @@ exclude_re = [
     # shifting the high nibble, so OR and XOR produce the same byte for every input.
     # Keep the AND replacement and all parsing/validation mutations enabled.
     'packages/crp_workspace/src/manifest\.rs:\d+:\d+: replace \| with \^ in decode_git_reference',
+
+    # Without failure publication, accepted tasks in another region never resolve.
+    'packages/vicinal/src/pool_runtime\.rs:\d+:\d+: replace PoolRuntime::fail with \(\)$',
+
+    # Shutdown must drop a queued capture before waiting for the worker it releases.
+    # Skipping either drain strands that initializer; keep non-no-op mutations enabled.
+    'packages/vicinal/src/pool_runtime\.rs:\d+:\d+: replace (PoolRuntime::drain_groups|drain_queue) with \(\)$',
+
+    # Reporting shutdown before startup prevents eager workers from reaching their
+    # parked-worker hooks, stranding fixtures such as eager spawn refusal.
+    'packages/vicinal/src/pool_runtime\.rs:\d+:\d+: replace PoolRuntime::is_shutdown -> bool with true$',
 ]

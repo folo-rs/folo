@@ -1,6 +1,7 @@
 //! Exact affinity, group sharing and wake notification coverage.
 
 use std::collections::{BTreeSet, HashSet};
+use std::ptr::eq as ptr_eq;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
@@ -214,7 +215,7 @@ fn workers_pin_to_spawning_processors_despite_resource_quota() {
     });
 }
 
-/// Every admission path must publish membership before its task observes permitted processors.
+/// A task submitted through any submission variant sees the expanded region mask.
 #[test]
 fn every_submission_variant_grows_the_region_mask() {
     with_watchdog(|| {
@@ -317,6 +318,7 @@ fn concurrent_first_use_preserves_every_initial_processor() {
         let (release_first, first_release) = mpsc::channel();
         let first_release = Mutex::new(first_release);
         pool.inner.groups.set_before_membership_selection(move || {
+            // The swap elects the paused callback; the channels order the two submissions.
             if first_selection.swap(false, Ordering::Relaxed) {
                 blocked.send(()).unwrap();
                 first_release.lock().unwrap().recv().unwrap();
@@ -324,11 +326,13 @@ fn concurrent_first_use_preserves_every_initial_processor() {
         });
 
         let submit = |processor| {
-            let scheduler = scheduler.clone();
-            let hardware = hardware.clone();
-            thread::spawn(move || {
-                pin(&hardware, processor);
-                scheduler.spawn(move || affinity(&hardware))
+            thread::spawn({
+                let scheduler = scheduler.clone();
+                let hardware = hardware.clone();
+                move || {
+                    pin(&hardware, processor);
+                    scheduler.spawn(move || affinity(&hardware))
+                }
             })
         };
         let first = submit(0);
@@ -638,7 +642,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
     let second = state.wake_event.listen();
     let selected = pool.inner.policy.select_group(&pool.inner.groups);
     let selected = pool.inner.groups.resolve(selected);
-    assert!(std::ptr::eq(state, selected));
+    assert!(ptr_eq(state, selected));
     pool.inner.enqueue(selected, allocate(), false);
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), None);
@@ -651,7 +655,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
 
     let selected = pool.inner.policy.select_group(&pool.inner.groups);
     let selected = pool.inner.groups.resolve(selected);
-    assert!(std::ptr::eq(state, selected));
+    assert!(ptr_eq(state, selected));
     pool.inner.enqueue(selected, allocate(), false);
     assert_eq!(first.now_or_never(), Some(()));
     assert_eq!(second.now_or_never(), None);
@@ -674,7 +678,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
             set.iter().map(Processor::id).collect::<BTreeSet<_>>(),
             BTreeSet::from([0])
         );
-        drop(state.affinity.try_read().unwrap());
+        drop(state.affinity.try_write().unwrap());
     });
     refresh_affinity(state, &mut applied, |_| {
         panic!("known revision must not repin")

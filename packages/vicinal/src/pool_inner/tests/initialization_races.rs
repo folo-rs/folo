@@ -161,6 +161,7 @@ fn shutdown_waits_for_failure_publication_to_finish() {
                 .runtime
                 .before_worker_wait
                 .set(Box::new(move || {
+                    // The swap elects one notifier; the channels order wait entry and shutdown.
                     if !notified_shutdown_wait.swap(true, Ordering::Relaxed) {
                         shutdown_waiting.send(()).unwrap();
                     }

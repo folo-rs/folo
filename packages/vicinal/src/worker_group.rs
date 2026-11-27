@@ -89,14 +89,20 @@ impl WorkerGroup {
         self.runtime.before_binding_wait.set(waiting).unwrap();
     }
 
-    /// Lets a parked fixture worker resume once failed construction waits for its departure.
+    /// Signals that failed construction started waiting for a participating fixture worker.
     #[cfg(test)]
-    pub(crate) fn observe_worker_wait(&self, waiting: Sender<()>) {
+    pub(crate) fn observe_worker_wait<
+        T: Copy + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
+    >(
+        &self,
+        waiting: Sender<T>,
+        event: T,
+    ) {
         assert!(
             self.runtime
                 .before_worker_wait
                 .set(Box::new(move || {
-                    _ = waiting.send(());
+                    _ = waiting.send(event);
                 }))
                 .is_ok()
         );

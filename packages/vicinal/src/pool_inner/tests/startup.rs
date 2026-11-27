@@ -5,7 +5,7 @@ use std::io;
 use std::mem::forget;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Barrier, Mutex, OnceLock};
 use std::thread::{Builder, current, spawn};
 
@@ -21,14 +21,13 @@ use crate::worker_policy::{
 };
 use crate::{BuiltInWorkerPolicy, GroupId, PolicyKind, Pool, SubmissionTarget};
 
-/// Pauses policy selection after a test worker reaches the ordinary participation boundary.
+/// Starts a test worker and independently pauses policy selection.
 #[derive(Debug)]
 struct GatedSelectionPolicy {
     inner: TestPolicy,
     worker_started: OnceLock<()>,
-    entered: Sender<()>,
-    exited: Sender<()>,
-    release: Mutex<Receiver<()>>,
+    events: Sender<StartupEvent>,
+    release_selection: Mutex<Receiver<()>>,
 }
 
 impl WorkerPolicy for GatedSelectionPolicy {
@@ -45,18 +44,39 @@ impl BoundPolicy for GatedSelectionPolicy {
             let group = self.inner.group();
             _ = spawn({
                 let worker = group.add_worker();
-                let exited = self.exited.clone();
+                let events = self.events.clone();
                 move || {
-                    worker.run();
-                    exited.send(()).unwrap();
+                    let event = if catch_unwind(|| worker.run()).is_ok() {
+                        StartupEvent::WorkerExited
+                    } else {
+                        StartupEvent::WorkerPanicked
+                    };
+                    events.send(event).unwrap();
                 }
             });
             group.wait_for_initialized_workers(nz!(1_usize));
         });
-        self.entered.send(()).unwrap();
-        self.release.lock().unwrap().recv().unwrap();
+        self.events.send(StartupEvent::SelectionEntered).unwrap();
+        _ = self.release_selection.lock().unwrap().recv();
         id
     }
+}
+
+/// Tracks both independent startup gates and premature completion of either thread.
+#[derive(Debug, Eq, PartialEq)]
+enum StartupEvent {
+    SelectionEntered,
+    SubmissionFinished,
+    WorkerWaiting,
+    WorkerExited,
+    WorkerPanicked,
+}
+
+/// Orders entry to shutdown's worker wait against shutdown completion.
+#[derive(Debug, Eq, PartialEq)]
+enum ShutdownEvent {
+    Waiting,
+    Finished,
 }
 
 /// Fails exactly at custom policy selection after the pool has bound that policy.
@@ -177,12 +197,11 @@ fn assert_concurrent_startup(kind: PolicyKind) {
     });
 }
 
-/// Pauses startup while it owns registration, forcing shutdown to account for those handles.
+/// Shutdown waits for a participating worker but not the selection callback that started it.
 #[test]
-fn shutdown_accounts_for_in_progress_startup() {
+fn shutdown_waits_for_worker_but_not_for_policy_selection() {
     with_watchdog(|| {
-        let (entered, selection_entered) = channel();
-        let (exited, worker_exited) = channel();
+        let (events, startup_progress) = channel();
         let (release, selection_release) = channel();
         let policy = TestPolicy::new(0);
         let pool = Pool::builder()
@@ -190,9 +209,8 @@ fn shutdown_accounts_for_in_progress_startup() {
             .worker_policy(GatedSelectionPolicy {
                 inner: policy.clone(),
                 worker_started: OnceLock::new(),
-                entered,
-                exited,
-                release: Mutex::new(selection_release),
+                events: events.clone(),
+                release_selection: Mutex::new(selection_release),
             })
             .build()
             .unwrap();
@@ -200,47 +218,78 @@ fn shutdown_accounts_for_in_progress_startup() {
         let scheduler = pool.scheduler();
         let group = policy.group();
         let state = group.state();
-        let (worker_waiting, worker_wait) = channel();
         let (release_worker, worker_release) = channel();
         let worker_release = Mutex::new(Some(worker_release));
         assert!(
             state
                 .before_wait
-                .set(Box::new(move |_, _| {
-                    worker_waiting.send(()).unwrap();
-                    let worker_release = worker_release.lock().unwrap().take().unwrap();
-                    worker_release.recv().unwrap();
+                .set(Box::new({
+                    let events = events.clone();
+                    move |_, _| {
+                        if let Some(worker_release) = worker_release.lock().unwrap().take() {
+                            events.send(StartupEvent::WorkerWaiting).unwrap();
+                            _ = worker_release.recv();
+                        }
+                    }
                 }))
                 .is_ok()
         );
-        let starter = spawn(move || block_on(scheduler.spawn(|| 42)).unwrap_err());
+        let starter = spawn(move || {
+            let result = catch_unwind(AssertUnwindSafe(|| block_on(scheduler.spawn(|| 42))));
+            events.send(StartupEvent::SubmissionFinished).unwrap();
+            result
+        });
 
-        selection_entered.recv().unwrap();
-        worker_wait.recv().unwrap();
-        let (shutdown_waiting, shutdown_wait) = channel();
+        let mut selection_entered = false;
+        let mut worker_waiting = false;
+        while !selection_entered || !worker_waiting {
+            match startup_progress.recv() {
+                Ok(StartupEvent::SelectionEntered) => selection_entered = true,
+                Ok(StartupEvent::WorkerWaiting) => worker_waiting = true,
+                finished => {
+                    // Early completion cannot open a missing gate. Release both before
+                    // cleanup so this is a failed assertion, not a shutdown hang.
+                    drop(release_worker);
+                    drop(release);
+                    drop(pool);
+                    _ = starter.join();
+                    panic!("startup finished before reaching both gates: {finished:?}");
+                }
+            }
+        }
+        let (shutdown_events, shutdown_progress) = channel();
         assert!(
             inner
                 .runtime
                 .before_worker_wait
-                .set(Box::new(move || {
-                    shutdown_waiting.send(()).unwrap();
+                .set(Box::new({
+                    let shutdown_events = shutdown_events.clone();
+                    move || shutdown_events.send(ShutdownEvent::Waiting).unwrap()
                 }))
                 .is_ok()
         );
-        let (shutdown_done, shutdown_completion) = channel();
         let shutdown = spawn(move || {
-            drop(pool);
-            shutdown_done.send(()).unwrap();
+            let result = catch_unwind(AssertUnwindSafe(|| drop(pool)));
+            shutdown_events.send(ShutdownEvent::Finished).unwrap();
+            result
         });
-        shutdown_wait.recv().unwrap();
-        assert_eq!(shutdown_completion.try_recv(), Err(TryRecvError::Empty));
+        let first = shutdown_progress.recv();
 
-        release_worker.send(()).unwrap();
-        worker_exited.recv().unwrap();
-        shutdown.join().unwrap();
-        release.send(()).unwrap();
-        assert!(starter.join().unwrap().is_cancel());
+        // The worker gate exposes shutdown's participation wait. Keep the independent
+        // selection gate closed until shutdown returns: it must not wait for policy code,
+        // and the resumed submission must observe cancellation.
+        let worker_released = release_worker.send(());
+        let worker_exit = startup_progress.recv();
+        let shutdown = shutdown.join();
+        let selection_released = release.send(());
+        let submission = starter.join();
 
+        assert_eq!(first, Ok(ShutdownEvent::Waiting));
+        worker_released.unwrap();
+        assert_eq!(worker_exit, Ok(StartupEvent::WorkerExited));
+        shutdown.unwrap().unwrap();
+        selection_released.unwrap();
+        assert!(submission.unwrap().unwrap().unwrap_err().is_cancel());
         assert!(inner.runtime.is_shutdown());
         assert_eq!(inner.runtime.active_workers(), 0);
     });
@@ -366,6 +415,7 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     assert!(inner.runtime.is_poisoned());
     assert!(state.task_pool.lock().unwrap().is_empty());
 
+    // These flags observe the synchronous submission outcome, not publication of other data.
     let executed = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicBool::new(false));
     let payload = catch_unwind(AssertUnwindSafe({
@@ -373,11 +423,11 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
         let dropped = Arc::clone(&dropped);
         move || {
             let capture = OnDrop(Some(Box::new(move || {
-                dropped.store(true, Ordering::Release);
+                dropped.store(true, Ordering::Relaxed);
                 panic_any(PanickingPayload);
             })));
             _ = scheduler.spawn(move || {
-                executed.store(true, Ordering::Release);
+                executed.store(true, Ordering::Relaxed);
                 drop(capture);
             });
         }
@@ -386,8 +436,8 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
 
     assert!(payload.is::<PanickingPayload>());
     forget(payload);
-    assert!(dropped.load(Ordering::Acquire));
-    assert!(!executed.load(Ordering::Acquire));
+    assert!(dropped.load(Ordering::Relaxed));
+    assert!(!executed.load(Ordering::Relaxed));
     assert!(state.task_pool.lock().unwrap().is_empty());
     assert_eq!(inner.runtime.active_workers(), 0);
 }
