@@ -69,7 +69,8 @@
 //! It waits for each worker to apply its initial affinity and finish the configured
 //! [`PoolBuilder::thread_init`] callback.
 //!
-//! Use the same processor set for eager selection and the application's submitting threads.
+//! For optimal task locality, use the same processor set for eager selection and the application's
+//! submitting threads.
 //! Later submissions from other eligible processors still start missing processor-local
 //! workers or expand the processors on which shared workers may run.
 //!
