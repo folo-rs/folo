@@ -45,36 +45,37 @@
 //! locality groups as memory regions. A system with uniform memory access may contain only one
 //! region.
 //!
-//! The default processor-local policy creates a destination and its configured worker count for
-//! the processor that submits the first task. Work submitted from another processor uses that
-//! processor's destination.
+//! The default processor-local policy creates worker threads for the processor that submits the
+//! first task. Work submitted from another processor uses another set of worker threads created
+//! for that processor.
 //!
-//! [`policies::WorkersPerMemoryRegion`] creates one shared destination per submitting region.
-//! Submissions from processors in that region use the same fixed number of workers.
-//! [`policies::WorkersPerSystem`] creates one destination for the entire pool, so its fixed worker
-//! count is shared even when submissions originate in different regions.
+//! [`policies::WorkersPerMemoryRegion`] creates one set of worker threads per submitting region.
+//! Submissions from processors in that region share those workers.
+//! [`policies::WorkersPerSystem`] creates one set of worker threads for the entire pool, so the
+//! same workers handle submissions from every region.
 //!
 //! Placement and concurrency are separate choices. The worker count controls how many tasks may
-//! execute at once in a destination. Processor affinity controls where those workers may execute.
-//! A shared destination begins with the eager selection or first submitting processor, then grows
-//! its permitted processor set when another eligible processor submits work. Growing the set does
-//! not add workers. Affinity does not move task allocations or guarantee cache hits.
+//! execute at once. Processor affinity controls where those worker threads may execute. Regional
+//! and system-wide workers begin with the eager selection or first submitting processor, then
+//! become allowed to run on additional eligible processors as those processors submit work.
+//! Expanding the allowed processors does not add worker threads. Affinity does not move task
+//! allocations or guarantee cache hits.
 //!
 //! # Starting workers
 //!
-//! Workers start lazily when a destination first receives work. This avoids allocating worker
-//! threads for destinations an application never uses. Scheduler clones share the same pool and
+//! Worker threads start lazily when their processor, region or pool first receives work. This
+//! avoids creating threads an application never uses. Scheduler clones share the same pool and
 //! therefore share its workers.
 //!
 //! [`PoolBuilder::eager`] takes ownership of a
 //! [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
 //! from the pool's hardware instance. Construction then starts every worker required by the
-//! selected destinations. It waits for each worker to apply its initial affinity and finish the
-//! configured [`PoolBuilder::thread_init`] callback.
+//! selected processors, regions or system-wide workers. It waits for each worker to apply its
+//! initial affinity and finish the configured [`PoolBuilder::thread_init`] callback.
 //!
 //! Use the same processor set for eager selection and the application's submitting threads.
 //! Later submissions from other eligible processors still start missing processor-local
-//! destinations or expand the permitted set of shared destinations.
+//! workers or expand the processors on which shared workers may run.
 //!
 //! Initializers may overlap and must not depend on construction returning, including to publish
 //! the pool's scheduler. Eager construction leaves the calling thread's affinity unchanged.
