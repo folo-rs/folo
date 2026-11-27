@@ -156,7 +156,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
             group: GroupId::MemoryRegion(processor.memory_region_id()),
             processor: processor.id(),
         });
-        let state = pool.inner.registry.get_or_init(target.group);
+        let state = pool.inner.groups.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
         policy.install_test_group(&pool.inner.groups, &hardware, target);
 

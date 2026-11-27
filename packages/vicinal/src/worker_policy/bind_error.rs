@@ -14,6 +14,8 @@ pub struct BindError {
     core: OhnoCore,
 }
 
+// The erased foreign error need not be unwind-safe. This wrapper guards no user data
+// and exposes no mutation; reevaluate these impls if that changes.
 impl UnwindSafe for BindError {}
 impl RefUnwindSafe for BindError {}
 

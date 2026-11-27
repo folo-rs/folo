@@ -49,7 +49,7 @@ fn initialization_failure_during_sibling_startup_joins_every_worker() {
 
             let inner = Arc::clone(&pool.inner);
             let scheduler = pool.scheduler();
-            let state = inner.registry.get_or_init(target.group);
+            let state = inner.groups.get_or_init(target.group);
             let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
             let mut spawned = 0_u32;
 

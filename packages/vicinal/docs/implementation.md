@@ -72,6 +72,8 @@ Result channels use a separate typed pool because their layout and lifecycle do 
 require heterogeneous task storage. Joined wrappers retain the original body and sender
 together until execution consumes them. Dropping an unexecuted wrapper sends cancellation
 with the original body, completing pending handles even while schedulers retain the registry.
+After clean shutdown, joined submissions deliver the same cancellation directly without
+preparing a task for timing or execution.
 Only cancellation boxes the body; normal execution uses the existing pooled task slot.
 The recovery API hides that storage behind an opaque callable type so storage choices remain
 internal to the implementation.
@@ -150,11 +152,11 @@ membership are seeded before spawning; no synthetic task is allocated, counted o
 
 Lazy and eager startup share `Worker::run()`. Eager binding first seeds every selected
 group's permitted processor set, then reserves and starts every selected worker. The builder
-closes the binding reservation phase after `WorkerPolicy::bind()` returns and waits for every outstanding
-reservation to reach the end of `thread_init()`. Dropping a reserved `Worker` cancels that
-expectation. Callbacks can overlap across groups. A callback panic records the first payload in
-`PoolRuntime`, stops all groups and wakes the binding waiter. The builder converts the retained
-payload into a `BuildError` after participating workers leave.
+closes the binding reservation phase after `WorkerPolicy::bind()` returns and waits for each
+reservation to reach the end of `thread_init()` or be cancelled by dropping the unrun `Worker`.
+Callbacks can overlap across groups. A callback panic stops all groups and ends the reservation
+wait. The builder still waits for participating workers to leave before converting the selected
+primary failure into a `BuildError`.
 An eager thread creation refusal instead returns a `BindError` carrying the destination and
 original I/O error. The failed-binding path stops and waits for participating workers before
 returning a `BuildError`. Lazy thread creation refusals still use the submission failure path.

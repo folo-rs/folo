@@ -82,11 +82,6 @@ impl PoolRuntime {
         &self.pool_name
     }
 
-    #[cfg(test)]
-    pub(crate) fn pool_name_snapshot(&self) -> Arc<str> {
-        Arc::clone(&self.pool_name)
-    }
-
     /// Gives an initializing worker a callback reference without holding the slot lock.
     pub(crate) fn thread_init(&self) -> Option<Arc<ThreadInit>> {
         self.thread_init.lock().expect(NEVER_POISONED).clone()

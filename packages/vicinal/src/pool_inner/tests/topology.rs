@@ -36,7 +36,7 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
             .build()
             .unwrap();
 
-        assert_eq!(pool.inner.registry.initialized().count(), 0);
+        assert_eq!(pool.inner.groups.initialized().count(), 0);
         let initial_worker_count = pool.inner.runtime.active_workers();
         assert_eq!(initial_worker_count, 0);
 
@@ -59,7 +59,7 @@ fn sparse_processor_membership_is_compact_and_expands_by_identity() {
             );
         }
 
-        let region = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
+        let region = pool.inner.groups.get_or_init(GroupId::MemoryRegion(2));
         assert_eq!(region.affinity_revision.load(Ordering::Acquire), 2);
         assert_eq!(
             region
@@ -92,7 +92,7 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
             .build()
             .unwrap();
 
-        assert_eq!(pool.inner.registry.initialized().count(), 0);
+        assert_eq!(pool.inner.groups.initialized().count(), 0);
         assert_eq!(pool.inner.runtime.active_workers(), 0);
 
         let scheduler = pool.scheduler();
@@ -117,12 +117,12 @@ fn system_policy_shares_workers_and_accumulates_only_its_submitters() {
             }
 
             assert_eq!(received.recv().unwrap(), expected);
-            assert_eq!(pool.inner.registry.initialized().count(), 1);
+            assert_eq!(pool.inner.groups.initialized().count(), 1);
             let worker_count = pool.inner.runtime.active_workers();
             assert_eq!(worker_count, WORKERS as usize);
         }
 
-        let state = pool.inner.registry.get_or_init(GroupId::System);
+        let state = pool.inner.groups.get_or_init(GroupId::System);
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 4);
         assert_eq!(state.get_tasks_spawned(), 4);
         assert_eq!(
@@ -250,7 +250,7 @@ fn every_submission_variant_grows_the_region_mask() {
             assert_eq!(worker_count, 1);
         }
 
-        let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
+        let state = pool.inner.groups.get_or_init(GroupId::MemoryRegion(2));
         assert_eq!(state.get_tasks_spawned(), 4);
     });
 }
@@ -369,7 +369,7 @@ fn concurrent_same_processor_submissions_wait_for_membership_publication() {
             move || affinity(&hardware)
         });
         assert_eq!(block_on(initial).unwrap(), BTreeSet::from([0]));
-        let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
+        let state = pool.inner.groups.get_or_init(GroupId::MemoryRegion(2));
 
         let lock_attempts = AtomicUsize::new(0);
         let (outcome, outcomes) = mpsc::channel();
@@ -527,7 +527,7 @@ fn assert_idle_workers_refresh(policy: BuiltInWorkerPolicy, next_processor: u32)
             .unwrap();
         policy.install_test_group(&pool.inner.groups, &hardware, target);
 
-        let state = pool.inner.registry.get_or_init(target.group);
+        let state = pool.inner.groups.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
 
         // Finish initial admission before starting threads, leaving no earlier notifications
@@ -618,7 +618,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
         .worker_policy(policy.clone())
         .build()
         .unwrap();
-    let state = pool.inner.registry.get_or_init(GroupId::MemoryRegion(2));
+    let state = pool.inner.groups.get_or_init(GroupId::MemoryRegion(2));
     policy.install_test_group(
         &pool.inner.groups,
         &hardware,
@@ -686,7 +686,7 @@ fn known_submitter_does_not_broadcast_or_rebuild_affinity() {
 fn separate_enqueues_notify_separate_waiters() {
     let pool = Pool::builder().hardware(hardware()).build().unwrap();
     let destination = GroupId::Processor(0);
-    let state = pool.inner.registry.get_or_init(destination);
+    let state = pool.inner.groups.get_or_init(destination);
     let first = state.wake_event.listen();
     let second = state.wake_event.listen();
 

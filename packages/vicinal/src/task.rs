@@ -145,11 +145,20 @@ where
 {
     fn drop(&mut self) {
         if let Some((task, sender)) = self.pending.take() {
-            // Only cancellation boxes the body; successful dispatch retains pooled storage.
             // Queue draining and rejected admission release tasks outside pool locks.
-            sender.send(Err(TaskError::cancelled(task)));
+            cancel_joined_task(task, sender);
         }
     }
+}
+
+/// Returns the unexecuted body through its result channel without preparing execution metrics.
+pub(crate) fn cancel_joined_task<R, F>(task: F, sender: PooledSender<TaskResult<R>>)
+where
+    R: Send + 'static,
+    F: FnOnce() -> R + Send + 'static,
+{
+    // Only cancellation boxes the body; successful dispatch retains pooled storage.
+    sender.send(Err(TaskError::cancelled(task)));
 }
 
 /// Adds completion and cancellation delivery without boxing the submitted body.

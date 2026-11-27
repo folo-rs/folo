@@ -96,10 +96,10 @@ fn assert_ready(kind: PolicyKind) {
         assert_eq!(threads.len(), expected.len());
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, expected.len());
-        assert_eq!(pool.inner.registry.initialized().count(), group_count);
+        assert_eq!(pool.inner.groups.initialized().count(), group_count);
         assert_eq!(affinity(&hardware), BTreeSet::from([1]));
         assert!(!INITIALIZED.get());
-        for state in pool.inner.registry.initialized() {
+        for state in pool.inner.groups.initialized() {
             assert_eq!(state.get_tasks_spawned(), 0);
             assert!(state.regular_queue.lock().unwrap().is_empty());
             assert!(state.urgent_queue.lock().unwrap().is_empty());
@@ -118,7 +118,7 @@ fn assert_ready(kind: PolicyKind) {
         }
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, expected.len());
-        for state in pool.inner.registry.initialized() {
+        for state in pool.inner.groups.initialized() {
             let expected_revision = usize::from(!matches!(kind, PolicyKind::Processor));
             assert_eq!(
                 state.affinity_revision.load(Ordering::Acquire),
@@ -211,7 +211,7 @@ fn assert_expansion(kind: PolicyKind) {
         }
         assert_eq!(
             pool.inner
-                .registry
+                .groups
                 .initialized()
                 .map(WorkerGroup::get_tasks_spawned)
                 .sum::<u64>(),
@@ -255,10 +255,10 @@ fn eager_setters_replace_configuration_without_starting_workers() {
         assert_eq!(initialized.load(Ordering::Relaxed), 1);
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 1);
-        assert_eq!(pool.inner.registry.initialized().count(), 1);
+        assert_eq!(pool.inner.groups.initialized().count(), 1);
         assert_eq!(
             pool.inner
-                .registry
+                .groups
                 .get_or_init(GroupId::MemoryRegion(5))
                 .startup
                 .get(),
@@ -352,7 +352,7 @@ fn eager_unused_pool_without_initializer_joins_workers() {
         let scheduler = pool.scheduler();
         let worker_count = inner.runtime.active_workers();
         assert_eq!(worker_count, 2);
-        let state = inner.registry.get_or_init(GroupId::System);
+        let state = inner.groups.get_or_init(GroupId::System);
         assert_eq!(state.get_tasks_spawned(), 0);
         assert!(state.task_pool.lock().unwrap().is_empty());
 

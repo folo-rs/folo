@@ -1,3 +1,4 @@
+use std::any::type_name_of_val;
 use std::fmt::Debug;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
@@ -14,7 +15,8 @@ use crate::worker_policy::{BindContext, BindError, WorkerGroupId, WorkerGroups};
 /// [`Worker`][crate::worker_policy::Worker] into a thread, applies its intended affinity and calls
 /// [`Worker::run`][crate::worker_policy::Worker::run]. That method blocks until the worker leaves
 /// the pool.
-/// `Debug` lets builders and pools identify the configured policy. The unbound configuration is
+/// `Debug` lets callers format policy values directly. Builder diagnostics report only whether
+/// a policy was explicitly configured, without calling its formatter. The unbound configuration is
 /// consumed during construction, so it needs none of the thread-safety contracts required by
 /// the value returned from [`bind`][Self::bind]. The static lifetime lets the builder erase the
 /// concrete configuration until its one binding call.
@@ -81,7 +83,8 @@ pub trait WorkerPolicy: Debug + 'static {
 /// This type is shared by schedulers, so `Send + Sync` make concurrent selection part of its
 /// contract. The `Pool` public API preserves its unwind-safety contract across shutdown and
 /// submission boundaries, so bound policies are also `UnwindSafe + RefUnwindSafe`. `Debug`
-/// exposes the active policy in pool diagnostics. Selection should keep the established routing
+/// lets callers format policy values directly. Pool and scheduler diagnostics identify the bound
+/// policy type without calling its formatter. Selection should keep the established routing
 /// path lock-free and avoid cloning [`WorkerGroup`][crate::worker_policy::WorkerGroup] handles;
 /// group creation and worker startup may clone handles because they occur off that path.
 pub trait BoundPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
@@ -98,15 +101,23 @@ pub trait BoundPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'stati
 
 /// Erases an unbound policy while preserving a by-value binding operation.
 pub(crate) trait WorkerPolicyBinding: Debug {
-    fn bind(self: Box<Self>, context: BindContext<'_>) -> Result<Box<dyn BoundPolicy>, BindError>;
+    fn bind(
+        self: Box<Self>,
+        context: BindContext<'_>,
+    ) -> Result<(Box<dyn BoundPolicy>, &'static str), BindError>;
 }
 
 impl<T> WorkerPolicyBinding for T
 where
     T: WorkerPolicy,
 {
-    fn bind(self: Box<Self>, context: BindContext<'_>) -> Result<Box<dyn BoundPolicy>, BindError> {
+    fn bind(
+        self: Box<Self>,
+        context: BindContext<'_>,
+    ) -> Result<(Box<dyn BoundPolicy>, &'static str), BindError> {
         let bound = (*self).bind(context)?;
-        Ok(Box::new(bound))
+        // Capture the concrete type before erasure so diagnostics need not call policy code.
+        let policy_type = type_name_of_val(&bound);
+        Ok((Box::new(bound), policy_type))
     }
 }

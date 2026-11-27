@@ -260,7 +260,7 @@ fn partial_thread_creation_failure_does_not_poison_locks() {
             group: GroupId::Processor(0),
             processor: 0,
         };
-        let state = inner.registry.get_or_init(destination.group);
+        let state = inner.groups.get_or_init(destination.group);
         let mut attempts = 0_u32;
 
         assert_panics(|| {
@@ -316,7 +316,7 @@ fn affinity_failure_is_reported_before_admission() {
             group: GroupId::Processor(0),
             processor: 0,
         };
-        let state = inner.registry.get_or_init(destination.group);
+        let state = inner.groups.get_or_init(destination.group);
 
         assert_panics(|| {
             inner.enqueue_with(destination, state, probe(state, || {}), false, |handles| {
@@ -407,7 +407,7 @@ fn empty_region_never_starts_unpinned_workers() {
             group: GroupId::MemoryRegion(4),
             processor: 0,
         };
-        _ = pool.inner.registry.get_or_init(target.group);
+        _ = pool.inner.groups.get_or_init(target.group);
         pool.inner.start_workers(
             target,
             nz!(1),
@@ -467,7 +467,7 @@ fn startup_failure_stops_every_group() {
                 .unwrap()
                 .pin_current_thread_to();
             let target = policy.destination(&hardware);
-            let state = pool.inner.registry.get_or_init(target.group);
+            let state = pool.inner.groups.get_or_init(target.group);
 
             assert_panics(|| {
                 pool.inner
@@ -483,7 +483,7 @@ fn startup_failure_stops_every_group() {
             drop(error);
             block_on(running).unwrap();
 
-            for state in pool.inner.registry.initialized() {
+            for state in pool.inner.groups.initialized() {
                 assert!(state.shutdown_flag.load(Ordering::Acquire));
             }
 

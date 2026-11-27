@@ -6,8 +6,6 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::io;
 #[cfg(test)]
 use std::num::NonZero;
-#[cfg(test)]
-use std::ops::Deref;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 #[cfg(test)]
@@ -29,41 +27,18 @@ use crate::{SubmissionTarget, WorkerEntry};
 
 pub(crate) const POOL_LOG_TARGET: &str = module_path!();
 
-/// Shares the runtime-owned pool name with tests that inspect the inner facade directly.
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct PoolName(Arc<str>);
-
-#[cfg(test)]
-impl Deref for PoolName {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[cfg(test)]
-impl PartialEq<&str> for PoolName {
-    fn eq(&self, other: &&str) -> bool {
-        self.0.as_ref() == *other
-    }
-}
-
 /// Keeps schedulers' shared storage alive while the owning pool controls worker lifetime.
 pub(crate) struct PoolInner {
     pub(crate) pool_id: u64,
-    #[cfg(test)]
-    pub(crate) pool_name: PoolName,
     pub(crate) groups: WorkerGroups,
-    #[cfg(test)]
-    pub(crate) registry: WorkerGroups,
     #[cfg(test)]
     pub(crate) hardware: SystemHardware,
     #[cfg(test)]
     // Test fixtures own these OS-thread handles independently of pool participation.
     pub(crate) worker_handles: Mutex<Vec<JoinHandle<()>>>,
     pub(crate) policy: Box<dyn BoundPolicy>,
+    // Identifies the bound policy in diagnostics without invoking its formatter.
+    policy_type: &'static str,
     pub(crate) runtime: Arc<PoolRuntime>,
 }
 
@@ -104,7 +79,7 @@ impl PoolInner {
                 return Err(error);
             }
         };
-        let policy = match bound {
+        let (policy, policy_type) = match bound {
             Ok(policy) => policy,
             Err(error) => {
                 finish_failed_binding(&runtime);
@@ -120,22 +95,19 @@ impl PoolInner {
             runtime.wait_for_workers();
             drop(policy);
             let error = runtime_build_error(&runtime)
-                .expect("poisoned construction retains the first infrastructure failure");
+                .expect("poisoned construction retains the selected primary failure");
             return Err(error);
         }
 
         Ok(Self {
             pool_id,
-            #[cfg(test)]
-            pool_name: PoolName(runtime.pool_name_snapshot()),
-            groups: groups.clone(),
-            #[cfg(test)]
-            registry: groups,
+            groups,
             #[cfg(test)]
             hardware: hardware.clone(),
             #[cfg(test)]
             worker_handles: Mutex::new(Vec::new()),
             policy,
+            policy_type,
             runtime,
         })
     }
@@ -164,11 +136,11 @@ impl PoolInner {
             })
             .take_all()
             .unwrap_or_else(|| panic!("no eligible processors for worker group {destination:?}"));
-        let group = self.registry.group(destination);
+        let group = self.groups.group(destination);
         group.start_workers_with(destination, &Arc::new(affinity), count, handles, spawn, pin);
     }
 
-    /// Terminates admission, drains accepted work and propagates the prevailing failure.
+    /// Terminates admission, drains accepted work and propagates the selected primary failure.
     ///
     /// Ref: docs/implementation.md, "Task storage" and "Affinity and failure coordination".
     #[cfg_attr(test, mutants::skip)]
@@ -212,18 +184,19 @@ impl PoolInner {
     }
 }
 
-/// Stops policy-owned workers and waits for every binding reservation before returning failure.
+/// Stops runtime workers and waits for reservations to resolve or the runtime to be poisoned.
 ///
-/// A panic during the consumed policy's binding or destruction is contained by the caller's
-/// unwind boundary before this helper runs. Both payload and ordinary error paths therefore
-/// share the same worker cleanup barrier.
+/// The final wait always waits for active participation to end; it does not join policy-owned
+/// threads. Both binding panics and ordinary errors share this cleanup barrier.
 fn finish_failed_binding(runtime: &PoolRuntime) {
     runtime.stop_workers();
     runtime.wait_for_binding_workers();
     runtime.wait_for_workers();
 }
 
-/// Releases builder-owned initialization state before processing retained payloads.
+/// Releases builder-owned initialization state before converting the selected primary failure.
+///
+/// Ref: docs/implementation.md, "Affinity and failure coordination".
 fn runtime_build_error(runtime: &PoolRuntime) -> Option<BuildError> {
     let failure = runtime.take_failure();
     runtime.release_thread_init();
@@ -236,7 +209,7 @@ impl Debug for PoolInner {
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
             .field("pool_name", &self.runtime.pool_name())
-            .field("policy", &self.policy)
+            .field("policy_type", &self.policy_type)
             .finish_non_exhaustive()
     }
 }

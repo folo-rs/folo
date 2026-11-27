@@ -22,6 +22,8 @@ pub struct BuildError {
     core: OhnoCore,
 }
 
+// The erased source chain need not be unwind-safe. The wrapper guards no user data
+// and exposes no mutation; reevaluate these impls if that changes.
 impl UnwindSafe for BuildError {}
 impl RefUnwindSafe for BuildError {}
 

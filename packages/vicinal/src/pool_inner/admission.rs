@@ -1,7 +1,11 @@
 //! Submission ownership, policy selection and queue admission.
 
+#[cfg(test)]
+use std::mem::take;
 use std::ops::ControlFlow;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+#[cfg(test)]
+use std::ptr::eq as ptr_eq;
 use std::sync::Arc;
 #[cfg(test)]
 use std::thread::JoinHandle as ThreadJoinHandle;
@@ -131,7 +135,7 @@ impl PoolInner {
         // Shutdown may drain the fixture handles before the injected callback returns its
         // newly started handle. Publish then join any late handles to close that ownership gap.
         if self.runtime.is_shutdown() {
-            let handles = std::mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
+            let handles = take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
             for handle in handles {
                 _ = handle.join();
             }
@@ -145,9 +149,9 @@ impl PoolInner {
             self.poison(payload, cleanup);
         }
 
-        let selected = self.registry.group_id(target.group);
-        let selected = self.registry.resolve(selected);
-        assert!(std::ptr::eq(state, selected));
+        let selected = self.groups.group_id(target.group);
+        let selected = self.groups.resolve(selected);
+        assert!(ptr_eq(state, selected));
         self.enqueue(
             state,
             task.take()

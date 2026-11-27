@@ -3,7 +3,8 @@
     reason = "This is a test file, documentation is not required."
 )]
 
-use std::io;
+use std::error::Error;
+use std::io::Error as IoError;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, OnceLock};
 use std::thread::spawn;
@@ -46,7 +47,7 @@ impl WorkerPolicy for FailingBindingPolicy {
         self.initializer.lock().unwrap().recv().unwrap();
         self.bound.send(()).unwrap();
 
-        Err::<Self, _>(BindError::new(io::Error::other(
+        Err::<Self, _>(BindError::new(IoError::other(
             "injected policy binding failure",
         )))
     }
@@ -126,7 +127,10 @@ fn binding_failure_is_returned_after_started_workers_leave() {
         release_initializer.send(()).unwrap();
         let error = construction.join().unwrap().unwrap_err();
         worker_exited.recv().unwrap();
-        assert!(error.find_source::<io::Error>().is_some());
+        let cause = error.source().unwrap().downcast_ref::<BindError>().unwrap();
+        assert!(cause.find_source::<IoError>().is_some());
+        _ = error.to_string();
+        _ = cause.to_string();
     });
 }
 

@@ -452,7 +452,7 @@ fn system_post_shutdown_submissions_do_not_expand_or_restart() {
         pin(&hardware, 3);
         assert_retained_scheduler(&scheduler);
 
-        let state = inner.registry.get_or_init(GroupId::System);
+        let state = inner.groups.get_or_init(GroupId::System);
         assert_eq!(state.affinity_revision.load(Ordering::Acquire), 1);
         assert!(state.regular_queue.lock().unwrap().is_empty());
         assert!(state.urgent_queue.lock().unwrap().is_empty());
@@ -494,9 +494,9 @@ fn post_shutdown_submissions_do_not_expand_or_activate() {
         assert!(task.now_or_never().unwrap().unwrap_err().is_cancel());
     }
 
-    let existing = inner.registry.get_or_init(GroupId::MemoryRegion(2));
+    let existing = inner.groups.get_or_init(GroupId::MemoryRegion(2));
     assert_eq!(existing.affinity_revision.load(Ordering::Acquire), 1);
-    let unused = inner.registry.get_or_init(GroupId::MemoryRegion(5));
+    let unused = inner.groups.get_or_init(GroupId::MemoryRegion(5));
     assert!(unused.startup.get().is_none());
     assert_eq!(unused.affinity_revision.load(Ordering::Acquire), 0);
     assert_eq!(inner.runtime.active_workers(), 0);

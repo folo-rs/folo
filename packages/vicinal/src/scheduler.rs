@@ -8,7 +8,7 @@ use crate::metrics::CLOCK;
 use crate::pool_inner::POOL_LOG_TARGET;
 use crate::{
     ErasedTaskHandle, JoinHandle, NEVER_POISONED, PoolInner, VicinalTask, WorkerGroupState,
-    init_task, wrap_task, wrap_task_and_forget,
+    cancel_joined_task, init_task, wrap_task, wrap_task_and_forget,
 };
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
@@ -183,16 +183,13 @@ impl Scheduler {
                 pool_id = self.inner.pool_id,
                 "abandoned task during shutdown"
             );
-            // Read the fallible clock before moving ownership out of the task option. If it
-            // panics, submit's cleanup boundary can still contain and release the capture.
-            let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+            // Rent before moving the body so submit can contain capture cleanup if rent panics.
             let (sender, receiver) = self.inner.runtime.result_channel_pool.rent();
-            drop(wrap_task(
+            cancel_joined_task(
                 task.take()
-                    .expect("submit installs this task before any fallible shutdown operation"),
+                    .expect("cancellation consumes the body only after renting its channel"),
                 sender,
-                spawn_time,
-            ));
+            );
             return JoinHandle::new(receiver);
         }
 
@@ -291,6 +288,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use events_once::EventPool;
+    use futures::FutureExt;
     use futures::executor::block_on;
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
@@ -447,29 +445,33 @@ mod tests {
             });
         });
 
-        assert!(block_on(queued).unwrap_err().is_cancel());
+        assert!(queued.now_or_never().unwrap().unwrap_err().is_cancel());
         assert!(pool.inner.runtime.is_poisoned());
         assert!(pool.inner.runtime.is_shutdown());
     }
 
-    /// Shutdown-time clock failure must still retain the unconsumed task for cleanup.
+    /// Immediate cancellation does not prepare execution timing and returns the original body.
     #[test]
-    fn shutdown_preparation_failure_contains_unwrapped_capture() {
+    fn joined_submissions_after_shutdown_cancel_without_reading_the_clock() {
         let pool = fake_pool();
         let scheduler = pool.scheduler();
         drop(pool);
-        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
 
+        // Hold the clock borrow so any attempt to prepare execution timing would panic.
         CLOCK.with_borrow_mut(|_| {
-            assert_incidental_panic(|| {
-                _ = scheduler.spawn(move || drop(capture));
-            });
+            for (urgent, expected) in [(false, "regular task body"), (true, "urgent task body")] {
+                let capture = String::from(expected);
+                let task = move || capture;
+                let handle = if urgent {
+                    scheduler.spawn_urgent(task)
+                } else {
+                    scheduler.spawn(task)
+                };
+                let error = handle.now_or_never().unwrap().unwrap_err();
+                assert!(error.is_cancel());
+                assert_eq!(error.into_body().unwrap()(), expected);
+            }
         });
-
-        assert!(scheduler.inner.runtime.is_poisoned());
-        assert!(scheduler.inner.runtime.is_shutdown());
-        scheduler.inner.runtime.wait_for_workers();
-        assert_eq!(scheduler.inner.runtime.active_workers(), 0);
     }
 
     /// A poisoned allocation lock forces failure after wrapping but before task storage exists.

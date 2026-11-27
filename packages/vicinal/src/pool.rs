@@ -11,8 +11,6 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 
 use crate::policies::WorkersPerProcessor;
-#[cfg(test)]
-use crate::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
 use crate::worker_policy::{WorkerPolicy, WorkerPolicyBinding};
 use crate::{BuildError, PoolInner, Scheduler};
 
@@ -123,6 +121,7 @@ impl Drop for Pool {
 /// a policy error before publishing a usable pool.
 pub struct PoolBuilder {
     name: Option<String>,
+    // The builder only exposes policy access through consuming binding, never by reference.
     policy: Option<AssertUnwindSafe<Box<dyn WorkerPolicyBinding>>>,
     hardware: Option<SystemHardware>,
     thread_init: Option<ThreadInit>,
@@ -321,7 +320,7 @@ impl fmt::Debug for PoolBuilder {
         f.debug_struct(type_name::<Self>())
             .field("name", &self.name)
             .field("hardware", &self.hardware)
-            .field("policy", &self.policy)
+            .field("has_policy", &self.policy.is_some())
             .field("has_thread_init", &self.thread_init.is_some())
             .field("eager", &self.eager)
             .finish_non_exhaustive()
@@ -342,55 +341,82 @@ pub(crate) type ThreadInit = AssertUnwindSafe<Box<dyn Fn() + Send + Sync>>;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::io::Error as IoError;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::sync::atomic::AtomicBool;
 
     use many_cpus::fake::HardwareBuilder;
     use ohno::ErrorExt;
-    use static_assertions::assert_impl_all;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::BuildPanicked;
+    use crate::worker_policy::{BindContext, BindError, BoundPolicy, WorkerGroupId, WorkerGroups};
+
     assert_impl_all!(Pool: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PoolBuilder: UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(PoolBuilder: Send, Sync);
 
-    #[test]
-    fn setup_panics_become_build_errors() {
-        let error =
-            contain_build_setup(|| panic_any(std::io::Error::other("setup failed"))).unwrap_err();
+    /// Detects accidental application callbacks in owner and scheduler diagnostics.
+    struct PanickingDebugPolicy;
 
-        assert!(
-            error
-                .find_source::<crate::build_error::BuildPanicked>()
-                .is_some()
-        );
+    impl fmt::Debug for PanickingDebugPolicy {
+        fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            panic!("pool diagnostics must not call the custom policy formatter");
+        }
+    }
+
+    impl WorkerPolicy for PanickingDebugPolicy {
+        fn bind(self, _context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+            Ok(self)
+        }
+    }
+
+    impl BoundPolicy for PanickingDebugPolicy {
+        fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+            unreachable!("formatting does not submit tasks");
+        }
     }
 
     #[test]
-    fn default_and_policy_setter_order() {
+    fn setup_panics_become_build_errors() {
+        let error = contain_build_setup(|| panic_any(IoError::other("setup failed"))).unwrap_err();
+
+        assert!(error.find_source::<BuildPanicked>().is_some());
+    }
+
+    #[test]
+    fn default_build_does_not_initialize_workers() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let default = Pool::builder().hardware(hardware.clone()).build().unwrap();
-        let region = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkersPerProcessor::new(nz!(3)))
-            .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
-            .build()
-            .unwrap();
-        let processor = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkersPerSystem::new(nz!(1)))
-            .worker_policy(WorkersPerProcessor::new(nz!(3)))
-            .build()
-            .unwrap();
-        let system = Pool::builder()
+        let initialized = Arc::new(AtomicBool::new(false));
+        let pool = Pool::builder()
             .hardware(hardware)
-            .worker_policy(WorkersPerMemoryRegion::new(nz!(1)))
-            .worker_policy(WorkersPerSystem::new(nz!(3)))
+            .thread_init({
+                let initialized = Arc::clone(&initialized);
+                // This flag reports only callback invocation, not other worker state.
+                move || initialized.store(true, Ordering::Relaxed)
+            })
             .build()
             .unwrap();
 
-        for pool in [&default, &region, &processor, &system] {
-            assert_eq!(pool.inner.registry.initialized().count(), 0);
-            assert_eq!(pool.inner.runtime.active_workers(), 0);
-        }
+        assert!(!initialized.load(Ordering::Relaxed));
+        drop(pool);
+        assert!(!initialized.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn diagnostics_do_not_format_custom_policies() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+        let builder = Pool::builder()
+            .hardware(hardware)
+            .worker_policy(PanickingDebugPolicy);
+
+        _ = format!("{builder:?}");
+
+        let pool = builder.build().unwrap();
+        let scheduler = pool.scheduler();
+        _ = format!("{pool:?}");
+        _ = format!("{scheduler:?}");
     }
 
     #[test]
@@ -402,7 +428,7 @@ mod tests {
             .name("named")
             .build()
             .unwrap();
-        assert!(default.inner.pool_name.starts_with("vicinal-"));
-        assert_eq!(named.inner.pool_name, "named");
+        assert!(default.inner.runtime.pool_name().starts_with("vicinal-"));
+        assert_eq!(named.inner.runtime.pool_name(), "named");
     }
 }
