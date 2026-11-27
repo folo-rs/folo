@@ -65,9 +65,9 @@
 //!
 //! [`PoolBuilder::eager`] takes ownership of a
 //! [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
-//! from the pool's hardware instance. Construction then starts every worker required by the
-//! selected processors, regions or system-wide workers. It waits for each worker to apply its
-//! initial affinity and finish the configured [`PoolBuilder::thread_init`] callback.
+//! and starts every worker required by the selected processors, regions or system-wide workers.
+//! It waits for each worker to apply its initial affinity and finish the configured
+//! [`PoolBuilder::thread_init`] callback.
 //!
 //! Use the same processor set for eager selection and the application's submitting threads.
 //! Later submissions from other eligible processors still start missing processor-local
