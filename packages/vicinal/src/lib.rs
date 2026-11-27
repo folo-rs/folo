@@ -12,7 +12,7 @@
 //! can instead use [`policies::WorkersPerMemoryRegion`] or [`policies::WorkersPerSystem`] to
 //! share a fixed worker count across a larger locality. Processor affinity controls which
 //! processors a worker may run on. A memory region groups processors by local physical memory,
-//! as reported by [`many_cpus`].
+//! as reported by [many_cpus](https://docs.rs/many_cpus/latest/many_cpus/).
 //!
 //! Workers start lazily on first use by default. [`PoolBuilder::eager`] starts selected
 //! destinations during construction, after the configured processors have been pinned. Custom
@@ -47,7 +47,9 @@
 //!
 //! Systems with non-uniform memory access (NUMA) have processors connected to different physical
 //! memory modules. A memory region represents one such locality group; many systems have only one.
-//! Regions are identified by [`many_cpus::MemoryRegionId`], not by a task's allocations or data.
+//! Regions are identified by
+//! [`many_cpus::MemoryRegionId`](https://docs.rs/many_cpus/latest/many_cpus/type.MemoryRegionId.html),
+//! not by a task's allocations or data.
 //!
 //! With [`policies::WorkersPerMemoryRegion`], submissions from processors in the same region share
 //! one configured worker count. Eager construction or the first submission activates those workers;
@@ -66,10 +68,12 @@
 //!
 //! # Eager initialization
 //!
-//! [`PoolBuilder::eager`] takes ownership of a [`many_cpus::ProcessorSet`] from the pool's hardware
-//! instance. Construction waits for the configured workers in each selected destination to apply
-//! affinity and complete [`PoolBuilder::thread_init`]. Regional workers use only the selected
-//! processors in their region; system workers use the entire selection.
+//! [`PoolBuilder::eager`] takes ownership of a
+//! [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
+//! from the pool's hardware instance. Construction waits for the configured workers in each
+//! selected destination to apply affinity and complete [`PoolBuilder::thread_init`]. Regional
+//! workers use only the selected processors in their region; system workers use the entire
+//! selection.
 //!
 //! Use the same processor set for eager selection and the application's submitting threads.
 //! The selection is not a permanent limit: submissions from other eligible processors still
