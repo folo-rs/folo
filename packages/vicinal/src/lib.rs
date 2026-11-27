@@ -1,23 +1,23 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Worker pool with configurable processor affinity.
+//! Worker pool for running closures with configurable processor locality.
 //!
-//! Processor affinity is the set of processors on which a worker is permitted to run.
+//! [`Pool::builder`] selects a worker policy and constructs a pool. The pool's [`Scheduler`]
+//! accepts ordinary closures, returns a [`JoinHandle`] immediately and runs each closure once on
+//! a worker thread. Await that handle when the result or completion matters; callers that do not
+//! need a result can use the fire-and-forget spawn methods.
 //!
-//! A memory region groups processors with their local physical memory, as reported by
-//! [`many_cpus`]. Access to memory local to a processor can be faster than access across regions.
+//! By default, the worker policy follows the submitting thread's logical processor. Applications
+//! can instead use [`policies::WorkersPerMemoryRegion`] or [`policies::WorkersPerSystem`] to
+//! share a fixed worker count across a larger locality. Processor affinity controls which
+//! processors a worker may run on. A memory region groups processors by local physical memory,
+//! as reported by [`many_cpus`].
 //!
-//! A caller submits a task through one of a pool's [`Scheduler`] spawn methods. The pool samples
-//! the calling thread's current logical processor; this is the task's submitting processor.
-//! Tasks execute synchronously on that processor by default.
-//! [`policies::WorkersPerMemoryRegion`] can share workers across the caller's memory region, and
-//! [`policies::WorkersPerSystem`] can share them across the system. Custom
-//! [`WorkerPolicy`][worker_policy::WorkerPolicy] implementations can select and create their own
-//! worker groups. Each built-in-policy destination starts its fixed worker count on first use.
-//! [`PoolBuilder::eager`] initializes selected destinations during construction instead.
-//! Custom-policy implementation types live in [`worker_policy`], while the ready-to-use
-//! policies are available from [`policies`].
+//! Workers start lazily on first use by default. [`PoolBuilder::eager`] starts selected
+//! destinations during construction, after the configured processors have been pinned. Custom
+//! policy implementors use the types in [`worker_policy`]; applications that use the built-in
+//! policies normally only need [`Pool`], [`PoolBuilder`], and [`policies`].
 //!
 //! # Quick start
 //!
