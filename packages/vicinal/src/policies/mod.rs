@@ -1,4 +1,4 @@
-//! Built-in policies for routing work to fixed worker counts.
+//! Built-in policies for routing work to worker threads.
 
 mod workers_per_memory_region;
 mod workers_per_processor;
