@@ -45,14 +45,18 @@ impl BindContext<'_> {
         }
     }
 
-    /// Returns the pool's fixed topology and hardware instance.
+    /// Returns the pool's fixed
+    /// [`many_cpus::SystemHardware`](https://docs.rs/many_cpus/latest/many_cpus/struct.SystemHardware.html)
+    /// instance.
     #[must_use]
     #[inline]
     pub fn hardware(&self) -> &SystemHardware {
         self.hardware
     }
 
-    /// Returns the optional processor selection configured for eager construction.
+    /// Returns the optional
+    /// [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
+    /// configured for eager construction.
     #[must_use]
     #[inline]
     pub fn eager(&self) -> Option<&ProcessorSet> {

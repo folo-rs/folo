@@ -184,7 +184,9 @@ impl PoolBuilder {
     ///
     /// This is an initial selection, not a permanent restriction. Later submissions from other
     /// eligible processors start missing destinations lazily or expand shared-worker affinity.
-    /// The selection must belong to the pool's [`SystemHardware`] instance.
+    /// The selection must belong to the pool's
+    /// [`many_cpus::SystemHardware`](https://docs.rs/many_cpus/latest/many_cpus/struct.SystemHardware.html)
+    /// instance.
     ///
     /// # Example
     ///
@@ -256,8 +258,10 @@ impl PoolBuilder {
 
     /// Sets the hardware instance used for topology and locality.
     ///
-    /// Defaults to [`SystemHardware::current()`]. A custom instance can provide simulated
-    /// hardware. The pool does not refresh topology or operating-system restrictions.
+    /// Defaults to
+    /// [`many_cpus::SystemHardware::current()`](https://docs.rs/many_cpus/latest/many_cpus/struct.SystemHardware.html#method.current).
+    /// A custom instance can provide simulated hardware. The pool does not refresh topology or
+    /// operating-system restrictions.
     #[must_use]
     pub fn hardware(mut self, hardware: SystemHardware) -> Self {
         self.hardware = Some(hardware);
