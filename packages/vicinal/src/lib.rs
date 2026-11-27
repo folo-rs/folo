@@ -3,21 +3,16 @@
 
 //! Worker pool for running closures with configurable processor locality.
 //!
-//! [`Pool::builder`] selects a worker policy and constructs a pool. The pool's [`Scheduler`]
-//! accepts ordinary closures, returns a [`JoinHandle`] immediately and runs each closure once on
-//! a worker thread. Await that handle when the result or completion matters; callers that do not
-//! need a result can use the fire-and-forget spawn methods.
+//! A [`Pool`] owns worker threads and the queues shared by its cloned [`Scheduler`] values.
+//! Submitting a closure returns a [`JoinHandle`] immediately, while a worker runs the closure
+//! independently on a worker thread. Await the handle when the result or completion matters.
+//! Use a fire-and-forget spawn method when the result does not matter.
 //!
-//! By default, the worker policy follows the submitting thread's logical processor. Applications
-//! can instead use [`policies::WorkersPerMemoryRegion`] or [`policies::WorkersPerSystem`] to
-//! share a fixed worker count across a larger locality. Processor affinity controls which
-//! processors a worker may run on. A memory region groups processors by local physical memory,
-//! as reported by [many_cpus](https://docs.rs/many_cpus/latest/many_cpus/).
-//!
-//! Workers start lazily on first use by default. [`PoolBuilder::eager`] starts selected
-//! destinations during construction, after the configured processors have been pinned. Custom
-//! policy implementors use the types in [`worker_policy`]; applications that use the built-in
-//! policies normally only need [`Pool`], [`PoolBuilder`], and [`policies`].
+//! A worker policy decides which destination receives each task and which processors that
+//! destination's workers may run on. The default policy uses the submitting thread's logical
+//! processor. Applications can instead share a fixed worker count across a memory region with
+//! [`policies::WorkersPerMemoryRegion`] or across the whole system with
+//! [`policies::WorkersPerSystem`]. Implement custom policies with the types in [`worker_policy`].
 //!
 //! # Quick start
 //!
@@ -43,76 +38,49 @@
 //! # }).unwrap();
 //! ```
 //!
-//! # Memory regions and worker counts
+//! # Choosing where work runs
 //!
 //! Systems with non-uniform memory access (NUMA) have processors connected to different physical
-//! memory modules. A memory region represents one such locality group; many systems have only one.
-//! Regions are identified by
-//! [`many_cpus::MemoryRegionId`](https://docs.rs/many_cpus/latest/many_cpus/type.MemoryRegionId.html),
-//! not by a task's allocations or data.
+//! memory modules. [`many_cpus`](https://docs.rs/many_cpus/latest/many_cpus/) represents these
+//! locality groups as memory regions. A system with uniform memory access may contain only one
+//! region.
 //!
-//! With [`policies::WorkersPerMemoryRegion`], submissions from processors in the same region share
-//! one configured worker count. Eager construction or the first submission activates those workers;
-//! further submissions from that region do not add workers. Each pool accounts for its regions
-//! independently, and scheduler clones share their pool's workers.
+//! The default processor-local policy creates a destination and its configured worker count for
+//! the processor that submits the first task. Work submitted from another processor uses that
+//! processor's destination.
 //!
-//! With [`policies::WorkersPerSystem`], all submitting processors share one configured worker
-//! count per pool, regardless of memory region. Workers may move across regions but remain limited
-//! to eagerly selected processors and those included during policy selection.
+//! [`policies::WorkersPerMemoryRegion`] creates one shared destination per submitting region.
+//! Submissions from processors in that region use the same fixed number of workers.
+//! [`policies::WorkersPerSystem`] creates one destination for the entire pool, so its fixed worker
+//! count is shared even when submissions originate in different regions.
 //!
-//! Worker placement is tracked separately from concurrency. The permitted set starts with the eager
-//! selection or the first submitting processor and grows when another processor in the destination
-//! reaches policy selection. Worker concurrency
-//! is configured explicitly, rather than calculated from this set or from a processor-time quota.
-//! This controls where tasks run, not where their memory is allocated.
+//! Placement and concurrency are separate choices. The worker count controls how many tasks may
+//! execute at once in a destination. Processor affinity controls where those workers may execute.
+//! A shared destination begins with the eager selection or first submitting processor, then grows
+//! its permitted processor set when another eligible processor submits work. Growing the set does
+//! not add workers. Affinity does not move task allocations or guarantee cache hits.
 //!
-//! # Eager initialization
+//! # Starting workers
+//!
+//! Workers start lazily when a destination first receives work. This avoids allocating worker
+//! threads for destinations an application never uses. Scheduler clones share the same pool and
+//! therefore share its workers.
 //!
 //! [`PoolBuilder::eager`] takes ownership of a
 //! [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
-//! from the pool's hardware instance. Construction waits for the configured workers in each
-//! selected destination to apply affinity and complete [`PoolBuilder::thread_init`]. Regional
-//! workers use only the selected processors in their region; system workers use the entire
-//! selection.
+//! from the pool's hardware instance. Construction then starts every worker required by the
+//! selected destinations. It waits for each worker to apply its initial affinity and finish the
+//! configured [`PoolBuilder::thread_init`] callback.
 //!
 //! Use the same processor set for eager selection and the application's submitting threads.
-//! The selection is not a permanent limit: submissions from other eligible processors still
-//! start missing destinations lazily or expand shared-worker affinity.
+//! Later submissions from other eligible processors still start missing processor-local
+//! destinations or expand the permitted set of shared destinations.
 //!
 //! Initializers may overlap and must not depend on construction returning, including to publish
 //! the pool's scheduler. Eager construction leaves the calling thread's affinity unchanged.
-//! It prepares workers, not task-specific allocations or caches.
+//! It starts workers; it does not prepare task-specific allocations or caches.
 //!
-//! # Tradeoffs
-//!
-//! - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
-//!   short-lived so that the pool is often idle.
-//! - Shared workers use eagerly selected processors and submitters included during policy selection.
-//!   Using one stable, quota-appropriate set for selection and submissions keeps workers in it.
-//!   Membership grows if new processors submit work and never shrinks. Quotas do not adjust counts.
-//!   Fractional quotas and other process work can still cause throttling: operating-system
-//!   delays after the process exceeds its processor-time allowance. See
-//!   [avoiding operating system quota penalties] for guidance on choosing the processor set.
-//! - Shared worker affinity expands at task boundaries, without preempting running tasks.
-//!   Workers may migrate within their permitted set, even during one task.
-//!   Task code must preserve worker affinity. Affinity does not bind allocations, move data
-//!   or guarantee cache hits. Topology and restriction refresh are not supported.
-//!
-//! # Shutdown behavior
-//!
-//! When the [`Pool`] is dropped, it stops accepting work and waits for any
-//! currently-executing tasks to complete. Queued tasks that have not started execution are
-//! cancelled. Joined tasks return errors that retain their bodies and captures for recovery
-//! through [`TaskError::into_body()`]. Fire-and-forget tasks release their captures.
-//!
-//! If you need to ensure all spawned tasks complete before shutdown, await their [`JoinHandle`]s
-//! before dropping the pool.
-//! Infrastructure failures log the failure and stop the entire pool. Queued joined work is
-//! cancelled recoverably; queued fire-and-forget tasks release their captures.
-//! The pool then remains poisoned and all further submissions panic synchronously.
-//! Already executing tasks may finish; task panics do not poison the pool.
-//!
-//! # Task outcomes
+//! # Receiving task results
 //!
 //! Awaiting a [`JoinHandle`] returns `Result<R, TaskError<R>>`:
 //!
@@ -122,12 +90,38 @@
 //! - **Panic:** [`TaskError::is_panic()`] identifies a task panic.
 //!   [`TaskError::into_panic()`] recovers the original panic payload.
 //!
-//! Calling a recovery method for the other outcome returns the unchanged error.
+//! Calling a recovery method for the other outcome returns the unchanged error. For reporting
+//! without recovery, [`TaskError::into_diagnostic()`] discards recovery data and retains a
+//! thread-safe error with its source chain and backtrace. Fire-and-forget tasks log task panics
+//! instead.
 //!
-//! For reporting without recovery, [`TaskError::into_diagnostic()`] discards recovery data and
-//! retains a thread-safe error, including its source chain and backtrace.
+//! # Shutting down
 //!
-//! Fire-and-forget tasks log task panics instead.
+//! Dropping a [`Pool`] stops admission, waits for executing tasks and cancels tasks that have not
+//! started. Await joined tasks before dropping the pool if every submitted task must complete.
+//! Retained schedulers do not keep worker threads alive, and submissions after clean shutdown
+//! return cancelled tasks.
+//!
+//! Worker-infrastructure failures stop and permanently poison the entire pool. Queued joined
+//! tasks return cancellation errors that retain their bodies; queued fire-and-forget tasks release
+//! their captures. Executing tasks may finish. Further submissions panic synchronously. A task
+//! panic remains a task result and does not poison the pool.
+//!
+//! # Choosing a processor set
+//!
+//! The pool favors low latency for one task on an idle pool and assumes that tasks are usually
+//! short-lived. The worker count is explicit; processor-time quotas do not reduce or multiply it.
+//!
+//! Prefer one stable, quota-appropriate processor set for both eager selection and application
+//! submission. Shared workers may grow their permitted set when a new processor submits work, but
+//! the set never shrinks. Fractional quotas and unrelated process work can still cause operating
+//! system throttling after the process exceeds its processor-time allowance. See
+//! [avoiding operating system quota penalties] for guidance.
+//!
+//! Workers refresh shared affinity at task boundaries. A running task keeps its previous affinity
+//! until it reaches the next boundary. Task code must preserve worker affinity. Affinity controls
+//! execution placement only: it does not bind allocations, move data or guarantee cache hits.
+//! The pool does not refresh topology or operating-system restrictions after construction.
 //!
 //! # Platform support
 //!
