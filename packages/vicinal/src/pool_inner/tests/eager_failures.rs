@@ -1,5 +1,5 @@
 use std::io;
-use std::panic::panic_any;
+use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -44,6 +44,24 @@ struct PanickingDropPolicy {
     dropped: Sender<()>,
 }
 
+/// Panics while dropping the bound policy after a worker failure.
+#[derive(Debug)]
+struct PanickingBoundDropPolicy {
+    dropped: Sender<()>,
+}
+
+/// Panics if cleanup drops the worker initializer's capture.
+struct PanickingInitializerDrop {
+    dropped: Sender<()>,
+}
+
+impl Drop for PanickingInitializerDrop {
+    fn drop(&mut self) {
+        self.dropped.send(()).unwrap();
+        panic_any(PolicyDropFailure);
+    }
+}
+
 impl WorkerPolicy for PanickingDropPolicy {
     fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
         let group = context.groups().add();
@@ -63,6 +81,27 @@ impl BoundPolicy for PanickingDropPolicy {
 }
 
 impl Drop for PanickingDropPolicy {
+    fn drop(&mut self) {
+        self.dropped.send(()).unwrap();
+        panic_any(PolicyDropFailure);
+    }
+}
+
+impl WorkerPolicy for PanickingBoundDropPolicy {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        let worker = context.groups().add().add_worker();
+        _ = spawn(move || worker.run());
+        Ok(self)
+    }
+}
+
+impl BoundPolicy for PanickingBoundDropPolicy {
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        unreachable!("construction rejects the worker failure")
+    }
+}
+
+impl Drop for PanickingBoundDropPolicy {
     fn drop(&mut self) {
         self.dropped.send(()).unwrap();
         panic_any(PolicyDropFailure);
@@ -282,6 +321,88 @@ fn policy_drop_failure_waits_for_binding_workers() {
         let group = observer.lock().unwrap().take().unwrap();
         assert_eq!(group.worker_count(), 0);
     });
+}
+
+#[test]
+fn eager_rejection_prioritizes_unbound_policy_drop_panic() {
+    let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+    let foreign = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+    let observer = Arc::new(Mutex::new(None));
+    let (_initializer_sender, initializer) = channel();
+    let (dropped, policy_dropped) = channel();
+
+    let builder = Pool::builder()
+        .hardware(hardware)
+        .eager(foreign.all_processors())
+        .worker_policy(PanickingDropPolicy {
+            worker_observer: observer,
+            initializer: Mutex::new(initializer),
+            dropped,
+        });
+
+    let payload = catch_unwind(AssertUnwindSafe(|| builder.build())).unwrap_err();
+    policy_dropped.recv().unwrap();
+    assert!(payload.is::<PolicyDropFailure>());
+}
+
+#[test]
+fn eager_rejection_prioritizes_initializer_drop_panic() {
+    let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+    let foreign = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+    let (dropped, initializer_dropped) = channel();
+    let marker = PanickingInitializerDrop { dropped };
+
+    let builder = Pool::builder()
+        .hardware(hardware)
+        .eager(foreign.all_processors())
+        .thread_init(move || {
+            _ = &marker;
+        });
+
+    let payload = catch_unwind(AssertUnwindSafe(|| builder.build())).unwrap_err();
+    initializer_dropped.recv().unwrap();
+    assert!(payload.is::<PolicyDropFailure>());
+}
+
+#[test]
+fn worker_failure_prioritizes_bound_policy_drop_panic() {
+    /// Distinguishes the worker initializer failure from policy cleanup.
+    struct InitializationFailure;
+
+    let (dropped, policy_dropped) = channel();
+    let builder = Pool::builder()
+        .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+            nz!(1),
+            nz!(1),
+        )))
+        .worker_policy(PanickingBoundDropPolicy { dropped })
+        .thread_init(|| panic_any(InitializationFailure));
+
+    let payload = catch_unwind(AssertUnwindSafe(|| builder.build())).unwrap_err();
+    policy_dropped.recv().unwrap();
+    assert!(payload.is::<PolicyDropFailure>());
+}
+
+#[test]
+fn worker_failure_prioritizes_initializer_drop_panic() {
+    /// Distinguishes the worker initializer failure from destructor cleanup.
+    struct InitializationFailure;
+
+    let (dropped, initializer_dropped) = channel();
+    let marker = PanickingInitializerDrop { dropped };
+    let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+    let eager = hardware.all_processors();
+    let builder = Pool::builder()
+        .hardware(hardware)
+        .eager(eager)
+        .thread_init(move || {
+            _ = &marker;
+            panic_any(InitializationFailure);
+        });
+
+    let payload = catch_unwind(AssertUnwindSafe(|| builder.build())).unwrap_err();
+    initializer_dropped.recv().unwrap();
+    assert!(payload.is::<PolicyDropFailure>());
 }
 
 #[test]

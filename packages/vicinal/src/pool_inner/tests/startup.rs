@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
+use std::mem::forget;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -360,7 +361,8 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     }))
     .unwrap_err();
 
-    assert!(payload.is::<StartupFailure>());
+    assert!(payload.is::<PanickingPayload>());
+    forget(payload);
     assert!(inner.runtime.is_poisoned());
     assert!(state.task_pool.lock().unwrap().is_empty());
 
@@ -382,7 +384,8 @@ fn startup_failure_contains_unadmitted_capture_destruction() {
     }))
     .unwrap_err();
 
-    _ = payload;
+    assert!(payload.is::<PanickingPayload>());
+    forget(payload);
     assert!(dropped.load(Ordering::Acquire));
     assert!(!executed.load(Ordering::Acquire));
     assert!(state.task_pool.lock().unwrap().is_empty());

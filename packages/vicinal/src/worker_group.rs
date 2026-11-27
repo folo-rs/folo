@@ -38,6 +38,31 @@ pub struct WorkerGroup {
     runtime: Arc<PoolRuntime>,
 }
 
+/// Releases worker lifecycle accounting if failure handling starts unwinding.
+struct WorkerExitGuard<'a> {
+    group: &'a WorkerGroup,
+    participating: bool,
+    #[cfg(test)]
+    initialized: bool,
+}
+
+impl Drop for WorkerExitGuard<'_> {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        if self.initialized {
+            self.group
+                .state
+                .initialized_workers
+                .fetch_sub(1, Ordering::Release);
+        }
+
+        if self.participating {
+            self.group.mark_worker_finished();
+        }
+        self.group.runtime.end_worker();
+    }
+}
+
 impl WorkerGroup {
     pub(crate) fn new(runtime: Arc<PoolRuntime>, destination: Option<GroupId>) -> Self {
         let state = Arc::new(WorkerGroupState::new(destination));
@@ -110,9 +135,14 @@ impl WorkerGroup {
         if self.runtime.begin_worker().is_break() {
             return;
         }
+        let exit = WorkerExitGuard {
+            group: self,
+            participating: false,
+            #[cfg(test)]
+            initialized: false,
+        };
         if let Err(payload) = catch_unwind(AssertUnwindSafe(initial_setup)) {
             self.runtime.fail(payload);
-            self.runtime.end_worker();
             return;
         }
         // Built-in startup carries the revision paired with its captured initial mask, so an
@@ -120,7 +150,7 @@ impl WorkerGroup {
         // has no captured mask to pair and observes the current revision after its user setup.
         let applied_revision = applied_revision
             .unwrap_or_else(|| self.state.affinity_revision.load(Ordering::Acquire));
-        self.run_worker(reservation, pin, applied_revision);
+        self.run_worker(reservation, pin, applied_revision, exit);
     }
 
     /// Runs one already-registered worker through initialization, work and cleanup.
@@ -132,9 +162,8 @@ impl WorkerGroup {
         mut reservation: BindingReservation,
         pin: impl FnMut(&ProcessorSet) + Send,
         applied_revision: usize,
+        mut exit: WorkerExitGuard<'_>,
     ) {
-        #[cfg(test)]
-        let mut initialized = false;
         let mut pin = pin;
         let result = catch_unwind(AssertUnwindSafe(|| {
             // This counter only assigns diagnostic labels; runtime participation publishes the
@@ -144,6 +173,7 @@ impl WorkerGroup {
             // must already satisfy the lazy startup waiter before the subscriber runs so
             // it can finish the route's OnceLock initialization.
             self.mark_worker_participating();
+            exit.participating = true;
             #[cfg(test)]
             if let Some(before_startup_trace) = self.state.before_startup_trace.get() {
                 before_startup_trace();
@@ -157,7 +187,7 @@ impl WorkerGroup {
             self.mark_worker_initialized(&mut reservation);
             #[cfg(test)]
             {
-                initialized = true;
+                exit.initialized = true;
             }
             worker_loop_with(
                 &self.runtime,
@@ -178,18 +208,6 @@ impl WorkerGroup {
                 before_exit();
             }
         }
-
-        #[cfg(test)]
-        if initialized {
-            // This test-only Release publishes the removal from the initialized snapshot. It
-            // occurs outside the initialization mutex because the counter observes completion,
-            // not a condition-variable shutdown predicate.
-            self.state
-                .initialized_workers
-                .fetch_sub(1, Ordering::Release);
-        }
-        self.mark_worker_finished();
-        self.runtime.end_worker();
     }
 
     /// Records the start of a worker while preserving destination-specific trace fields.

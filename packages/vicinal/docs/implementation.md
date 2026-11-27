@@ -136,7 +136,9 @@ implementation. It checks both supplied processor handles and processors rebuilt
 selection's backing hardware against the pool's eligible set. Full processor equality includes
 hardware-instance identity; supplied handles alone do not establish the backend used for pinning.
 Validation converts a foreign selection into the private hardware-mismatch leaf under
-`BuildError` without starting the policy.
+`BuildError` without starting the policy. Destruction of rejected policy state remains outside
+the fallible-result conversion, so an incidental destructor panic propagates instead of
+being replaced by the ordinary construction error.
 Built-in policies partition the selection into singletons for distinct processors, distinct
 regions or one system mask according to the policy.
 Repeated entries never create additional worker groups. Group masks and shared
@@ -199,8 +201,10 @@ Task wrappers separately catch user-task panics, keeping them out of the
 infrastructure boundary. Cleanup failures also poison the pool while cleanup continues.
 Failure diagnostics run after terminal publication and outside the retained-failure lock;
 submission threads can reserve ownership of the original payload before diagnostics. Reentrant
-pool destruction therefore cannot consume that payload; subscriber panics cannot interrupt
-queue draining or release of worker participation.
+pool destruction therefore cannot consume that payload. A diagnostic or cleanup panic is
+contained only until the pool has completed required terminal transitions and queue cleanup.
+The latest incidental panic then propagates or becomes the construction error. A worker
+participation guard releases its accounting while that incidental panic unwinds.
 Workers check the pool-wide stop flag before task execution, rather than waiting for the
 group signal scan to reach their group.
 
@@ -209,14 +213,13 @@ participating workers. Enqueue checks the pool shutdown flag while holding its s
 queue lock. A group created by a retained scheduler after clean shutdown is terminal and
 cannot start workers or retain work. Poisoned pools reject group creation entirely.
 Draining pops tasks under the queue lock and destroys them outside it; reentrant callbacks
-observe the terminal pool state. Cleanup continues after a destructor or worker panic,
-propagating the first failure only after resources are released and participating workers exit.
+observe the terminal pool state. Cleanup propagates a destructor or worker panic after required resource and participation
+state has been released. Additional incidental panics replace the earlier runtime failure;
+an active unwind retains Rust's normal double-panic abort behavior.
 Task preparation and rejected-startup cleanup catch the infrastructure failure before
 destroying an owned task, so a panicking capture cannot cause a double panic during unwinding.
-Suppressed panic payloads are also destroyed behind an unwind boundary. If that destruction
-panics, its replacement payload is deliberately retained: recursively destroying arbitrary
-payloads cannot provide bounded cleanup. This exceptional retention lets the remaining
-tasks and participating workers be released while preserving the original failure.
+Panic payloads are dropped through a containment boundary. If destruction panics, the
+replacement payload is re-raised after required cleanup has completed.
 Clean shutdown permits retained schedulers to cancel submissions normally. Poisoning
 takes precedence over shutdown, permanently rejecting every submission with a panic.
 

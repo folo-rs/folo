@@ -1,8 +1,7 @@
 //! Panic payload ownership and bounded disposal during task and pool cleanup.
 
 use std::any::Any;
-use std::mem::forget;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use tracing::error;
 
@@ -47,42 +46,55 @@ pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
     }
 }
 
-/// Emits a failure diagnostic without allowing a subscriber panic to interrupt cleanup.
-pub(crate) fn report_diagnostic(report: impl FnOnce()) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(report)) {
-        // A subscriber panic is an unrelated diagnostic failure. Its payload may have a
-        // panicking destructor, so retaining it is the only bounded cleanup path.
-        forget(payload);
-    }
-}
-
-/// Disposes of a suppressed failure without allowing its destructor to interrupt pool cleanup.
+/// Drops a captured panic and re-raises a destructor panic after reporting it.
 pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
     if let Err(replacement) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
-        // A replacement can itself have a panicking destructor. Retain it rather than
-        // recursively disposing of arbitrary user payloads; see docs/implementation.md.
-        forget(replacement);
-        report_diagnostic(|| {
+        let mut failures = vec![replacement];
+        record_diagnostic_panic(&mut failures, || {
             error!(
                 target: TASK_LOG_TARGET,
-                "panic payload destruction failed; replacement payload retained"
+                "panic payload destruction failed"
             );
         });
+        resume_latest_failure(failures);
     }
 }
 
 /// Releases task captures outside an active unwind while preserving an earlier failure.
 pub(crate) fn discard_task_after_failure<T>(task: T) {
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(task))) {
-        report_diagnostic(|| {
+        let message = extract_panic_message(&payload);
+        let mut failures = vec![payload];
+        record_diagnostic_panic(&mut failures, || {
             error!(
                 target: TASK_LOG_TARGET,
-                message = extract_panic_message(&payload),
+                message,
                 "task cleanup failed while handling an infrastructure failure"
             );
         });
-        discard_panic(payload);
+        resume_latest_failure(failures);
     }
+}
+
+/// Records an incidental diagnostic panic without interrupting the required cleanup.
+pub(crate) fn record_diagnostic_panic(
+    failures: &mut Vec<Box<dyn Any + Send>>,
+    diagnostic: impl FnOnce(),
+) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(diagnostic)) {
+        failures.push(payload);
+    }
+}
+
+/// Re-raises the most recent incidental panic after releasing earlier payloads.
+pub(crate) fn resume_latest_failure(mut failures: Vec<Box<dyn Any + Send>>) -> ! {
+    let latest = failures
+        .pop()
+        .expect("failure cleanup retains at least the initiating panic");
+    for failure in failures {
+        drop(failure);
+    }
+    resume_unwind(latest);
 }
 
 #[cfg(test)]

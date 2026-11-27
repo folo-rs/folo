@@ -262,8 +262,12 @@ mod tests {
 
     #[test]
     fn diagnostic_conversion_contains_panicking_payload_disposal() {
-        let diagnostic = TaskError::<()>::panicked(Box::new(PanickingPayload)).into_diagnostic();
-        assert!(diagnostic.source().unwrap().is::<TaskPanicked>());
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            TaskError::<()>::panicked(Box::new(PanickingPayload)).into_diagnostic()
+        }))
+        .unwrap_err();
+        assert!(payload.is::<()>());
+        std::mem::forget(payload);
     }
 
     #[test]
@@ -312,8 +316,13 @@ mod tests {
     }
 
     #[test]
-    fn discarded_panic_contains_payload_destructor_failure() {
-        drop(TaskError::<()>::panicked(Box::new(PanickingPayload)));
+    fn discarded_panic_propagates_payload_destructor_failure() {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(TaskError::<()>::panicked(Box::new(PanickingPayload)));
+        }))
+        .unwrap_err();
+        assert!(payload.is::<()>());
+        std::mem::forget(payload);
     }
 
     #[test]

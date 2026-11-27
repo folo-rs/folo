@@ -8,7 +8,7 @@ use ohno::OhnoCore;
 use crate::worker_policy::BindError;
 use crate::{discard_panic, extract_panic_message};
 
-/// A worker policy or worker infrastructure failed while building a pool.
+/// Pool configuration, a worker policy or worker infrastructure failed during construction.
 ///
 /// A build error retains an invalid eager processor selection, a policy-specific binding error
 /// or a contained infrastructure panic. Construction has stopped participating workers before

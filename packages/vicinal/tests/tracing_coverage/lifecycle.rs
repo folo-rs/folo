@@ -33,13 +33,31 @@ pub(crate) fn exercise(capture: &TracingCapture) {
         WorkersPerMemoryRegion::new(nz!(1)),
         "logging\ncanary",
         "MemoryRegion",
-        [Box::new(()), Box::new(PanickingPayload)],
+        [Box::new(42_i32), Box::new(String::from("regional panic"))],
         &[],
     );
 
+    exercise_payload_destruction();
     assert!(capture.snapshot().iter().any(|entry| {
         entry.contains("payload destruction failed") && entry.contains("vicinal::task:")
     }));
+}
+
+/// Exercises public task-error cleanup without recursively panicking in the tracing harness.
+fn exercise_payload_destruction() {
+    let pool = pool(WorkersPerProcessor::new(nz!(1)), "payload-destruction");
+    let error = block_on(
+        pool.scheduler()
+            .spawn(|| panic::panic_any(PanickingPayload)),
+    )
+    .unwrap_err();
+    let payload = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        _ = error.into_diagnostic();
+    }))
+    .unwrap_err();
+    assert!(payload.is::<PanickingPayload>());
+    std::mem::forget(payload);
+    drop(pool);
 }
 
 /// Checks shared lifecycle events and the expected destination-specific `group` label.
@@ -84,11 +102,12 @@ fn exercise_policy(
     let snapshot = capture.snapshot();
     let entries = snapshot.get(first_entry..).unwrap();
     let group_field = format!("group={group}");
-    for message in [
+    let lifecycle_messages = [
         "worker thread started",
         "worker thread exiting",
         "executed task",
-    ] {
+    ];
+    for message in lifecycle_messages {
         assert!(entries.iter().any(|entry| {
             entry.contains(message)
                 && entry.contains("vicinal::pool_inner::inner:")

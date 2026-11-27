@@ -284,6 +284,7 @@ fn allocate_task<T: VicinalTask>(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::mem::forget;
     use std::panic;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -351,6 +352,12 @@ mod tests {
             .unwrap()
     }
 
+    fn assert_incidental_panic(f: impl FnOnce()) {
+        let payload = panic::catch_unwind(panic::AssertUnwindSafe(f)).unwrap_err();
+        assert!(payload.is::<PanickingPayload>());
+        forget(payload);
+    }
+
     /// Rejected capture cleanup must remain contained even through a retained poisoned scheduler.
     fn assert_poisoned_capture_released(submit: impl FnOnce(&Scheduler, OnDrop)) {
         let pool = fake_pool();
@@ -367,7 +374,7 @@ mod tests {
             }
         })));
 
-        assert_panics(|| submit(&scheduler, capture));
+        assert_incidental_panic(|| submit(&scheduler, capture));
 
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
@@ -409,7 +416,9 @@ mod tests {
         let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
 
         CLOCK.with_borrow_mut(|_| {
-            assert_panics(|| scheduler.spawn(move || drop(capture)));
+            assert_incidental_panic(|| {
+                _ = scheduler.spawn(move || drop(capture));
+            });
         });
 
         assert!(pool.inner.runtime.is_poisoned());
@@ -427,7 +436,9 @@ mod tests {
         let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
 
         CLOCK.with_borrow_mut(|_| {
-            assert_panics(|| scheduler.spawn(move || drop(capture)));
+            assert_incidental_panic(|| {
+                _ = scheduler.spawn(move || drop(capture));
+            });
         });
 
         assert!(scheduler.inner.runtime.is_poisoned());
@@ -452,7 +463,7 @@ mod tests {
                 });
 
                 let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
-                assert_panics(|| {
+                assert_incidental_panic(|| {
                     if joined {
                         _ = scheduler.spawn(move || drop(capture));
                     } else {

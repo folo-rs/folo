@@ -121,7 +121,6 @@ mod tests {
     use std::sync::atomic::AtomicU32;
 
     use plurality::MultiPool;
-    use testing::assert_panics;
 
     use super::*;
     use crate::metrics::CLOCK;
@@ -240,7 +239,8 @@ mod tests {
             }))
             .unwrap_err();
 
-            assert!(payload.is::<AffinityFailure>());
+            assert!(payload.is::<PanickingPayload>());
+            std::mem::forget(payload);
             assert!(queue.lock().unwrap().is_empty());
             assert!(pool.is_empty());
         }
@@ -257,7 +257,13 @@ mod tests {
         );
         let task = alloc_task(&pool, wrapped);
 
-        CLOCK.with_borrow_mut(|_| assert_panics(|| execute_task(task, || true, || {})));
+        let payload = CLOCK
+            .with_borrow_mut(|_| {
+                panic::catch_unwind(AssertUnwindSafe(|| execute_task(task, || true, || {})))
+            })
+            .unwrap_err();
+        assert!(payload.is::<PanickingPayload>());
+        std::mem::forget(payload);
 
         assert!(pool.is_empty());
     }

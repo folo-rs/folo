@@ -3,7 +3,7 @@
 use std::any::type_name;
 use std::fmt;
 use std::num::NonZero;
-use std::panic::{AssertUnwindSafe, panic_any};
+use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -275,21 +275,29 @@ impl PoolBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error if the eager selection belongs to different hardware, if
-    /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] reports a failure or if
-    /// worker infrastructure panics. After a binding failure, all participating workers have
-    /// left the worker loop before this method returns.
+    /// Returns an error if default hardware discovery panics, the eager selection belongs to
+    /// different hardware, [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind]
+    /// reports a failure or worker infrastructure panics. After a binding failure, all
+    /// participating workers have left the worker loop before this method returns.
     pub fn build(self) -> Result<Pool, BuildError> {
-        let hardware = self
-            .hardware
-            .unwrap_or_else(|| SystemHardware::current().clone());
-        let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
-        let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
+        let Self {
+            name,
+            policy,
+            hardware,
+            thread_init,
+            eager,
+        } = self;
         // Deferring the default box avoids allocating it for custom or abandoned builders.
-        let policy: Box<dyn WorkerPolicyBinding> = match self.policy {
+        let policy: Box<dyn WorkerPolicyBinding> = match policy {
             Some(policy) => policy.0,
             None => Box::new(WorkersPerProcessor::new(DEFAULT_WORKERS_PER_PROCESSOR)),
         };
+        let hardware = match hardware {
+            Some(hardware) => hardware,
+            None => contain_build_setup(|| SystemHardware::current().clone())?,
+        };
+        let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
+        let pool_name = name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
 
         // Policy binding can start participating workers before the outer Pool exists.
         // PoolInner::new therefore owns binding failure cleanup through the runtime barrier.
@@ -300,11 +308,16 @@ impl PoolBuilder {
                 pool_name,
                 &hardware,
                 policy,
-                self.thread_init,
-                self.eager.as_ref(),
+                thread_init,
+                eager.as_ref(),
             )?),
         })
     }
+}
+
+/// Converts hardware-discovery panics before worker participation into a fallible build result.
+fn contain_build_setup<T>(setup: impl FnOnce() -> T) -> Result<T, BuildError> {
+    catch_unwind(AssertUnwindSafe(setup)).map_err(BuildError::from_panic)
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -332,11 +345,24 @@ mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use many_cpus::fake::HardwareBuilder;
+    use ohno::ErrorExt;
     use static_assertions::assert_impl_all;
 
     use super::*;
     assert_impl_all!(Pool: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PoolBuilder: UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn setup_panics_become_build_errors() {
+        let error =
+            contain_build_setup(|| panic_any(std::io::Error::other("setup failed"))).unwrap_err();
+
+        assert!(
+            error
+                .find_source::<crate::build_error::BuildPanicked>()
+                .is_some()
+        );
+    }
 
     #[test]
     fn default_and_policy_setter_order() {

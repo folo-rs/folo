@@ -1,15 +1,16 @@
 //! Pool-wide infrastructure failure and user-task panic isolation.
 
+use std::mem::forget;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::{panic, thread};
 
 use futures::executor::block_on;
 use new_zealand::nz;
-use testing::{assert_panics, with_watchdog};
+use testing::{assert_panics, assert_panics_with, with_watchdog};
 
 use super::helpers::{
-    CountOnDrop, NoopTask, PanickingPayload, TestBuiltInPolicy, TestPolicy, hardware, pin,
+    CountOnDrop, NoopTask, OnDrop, PanickingPayload, TestBuiltInPolicy, TestPolicy, hardware, pin,
     regional_hardware,
 };
 use crate::{BuiltInWorkerPolicy, GroupId, Pool, SubmissionTarget, init_task};
@@ -30,10 +31,28 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
                 .is_panic()
         );
         scheduler.spawn_and_forget(|| panic!("fire-and-forget task panic"));
-        scheduler.spawn_and_forget(|| panic::panic_any(PanickingPayload));
         block_on(scheduler.spawn(|| {})).unwrap();
         assert!(!pool.inner.runtime.is_poisoned());
 
+        scheduler.spawn_and_forget(|| {
+            panic::panic_any(OnDrop(Some(Box::new(|| {
+                panic!("destructor failure");
+            }))))
+        });
+        pool.inner.runtime.wait_for_workers();
+        assert!(pool.inner.runtime.is_poisoned());
+        assert_panics(|| scheduler.spawn(|| {}));
+        assert_panics_with(
+            || drop(pool),
+            |message| assert!(message.contains("destructor failure")),
+        );
+
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(TestPolicy::new(0))
+            .build()
+            .unwrap();
+        let scheduler = pool.scheduler();
         // This is the common boundary for topology, result-channel and task-slot failures.
         assert_panics(|| {
             pool.inner
@@ -76,7 +95,7 @@ fn poisoned_enqueue_preserves_existing_runtime_failure() {
     assert!(failure.is::<OriginalFailure>());
 }
 
-/// Drop the receiver while its task is blocked so the worker must discard the eventual panic.
+/// Ordinary disconnected task panics do not poison the pool.
 #[test]
 fn disconnected_joined_panic_does_not_poison_pool() {
     with_watchdog(|| {
@@ -90,7 +109,7 @@ fn disconnected_joined_panic_does_not_poison_pool() {
 
         let abandoned = scheduler.spawn(move || {
             wait.recv().unwrap();
-            panic::panic_any(PanickingPayload);
+            panic::panic_any("ordinary task panic");
         });
 
         drop(abandoned);
@@ -101,9 +120,9 @@ fn disconnected_joined_panic_does_not_poison_pool() {
     });
 }
 
-/// Finish delivery first to cover payload destruction on the receiver instead of the worker.
+/// A panicking payload destructor propagates when the receiver drops the result.
 #[test]
-fn unobserved_joined_panic_can_be_dropped_after_completion() {
+fn unobserved_joined_panic_reports_payload_destructor_panic() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
@@ -115,7 +134,9 @@ fn unobserved_joined_panic_can_be_dropped_after_completion() {
         let completed = scheduler.spawn(|| panic::panic_any(PanickingPayload));
         block_on(scheduler.spawn(|| {})).unwrap();
 
-        drop(completed);
+        let payload = panic::catch_unwind(panic::AssertUnwindSafe(|| drop(completed))).unwrap_err();
+        assert!(payload.is::<()>());
+        forget(payload);
         assert!(!pool.inner.runtime.is_poisoned());
     });
 }

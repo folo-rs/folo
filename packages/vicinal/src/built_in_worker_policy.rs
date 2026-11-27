@@ -139,10 +139,9 @@ pub(crate) fn validate_eager_processors(
     processors: &ProcessorSet,
 ) -> Result<(), EagerProcessorHardwareMismatch> {
     let eligible: BTreeSet<_> = hardware.all_processors().into_iter().collect();
-    let backing_processors = processors
-        .to_builder()
-        .take_all()
-        .expect("ProcessorSet::to_builder retains the nonempty set's backing candidates");
+    let Some(backing_processors) = processors.to_builder().take_all() else {
+        return Err(EagerProcessorHardwareMismatch::new());
+    };
     let belongs_to_pool_hardware = processors
         .iter()
         .chain(backing_processors.iter())

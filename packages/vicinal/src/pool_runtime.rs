@@ -5,7 +5,7 @@ use std::mem::replace;
 use std::ops::ControlFlow;
 #[cfg(test)]
 use std::panic::panic_any;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(test)]
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,8 +17,8 @@ use tracing::error;
 
 use crate::pool_inner::POOL_LOG_TARGET;
 use crate::{
-    ErasedTaskHandle, NEVER_POISONED, ThreadInit, WorkerGroupState, discard_panic,
-    extract_panic_message, report_diagnostic,
+    ErasedTaskHandle, NEVER_POISONED, ThreadInit, WorkerGroupState, extract_panic_message,
+    record_diagnostic_panic, resume_latest_failure,
 };
 
 /// Coordinates terminal state, group registration, failure ownership and worker participation.
@@ -269,7 +269,7 @@ impl PoolRuntime {
         self.shutdown.store(true, Ordering::Release);
     }
 
-    /// Retains the first worker/runtime failure and contains later cleanup failures.
+    /// Retains worker failures and replaces the primary value with later incidental panics.
     ///
     /// Ref: docs/implementation.md, "Affinity and failure coordination".
     pub(crate) fn fail(&self, payload: Box<dyn Any + Send>) {
@@ -281,24 +281,30 @@ impl PoolRuntime {
                     extract_panic_message(payload.as_ref().expect(
                         "Some is assigned for the vacant first-failure branch before take",
                     ));
-                *failure = FailureState::Retained(
+                *failure = FailureState::Retained(vec![
                     payload
                         .take()
                         .expect("the payload remains Some until this first-failure move"),
-                );
+                ]);
                 Some(message)
+            } else if let FailureState::Retained(failures) = &mut *failure {
+                failures.push(
+                    payload
+                        .take()
+                        .expect("the payload remains Some until this later-failure move"),
+                );
+                drop(failure);
+                return;
             } else {
                 None
             }
         };
 
         let Some(message) = message else {
-            // Keep the first infrastructure failure so later cleanup panics cannot
-            // replace the root cause.
-            discard_panic(
+            // The pool is already terminal; this later panic takes precedence on this thread.
+            resume_unwind(
                 payload.expect("the non-vacant branch neither takes nor replaces this payload"),
             );
-            return;
         };
 
         self.complete_failure(&message);
@@ -307,23 +313,23 @@ impl PoolRuntime {
     /// Publishes a failure whose submitting thread owns the payload through diagnostic reentry.
     ///
     /// A vacant failure belongs to this call, which publishes it and returns the same payload
-    /// after terminal cleanup. A retained failure transfers the earlier primary payload to this
-    /// caller and discards its secondary payload. An unavailable failure remains submission-owned,
-    /// so this call returns its payload without publishing or draining again. Only first
-    /// publication completes failure cleanup.
+    /// after terminal cleanup. If another failure is retained, this incidental failure takes
+    /// precedence and propagates after releasing the retained payloads. An unavailable failure
+    /// remains submission-owned, so this call returns its payload without publishing or draining
+    /// again. Only first publication completes failure cleanup.
     pub(crate) fn fail_for_submission(&self, payload: Box<dyn Any + Send>) -> Box<dyn Any + Send> {
         let (message, retained) = {
             let mut failure = self.failure.lock().expect(NEVER_POISONED);
             match replace(&mut *failure, FailureState::Unavailable) {
                 FailureState::Vacant => (Some(extract_panic_message(&payload)), None),
-                FailureState::Retained(payload) => (None, Some(payload)),
+                FailureState::Retained(failures) => (None, Some(failures)),
                 FailureState::Unavailable => (None, None),
             }
         };
 
-        if let Some(retained) = retained {
-            discard_panic(payload);
-            return retained;
+        if let Some(mut retained) = retained {
+            retained.push(payload);
+            resume_latest_failure(retained);
         }
 
         if let Some(message) = message {
@@ -337,7 +343,8 @@ impl PoolRuntime {
         // Terminal state must be visible before diagnostics can re-enter the pool.
         // The failure-state mutex is no longer held while tracing invokes subscribers.
         self.stop_admission();
-        report_diagnostic(|| {
+        let mut failures = Vec::new();
+        record_diagnostic_panic(&mut failures, || {
             error!(
                 target: POOL_LOG_TARGET,
                 pool_id = self.pool_id,
@@ -347,15 +354,38 @@ impl PoolRuntime {
         });
         self.drain_groups(|result| {
             if let Err(payload) = result {
-                report_diagnostic(|| {
-                    error!(
-                        message = extract_panic_message(&payload),
-                        "failure during worker pool cleanup"
-                    );
+                let message = extract_panic_message(&payload);
+                failures.push(payload);
+                record_diagnostic_panic(&mut failures, || {
+                    error!(message, "failure during worker pool cleanup");
                 });
-                discard_panic(payload);
             }
         });
+        if !failures.is_empty() {
+            let mut pending = Some(failures);
+            let submission_owned = {
+                let mut failure = self.failure.lock().expect(NEVER_POISONED);
+                match &mut *failure {
+                    FailureState::Retained(retained) => {
+                        retained
+                            .extend(pending.take().expect("pending failures are consumed once"));
+                        false
+                    }
+                    FailureState::Vacant => {
+                        *failure = FailureState::Retained(
+                            pending.take().expect("pending failures are consumed once"),
+                        );
+                        false
+                    }
+                    FailureState::Unavailable => true,
+                }
+            };
+            if submission_owned {
+                resume_latest_failure(
+                    pending.expect("submission-owned failures remain available after lookup"),
+                );
+            }
+        }
     }
 
     /// Drains every registered queue outside the registry lock after terminal publication.
@@ -381,7 +411,16 @@ impl PoolRuntime {
         let mut failure = self.failure.lock().expect(NEVER_POISONED);
         let previous = replace(&mut *failure, FailureState::Unavailable);
         match previous {
-            FailureState::Retained(payload) => Some(payload),
+            FailureState::Retained(mut failures) => {
+                drop(failure);
+                let latest = failures
+                    .pop()
+                    .expect("retained failure state always contains one payload");
+                for earlier in failures {
+                    drop(earlier);
+                }
+                Some(latest)
+            }
             FailureState::Vacant => {
                 *failure = FailureState::Vacant;
                 None
@@ -391,13 +430,14 @@ impl PoolRuntime {
     }
 }
 
-/// Tracks which boundary owns propagation of the first infrastructure failure.
+/// Tracks which boundary owns propagation of infrastructure and incidental failures.
 ///
-/// Keeping ownership explicit prevents a worker panic, submission panic, and later cleanup
-/// panic from competing to replace or consume the same arbitrary payload.
+/// Retained payloads stay in occurrence order so the most recent incidental failure becomes
+/// primary when a propagation boundary consumes them. Keeping ownership explicit prevents a
+/// worker, submission and later cleanup from consuming the same arbitrary payload concurrently.
 enum FailureState {
     Vacant,
-    Retained(Box<dyn Any + Send>),
+    Retained(Vec<Box<dyn Any + Send>>),
     Unavailable,
 }
 
@@ -475,12 +515,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "subscriber panic payload retention intentionally leaks arbitrary callback state"
-    )]
-    fn failure_state_precedes_panicking_diagnostics() {
-        /// Identifies the root infrastructure payload across subscriber and cleanup panics.
+    fn diagnostic_panic_replaces_retained_infrastructure_failure() {
+        /// Identifies the original infrastructure payload before diagnostics run.
         struct OriginalFailure;
 
         let runtime = PoolRuntime::new(1, "test".to_string(), None);
@@ -498,7 +534,12 @@ mod tests {
         assert!(state_was_ready.load(Ordering::Acquire));
         let failure = runtime
             .take_failure()
-            .expect("diagnostic panic does not replace the infrastructure failure");
-        assert!(failure.is::<OriginalFailure>());
+            .expect("the diagnostic panic becomes the retained primary failure");
+        assert_eq!(
+            *failure
+                .downcast::<&'static str>()
+                .expect("subscriber panic produces the standard string payload"),
+            "failure subscriber panicked"
+        );
     }
 }

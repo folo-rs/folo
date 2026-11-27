@@ -11,8 +11,7 @@ use std::task::{Context, Wake};
 
 use futures::FutureExt;
 use futures::executor::block_on;
-use many_cpus::fake::HardwareBuilder;
-use many_cpus::{Processor, SystemHardware};
+use many_cpus::Processor;
 use new_zealand::nz;
 use testing::{assert_panics, with_watchdog};
 
@@ -235,9 +234,9 @@ fn shutdown_drains_both_queues_despite_a_destructor_panic() {
     assert!(state.regular_queue.lock().unwrap().is_empty());
 }
 
-/// A secondary payload's destructor cannot stop queue draining or replace the first error.
+/// A secondary payload destructor panic takes precedence over the retained failure.
 #[test]
-fn shutdown_contains_secondary_payload_destruction() {
+fn shutdown_prioritizes_secondary_payload_destruction() {
     /// Identifies the first queued cleanup failure that must outrank later diagnostics.
     struct FirstFailure;
 
@@ -265,37 +264,11 @@ fn shutdown_contains_secondary_payload_destruction() {
 
     let payload = panic::catch_unwind(AssertUnwindSafe(|| drop(pool))).unwrap_err();
 
-    assert!(payload.is::<FirstFailure>());
+    assert!(payload.is::<PanickingPayload>());
+    std::mem::forget(payload);
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
     assert!(state.task_pool.lock().unwrap().is_empty());
     assert!(inner.runtime.is_poisoned());
-}
-
-/// Suppressing cleanup failure during an outer unwind must also contain its payload destructor.
-#[test]
-fn shutdown_contains_payload_destruction_during_outer_unwind() {
-    /// Identifies the caller's active unwind that cleanup must preserve.
-    struct OuterFailure;
-
-    with_watchdog(|| {
-        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
-        let pool = Pool::builder().hardware(hardware).build().unwrap();
-        let inner = Arc::clone(&pool.inner);
-
-        // Retained runtime failure tests cleanup directly, rather than depending on whether
-        // detached test-thread state is released by a JoinHandle or the process.
-        inner.runtime.fail(Box::new(PanickingPayload));
-
-        let payload = panic::catch_unwind(AssertUnwindSafe(move || {
-            let _pool = pool;
-            panic::resume_unwind(Box::new(OuterFailure));
-        }))
-        .unwrap_err();
-
-        assert!(payload.is::<OuterFailure>());
-        assert_eq!(inner.runtime.active_workers(), 0);
-        assert!(inner.runtime.is_poisoned());
-    });
 }
 
 /// A queued destructor re-enters admission and releases the running task during clean shutdown.

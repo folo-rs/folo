@@ -8,21 +8,21 @@ use std::io;
 use std::num::NonZero;
 #[cfg(test)]
 use std::ops::Deref;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
+use std::thread::Result as ThreadResult;
 #[cfg(test)]
 use std::thread::{Builder, JoinHandle};
-use std::thread::{Result as ThreadResult, panicking};
 
 use many_cpus::{ProcessorSet, SystemHardware};
 use tracing::error;
 
 use crate::worker_policy::{BindContext, BoundPolicy, WorkerGroups, WorkerPolicyBinding};
 use crate::{
-    BuildError, PoolRuntime, ThreadInit, discard_panic, extract_panic_message, report_diagnostic,
-    validate_eager_processors,
+    BuildError, PoolRuntime, ThreadInit, extract_panic_message, record_diagnostic_panic,
+    resume_latest_failure, validate_eager_processors,
 };
 #[cfg(test)]
 use crate::{SubmissionTarget, WorkerEntry};
@@ -76,11 +76,13 @@ impl PoolInner {
         thread_init: Option<ThreadInit>,
         eager: Option<&ProcessorSet>,
     ) -> Result<Self, BuildError> {
+        if let Some(processors) = eager
+            && let Err(error) = validate_eager_processors(hardware, processors)
+        {
+            return Err(error.into());
+        }
         let runtime = PoolRuntime::new(pool_id, pool_name, thread_init);
         let groups = WorkerGroups::new(Arc::clone(&runtime));
-        if let Some(processors) = eager {
-            validate_eager_processors(hardware, processors)?;
-        }
         runtime.begin_worker_binding();
         let result = catch_unwind(AssertUnwindSafe(|| {
             policy.bind(BindContext::new(
@@ -97,15 +99,17 @@ impl PoolInner {
             Err(payload) => {
                 runtime.fail(payload);
                 finish_failed_binding(&runtime);
-                return Err(runtime_build_error(&runtime)
-                    .expect("runtime.fail retained the binding panic before cleanup"));
+                let error = runtime_build_error(&runtime)
+                    .expect("runtime.fail retained the binding panic before cleanup");
+                return Err(error);
             }
         };
         let policy = match bound {
             Ok(policy) => policy,
             Err(error) => {
                 finish_failed_binding(&runtime);
-                return Err(runtime_build_error(&runtime).unwrap_or_else(|| error.into()));
+                let error = runtime_build_error(&runtime).unwrap_or_else(|| error.into());
+                return Err(error);
             }
         };
         runtime.wait_for_binding_workers();
@@ -114,8 +118,9 @@ impl PoolInner {
         // an already-poisoned pool.
         if runtime.is_poisoned() {
             runtime.wait_for_workers();
-            return Err(runtime_build_error(&runtime)
-                .expect("poisoned construction retains the first infrastructure failure"));
+            let error = runtime_build_error(&runtime)
+                .expect("poisoned construction retains the first infrastructure failure");
+            return Err(error);
         }
 
         Ok(Self {
@@ -168,10 +173,10 @@ impl PoolInner {
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn poison(&self, payload: Box<dyn Any + Send>) -> ! {
         let payload = self.runtime.fail_for_submission(payload);
-        let mut failure = Err(payload);
+        let mut failures = vec![payload];
         self.runtime
-            .drain_groups(|result| record_failure(&mut failure, result, &self.runtime));
-        resume_unwind(failure.expect_err("pool failure retains its original panic"))
+            .drain_groups(|result| record_failure(&mut failures, result, &self.runtime));
+        resume_latest_failure(failures);
     }
 
     /// Publishes shutdown, contains queue cleanup and waits for all participating workers.
@@ -182,45 +187,31 @@ impl PoolInner {
     pub(crate) fn shutdown_and_wait_for_workers(&self) {
         self.runtime.stop_workers();
 
-        let mut failure = self.runtime.take_failure().map_or(Ok(()), |payload| {
-            report_diagnostic(|| {
-                error!(
-                    message = extract_panic_message(&payload),
-                    "failure during worker pool cleanup"
-                );
+        let mut failures = self.runtime.take_failure().into_iter().collect::<Vec<_>>();
+        if !failures.is_empty() {
+            let message = extract_panic_message(
+                failures
+                    .first()
+                    .expect("the nonempty branch contains a runtime failure"),
+            );
+            record_diagnostic_panic(&mut failures, || {
+                error!(message, "failure during worker pool cleanup");
             });
-            Err(payload)
-        });
+        }
         self.runtime
-            .drain_groups(|result| record_failure(&mut failure, result, &self.runtime));
+            .drain_groups(|result| record_failure(&mut failures, result, &self.runtime));
         self.runtime.wait_for_workers();
 
         if let Some(payload) = self.runtime.take_failure() {
-            report_diagnostic(|| {
-                error!(
-                    message = extract_panic_message(&payload),
-                    "failure during worker pool cleanup"
-                );
+            let message = extract_panic_message(&payload);
+            failures.push(payload);
+            record_diagnostic_panic(&mut failures, || {
+                error!(message, "failure during worker pool cleanup");
             });
-            if failure.is_ok() {
-                failure = Err(payload);
-            } else {
-                discard_panic(payload);
-            }
         }
 
-        if let Err(payload) = failure {
-            if panicking() {
-                report_diagnostic(|| {
-                    error!(
-                        pool_id = self.pool_id,
-                        "worker or task cleanup panicked during unwinding"
-                    );
-                });
-                discard_panic(payload);
-            } else {
-                resume_unwind(payload);
-            }
+        if !failures.is_empty() {
+            resume_latest_failure(failures);
         }
     }
 }
@@ -252,22 +243,18 @@ impl Debug for PoolInner {
     }
 }
 
-/// Records the first cleanup failure and preserves later diagnostics without interrupting cleanup.
-fn record_failure(first: &mut ThreadResult<()>, result: ThreadResult<()>, runtime: &PoolRuntime) {
+/// Records each cleanup failure and continues the required terminal-state cleanup.
+fn record_failure(
+    failures: &mut Vec<Box<dyn Any + Send>>,
+    result: ThreadResult<()>,
+    runtime: &PoolRuntime,
+) {
     if let Err(payload) = result {
         runtime.stop_admission();
-        report_diagnostic(|| {
-            error!(
-                message = extract_panic_message(&payload),
-                "failure during worker pool cleanup"
-            );
+        let message = extract_panic_message(&payload);
+        failures.push(payload);
+        record_diagnostic_panic(failures, || {
+            error!(message, "failure during worker pool cleanup");
         });
-
-        if first.is_ok() {
-            *first = Err(payload);
-        } else {
-            report_diagnostic(|| error!("additional panic while shutting down worker pool"));
-            discard_panic(payload);
-        }
     }
 }

@@ -34,18 +34,7 @@ pub(crate) struct PanickingPayload;
 
 impl Drop for PanickingPayload {
     fn drop(&mut self) {
-        // The replacement is zero-sized, so the pool's deliberate retention leaks no storage.
+        // Reusing a zero-sized replacement keeps recursive destructor failure deterministic.
         panic::resume_unwind(Box::new(Self));
-    }
-}
-
-/// Releases a running worker when shutdown abandons a queued capture.
-pub(crate) struct OnDrop<F: FnOnce()>(pub(crate) Option<F>);
-
-impl<F: FnOnce()> Drop for OnDrop<F> {
-    fn drop(&mut self) {
-        if let Some(action) = self.0.take() {
-            action();
-        }
     }
 }
