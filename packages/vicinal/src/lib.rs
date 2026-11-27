@@ -8,12 +8,6 @@
 //! independently on a worker thread. Await the handle when the result or completion matters.
 //! Use a fire-and-forget spawn method when the result does not matter.
 //!
-//! A worker policy defines how tasks are distributed between worker threads and on which
-//! processors those threads may execute. The default policy uses the submitting thread's logical
-//! processor. Applications can instead share a fixed worker count across a memory region with
-//! [`policies::WorkersPerMemoryRegion`] or across the whole system with
-//! [`policies::WorkersPerSystem`]. Implement custom policies with the types in [`worker_policy`].
-//!
 //! # Quick start
 //!
 //! ```rust
@@ -45,9 +39,11 @@
 //! locality groups as memory regions. A system with uniform memory access may contain only one
 //! region.
 //!
-//! The default processor-local policy creates worker threads for the processor that submits the
-//! first task. Work submitted from another processor uses another set of worker threads created
-//! for that processor.
+//! A worker policy defines how tasks are distributed between worker threads and on which
+//! processors those threads may execute. The default processor-local policy creates worker
+//! threads for the processor that submits the first task. Work submitted from another processor
+//! uses another set of worker threads created for that processor. Implement custom policies with
+//! the types in [`worker_policy`].
 //!
 //! [`policies::WorkersPerMemoryRegion`] creates one set of worker threads per submitting region.
 //! Submissions from processors in that region share those workers.
