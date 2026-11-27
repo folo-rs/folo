@@ -107,6 +107,19 @@ all-features = true
 *badge* rustdoc renders next to an item; it does not make an intra-doc link
 conditional. For the link-side of the problem, see the next section.
 
+## Cross-crate links
+
+Use explicit HTTP links to the target crate's documentation on docs.rs for
+cross-crate items. Rustdoc does not reliably produce a rendered link from a
+cross-crate intra-doc link in the local documentation output. For example:
+
+```rust
+//! [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
+```
+
+Use `latest` in the URL so the link follows the current released documentation.
+Use ordinary intra-doc links for items defined by the current crate.
+
 ## Intra-doc links to feature-gated items
 
 ### The problem
