@@ -97,6 +97,8 @@
 //! Retained schedulers do not keep worker threads alive, and submissions after clean shutdown
 //! return cancelled tasks.
 //!
+//! # Handling errors
+//!
 //! Worker-infrastructure failures stop and permanently poison the entire pool. Queued joined
 //! tasks return cancellation errors that retain their bodies; queued fire-and-forget tasks release
 //! their captures. Executing tasks may finish. Further submissions panic synchronously. A task
