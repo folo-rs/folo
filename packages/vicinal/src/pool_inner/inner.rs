@@ -54,6 +54,11 @@ impl PoolInner {
         if let Some(processors) = eager
             && let Err(error) = validate_eager_processors(hardware, processors)
         {
+            // Configuration destructors may panic. Dispose of their captured state before
+            // allocating the fallible return value so that this incidental panic cannot
+            // bypass normal destruction of the eager-hardware error during unwind.
+            drop(thread_init);
+            drop(policy);
             return Err(error.into());
         }
         let runtime = PoolRuntime::new(pool_id, pool_name, thread_init);

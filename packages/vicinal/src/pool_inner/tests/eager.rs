@@ -256,6 +256,10 @@ fn eager_setters_replace_configuration_without_starting_workers() {
         let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 1);
         assert_eq!(pool.inner.groups.initialized().count(), 1);
+        pool.inner
+            .groups
+            .group(GroupId::MemoryRegion(5))
+            .wait_for_initialized_workers(nz!(1_usize));
         assert_eq!(
             pool.inner
                 .groups
