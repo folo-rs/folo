@@ -118,6 +118,7 @@ mod tests {
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
     use ohno::ErrorExt;
+    use testing::with_watchdog;
 
     use super::*;
 
@@ -173,15 +174,17 @@ mod tests {
 
     #[test]
     fn existing_worker_drains_backlog_after_growth_is_refused() {
-        let pool = Pool::builder()
-            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
-                nz!(1),
-                nz!(1),
-            )))
-            .worker_policy(RefuseWorker::Growth)
-            .build()
-            .unwrap();
-        drain_backlog(&pool);
-        assert!(GROWTH_REFUSED.get());
+        with_watchdog(|| {
+            let pool = Pool::builder()
+                .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                    nz!(1),
+                    nz!(1),
+                )))
+                .worker_policy(RefuseWorker::Growth)
+                .build()
+                .unwrap();
+            drain_backlog(&pool);
+            assert!(GROWTH_REFUSED.get());
+        });
     }
 }
