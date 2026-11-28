@@ -8,7 +8,14 @@ use tracing::error;
 
 use crate::TASK_LOG_TARGET;
 
-/// Carries caught panics to the boundary that can release superseded payloads.
+/// Defers panic-payload destruction until the boundary finishes its recovery work.
+///
+/// Failure handling can itself panic, for example while dropping task captures or formatting
+/// diagnostics. Those new failures must supersede the earlier failure, but dropping the captured
+/// payloads can also panic. Keeping every payload alive lets the boundary first stop admission,
+/// drain queues and wait for participating workers. Only then does it release superseded payloads
+/// and resume the latest failure. This prevents destructor panics from interrupting terminal-state
+/// cleanup while preserving each caught panic until its destruction is safe.
 #[derive(Debug)]
 pub(crate) struct PanicFailures {
     earlier: Vec<Box<dyn Any + Send>>,
@@ -67,7 +74,12 @@ impl PanicFailures {
     }
 }
 
-/// Keeps discarded task panics isolated from infrastructure, on either result-channel endpoint.
+/// Owns a task-panic payload without exposing it to infrastructure-failure cleanup.
+///
+/// Either endpoint of the task result channel may be dropped without inspecting the panic.
+/// `TaskPanic` keeps responsibility for that payload in one place: extracting the payload transfers
+/// it to the caller, while ordinary destruction routes it through the protected panic-disposal
+/// boundary. A task panic therefore does not poison the pool merely because the caller discards it.
 #[derive(Debug)]
 pub(crate) struct TaskPanic {
     payload: Option<Box<dyn Any + Send>>,

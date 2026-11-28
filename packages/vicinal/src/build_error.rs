@@ -8,11 +8,12 @@ use ohno::OhnoCore;
 use crate::worker_policy::BindError;
 use crate::{discard_panic, extract_panic_message};
 
-/// Pool configuration, a worker policy or worker infrastructure failed during construction.
+/// Aggregates failures that prevent a configured pool from completing construction.
 ///
-/// A build error retains an invalid eager processor selection, a policy-specific binding error
-/// or a contained infrastructure panic. Construction has stopped participating workers before
-/// this value reaches the caller.
+/// A build error preserves an eager-hardware mismatch, a policy's [`BindError`], or a contained
+/// worker-infrastructure panic in its source chain. Participating workers have left
+/// [`Worker::run`][crate::worker_policy::Worker::run] before this error reaches the caller; inspect
+/// the source chain when the failure category matters.
 #[derive(ohno::Error)]
 #[no_constructors]
 #[from(BindError, BuildPanicked, EagerProcessorHardwareMismatch)]

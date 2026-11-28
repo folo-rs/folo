@@ -18,10 +18,13 @@ use crate::{GroupId, NEVER_POISONED, PoolRuntime, WorkerGroupState};
 // receives its owner at construction rather than using a numeric initialization sentinel.
 static NEXT_REGISTRY_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Owns the append-only worker-group collection shared by one pool's policies.
+/// Owns the worker-group destinations created for one pool.
 ///
-/// Policies can clone this handle to share the collection and add groups after binding.
-/// Cloning it does not start any workers.
+/// This is the registry a bound policy receives during routing. It can create new groups during
+/// binding or selection, and a retained clone can add groups later. Every group and
+/// [`WorkerGroupId`] created here belongs to this one pool; IDs from another collection cannot be
+/// used for routing. Cloning the collection shares the registry but does not start workers or
+/// create groups.
 #[derive(Clone)]
 pub struct WorkerGroups {
     inner: Arc<WorkerGroupsInner>,
@@ -49,7 +52,7 @@ impl WorkerGroups {
         }
     }
 
-    /// Adds one empty group and returns a cloneable handle for reserving and observing workers.
+    /// Adds one task destination and returns its participation and observation handle.
     ///
     /// To include a worker in binding-time readiness, reserve it with
     /// [`WorkerGroup::add_worker`] during binding before spawning its thread. Move the returned
@@ -97,20 +100,20 @@ impl WorkerGroups {
         self.add_inner(Some(destination))
     }
 
-    /// Returns the number of groups currently present.
+    /// Returns the current number of task destinations in this registry.
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.groups.lock().expect(NEVER_POISONED).len()
     }
 
-    /// Returns whether no groups have been added.
+    /// Returns whether this registry has no task destinations.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Returns a snapshot of every group for inspection.
+    /// Returns a snapshot of the current group handles.
     ///
     /// The snapshot clones every stored group handle. Policies that choose a group for each
     /// task should cache [`WorkerGroupId`] values instead of taking snapshots repeatedly.
@@ -229,9 +232,12 @@ impl IntoIterator for WorkerGroups {
     }
 }
 
-/// Identifies a worker group within one [`WorkerGroups`] collection.
+/// Opaque, copyable identity for a worker group in one pool.
 ///
-/// Policies return this ID to select a group in the pool they are bound to.
+/// IDs let a bound policy route tasks without cloning group handles on established paths. Obtain
+/// the value from [`WorkerGroup::id`] or route construction through the [`WorkerGroups`] supplied
+/// during policy binding and selection. Returning an ID from another pool violates the
+/// [`BoundPolicy::select_group`][crate::worker_policy::BoundPolicy::select_group] contract.
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct WorkerGroupId {
     owner: u64,

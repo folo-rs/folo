@@ -9,10 +9,16 @@ use many_cpus::ProcessorSet;
 use crate::PoolRuntime;
 use crate::worker_policy::WorkerGroup;
 
-/// Runs one reserved worker through the pool's worker lifecycle.
+/// A single-use reservation for one policy-owned worker thread.
 ///
-/// A policy moves this value into a thread and calls [`run`][Self::run] once.
-/// Dropping it before that call cancels any reservation created during policy binding.
+/// [`WorkerGroup::add_worker`][crate::worker_policy::WorkerGroup::add_worker] reserves capacity
+/// before the policy creates or selects a thread. Moving this value into the thread and calling
+/// [`run`][Self::run] transfers that reservation into Vicinal's participation and shutdown
+/// barriers. The policy retains ownership of thread creation and joining outside this API.
+///
+/// A worker reserved while [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] runs
+/// must be run or dropped before binding completes so construction can establish whether every
+/// selected worker initialized. Dropping an unrun reservation cancels that binding-time target.
 #[must_use = "reserved workers must be run or explicitly dropped"]
 pub struct Worker {
     group: WorkerGroup,
@@ -27,9 +33,11 @@ impl Worker {
         }
     }
 
-    /// Runs this worker on the current thread until the pool shuts down.
+    /// Enters the pool's worker lifecycle on the current thread.
     ///
-    /// The policy must apply the intended initial affinity before calling this method.
+    /// The method blocks while this worker participates in task execution and returns when the
+    /// worker leaves during shutdown or after an infrastructure failure. The policy must apply
+    /// its intended initial affinity before calling this method and must not call it more than once.
     #[inline]
     pub fn run(self) {
         self.run_with(|| {}, ProcessorSet::pin_current_thread_to, None);

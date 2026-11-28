@@ -5,8 +5,12 @@ use many_cpus::{ProcessorSet, SystemHardware};
 
 use crate::worker_policy::WorkerGroups;
 
-/// Final pool configuration supplied to
-/// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind].
+/// Read-only final configuration for one policy-binding operation.
+///
+/// The context makes the already-selected hardware, optional eager processors, group registry
+/// and pool identifier available together. It is borrowed only for
+/// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind], so a policy can inspect or
+/// clone the needed configuration into its bound value but cannot retain these references.
 #[derive(Clone, Copy)]
 pub struct BindContext<'a> {
     hardware: &'a SystemHardware,
@@ -45,7 +49,7 @@ impl BindContext<'_> {
         }
     }
 
-    /// Returns the pool's fixed
+    /// Returns the hardware snapshot used for topology and processor affinity.
     /// [`many_cpus::SystemHardware`](https://docs.rs/many_cpus/latest/many_cpus/struct.SystemHardware.html)
     /// instance.
     #[must_use]
@@ -54,7 +58,7 @@ impl BindContext<'_> {
         self.hardware
     }
 
-    /// Returns the optional
+    /// Returns the caller's eager processor selection, when configured.
     /// [`many_cpus::ProcessorSet`](https://docs.rs/many_cpus/latest/many_cpus/struct.ProcessorSet.html)
     /// configured for eager construction.
     #[must_use]
@@ -63,14 +67,14 @@ impl BindContext<'_> {
         self.eager
     }
 
-    /// Returns this pool's worker-group collection.
+    /// Returns the registry in which this policy can create task destinations.
     #[must_use]
     #[inline]
     pub fn groups(&self) -> &WorkerGroups {
         self.groups
     }
 
-    /// Returns the identifier included in built-in worker thread names.
+    /// Returns the pool identifier that policies may include in their thread names.
     #[must_use]
     #[inline]
     pub fn pool_name(&self) -> &str {

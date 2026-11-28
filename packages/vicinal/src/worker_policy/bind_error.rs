@@ -3,9 +3,11 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use ohno::OhnoCore;
 
-/// A worker policy failed while binding to a pool.
+/// A recoverable error reported by a policy during binding.
 ///
-/// The error retains the policy's original failure in its source chain.
+/// Use this error when a custom [`WorkerPolicy`][crate::worker_policy::WorkerPolicy] cannot finish
+/// one-time setup for a pool. The original policy-specific error remains in the source chain, so
+/// callers can inspect it through the standard error API or aggregate it in application errors.
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("worker policy binding failed")]
@@ -20,7 +22,7 @@ impl UnwindSafe for BindError {}
 impl RefUnwindSafe for BindError {}
 
 impl BindError {
-    /// Creates a binding error from a policy-specific failure.
+    /// Wraps a policy-specific failure while preserving its source and backtrace.
     #[must_use]
     pub fn new(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
         Self {

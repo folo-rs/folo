@@ -31,10 +31,12 @@ use crate::{
     BindingReservation, ErasedTaskHandle, GroupId, NEVER_POISONED, PanicFailures, PoolRuntime,
 };
 
-/// A cloneable policy handle for reserving workers and observing a worker group.
+/// A task destination that a custom policy can populate and observe.
 ///
-/// Reserve a worker with [`Self::add_worker`] and move the returned [`Worker`] into its thread.
-/// Use [`WorkerGroupId`] for task routing.
+/// A group owns the queues, wake state and worker participation shared by one destination.
+/// Clones of this handle refer to that same destination, so a policy can retain one for later
+/// worker growth while returning its [`WorkerGroupId`] from routing. Cloning the handle does not
+/// start a worker or reserve capacity.
 #[derive(Clone)]
 pub struct WorkerGroup {
     id: WorkerGroupId,
@@ -50,26 +52,31 @@ impl WorkerGroup {
         Self { id, state, runtime }
     }
 
-    /// Returns the copyable identity of this group.
+    /// Returns the pool-bound routing identity for this group.
+    ///
+    /// Cache this copyable value in the bound policy for established submission paths instead of
+    /// retaining and cloning this handle solely to route tasks.
     #[must_use]
     #[inline]
     pub fn id(&self) -> WorkerGroupId {
         self.id
     }
 
-    /// Returns the number of workers currently participating in this group.
+    /// Observes how many workers currently participate in this group.
     ///
-    /// This includes workers still running their initializer. It excludes reserved workers
-    /// that have not started participating.
+    /// Participation begins when a worker enters the pool lifecycle, so this includes workers
+    /// still running their initializer. It excludes [`Self::add_worker`] reservations that have not
+    /// reached [`Worker::run`][crate::worker_policy::Worker::run]. The value is an instantaneous
+    /// observation, not a capacity reservation.
     #[must_use]
     #[inline]
     pub fn worker_count(&self) -> usize {
         self.state.worker_count.load(Ordering::Acquire)
     }
 
-    /// Reserves a worker for the policy to run or drop.
+    /// Reserves one worker for the policy to run in a policy-owned thread.
     ///
-    /// A worker reserved while
+    /// Reservation precedes thread creation. A worker reserved while
     /// [`WorkerPolicy::bind`][crate::worker_policy::WorkerPolicy::bind] runs
     /// contributes a reservation that [`Worker::run`] completes upon initialization.
     /// Dropping the unrun worker cancels the reservation. Resolve every binding-time
@@ -108,7 +115,7 @@ impl WorkerGroup {
         );
     }
 
-    /// Returns the combined number of urgent and regular tasks currently queued in this group.
+    /// Observes the existing urgent and regular backlog in this group.
     ///
     /// This is an instantaneous observation for policy decisions, not a reservation. Tasks
     /// and policy callbacks may change the queues immediately before or after this method

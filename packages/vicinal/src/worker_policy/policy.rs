@@ -4,18 +4,19 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use crate::worker_policy::{BindContext, BindError, WorkerGroupId, WorkerGroups};
 
-/// Defines one pool's task routing and policy-owned worker topology before pool binding.
+/// Supplies the one-time configuration for a pool's custom worker policy.
 ///
-/// Binding consumes this configuration and returns a separate [`BoundPolicy`] owned by
-/// the completed pool. This keeps configuration-time setup distinct from the policy value used
-/// for subsequent task routing.
+/// This is the policy's construction-time value, not its submission-time state. Binding consumes
+/// it and returns a separate [`BoundPolicy`] that schedulers share for task routing. Keeping those
+/// phases separate allows an implementation to validate configuration and create initial groups
+/// before a pool exists while requiring thread-safe state only from the bound value.
 ///
 /// A policy reserves a worker with
 /// [`WorkerGroup::add_worker`][crate::worker_policy::WorkerGroup::add_worker], moves the returned
 /// [`Worker`][crate::worker_policy::Worker] into a thread, applies its intended affinity and calls
 /// [`Worker::run`][crate::worker_policy::Worker::run]. That method blocks until the worker leaves
 /// the pool.
-/// `Debug` lets callers format policy values directly. Builder diagnostics report only whether
+/// `Debug` lets callers format configuration values directly. Builder diagnostics report only whether
 /// a policy was explicitly configured, without calling its formatter. The unbound configuration is
 /// consumed during construction, so it needs none of the thread-safety contracts required by
 /// the value returned from [`bind`][Self::bind]. The configuration must be `'static` so binding
@@ -65,9 +66,9 @@ use crate::worker_policy::{BindContext, BindError, WorkerGroupId, WorkerGroups};
 /// # }).unwrap();
 /// ```
 pub trait WorkerPolicy: Debug + 'static {
-    /// Consumes the configuration and returns the policy used for task routing.
+    /// Binds this configuration to one pool and creates its routing policy.
     ///
-    /// A policy creates binding-time workers with
+    /// A policy can create initial groups and workers with
     /// [`WorkerGroup::add_worker`][crate::worker_policy::WorkerGroup::add_worker] and may clone
     /// the supplied [`WorkerGroups`] to support later asynchronous group creation. The builder
     /// waits for reserved workers to finish initialization before returning a pool. Dropping
@@ -78,20 +79,21 @@ pub trait WorkerPolicy: Debug + 'static {
         Self: Sized;
 }
 
-/// Selects task destinations after a [`WorkerPolicy`] binds to one pool.
+/// Owns the state that selects task destinations for one completed pool.
 ///
-/// This type is shared by schedulers, so `Send + Sync` make concurrent selection part of its
-/// contract. The `Pool` public API preserves its unwind-safety contract across shutdown and
-/// submission boundaries, so bound policies are also `UnwindSafe + RefUnwindSafe`. `Debug`
+/// Schedulers can call this value concurrently and retain it until the pool shuts down, which is
+/// why `Send + Sync` and the unwind-safety traits are part of the contract. `Debug`
 /// lets callers format policy values directly. Pool and scheduler diagnostics identify the bound
-/// policy type without calling its formatter. Selection should keep the established routing
-/// path lock-free and avoid cloning [`WorkerGroup`][crate::worker_policy::WorkerGroup] handles;
-/// group creation and worker startup may clone handles because they occur off that path.
+/// policy type without calling its formatter. The policy should cache
+/// [`WorkerGroupId`][crate::worker_policy::WorkerGroupId] values for established routes; group
+/// creation and worker startup are cold paths and may retain or clone
+/// [`WorkerGroup`][crate::worker_policy::WorkerGroup] handles.
 pub trait BoundPolicy: Debug + Send + Sync + UnwindSafe + RefUnwindSafe + 'static {
-    /// Selects the group for one submitted task.
+    /// Selects the destination for one submitted task that reaches routing.
     ///
-    /// Return an ID belonging to the supplied pool. Selection runs before admission and does
-    /// not guarantee that the scheduler will enqueue the task.
+    /// Return an ID created by the supplied [`WorkerGroups`]. The scheduler calls this before
+    /// admitting the task, so selection alone does not reserve queue capacity or guarantee that
+    /// the task is accepted.
     ///
     /// Selection may create groups or workers, but keep established routing fast. Policies
     /// that retain a [`WorkerGroup`][crate::worker_policy::WorkerGroup] can use

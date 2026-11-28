@@ -5,17 +5,18 @@ use std::num::NonZero;
 use crate::BuiltInWorkerPolicy;
 use crate::worker_policy::{BindContext, BindError, BoundPolicy, WorkerPolicy};
 
-/// Creates a fixed worker count shared across the system.
+/// Routes all submissions to one fixed worker set for the pool.
 ///
-/// Workers initially run on the eager processors or the first submitting processor. As tasks
-/// arrive from other processors, the same fixed worker set also becomes permitted to run there.
+/// The eager selection or first submission creates one group with the configured total worker
+/// count. Later submissions can expand where that same set may run, without adding workers or
+/// creating per-region groups.
 #[derive(Clone)]
 pub struct WorkersPerSystem {
     policy: BuiltInWorkerPolicy,
 }
 
 impl WorkersPerSystem {
-    /// Creates a system-wide policy with the given total worker count.
+    /// Sets the total number of workers shared across the pool.
     #[must_use]
     #[inline]
     pub fn new(count: NonZero<u32>) -> Self {

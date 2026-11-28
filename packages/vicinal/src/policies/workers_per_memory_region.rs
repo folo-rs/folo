@@ -5,18 +5,18 @@ use std::num::NonZero;
 use crate::BuiltInWorkerPolicy;
 use crate::worker_policy::{BindContext, BindError, BoundPolicy, WorkerPolicy};
 
-/// Creates a fixed worker count for each submitting memory region.
+/// Routes submissions from one memory region to a shared fixed-size worker set.
 ///
-/// Workers initially run on that region's eager processors or its first submitting processor.
-/// When another processor in the same region submits work, the existing workers may run there
-/// too without increasing the configured worker count.
+/// The first submission or eager selection creates one group for a region with the configured
+/// worker count. Later submissions from another processor in that region expand where those same
+/// workers may run; they do not create more workers.
 #[derive(Clone)]
 pub struct WorkersPerMemoryRegion {
     policy: BuiltInWorkerPolicy,
 }
 
 impl WorkersPerMemoryRegion {
-    /// Creates a policy with the given count per active submitting memory region.
+    /// Sets the number of workers shared by each memory region that submits work.
     #[must_use]
     #[inline]
     pub fn new(count: NonZero<u32>) -> Self {

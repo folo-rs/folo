@@ -5,16 +5,17 @@ use std::num::NonZero;
 use crate::BuiltInWorkerPolicy;
 use crate::worker_policy::{BindContext, BindError, BoundPolicy, WorkerPolicy};
 
-/// Creates a fixed worker count on each submitting processor.
+/// Routes every submission to a fixed worker set for its submitting processor.
 ///
-/// Each task is routed to the logical processor sampled once during submission.
+/// The policy creates one group for each active submitting processor. Every group starts the
+/// configured number of workers once and keeps them on that processor until the pool shuts down.
 #[derive(Clone)]
 pub struct WorkersPerProcessor {
     policy: BuiltInWorkerPolicy,
 }
 
 impl WorkersPerProcessor {
-    /// Creates a policy with the given count per active submitting processor.
+    /// Sets the number of workers created for each processor that submits work.
     #[must_use]
     #[inline]
     pub fn new(count: NonZero<u32>) -> Self {
