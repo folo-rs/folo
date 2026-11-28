@@ -1,16 +1,138 @@
 //! Shared fake topology, affinity observations and destructor probes for lifecycle tests.
 
 use std::collections::BTreeSet;
-use std::panic;
+use std::panic::resume_unwind;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::spawn;
 
 use futures::FutureExt;
 use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
 use many_cpus::{Processor, SystemHardware};
 
-use crate::{ErasedTaskHandle, Scheduler, VicinalTask, WorkerGroup, init_task};
+use crate::worker_policy::{
+    BindContext, BindError, BoundPolicy, WorkerGroup, WorkerGroupId, WorkerGroups, WorkerPolicy,
+};
+use crate::{
+    BoundBuiltInPolicy, BuiltInWorkerPolicy, ErasedTaskHandle, Scheduler, SubmissionTarget,
+    VicinalTask, WorkerGroupState, init_task,
+};
+
+/// Retains the concrete built-in policy for white-box startup tests.
+#[derive(Clone, Debug)]
+pub(crate) struct TestBuiltInPolicy {
+    policy: BuiltInWorkerPolicy,
+    bound: Arc<Mutex<Option<Arc<BoundBuiltInPolicy>>>>,
+}
+
+impl TestBuiltInPolicy {
+    pub(crate) fn new(policy: BuiltInWorkerPolicy) -> Self {
+        Self {
+            policy,
+            bound: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) fn destination(&self, hardware: &SystemHardware) -> SubmissionTarget {
+        self.policy.destination(hardware)
+    }
+
+    pub(crate) fn install_test_group(
+        &self,
+        groups: &WorkerGroups,
+        hardware: &SystemHardware,
+        target: SubmissionTarget,
+    ) {
+        let affinity = hardware
+            .all_processors()
+            .to_builder()
+            .filter(|processor| {
+                processor.id() == target.processor && target.group.contains(processor)
+            })
+            .take_all()
+            .expect("a test target has one eligible processor");
+        self.bound
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("the builder binds a test policy before installation")
+            .install_test_group(&groups.group(target.group), self.policy.kind(), &affinity);
+    }
+}
+
+impl WorkerPolicy for TestBuiltInPolicy {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        let bound = Arc::new(self.policy.clone().bind_built_in(context)?);
+        *self.bound.lock().unwrap() = Some(Arc::clone(&bound));
+        Ok(bound)
+    }
+}
+
+/// Provides one stable group for tests unrelated to built-in topology routing.
+#[derive(Clone, Debug)]
+pub(crate) struct TestPolicy {
+    state: Arc<TestPolicyState>,
+}
+
+impl TestPolicy {
+    /// Creates a test policy with a fixed worker count and no processor-affinity setup.
+    pub(crate) fn new(workers: usize) -> Self {
+        Self {
+            state: Arc::new(TestPolicyState {
+                group: OnceLock::new(),
+                started: OnceLock::new(),
+                workers,
+            }),
+        }
+    }
+
+    /// Returns the group created while the pool bound this policy.
+    pub(crate) fn group(&self) -> WorkerGroup {
+        self.state
+            .group
+            .get()
+            .expect("the builder binds a test policy before inspection")
+            .clone()
+    }
+
+    pub(crate) fn bind_test_policy(self, context: BindContext<'_>) -> Self {
+        self.state
+            .group
+            .set(context.groups().add())
+            .expect("a test policy is bound once");
+        self
+    }
+}
+
+impl WorkerPolicy for TestPolicy {
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        Ok(self.bind_test_policy(context))
+    }
+}
+
+impl BoundPolicy for TestPolicy {
+    fn select_group(&self, _groups: &WorkerGroups) -> WorkerGroupId {
+        let group = self.group();
+        self.state.started.get_or_init(|| {
+            for _ in 0..self.state.workers {
+                _ = spawn({
+                    let worker = group.add_worker();
+                    move || worker.run()
+                });
+            }
+        });
+        group.id()
+    }
+}
+
+/// Retains the bound group and startup state shared with the test controller.
+#[derive(Debug)]
+struct TestPolicyState {
+    group: OnceLock<WorkerGroup>,
+    started: OnceLock<()>,
+    workers: usize,
+}
 
 /// Sparse regions with multiple eligible CPUs and a quota that excludes some of them.
 pub(crate) fn hardware() -> SystemHardware {
@@ -62,7 +184,7 @@ impl VicinalTask for OnDrop {
 
 /// Places a probe between allocation and admission without injecting production-only branches.
 pub(crate) fn probe(
-    state: &WorkerGroup,
+    state: &WorkerGroupState,
     callback: impl FnOnce() + Send + 'static,
 ) -> ErasedTaskHandle {
     let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
@@ -149,6 +271,6 @@ pub(crate) struct PanickingPayload;
 impl Drop for PanickingPayload {
     fn drop(&mut self) {
         // Only unwind containment is under test, not panic-hook output or backtrace collection.
-        panic::resume_unwind(Box::new(()));
+        resume_unwind(Box::new(()));
     }
 }

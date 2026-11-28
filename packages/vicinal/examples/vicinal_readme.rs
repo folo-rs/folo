@@ -3,7 +3,8 @@
 use many_cpus::SystemHardware;
 use new_zealand::nz;
 use ohno::AppError;
-use vicinal::{Pool, TaskError, WorkerPolicy};
+use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
+use vicinal::{Pool, TaskError};
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -35,9 +36,9 @@ async fn memory_region_local() -> Result<(), AppError> {
     let processors = SystemHardware::current().processors();
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+        .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
         .eager(processors)
-        .build();
+        .build()?;
 
     assert_eq!(
         pool.scheduler()
@@ -53,8 +54,8 @@ async fn memory_region_local() -> Result<(), AppError> {
 async fn system_wide() -> Result<(), AppError> {
     // Illustrative concurrency shared across every submitting processor in this pool.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::per_system(nz!(2_u32)))
-        .build();
+        .worker_policy(WorkersPerSystem::new(nz!(2_u32)))
+        .build()?;
 
     assert_eq!(
         pool.scheduler()

@@ -2,19 +2,25 @@
 
 use std::sync::Arc;
 
+use tracing::trace;
+
 use crate::metrics::CLOCK;
+use crate::pool_inner::POOL_LOG_TARGET;
 use crate::{
-    ErasedTaskHandle, JoinHandle, NEVER_POISONED, PoolInner, VicinalTask, WorkerGroup, init_task,
-    wrap_task, wrap_task_and_forget,
+    ErasedTaskHandle, JoinHandle, NEVER_POISONED, PoolInner, VicinalTask, WorkerGroupState,
+    cancel_joined_task, init_task, wrap_task, wrap_task_and_forget,
 };
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
-/// Each task uses its submitting processor according to the pool's
-/// [`WorkerPolicy`][crate::WorkerPolicy]: that processor by default, or its memory
-/// region for a regional policy, or all submitting processors for a system policy.
-/// Shared worker affinity includes the pool's eager selection and accumulates the processors
-/// that submit accepted work to this pool and destination. All submission methods use the same policy.
+/// Submissions that reach [routing][crate::worker_policy::BoundPolicy::select_group] use the
+/// [`BoundPolicy`][crate::worker_policy::BoundPolicy] to choose a group before admission.
+/// Submissions that observe clean shutdown before routing skip policy selection and do not
+/// enter the pool. Selection does not guarantee admission.
+/// The built-in processor policy uses the submitting processor, while the regional
+/// and system policies select shared destinations across larger locality scopes.
+/// Built-in shared-worker affinity includes the eager selection and processors that reach
+/// policy selection for that destination.
 /// Tasks execute synchronously and must preserve worker affinity.
 ///
 /// # Cloning
@@ -173,13 +179,30 @@ impl Scheduler {
         R: Send + 'static,
         F: FnOnce() -> R + Send + 'static,
     {
+        if self.inner.runtime.is_shutdown() {
+            trace!(
+                target: POOL_LOG_TARGET,
+                pool_id = self.inner.pool_id,
+                "abandoned task during shutdown"
+            );
+            // Rent before moving the body so submit can contain capture cleanup if rent panics.
+            let (sender, receiver) = self.inner.runtime.result_channel_pool.rent();
+            cancel_joined_task(
+                task.take()
+                    .expect("cancellation consumes the body only after renting its channel"),
+                sender,
+            );
+            return JoinHandle::new(receiver);
+        }
+
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
-        let destination = self.inner.policy.destination(&self.inner.hardware);
-        let state = self.inner.registry.get_or_init(destination.group);
+        let group = self.inner.policy.select_group(&self.inner.groups);
+        let state = self.inner.groups.resolve(group);
         let (sender, receiver) = state.result_channel_pool.rent();
 
         let wrapped = wrap_task(
-            task.take().expect("submission consumes its task once"),
+            task.take()
+                .expect("submission keeps the task in this Option until first wrapping"),
             sender,
             spawn_time,
         );
@@ -189,13 +212,13 @@ impl Scheduler {
         self.inner.submit((Some(wrapped), receiver), |submission| {
             let (wrapped, _) = submission
                 .as_mut()
-                .expect("submission remains owned until admitted");
+                .expect("nested submit moves the wrapped task only after this borrow is released");
             let task = allocate_task(state, wrapped);
-            self.inner.enqueue(destination, state, task, urgent);
+            self.inner.enqueue(state, task, urgent);
 
-            let (_, receiver) = submission
-                .take()
-                .expect("admission consumes its receiver once");
+            let (_, receiver) = submission.take().expect(
+                "successful admission is the sole branch that consumes the result receiver",
+            );
             JoinHandle::new(receiver)
         })
     }
@@ -205,24 +228,41 @@ impl Scheduler {
     where
         F: FnOnce() + Send + 'static,
     {
+        if self.inner.runtime.is_shutdown() {
+            trace!(
+                target: POOL_LOG_TARGET,
+                pool_id = self.inner.pool_id,
+                "abandoned task during shutdown"
+            );
+            drop(
+                task.take()
+                    .expect("shutdown wrapping is the first operation that consumes this task"),
+            );
+            return;
+        }
+
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
-        let destination = self.inner.policy.destination(&self.inner.hardware);
-        let state = self.inner.registry.get_or_init(destination.group);
+        let group = self.inner.policy.select_group(&self.inner.groups);
+        let state = self.inner.groups.resolve(group);
 
         let wrapped = wrap_task_and_forget(
-            task.take().expect("submission consumes its task once"),
+            task.take()
+                .expect("fire-and-forget wrapping is the first operation that consumes this task"),
             spawn_time,
         );
 
         self.inner.submit(wrapped, |wrapped| {
             let task = allocate_task(state, wrapped);
-            self.inner.enqueue(destination, state, task, urgent);
+            self.inner.enqueue(state, task, urgent);
         });
     }
 }
 
 /// Allocates and initializes a task without invoking task code under the pool lock.
-fn allocate_task<T: VicinalTask>(state: &WorkerGroup, task: &mut Option<T>) -> ErasedTaskHandle {
+fn allocate_task<T: VicinalTask>(
+    state: &WorkerGroupState,
+    task: &mut Option<T>,
+) -> ErasedTaskHandle {
     let slot = {
         let pool = state.task_pool.lock().expect(NEVER_POISONED);
         pool.try_alloc_uninit_box()
@@ -235,31 +275,72 @@ fn allocate_task<T: VicinalTask>(state: &WorkerGroup, task: &mut Option<T>) -> E
 
     init_task(
         slot,
-        task.take().expect("allocation consumes its task once"),
+        task.take()
+            .expect("initialization consumes the wrapped task only after allocation succeeds"),
     )
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::mem::forget;
     use std::panic;
     use std::panic::{RefUnwindSafe, UnwindSafe};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use events_once::EventPool;
+    use futures::FutureExt;
     use futures::executor::block_on;
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
     use static_assertions::assert_impl_all;
-    use testing::assert_panics;
+    use testing::{assert_panics, assert_panics_with, with_watchdog};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::subscriber::with_default;
+    use tracing::{Event, Metadata, Subscriber};
 
     use crate::metrics::CLOCK;
-    use crate::pool_inner::{OnDrop, PanickingPayload};
-    use crate::{Pool, Scheduler, WorkerPolicy};
+    use crate::pool_inner::{OnDrop, POOL_LOG_TARGET, PanickingPayload, TestPolicy};
+    use crate::{Pool, Scheduler};
 
     assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
+
+    /// Drops a captured pool when it receives the infrastructure-failure diagnostic.
+    struct PoolDroppingSubscriber {
+        pool: Mutex<Option<Pool>>,
+        dropped: Arc<AtomicUsize>,
+    }
+
+    impl Subscriber for PoolDroppingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            if event.metadata().target() == POOL_LOG_TARGET
+                && let Some(pool) = self.pool.lock().unwrap().take()
+            {
+                drop(pool);
+                // The subscriber call is synchronous; this counter only reports that its
+                // same-thread reentrant action completed.
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
 
     fn fake_pool() -> Pool {
         Pool::builder()
@@ -267,15 +348,22 @@ mod tests {
                 nz!(1),
                 nz!(1),
             )))
-            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
+            .worker_policy(TestPolicy::new(1))
             .build()
+            .unwrap()
+    }
+
+    fn assert_incidental_panic(f: impl FnOnce()) {
+        let payload = panic::catch_unwind(panic::AssertUnwindSafe(f)).unwrap_err();
+        assert!(payload.is::<PanickingPayload>());
+        forget(payload);
     }
 
     /// Rejected capture cleanup must remain contained even through a retained poisoned scheduler.
     fn assert_poisoned_capture_released(submit: impl FnOnce(&Scheduler, OnDrop)) {
         let pool = fake_pool();
         let scheduler = pool.scheduler();
-        pool.inner.poisoned.store(true, Ordering::Release);
+        pool.inner.stop_admission();
         drop(pool);
 
         let dropped = Arc::new(AtomicUsize::new(0));
@@ -287,7 +375,7 @@ mod tests {
             }
         })));
 
-        assert_panics(|| submit(&scheduler, capture));
+        assert_incidental_panic(|| submit(&scheduler, capture));
 
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
@@ -329,41 +417,131 @@ mod tests {
         let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
 
         CLOCK.with_borrow_mut(|_| {
-            assert_panics(|| scheduler.spawn(move || drop(capture)));
+            assert_incidental_panic(|| {
+                _ = scheduler.spawn(move || drop(capture));
+            });
         });
 
-        assert!(pool.inner.poisoned.load(Ordering::Acquire));
-        assert!(pool.inner.shutdown.load(Ordering::Acquire));
-        assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
+        assert!(pool.inner.runtime.is_poisoned());
+        assert!(pool.inner.runtime.is_shutdown());
+        pool.inner.runtime.wait_for_workers();
+        assert_eq!(pool.inner.runtime.active_workers(), 0);
+    }
+
+    #[test]
+    fn preparation_cleanup_drains_queued_tasks_before_panicking() {
+        let pool = Pool::builder()
+            .hardware(SystemHardware::fake(HardwareBuilder::from_counts(
+                nz!(1),
+                nz!(1),
+            )))
+            .worker_policy(TestPolicy::new(0))
+            .build()
+            .unwrap();
+        let scheduler = pool.scheduler();
+        let queued = scheduler.spawn(|| 42);
+        let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+
+        CLOCK.with_borrow_mut(|_| {
+            assert_incidental_panic(|| {
+                _ = scheduler.spawn(move || drop(capture));
+            });
+        });
+
+        assert!(queued.now_or_never().unwrap().unwrap_err().is_cancel());
+        assert!(pool.inner.runtime.is_poisoned());
+        assert!(pool.inner.runtime.is_shutdown());
+    }
+
+    /// Immediate cancellation does not prepare execution timing and returns the original body.
+    #[test]
+    fn joined_submissions_after_shutdown_cancel_without_reading_the_clock() {
+        let pool = fake_pool();
+        let scheduler = pool.scheduler();
+        drop(pool);
+
+        // Hold the clock borrow so any attempt to prepare execution timing would panic.
+        CLOCK.with_borrow_mut(|_| {
+            for (urgent, expected) in [(false, "regular task body"), (true, "urgent task body")] {
+                let capture = String::from(expected);
+                let task = move || capture;
+                let handle = if urgent {
+                    scheduler.spawn_urgent(task)
+                } else {
+                    scheduler.spawn(task)
+                };
+                let error = handle.now_or_never().unwrap().unwrap_err();
+                assert!(error.is_cancel());
+                assert_eq!(error.into_body().unwrap()(), expected);
+            }
+        });
     }
 
     /// A poisoned allocation lock forces failure after wrapping but before task storage exists.
     #[test]
     fn allocation_failure_contains_wrapped_capture() {
-        for joined in [false, true] {
+        with_watchdog(|| {
+            for joined in [false, true] {
+                let pool = fake_pool();
+                let scheduler = pool.scheduler();
+                let group = pool.inner.policy.select_group(&pool.inner.groups);
+                let state = pool.inner.groups.resolve(group);
+
+                assert_panics(|| {
+                    let _guard = state.task_pool.lock().unwrap();
+                    panic!("injected allocator lock failure");
+                });
+
+                let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
+                assert_incidental_panic(|| {
+                    if joined {
+                        _ = scheduler.spawn(move || drop(capture));
+                    } else {
+                        scheduler.spawn_and_forget(move || drop(capture));
+                    }
+                });
+
+                assert!(pool.inner.runtime.is_poisoned());
+                assert!(pool.inner.runtime.is_shutdown());
+                pool.inner.runtime.wait_for_workers();
+                assert_eq!(pool.inner.runtime.active_workers(), 0);
+            }
+        });
+    }
+
+    #[test]
+    fn failure_diagnostic_can_drop_pool_on_submitting_thread() {
+        with_watchdog(|| {
             let pool = fake_pool();
             let scheduler = pool.scheduler();
-            let target = pool.inner.policy.destination(&pool.inner.hardware);
-            let state = pool.inner.registry.get_or_init(target.group);
+            let group = pool.inner.policy.select_group(&pool.inner.groups);
+            let state = pool.inner.groups.resolve(group);
 
             assert_panics(|| {
                 let _guard = state.task_pool.lock().unwrap();
                 panic!("injected allocator lock failure");
             });
 
-            let capture = OnDrop(Some(Box::new(|| panic::panic_any(PanickingPayload))));
-            assert_panics(|| {
-                if joined {
-                    _ = scheduler.spawn(move || drop(capture));
-                } else {
-                    scheduler.spawn_and_forget(move || drop(capture));
-                }
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let subscriber = PoolDroppingSubscriber {
+                pool: Mutex::new(Some(pool)),
+                dropped: Arc::clone(&dropped),
+            };
+
+            with_default(subscriber, || {
+                assert_panics_with(
+                    || {
+                        _ = scheduler.spawn(|| 42);
+                    },
+                    |message| assert!(message.contains("we never panic while holding this lock")),
+                );
             });
 
-            assert!(pool.inner.poisoned.load(Ordering::Acquire));
-            assert!(pool.inner.shutdown.load(Ordering::Acquire));
-            assert!(pool.inner.worker_handles.lock().unwrap().is_empty());
-        }
+            assert_eq!(dropped.load(Ordering::Relaxed), 1);
+            assert!(scheduler.inner.runtime.is_poisoned());
+            scheduler.inner.runtime.wait_for_workers();
+            assert_eq!(scheduler.inner.runtime.active_workers(), 0);
+        });
     }
 
     #[test]

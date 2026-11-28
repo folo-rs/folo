@@ -17,7 +17,8 @@ use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use testing::DefaultAllocator;
 use threadpool::ThreadPool;
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::Pool;
+use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerProcessor};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
@@ -74,7 +75,6 @@ fn entrypoint(criterion: &mut Criterion) {
     initialization(criterion, &one_processor);
     joined_dispatch(criterion, &allocs, &times, &one_processor);
     fire_and_forget_dispatch(criterion, &allocs, &times);
-    policy_dispatch(criterion, &allocs, &times);
     region_contention(criterion, &one_processor);
 
     // The sessions emit their summaries and JSON after every group has completed.
@@ -94,7 +94,7 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
         let builder = || {
             // Fix the destination capacity to match the dispatch comparison, independently
             // of future changes to the library default. No application initializer is installed.
-            let builder = Pool::builder().worker_policy(WorkerPolicy::per_processor(nz!(2_u32)));
+            let builder = Pool::builder().worker_policy(WorkersPerProcessor::new(nz!(2_u32)));
             if eager {
                 builder.eager(one_processor.clone())
             } else {
@@ -105,8 +105,8 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
         group.bench_function(format!("create/{name}"), |b| {
             b.iter_batched(
                 &builder,
-                |builder| black_box(builder.build()),
-                // Drop and join each returned pool outside measurement before creating another.
+                |builder| black_box(builder.build().unwrap()),
+                // Drop each pool and wait for worker shutdown outside measurement.
                 // Larger batches would leave idle worker pools competing with later iterations.
                 BatchSize::PerIteration,
             );
@@ -115,7 +115,7 @@ fn initialization(criterion: &mut Criterion, one_processor: &ProcessorSet) {
         group.bench_function(format!("first_task/{name}"), |b| {
             b.iter_batched_ref(
                 || {
-                    let pool = builder().build();
+                    let pool = builder().build().unwrap();
                     let scheduler = pool.scheduler();
                     // Do not submit warmup work: task slots and result channels must be cold.
                     (pool, scheduler)
@@ -600,52 +600,6 @@ fn spawn_and_forget(
     });
 }
 
-/// Compares locality routing with one submission and a short queued batch.
-fn policy_dispatch(criterion: &mut Criterion, allocs: &AllocSession, times: &TimeSession) {
-    let mut group = criterion.benchmark_group("vicinal/policy_dispatch");
-
-    // Keep equal destination capacity at a fixed comparison baseline that supports overlapping
-    // tasks. This benchmark count does not track future changes to the pool's default.
-    for (policy_name, policy) in [
-        ("processor", WorkerPolicy::per_processor(nz!(2_u32))),
-        ("region", WorkerPolicy::per_memory_region(nz!(2_u32))),
-    ] {
-        // The low case isolates dispatch; the high case exercises shared queue/slot reuse.
-        for batch_size in [1, TASK_BATCH_SIZE] {
-            let name = format!("{policy_name}/{batch_size}");
-            let allocation = allocs.operation(format!("vicinal/policy_dispatch/{name}"));
-            let time = times.operation(format!("vicinal/policy_dispatch/{name}"));
-
-            group.bench_function(name, |b| {
-                let pool = Pool::builder().worker_policy(policy.clone()).build();
-                let scheduler = pool.scheduler();
-                block_on(scheduler.spawn(|| {})).unwrap();
-                let mut handles = Vec::with_capacity(batch_size);
-
-                b.iter_custom(|iterations| {
-                    let _allocations = allocation.measure_process().iterations(iterations);
-                    let _time = time.measure_process().iterations(iterations);
-                    let start = Instant::now();
-
-                    for _ in 0..iterations {
-                        for _ in 0..batch_size {
-                            handles.push(scheduler.spawn(|| black_box(simulate_work())));
-                        }
-
-                        #[expect(clippy::iter_with_drain, reason = "reuse the batch vector")]
-                        for handle in handles.drain(..) {
-                            black_box(block_on(handle).unwrap());
-                        }
-                    }
-
-                    start.elapsed()
-                });
-            });
-        }
-    }
-    group.finish();
-}
-
 /// Measures competing submitters sharing a region; thread creation and affinity are untimed.
 ///
 /// The workspace has no `bench_on_threadpool` helper. A scoped-thread harness runs both
@@ -663,11 +617,12 @@ fn region_contention(criterion: &mut Criterion, caller: &ProcessorSet) {
     // A single submitter is the control; competing submitters expose regional queue contention.
     for callers in [1_usize, 2] {
         group.bench_function(format!("callers/{callers}"), |b| {
-            // Use the same fixed destination capacity as policy_dispatch so contention is
-            // measured without changing the amount of worker parallelism.
+            // Keep destination worker capacity fixed across submitter counts to isolate
+            // producer contention.
             let pool = Pool::builder()
-                .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
-                .build();
+                .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
+                .build()
+                .unwrap();
             let scheduler = pool.scheduler();
 
             // Only producers submit, including during setup, so the controller cannot expand

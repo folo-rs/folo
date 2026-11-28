@@ -1,15 +1,19 @@
 //! Pool-wide infrastructure failure and user-task panic isolation.
 
+use std::mem::forget;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::{panic, thread};
 
 use futures::executor::block_on;
 use new_zealand::nz;
-use testing::{assert_panics, with_watchdog};
+use testing::{assert_panics, assert_panics_with, with_watchdog};
 
-use super::helpers::{CountOnDrop, NoopTask, PanickingPayload, hardware, pin, regional_hardware};
-use crate::{Pool, WorkerPolicy, init_task};
+use super::helpers::{
+    CountOnDrop, NoopTask, OnDrop, PanickingPayload, TestBuiltInPolicy, TestPolicy, hardware, pin,
+    regional_hardware,
+};
+use crate::{BuiltInWorkerPolicy, GroupId, PanicFailures, Pool, SubmissionTarget, init_task};
 
 /// Submission failures stop admission, whereas caught user-task panics leave it operational.
 #[test]
@@ -17,8 +21,9 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
-            .build();
+            .worker_policy(TestPolicy::new(1))
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         assert!(
             block_on(scheduler.spawn(|| panic!("task panic")))
@@ -26,62 +31,112 @@ fn submission_infrastructure_failure_poisons_pool_but_task_panics_do_not() {
                 .is_panic()
         );
         scheduler.spawn_and_forget(|| panic!("fire-and-forget task panic"));
-        scheduler.spawn_and_forget(|| panic::panic_any(PanickingPayload));
         block_on(scheduler.spawn(|| {})).unwrap();
-        assert!(!pool.inner.poisoned.load(Ordering::Acquire));
+        assert!(!pool.inner.runtime.is_poisoned());
 
+        scheduler.spawn_and_forget(|| {
+            panic::panic_any(OnDrop(Some(Box::new(|| {
+                panic!("destructor failure");
+            }))))
+        });
+        pool.inner.runtime.wait_for_workers();
+        assert!(pool.inner.runtime.is_poisoned());
+        assert_panics_with(
+            || {
+                _ = scheduler.spawn(|| {});
+            },
+            |message| assert!(message.contains("destructor failure")),
+        );
+        drop(pool);
+
+        let pool = Pool::builder()
+            .hardware(hardware())
+            .worker_policy(TestPolicy::new(0))
+            .build()
+            .unwrap();
+        let scheduler = pool.scheduler();
         // This is the common boundary for topology, result-channel and task-slot failures.
         assert_panics(|| {
             pool.inner
                 .submit((), |_| panic!("injected infrastructure failure"))
         });
-        assert!(pool.inner.poisoned.load(Ordering::Acquire));
-        assert!(pool.inner.shutdown.load(Ordering::Acquire));
+        assert!(pool.inner.runtime.is_poisoned());
+        assert!(pool.inner.runtime.is_shutdown());
         assert_panics(|| scheduler.spawn(|| {}));
     });
 }
 
-/// Drop the receiver while its task is blocked so the worker must discard the eventual panic.
+/// A rejected admission must not claim a failure that a worker already published.
+#[test]
+fn poisoned_enqueue_preserves_existing_runtime_failure() {
+    /// Identifies the worker-published payload that a rejected admission must preserve.
+    struct OriginalFailure;
+
+    let policy = TestPolicy::new(0);
+    let pool = Pool::builder()
+        .hardware(hardware())
+        .worker_policy(policy.clone())
+        .build()
+        .unwrap();
+    let group = policy.group();
+    let state = group.state();
+    pool.inner
+        .runtime
+        .fail(PanicFailures::new(Box::new(OriginalFailure)));
+    let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
+
+    let payload = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        pool.inner.enqueue(state, init_task(slot, NoopTask), false);
+    }))
+    .unwrap_err();
+
+    assert!(payload.is::<OriginalFailure>());
+    assert!(pool.inner.runtime.is_poisoned());
+}
+
+/// Ordinary disconnected task panics do not poison the pool.
 #[test]
 fn disconnected_joined_panic_does_not_poison_pool() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
-            .build();
-        pin(&pool.inner.hardware, 0);
+            .worker_policy(TestPolicy::new(1))
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         let (release, wait) = mpsc::channel();
 
         let abandoned = scheduler.spawn(move || {
             wait.recv().unwrap();
-            panic::panic_any(PanickingPayload);
+            panic::panic_any("ordinary task panic");
         });
 
         drop(abandoned);
         release.send(()).unwrap();
         block_on(scheduler.spawn(|| {})).unwrap();
 
-        assert!(!pool.inner.poisoned.load(Ordering::Acquire));
+        assert!(!pool.inner.runtime.is_poisoned());
     });
 }
 
-/// Finish delivery first to cover payload destruction on the receiver instead of the worker.
+/// A panicking payload destructor propagates when the receiver drops the result.
 #[test]
-fn unobserved_joined_panic_can_be_dropped_after_completion() {
+fn unobserved_joined_panic_reports_payload_destructor_panic() {
     with_watchdog(|| {
         let pool = Pool::builder()
             .hardware(hardware())
-            .worker_policy(WorkerPolicy::per_processor(nz!(1)))
-            .build();
-        pin(&pool.inner.hardware, 0);
+            .worker_policy(TestPolicy::new(1))
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
 
         let completed = scheduler.spawn(|| panic::panic_any(PanickingPayload));
         block_on(scheduler.spawn(|| {})).unwrap();
 
-        drop(completed);
-        assert!(!pool.inner.poisoned.load(Ordering::Acquire));
+        let payload = panic::catch_unwind(panic::AssertUnwindSafe(|| drop(completed))).unwrap_err();
+        assert!(payload.is::<()>());
+        forget(payload);
+        assert!(!pool.inner.runtime.is_poisoned());
     });
 }
 
@@ -91,18 +146,24 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
     with_watchdog(|| {
         let hardware = regional_hardware();
         pin(&hardware, 0);
+        let policy = TestBuiltInPolicy::new(BuiltInWorkerPolicy::per_memory_region(nz!(1)));
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
-            .build();
-        let target = pool.inner.policy.destination(&hardware);
-        let state = pool.inner.registry.get_or_init(target.group);
+            .worker_policy(policy.clone())
+            .build()
+            .unwrap();
+        let target = hardware.with_current_processor(|processor| SubmissionTarget {
+            group: GroupId::MemoryRegion(processor.memory_region_id()),
+            processor: processor.id(),
+        });
+        let state = pool.inner.groups.get_or_init(target.group);
         let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
+        policy.install_test_group(&pool.inner.groups, &hardware, target);
 
         pool.inner
             .enqueue_with(target, state, init_task(slot, NoopTask), false, |handles| {
                 pool.inner
-                    .start_workers(target, handles, thread::Builder::spawn, |set| {
+                    .start_workers(target, nz!(1), handles, thread::Builder::spawn, |set| {
                         assert_eq!(set.len(), 1);
                         set.pin_current_thread_to();
                     });
@@ -154,7 +215,7 @@ fn refresh_failure_stops_pool_and_cancels_accepted_work() {
         assert_panics(|| scheduler.spawn_and_forget(|| {}));
         other_release.send(()).unwrap();
         block_on(other_running).unwrap();
-        assert_panics(|| drop(pool));
+        drop(pool);
         assert_panics(|| scheduler.spawn(|| {}));
     });
 }

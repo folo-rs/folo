@@ -66,6 +66,5 @@ benchmarks = [
     "vicinal/initialization/",
     "vicinal/spawn/",
     "vicinal/fire_and_forget/",
-    "vicinal/policy_dispatch/",
     "vicinal/region_contention/",
 ]

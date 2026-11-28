@@ -4,17 +4,19 @@ use std::cell::Cell;
 use std::collections::{BTreeSet, HashSet};
 use std::num::NonZero;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::{iter, thread};
 
 use futures::executor::block_on;
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
-use testing::{assert_panics, with_watchdog};
+use ohno::ErrorExt;
+use testing::with_watchdog;
 
 use super::helpers::{affinity, assert_retained_scheduler, hardware, pin, regional_hardware};
-use crate::{GroupId, PolicyKind, Pool, Scheduler, WorkerGroup, WorkerPolicy};
+use crate::worker_policy::WorkerGroup;
+use crate::{BuiltInWorkerPolicy, EagerProcessorHardwareMismatch, GroupId, PolicyKind, Pool};
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
@@ -68,7 +70,8 @@ fn assert_ready(kind: PolicyKind) {
                         .push((thread::current().id(), affinity(&hardware)));
                 }
             })
-            .build();
+            .build()
+            .unwrap();
 
         let expected_masks = match kind {
             PolicyKind::Processor => vec![
@@ -91,13 +94,12 @@ fn assert_ready(kind: PolicyKind) {
         masks.sort();
         assert_eq!(masks, expected);
         assert_eq!(threads.len(), expected.len());
-        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, expected.len());
-        assert_eq!(pool.inner.registry.initialized().count(), group_count);
+        assert_eq!(pool.inner.groups.initialized().count(), group_count);
         assert_eq!(affinity(&hardware), BTreeSet::from([1]));
         assert!(!INITIALIZED.get());
-        for state in pool.inner.registry.initialized() {
-            assert_eq!(state.startup.get(), Some(&Ok(())));
+        for state in pool.inner.groups.initialized() {
             assert_eq!(state.get_tasks_spawned(), 0);
             assert!(state.regular_queue.lock().unwrap().is_empty());
             assert!(state.urgent_queue.lock().unwrap().is_empty());
@@ -114,9 +116,9 @@ fn assert_ready(kind: PolicyKind) {
             .unwrap();
             assert!(threads.contains(&worker));
         }
-        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, expected.len());
-        for state in pool.inner.registry.initialized() {
+        for state in pool.inner.groups.initialized() {
             let expected_revision = usize::from(!matches!(kind, PolicyKind::Processor));
             assert_eq!(
                 state.affinity_revision.load(Ordering::Acquire),
@@ -164,7 +166,8 @@ fn assert_expansion(kind: PolicyKind) {
                     initialized.fetch_add(1, Ordering::Relaxed);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
         let scheduler = pool.scheduler();
         let mut members = BTreeSet::from([0, 3]);
         for (variant, processor) in [0, 3, 2, 8].into_iter().enumerate() {
@@ -202,13 +205,13 @@ fn assert_expansion(kind: PolicyKind) {
                 }
                 PolicyKind::System => 1,
             };
-            let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+            let worker_count = pool.inner.runtime.active_workers();
             assert_eq!(worker_count, expected_count);
             assert_eq!(initialized.load(Ordering::Relaxed), expected_count);
         }
         assert_eq!(
             pool.inner
-                .registry
+                .groups
                 .initialized()
                 .map(WorkerGroup::get_tasks_spawned)
                 .sum::<u64>(),
@@ -230,7 +233,7 @@ fn eager_setters_replace_configuration_without_starting_workers() {
                 nz!(1),
             )))
             .eager(hardware.all_processors())
-            .worker_policy(WorkerPolicy::per_processor(nz!(2)))
+            .worker_policy(BuiltInWorkerPolicy::per_processor(nz!(2)))
             .thread_init(|| panic!("replaced callback"))
             .eager(
                 hardware
@@ -238,7 +241,7 @@ fn eager_setters_replace_configuration_without_starting_workers() {
                     .filter(|processor| processor.id() == 3)
                     .unwrap(),
             )
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .hardware(hardware.clone())
             .thread_init({
                 let initialized = Arc::clone(&initialized);
@@ -248,14 +251,18 @@ fn eager_setters_replace_configuration_without_starting_workers() {
                 }
             });
         assert_eq!(initialized.load(Ordering::Relaxed), 0);
-        let pool = builder.build();
+        let pool = builder.build().unwrap();
         assert_eq!(initialized.load(Ordering::Relaxed), 1);
-        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 1);
-        assert_eq!(pool.inner.registry.initialized().count(), 1);
+        assert_eq!(pool.inner.groups.initialized().count(), 1);
+        pool.inner
+            .groups
+            .group(GroupId::MemoryRegion(5))
+            .wait_for_initialized_workers(nz!(1_usize));
         assert_eq!(
             pool.inner
-                .registry
+                .groups
                 .get_or_init(GroupId::MemoryRegion(5))
                 .startup
                 .get(),
@@ -285,7 +292,12 @@ fn eager_selection_rejects_foreign_hardware_before_initialization() {
                 initialized.fetch_add(1, Ordering::Relaxed);
             }
         });
-    assert_panics(|| builder.build());
+    let error = builder.build().unwrap_err();
+    assert!(
+        error
+            .find_source::<EagerProcessorHardwareMismatch>()
+            .is_some()
+    );
     assert_eq!(initialized.load(Ordering::Relaxed), 0);
 }
 
@@ -317,7 +329,12 @@ fn eager_selection_rejects_foreign_backing_hardware_before_initialization() {
                         initialized.fetch_add(1, Ordering::Relaxed);
                     }
                 });
-            assert_panics(|| builder.build());
+            let error = builder.build().unwrap_err();
+            assert!(
+                error
+                    .find_source::<EagerProcessorHardwareMismatch>()
+                    .is_some()
+            );
             assert_eq!(initialized.load(Ordering::Relaxed), 0);
         }
     });
@@ -331,22 +348,23 @@ fn eager_unused_pool_without_initializer_joins_workers() {
         // Idle siblings exercise cleanup independently of task execution and initializer callbacks.
         let pool = Pool::builder()
             .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_system(nz!(2)))
+            .worker_policy(BuiltInWorkerPolicy::per_system(nz!(2)))
             .eager(hardware.all_processors())
-            .build();
+            .build()
+            .unwrap();
         let inner = Arc::clone(&pool.inner);
         let scheduler = pool.scheduler();
-        let worker_count = inner.worker_handles.lock().unwrap().len();
+        let worker_count = inner.runtime.active_workers();
         assert_eq!(worker_count, 2);
-        let state = inner.registry.get_or_init(GroupId::System);
+        let state = inner.groups.get_or_init(GroupId::System);
         assert_eq!(state.get_tasks_spawned(), 0);
         assert!(state.task_pool.lock().unwrap().is_empty());
 
         drop(pool);
 
-        assert!(inner.worker_handles.lock().unwrap().is_empty());
+        assert_eq!(inner.runtime.active_workers(), 0);
         assert!(state.shutdown_flag.load(Ordering::Acquire));
-        assert!(!inner.poisoned.load(Ordering::Acquire));
+        assert!(!inner.runtime.is_poisoned());
         assert_retained_scheduler(&scheduler);
     });
 }
@@ -364,7 +382,7 @@ fn eager_initializers_overlap_across_groups() {
         let initialized = Arc::new(AtomicUsize::new(0));
         let pool = Pool::builder()
             .hardware(hardware)
-            .worker_policy(WorkerPolicy::per_memory_region(nz!(1)))
+            .worker_policy(BuiltInWorkerPolicy::per_memory_region(nz!(1)))
             .eager(processors)
             .thread_init({
                 let initialized = Arc::clone(&initialized);
@@ -374,78 +392,19 @@ fn eager_initializers_overlap_across_groups() {
                     initialized.fetch_add(1, Ordering::Relaxed);
                 }
             })
-            .build();
+            .build()
+            .unwrap();
         assert_eq!(initialized.load(Ordering::Relaxed), 2);
-        let worker_count = pool.inner.worker_handles.lock().unwrap().len();
+        let worker_count = pool.inner.runtime.active_workers();
         assert_eq!(worker_count, 2);
     });
 }
 
-/// Callback submission must not deadlock with eager construction's registration lock.
-#[test]
-fn eager_completion_wait_releases_registration_lock() {
-    with_watchdog(|| {
-        let scheduler = Arc::new(OnceLock::<Scheduler>::new());
-        let hardware = hardware();
-        let pool = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_system(nz!(1)))
-            .thread_init({
-                let scheduler = Arc::downgrade(&scheduler);
-                move || {
-                    scheduler
-                        .upgrade()
-                        .unwrap()
-                        .get()
-                        .unwrap()
-                        .spawn_and_forget(|| {});
-                }
-            })
-            .build();
-        scheduler.set(pool.scheduler()).unwrap();
-        // Private entry permits publishing the scheduler first, exercising reentrancy that must
-        // remain safe even though a public eager builder does not yet expose its pool.
-        pool.inner.start_eager(hardware.all_processors());
-        assert_eq!(
-            pool.inner
-                .registry
-                .get_or_init(GroupId::System)
-                .get_tasks_spawned(),
-            1
-        );
-    });
-}
-
-/// Initial snapshots are already applied; an idle eager worker need not re-pin in its loop.
-#[test]
-fn eager_idle_workers_apply_the_initial_mask_once() {
-    with_watchdog(|| {
-        let hardware = hardware();
-        let pool = Pool::builder()
-            .hardware(hardware.clone())
-            .worker_policy(WorkerPolicy::per_system(nz!(1)))
-            .build();
-        // Pool destruction joins every worker before the relaxed observation of pin calls.
-        let pins = Arc::new(AtomicUsize::new(0));
-        pool.inner
-            .start_eager_with(hardware.all_processors(), thread::Builder::spawn, {
-                let pins = Arc::clone(&pins);
-                move |processors| {
-                    processors.pin_current_thread_to();
-                    pins.fetch_add(1, Ordering::Relaxed);
-                }
-            });
-        block_on(pool.scheduler().spawn(|| {})).unwrap();
-        drop(pool);
-        assert_eq!(pins.load(Ordering::Relaxed), 1);
-    });
-}
-
-/// Keeps each policy's concurrency explicit without coupling fixtures to the default count.
-fn policy(kind: PolicyKind, count: NonZero<u32>) -> WorkerPolicy {
+/// Keeps each policy's concurrency explicit without coupling fixtures to the pool default.
+fn policy(kind: PolicyKind, count: NonZero<u32>) -> BuiltInWorkerPolicy {
     match kind {
-        PolicyKind::Processor => WorkerPolicy::per_processor(count),
-        PolicyKind::MemoryRegion => WorkerPolicy::per_memory_region(count),
-        PolicyKind::System => WorkerPolicy::per_system(count),
+        PolicyKind::Processor => BuiltInWorkerPolicy::per_processor(count),
+        PolicyKind::MemoryRegion => BuiltInWorkerPolicy::per_memory_region(count),
+        PolicyKind::System => BuiltInWorkerPolicy::per_system(count),
     }
 }

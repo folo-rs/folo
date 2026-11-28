@@ -8,66 +8,75 @@ use many_cpus::ProcessorSet;
 use tracing::trace;
 
 use crate::pool_inner::POOL_LOG_TARGET;
-use crate::{GroupId, IterationResult, NEVER_POISONED, PoolInner, WorkerCore, WorkerGroup};
+use crate::{
+    IterationResult, NEVER_POISONED, PanicFailures, PoolRuntime, WorkerCore, WorkerGroupState,
+};
 
-/// Drives `WorkerCore` with this group's queues and wake signal.
-// Broken wakeup coordination can strand workers indefinitely.
+/// Runs one worker through affinity refresh, task dispatch and wake/lost-notification handling.
+///
+/// Ref: docs/implementation.md, "Affinity and failure coordination".
+// A stripped or nonblocking worker loop can strand accepted work indefinitely.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn worker_loop(
-    inner: &PoolInner,
-    destination: GroupId,
+pub(crate) fn worker_loop_with(
+    runtime: &PoolRuntime,
+    state: &WorkerGroupState,
     worker_index: u32,
     mut revision: usize,
-    pin: impl Fn(&ProcessorSet),
-) {
-    let state = inner.registry.get_or_init(destination);
+    pin: impl FnMut(&ProcessorSet),
+) -> Result<(), PanicFailures> {
     let core = WorkerCore::new(
         &state.urgent_queue,
         &state.regular_queue,
         &state.shutdown_flag,
     );
-    let shared = inner.policy.shares_processors();
+    let mut pin = pin;
 
     loop {
-        if inner.shutdown.load(Ordering::Acquire) {
+        if runtime.is_shutdown() {
             break;
         }
 
-        if shared {
-            refresh_affinity(state, &mut revision, &pin);
-        }
+        refresh_affinity(state, &mut revision, &mut pin);
 
         let outcome = core.run_one_iteration_with(
             || {
-                if inner.shutdown.load(Ordering::Acquire) {
+                if runtime.is_shutdown() {
                     return false;
                 }
 
-                if shared {
-                    refresh_affinity(state, &mut revision, &pin);
-                }
+                refresh_affinity(state, &mut revision, &mut pin);
 
-                !inner.shutdown.load(Ordering::Acquire)
+                !runtime.is_shutdown()
             },
-            || inner.stop_admission(),
-        );
+            || runtime.stop_admission(),
+        )?;
 
         match outcome {
             IterationResult::ExecutedUrgent | IterationResult::ExecutedRegular => {
-                trace!(
-                    target: POOL_LOG_TARGET,
-                    pool_id = inner.pool_id,
-                    group = ?destination,
-                    worker_index,
-                    "executed task"
-                );
+                if let Some(group) = state.destination {
+                    trace!(
+                        target: POOL_LOG_TARGET,
+                        pool_id = runtime.pool_id(),
+                        group = ?group,
+                        worker_index,
+                        "executed task"
+                    );
+                } else {
+                    trace!(
+                        target: POOL_LOG_TARGET,
+                        pool_id = runtime.pool_id(),
+                        worker_index,
+                        "executed task"
+                    );
+                }
             }
             IterationResult::Shutdown => break,
             IterationResult::WaitingForWork => {
                 listener!(state.wake_event => listener);
 
-                // Changes between the executor's empty observation and listener registration
-                // cannot notify this listener. Recheck after registration to cover that gap.
+                // A change between the worker core's empty observation and listener
+                // registration cannot notify this listener. Recheck every possible change
+                // after registration; only an unchanged state is allowed to sleep.
                 if !state.urgent_queue.lock().expect(NEVER_POISONED).is_empty()
                     || !state.regular_queue.lock().expect(NEVER_POISONED).is_empty()
                     || state.shutdown_flag.load(Ordering::Acquire)
@@ -85,12 +94,17 @@ pub(crate) fn worker_loop(
             }
         }
     }
+    Ok(())
 }
 
-/// Applies a monotonically published snapshot on the owning worker, never under a shared lock.
-#[cfg_attr(test, mutants::skip)] // Missed revisions can strand idle workers or accepted work.
+/// Applies a newly published shared affinity snapshot and advances this worker's local cursor.
+///
+/// The caller already holds a lifetime-protected state reference, so this path avoids searching
+/// the pool registry on every refresh. The revision/acquire pair establishes the immutable mask;
+/// pinning runs after the affinity read lock is released.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn refresh_affinity(
-    state: &WorkerGroup,
+    state: &WorkerGroupState,
     revision: &mut usize,
     pin: impl FnOnce(&ProcessorSet),
 ) {
@@ -99,7 +113,7 @@ pub(crate) fn refresh_affinity(
     }
 
     let (affinity, latest) = {
-        let affinity = state.affinity.lock().expect(NEVER_POISONED);
+        let affinity = state.affinity.read().expect(NEVER_POISONED);
         (
             Arc::clone(
                 affinity
@@ -109,7 +123,6 @@ pub(crate) fn refresh_affinity(
             state.affinity_revision.load(Ordering::Acquire),
         )
     };
-
     pin(&affinity);
     *revision = latest;
 }

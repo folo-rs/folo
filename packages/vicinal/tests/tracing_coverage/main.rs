@@ -11,7 +11,6 @@ fn formats_lifecycle_and_failure_events() {
     with_watchdog(move || {
         lifecycle::exercise(&capture);
         failures::worker_failure(&capture);
-        failures::shutdown_during_unwind(&capture);
     });
 }
 

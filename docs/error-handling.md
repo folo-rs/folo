@@ -50,6 +50,31 @@ However, all such assertions must be guarded with a `thread::panicking()` check
 to ensure that the panic does not occur when already unwinding for another panic
 — we do not want to double-panic as that mangles the errors.
 
+## Panics during failure cleanup
+
+Incidental panics occur in a failure-handling path rather than as a direct result
+of violating a public API contract. For example, a `Drop::drop` implementation may
+panic while cleanup handles another panic or a runtime error.
+
+Allow incidental panics to propagate. The panic indicates a programming defect and
+takes precedence over the runtime error that the failure path was handling.
+Higher layers may observe and react to the propagated panic.
+
+This applies to runtime-error handling, caught-panic handling and cleanup during
+unwinding. The operation that catches an incidental panic first performs the
+state transitions and cleanup required to keep the system valid. If that
+operation's public contract is fallible, it may then convert the panic into an
+error, but the panic-derived error must replace the ordinary error. Re-raise
+the panic after cleanup when practical.
+
+Keep cleanup code small and avoid panicking destructors. If an incidental panic
+occurs while another panic is already active, Rust's normal double-panic behavior
+applies; do not catch or hide either panic.
+
+These are incidental failure paths, not promised API behavior. Do not add them
+to public API panic documentation; document only panics that the public contract
+explicitly permits.
+
 ## Non-zero integers
 
 Whenever a numeric value must be non-zero, prefer `NonZero<usize>` over `usize`,

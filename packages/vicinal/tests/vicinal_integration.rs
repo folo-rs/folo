@@ -219,7 +219,7 @@ fn spawn_and_await_with_fake_hardware() {
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| 42);
@@ -235,7 +235,7 @@ fn spawn_many_tasks_with_single_processor_hardware() {
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(1_usize), nz!(1_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let scheduler = pool.scheduler();
 
         for (i, handle) in (0..TASK_COUNT)
@@ -252,7 +252,7 @@ fn fire_and_forget_with_fake_hardware() {
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let scheduler = pool.scheduler();
         let event_pool = EventPool::<()>::new();
 
@@ -273,7 +273,7 @@ fn concurrent_spawns_with_fake_hardware() {
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(4_usize), nz!(2_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
 
         assert_concurrent_spawns(&pool, TASKS_PER_PRODUCER);
     });
@@ -284,7 +284,7 @@ fn spawn_and_await_panic_with_fake_hardware() {
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn(|| panic!("intentional panic"));
@@ -297,7 +297,7 @@ fn spawn_urgent_with_fake_hardware() {
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(3_usize), nz!(1_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let scheduler = pool.scheduler();
 
         let handle = scheduler.spawn_urgent(|| "urgent result");
@@ -310,7 +310,7 @@ fn nested_spawn_with_fake_hardware() {
     with_watchdog(|| {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
-        let pool = Pool::builder().hardware(hardware).build();
+        let pool = Pool::builder().hardware(hardware).build().unwrap();
         let scheduler = pool.scheduler();
 
         let outer_handle = scheduler.spawn({

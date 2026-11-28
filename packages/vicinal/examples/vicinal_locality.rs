@@ -23,13 +23,17 @@ fn main() -> Result<(), AppError> {
     println!("Spawning a task every 100ms. Press Ctrl+C to stop.");
     println!();
 
-    let pool = Pool::new();
+    let hardware = SystemHardware::current().clone();
+    let pool = Pool::builder().hardware(hardware.clone()).build()?;
     let scheduler = pool.scheduler();
 
     loop {
-        let handle = scheduler.spawn(|| {
-            let processor_id = SystemHardware::current().current_processor_id();
-            println!("Task executed on processor {processor_id}");
+        let handle = scheduler.spawn({
+            let hardware = hardware.clone();
+            move || {
+                let processor_id = hardware.current_processor_id();
+                println!("Task executed on processor {processor_id}");
+            }
         });
 
         block_on(handle).map_err(TaskError::into_diagnostic)?;

@@ -42,4 +42,33 @@ exclude_re = [
     # shifting the high nibble, so OR and XOR produce the same byte for every input.
     # Keep the AND replacement and all parsing/validation mutations enabled.
     'packages/crp_workspace/src/manifest\.rs:\d+:\d+: replace \| with \^ in decode_git_reference',
+
+    # Without failure publication, accepted tasks in another region never resolve.
+    'packages/vicinal/src/pool_runtime\.rs:\d+:\d+: replace PoolRuntime::fail with \(\)$',
+
+    # Shutdown must drop a queued capture before waiting for the worker it releases.
+    # Skipping either drain strands that initializer; keep non-no-op mutations enabled.
+    'packages/vicinal/src/pool_runtime\.rs:\d+:\d+: replace (PoolRuntime::drain_groups|drain_queue) with \(\)$',
+
+    # Reporting shutdown before startup prevents eager workers from reaching their
+    # parked-worker hooks, stranding fixtures such as eager spawn refusal.
+    'packages/vicinal/src/pool_runtime\.rs:\d+:\d+: replace PoolRuntime::is_shutdown -> bool with true$',
+
+    # Empty worker entries never reach participation or the worker loop. Startup and task
+    # waiters then have no worker to release them, and the mutation watchdog is disabled.
+    'packages/vicinal/src/worker\.rs:\d+:\d+: replace Worker::(run|run_with) with \(\)$',
+    'packages/vicinal/src/worker_group\.rs:\d+:\d+: replace WorkerGroup::(execute_worker|run_worker) with \(\)$',
+
+    # Initialization must complete the binding target before entering the worker loop:
+    # teardown cannot start while the builder still waits. Abandoning a reservation must
+    # complete the same target even though no worker will start.
+    'packages/vicinal/src/worker\.rs:\d+:\d+: replace BindingReservation::(initialize|complete) with \(\)$',
+    'packages/vicinal/src/worker\.rs:\d+:\d+: replace <impl Drop for BindingReservation>::drop with \(\)$',
+
+    # Without the exit accounting, teardown waits for participation that was never released.
+    "packages/vicinal/src/worker_group\\.rs:\\d+:\\d+: replace <impl Drop for WorkerExitGuard<'_>>::drop with \\(\\)$",
+
+    # Fixtures wait for signals sent by the initializer; omitting it leaves them blocked
+    # with the mutation watchdog disabled. Keep other replacements enabled.
+    'packages/vicinal/src/pool_runtime\.rs:\d+:\d+: replace PoolRuntime::thread_init -> Option<Arc<ThreadInit>> with None$',
 ]

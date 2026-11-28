@@ -13,8 +13,9 @@ the calling thread's current logical processor; this is the task's submitting pr
 Tasks execute synchronously on that processor by default.
 A regional policy shares a fixed worker count across submitting processors in each memory
 region. A system policy shares a fixed count across all submitting processors, regardless
-of region. Workers start on first use of a destination by default and persist until shutdown.
-Opt into eager initialization to prepare selected destinations during pool construction.
+of region. The pool coordinates worker participation and the queues shared by schedulers.
+Built-in policies start workers on first use of a destination by default. Opt into eager
+initialization to prepare selected destinations during pool construction.
 
 ## Example
 
@@ -24,7 +25,8 @@ The example uses `ohno::AppError`; enable the `app-err` feature on `ohno`.
 use many_cpus::SystemHardware;
 use new_zealand::nz;
 use ohno::AppError;
-use vicinal::{Pool, TaskError, WorkerPolicy};
+use vicinal::policies::{WorkersPerMemoryRegion, WorkersPerSystem};
+use vicinal::{Pool, TaskError};
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -56,9 +58,9 @@ async fn memory_region_local() -> Result<(), AppError> {
     let processors = SystemHardware::current().processors();
     // Illustrative concurrency; choose the count for your blocking workload.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::per_memory_region(nz!(2_u32)))
+        .worker_policy(WorkersPerMemoryRegion::new(nz!(2_u32)))
         .eager(processors)
-        .build();
+        .build()?;
 
     assert_eq!(
         pool.scheduler()
@@ -74,8 +76,8 @@ async fn memory_region_local() -> Result<(), AppError> {
 async fn system_wide() -> Result<(), AppError> {
     // Illustrative concurrency shared across every submitting processor in this pool.
     let pool = Pool::builder()
-        .worker_policy(WorkerPolicy::per_system(nz!(2_u32)))
-        .build();
+        .worker_policy(WorkersPerSystem::new(nz!(2_u32)))
+        .build()?;
 
     assert_eq!(
         pool.scheduler()
@@ -97,22 +99,45 @@ Membership is per pool and cumulative.
 Workers refresh affinity at task boundaries, without preempting running tasks. They may
 move within their permitted set even during one task. Regional workers never steal work from
 other regions; system workers share all regions' work.
-Configure concurrency with `WorkerPolicy`; counts may exceed processor counts for blocking work.
+Configure fixed worker counts with `WorkersPerProcessor`, `WorkersPerMemoryRegion` or
+`WorkersPerSystem`; counts may exceed processor counts for blocking work. The built-in
+policy types live in `vicinal::policies`. Implement `vicinal::worker_policy::WorkerPolicy`
+and use the same builder setter for custom group selection or thread-pinning strategies.
 Each pool counts workers independently, while scheduler clones share their pool's workers.
 Regions describe processor locality, not the task's allocations or data.
 
+## Custom worker growth
+
+The `vicinal::worker_policy` module contains the types used to implement a policy.
+`WorkerPolicy::bind()` consumes the configuration and returns a `BoundPolicy` shared by the
+pool's schedulers. The bound policy can retain a `WorkerGroup` handle and use `queue_len()`
+when deciding whether to create another worker. The standalone
+[`vicinal_growing_pool`](examples/vicinal_growing_pool.rs) example starts one worker and
+tries to add another whenever a later submission observes queued work. If growth fails,
+existing workers can drain the backlog. It has no maximum worker count and never shrinks.
+Policy selection happens before admission, so `queue_len()` reports existing backlog rather
+than reserving capacity for the current task.
+
 ## Eager initialization
 
-`PoolBuilder::eager(processors)` takes ownership of a nonempty `ProcessorSet` from the pool's
-hardware instance. The setter starts no workers. `build()` starts the configured workers for
-every selected processor, represented region or the system, according to the worker policy.
-It waits for initial affinity and every configured `thread_init` callback to complete.
-Initialization effects are visible when construction returns, and the calling thread's affinity
-remains unchanged. Startup failure stops and joins created workers before construction panics.
+[`PoolBuilder::eager(processors)`] takes ownership of a nonempty `ProcessorSet` from the pool's
+hardware instance without starting any workers. [`PoolBuilder::build()`] binds the policy with
+that selection. Built-in policies start the configured workers for the selected destinations.
+The calling thread's affinity remains unchanged.
+Custom policies create their own threads and may ignore the selection. They must run or drop
+each [`Worker`] reserved during `bind()`, without waiting for `build()` to return. Before
+returning a pool, `build()` waits for these workers to finish initialization or for the policy
+to cancel their reservations by dropping them unrun, regardless of the selection. On startup
+failure, `build()` stops the pool and waits for participating workers before returning a
+`BuildError`. See [Shutdown](#shutdown) for the limits of that wait.
+
+[`PoolBuilder::eager(processors)`]: https://docs.rs/vicinal/latest/vicinal/struct.PoolBuilder.html#method.eager
+[`PoolBuilder::build()`]: https://docs.rs/vicinal/latest/vicinal/struct.PoolBuilder.html#method.build
+[`Worker`]: https://docs.rs/vicinal/latest/vicinal/worker_policy/struct.Worker.html
 
 Callbacks run once per worker, may overlap, and must preserve affinity. They must not wait for
-same-pool work, shut down their pool or depend on eager construction returning. In particular,
-an eager initializer cannot depend on the caller publishing the pool's scheduler after `build()`.
+same-pool work or shut down their pool. Initializers for binding-time workers must not depend
+on `build()` returning, including to publish the pool's scheduler.
 
 The selection is initial membership, not a permanent limit. Later submissions from other eligible
 processors still create missing destinations or expand shared affinity. Choose a processor set
@@ -123,7 +148,8 @@ subsets. Eager construction prepares workers, not task-specific allocations or a
 
 - **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
   short-lived so that the pool is often idle.
-- Shared workers stay within eagerly selected processors and accepted submitters. Using one stable,
+- Shared workers stay within eagerly selected processors and submitters included during policy
+  selection. Using one stable,
   quota-appropriate processor set for selection and submissions keeps workers within it.
   Using new processors grows the cumulative set. Quotas do not adjust worker counts or remove processors. Fractional
   quotas and other process work can still cause throttling: operating-system delays after
@@ -152,11 +178,14 @@ Dropping a handle does not cancel the task.
 
 ## Shutdown
 
-Dropping the pool cancels queued tasks and waits for executing tasks and workers.
+Dropping the pool cancels queued tasks and waits for every participating worker to leave
+`Worker::run()`. It does not join policy-owned operating-system threads after that point.
 Cancelled joined tasks retain their captures for recovery until the handle, error or recovered
 body is dropped or the body executes. Fire-and-forget cancellation releases captures.
 Retained schedulers return cancelled join handles for submissions after clean shutdown.
 Await required work before dropping the pool.
+Do not release the last pool owner from one of its worker callbacks; capture a scheduler
+for follow-up submissions and retain the pool owner until required work finishes.
 
 Infrastructure failures, including worker startup and affinity refresh, log the failure
 and stop the entire pool. Queued joined tasks are cancelled recoverably; queued fire-and-forget

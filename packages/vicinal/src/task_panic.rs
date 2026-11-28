@@ -1,14 +1,85 @@
 //! Panic payload ownership and bounded disposal during task and pool cleanup.
 
 use std::any::Any;
-use std::mem;
-use std::panic::{self, AssertUnwindSafe};
+use std::mem::replace;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use tracing::error;
 
 use crate::TASK_LOG_TARGET;
 
-/// Keeps discarded task panics isolated from infrastructure, on either result-channel endpoint.
+/// Defers panic-payload destruction until the boundary finishes its recovery work.
+///
+/// Failure handling can itself panic, for example while dropping task captures or formatting
+/// diagnostics. Those new failures must supersede the earlier failure, but dropping the captured
+/// payloads can also panic. Keeping every payload alive lets the boundary first stop admission,
+/// drain queues and wait for participating workers. Only then does it release superseded payloads
+/// and resume the latest failure. This prevents destructor panics from interrupting terminal-state
+/// cleanup while preserving each caught panic until its destruction is safe.
+#[derive(Debug)]
+pub(crate) struct PanicFailures {
+    earlier: Vec<Box<dyn Any + Send>>,
+    latest: Box<dyn Any + Send>,
+}
+
+impl PanicFailures {
+    pub(crate) fn new(payload: Box<dyn Any + Send>) -> Self {
+        Self {
+            earlier: Vec::new(),
+            latest: payload,
+        }
+    }
+
+    pub(crate) fn latest(&self) -> &Box<dyn Any + Send> {
+        &self.latest
+    }
+
+    /// Appends later failures without running any payload destructors.
+    pub(crate) fn append(&mut self, mut later: Self) {
+        self.push(later.latest);
+        self.earlier.append(&mut later.earlier);
+    }
+
+    /// Records failure at a boundary where cleanup may also succeed.
+    pub(crate) fn accumulate(target: &mut Option<Self>, failures: Self) {
+        if let Some(retained) = target {
+            retained.append(failures);
+        } else {
+            *target = Some(failures);
+        }
+    }
+
+    /// Lets diagnostics fail independently of the remaining cleanup work.
+    pub(crate) fn record_diagnostic(&mut self, diagnostic: impl FnOnce()) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(diagnostic)) {
+            self.push(payload);
+        }
+    }
+
+    /// Releases superseded payloads once the owning boundary has completed cleanup.
+    pub(crate) fn into_latest(self) -> Box<dyn Any + Send> {
+        for payload in self.earlier {
+            drop(payload);
+        }
+        self.latest
+    }
+
+    /// Propagates after cleanup, allowing a payload destructor panic to take precedence.
+    pub(crate) fn resume(self) -> ! {
+        resume_unwind(self.into_latest());
+    }
+
+    fn push(&mut self, payload: Box<dyn Any + Send>) {
+        self.earlier.push(replace(&mut self.latest, payload));
+    }
+}
+
+/// Owns a task-panic payload without exposing it to infrastructure-failure cleanup.
+///
+/// Either endpoint of the task result channel may be dropped without inspecting the panic.
+/// `TaskPanic` keeps responsibility for that payload in one place: extracting the payload transfers
+/// it to the caller, while ordinary destruction routes it through the protected panic-disposal
+/// boundary. A task panic therefore does not poison the pool merely because the caller discards it.
 #[derive(Debug)]
 pub(crate) struct TaskPanic {
     payload: Option<Box<dyn Any + Send>>,
@@ -22,7 +93,9 @@ impl TaskPanic {
     }
 
     pub(crate) fn into_payload(mut self) -> Box<dyn Any + Send> {
-        self.payload.take().expect("a task panic is consumed once")
+        self.payload
+            .take()
+            .expect("the consuming method takes ownership before Drop can access the payload")
     }
 }
 
@@ -45,29 +118,33 @@ pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
     }
 }
 
-/// Disposes of a suppressed failure without allowing its destructor to interrupt pool cleanup.
+/// Drops a captured panic and re-raises a destructor panic after reporting it.
 pub(crate) fn discard_panic(payload: Box<dyn Any + Send>) {
-    if let Err(replacement) = panic::catch_unwind(AssertUnwindSafe(|| drop(payload))) {
-        // A replacement can itself have a panicking destructor. Retain it rather than
-        // recursively disposing of arbitrary user payloads; see docs/implementation.md.
-        mem::forget(replacement);
-        error!(
-            target: TASK_LOG_TARGET,
-            "panic payload destruction failed; replacement payload retained"
-        );
+    if let Err(replacement) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+        let mut failures = PanicFailures::new(replacement);
+        failures.record_diagnostic(|| {
+            error!(
+                target: TASK_LOG_TARGET,
+                "panic payload destruction failed"
+            );
+        });
+        failures.resume();
     }
 }
 
-/// Releases task captures outside an active unwind while preserving an earlier failure.
-pub(crate) fn discard_task_after_failure<T>(task: T) {
-    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| drop(task))) {
+/// Drops task state after a failure and returns any incidental cleanup panic.
+pub(crate) fn discard_task_after_failure<T>(task: T) -> Option<PanicFailures> {
+    let payload = catch_unwind(AssertUnwindSafe(|| drop(task))).err()?;
+    let message = extract_panic_message(&payload);
+    let mut failures = PanicFailures::new(payload);
+    failures.record_diagnostic(|| {
         error!(
             target: TASK_LOG_TARGET,
-            message = extract_panic_message(&payload),
+            message,
             "task cleanup failed while handling an infrastructure failure"
         );
-        discard_panic(payload);
-    }
+    });
+    Some(failures)
 }
 
 #[cfg(test)]

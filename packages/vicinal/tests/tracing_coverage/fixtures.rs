@@ -5,16 +5,18 @@ use std::panic;
 use many_cpus::SystemHardware;
 use many_cpus::fake::HardwareBuilder;
 use new_zealand::nz;
-use vicinal::{Pool, WorkerPolicy};
+use vicinal::Pool;
+use vicinal::worker_policy::WorkerPolicy;
 
 /// Provides deterministic simulated destinations for locality scenarios without real OS affinity.
-pub(crate) fn pool(policy: WorkerPolicy, name: &str) -> Pool {
+pub(crate) fn pool(policy: impl WorkerPolicy, name: &str) -> Pool {
     let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
     Pool::builder()
         .hardware(hardware)
         .worker_policy(policy)
         .name(name)
         .build()
+        .unwrap()
 }
 
 /// Fails disposal of a user-owned result or capture, outside the task's panic boundary.
@@ -32,18 +34,7 @@ pub(crate) struct PanickingPayload;
 
 impl Drop for PanickingPayload {
     fn drop(&mut self) {
-        // The replacement is zero-sized, so the pool's deliberate retention leaks no storage.
+        // Reusing a zero-sized replacement keeps recursive destructor failure deterministic.
         panic::resume_unwind(Box::new(Self));
-    }
-}
-
-/// Releases a running worker when shutdown abandons a queued capture.
-pub(crate) struct OnDrop<F: FnOnce()>(pub(crate) Option<F>);
-
-impl<F: FnOnce()> Drop for OnDrop<F> {
-    fn drop(&mut self) {
-        if let Some(action) = self.0.take() {
-            action();
-        }
     }
 }

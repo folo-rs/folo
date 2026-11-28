@@ -1,0 +1,79 @@
+use std::any::type_name;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::num::NonZero;
+
+use crate::BuiltInWorkerPolicy;
+use crate::worker_policy::{BindContext, BindError, BoundPolicy, WorkerPolicy};
+
+/// Routes every submission to a fixed worker set for its submitting processor.
+///
+/// The policy creates one group for each active submitting processor. Every group starts the
+/// configured number of workers once and keeps them on that processor until the pool shuts down.
+#[derive(Clone)]
+pub struct WorkersPerProcessor {
+    policy: BuiltInWorkerPolicy,
+}
+
+impl WorkersPerProcessor {
+    /// Sets the number of workers created for each processor that submits work.
+    #[must_use]
+    #[inline]
+    pub fn new(count: NonZero<u32>) -> Self {
+        Self {
+            policy: BuiltInWorkerPolicy::per_processor(count),
+        }
+    }
+}
+
+impl WorkerPolicy for WorkersPerProcessor {
+    #[inline]
+    fn bind(self, context: BindContext<'_>) -> Result<impl BoundPolicy, BindError> {
+        self.policy.bind(context)
+    }
+}
+
+impl Debug for WorkersPerProcessor {
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct(type_name::<Self>())
+            .field("workers", &self.policy.worker_count())
+            .finish()
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use futures::executor::block_on;
+    use many_cpus::SystemHardware;
+    use many_cpus::fake::HardwareBuilder;
+    use new_zealand::nz;
+    use static_assertions::assert_impl_all;
+    use testing::with_watchdog;
+
+    use super::*;
+    use crate::Pool;
+
+    assert_impl_all!(WorkersPerProcessor: Send, Sync, UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn executes_tasks() {
+        with_watchdog(|| {
+            let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+            let pool = Pool::builder()
+                .hardware(hardware)
+                .worker_policy(WorkersPerProcessor::new(nz!(1)))
+                .build()
+                .unwrap();
+
+            assert_eq!(block_on(pool.scheduler().spawn(|| 42)).unwrap(), 42);
+        });
+    }
+
+    #[test]
+    fn formats_policy() {
+        _ = format!("{:?}", WorkersPerProcessor::new(nz!(1)));
+    }
+}

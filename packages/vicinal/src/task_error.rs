@@ -194,6 +194,8 @@ struct TaskPanicked;
 mod tests {
     use std::cell::Cell;
     use std::error::Error;
+    use std::mem::forget;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{ptr, thread};
@@ -261,9 +263,13 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_conversion_contains_panicking_payload_disposal() {
-        let diagnostic = TaskError::<()>::panicked(Box::new(PanickingPayload)).into_diagnostic();
-        assert!(diagnostic.source().unwrap().is::<TaskPanicked>());
+    fn diagnostic_conversion_propagates_payload_destructor_panic() {
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            TaskError::<()>::panicked(Box::new(PanickingPayload)).into_diagnostic()
+        }))
+        .unwrap_err();
+        assert!(payload.is::<()>());
+        forget(payload);
     }
 
     #[test]
@@ -312,8 +318,13 @@ mod tests {
     }
 
     #[test]
-    fn discarded_panic_contains_payload_destructor_failure() {
-        drop(TaskError::<()>::panicked(Box::new(PanickingPayload)));
+    fn discarded_panic_propagates_payload_destructor_failure() {
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            drop(TaskError::<()>::panicked(Box::new(PanickingPayload)));
+        }))
+        .unwrap_err();
+        assert!(payload.is::<()>());
+        forget(payload);
     }
 
     #[test]
