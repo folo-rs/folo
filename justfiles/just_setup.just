@@ -41,6 +41,7 @@ install-tools:
         "cargo-llvm-cov@$env:CARGO_LLVM_COV_VERSION"
         "cargo-machete@$env:CARGO_MACHETE_VERSION"
         "cargo-nextest@$env:CARGO_NEXTEST_VERSION"
+        "cargo-public-api@$env:CARGO_PUBLIC_API_VERSION"
         "cargo-semver-checks@$env:CARGO_SEMVER_CHECKS_VERSION"
         "cargo-udeps@$env:CARGO_UDEPS_VERSION"
     )

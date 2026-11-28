@@ -27,6 +27,8 @@ Describe 'Non-Cargo change domains' {
     It 'selects the owner and its consumers for <Path>' -ForEach @(
         @{ Path = 'scripts/book/BookSite.psm1'; Domains = @('book'); Analysis = $true; Workflows = $false },
         @{ Path = 'scripts/book/BookSite.Tests.ps1'; Domains = @('book'); Analysis = $true; Workflows = $false },
+        @{ Path = 'scripts/workflow/PublicApiComment.psm1'; Domains = @('build', 'scheduled'); Analysis = $true; Workflows = $false },
+        @{ Path = 'scripts/build/PublicApiComment.Tests.ps1'; Domains = @('build', 'scheduled'); Analysis = $true; Workflows = $false },
         @{ Path = 'scripts/bench-history/fixtures/result.json'; Domains = @('bench-history'); Analysis = $false; Workflows = $false },
         @{ Path = 'scripts/build/Miri.psm1'; Domains = @('build', 'scheduled'); Analysis = $true; Workflows = $false },
         @{ Path = 'scripts/build/CargoExecutable.psm1'; Domains = @('build', 'release', 'scheduled'); Analysis = $true; Workflows = $false },

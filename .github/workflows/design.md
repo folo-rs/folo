@@ -130,6 +130,34 @@ prerequisites and evidence capture. Clippy stands in for a bare `cargo check` he
 prerequisite to linting it, so a standalone `check` job would only re-prove what a green
 Clippy already guarantees.
 
+## Public API diff publication
+
+Public API review uses a sticky PR comment generated after every head update. The
+unprivileged `pull_request` producer may compile and inspect PR source but receives no
+write permission. It publishes a bounded, structured JSON artifact and never invokes
+GitHub comment APIs.
+
+A separate `workflow_run` workflow is the only comment writer. GitHub runs it from the
+trusted default branch, not from the completed run's head. Before writing, its PowerShell
+publisher resolves the unique open PR from the completed run's head repository, branch
+and SHA, which also covers fork runs whose `workflow_run.pull_requests` array is empty.
+It validates the artifact schema and workflow identity, verifies the live PR still has
+the completed run's head SHA, and renders only validated fields and tool output. A hidden
+marker at the start of a `github-actions[bot]` comment identifies publisher ownership;
+user-authored marker copies are ignored, while duplicate publisher ownership fails
+visibly. Older runs cannot replace results for a newer head, and ambiguous writes are
+reconciled by reading the owned comment back instead of blindly retrying.
+The publisher uses non-cancelling `queue: max` concurrency so newer runs preserve an
+already-pending publication instead of replacing it. Serialized stale runs can still
+fail their live-head check, but the pending report for the current head remains queued.
+
+Producer failure or cancellation leaves a useful failure notice for the affected head.
+A valid artifact from an unsuccessful run retains its available diff but qualifies it as
+non-authoritative. A successful producer that omits or invalidates its artifact fails the
+publisher after posting the contract diagnostic, keeping the trust boundary visible in
+Actions checks. Oversized diffs link to the complete workflow artifact and retain bounded
+changed/incomplete package counts instead of exceeding GitHub's comment-body limit.
+
 ## Selective validation
 
 Package-scoped jobs consume Cargo dependency impact, so a one-package PR does not rebuild

@@ -1,0 +1,68 @@
+name: Publish public API diff
+
+on:
+  workflow_run:
+    workflows:
+      - Public API diff
+    types:
+      - completed
+
+concurrency:
+  # Retain every completed-producer notification in arrival order. GitHub replaces an
+  # existing pending run without `queue: max`, which can discard the live head's report.
+  group: public-api-diff-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  publish:
+    # workflow_run executes trusted default-branch code. It only consumes an untrusted,
+    # structured artifact from a read-only pull_request run.
+    # Ref: design.md#public-api-diff-publication.
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout trusted publisher code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Download producer artifact
+        id: artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: public-api-diff-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ${{ runner.temp }}/public-api-diff
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Reconcile rolling PR comment
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_API_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          PUBLIC_API_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          PUBLIC_API_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PUBLIC_API_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          ./scripts/workflow/PublishPublicApiComment.ps1 `
+            -ArtifactPath "${{ runner.temp }}/public-api-diff/public-api-diff.json" `
+            -Repository $env:GITHUB_REPOSITORY `
+            -HeadRepository $env:PUBLIC_API_HEAD_REPOSITORY `
+            -HeadBranch $env:PUBLIC_API_HEAD_BRANCH `
+            -RunId ${{ github.event.workflow_run.id }} `
+            -RunAttempt ${{ github.event.workflow_run.run_attempt }} `
+            -HeadSha $env:PUBLIC_API_HEAD_SHA `
+            -Conclusion $env:PUBLIC_API_CONCLUSION

@@ -102,6 +102,10 @@ function Get-ValidationPlan {
             if ($path -ceq 'scripts/workflow/ArtifactVisibility.psm1') {
                 $null = $domains.Add('bench-history')
                 Write-Verbose "'$path' owns benchmark artifact handoff behavior; selecting that domain's tests."
+            } elseif ($path -cmatch '^scripts/workflow/') {
+                $domains.Add('build') | Out-Null
+                Write-Verbose "'$path' owns workflow publication behavior; selecting build helper tests."
+                continue
             } elseif ($path -cmatch '^scripts/([^/]+)/' -and $Matches[1] -cin $script:ScriptDomains) {
                 $null = $domains.Add($Matches[1])
                 Write-Verbose "'$path' belongs to script domain '$($Matches[1])'; selecting that domain's tests."
