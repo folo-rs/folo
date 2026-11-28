@@ -154,6 +154,8 @@ function Invoke-CargoDelta {
     param(
         [string] $ConfigPath = (Resolve-Path 'delta.toml').Path,
         [switch] $SkipFetch,
+        # Public API reporting must retain names removed at the current revision to show removals.
+        [switch] $IncludeRemovedPackages,
         # Revision whose tree anchors the Git comparison. Local runs and pull requests default
         # to the release branch; callers may pin another comparison commit explicitly.
         [string] $BaselineRevision = 'origin/main'
@@ -250,6 +252,7 @@ function Invoke-CargoDelta {
         # Select-ExistingPackage's -Affected is Mandatory (rejects $null). Without this a PR that
         # touches no crate - docs, workflows or scripts only - would fail the delta job outright.
         $affected = @(Read-DeltaAffectedPackage -DeltaJson $deltaJson)
+        if ($IncludeRemovedPackages) { return $affected }
         return Select-ExistingPackage -Affected $affected -WorkspacePackage (Get-WorkspacePackage)
     } finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue

@@ -7,6 +7,11 @@ For repository-specific action release coordination, see
 
 ## Creating GitHub pull requests
 
+Every submitted PR is expected to have a current sticky **Public API diff** comment
+generated from its merge base to its head. The comment is authoritative; do not copy
+API diffs into the PR description, where they can become stale. The automation explicitly
+reports when there are no public API changes.
+
 When creating PRs with `gh pr create`, do not pass the `--body` flag with an
 inline string because PowerShell mangles backticks and special characters.
 Instead, write the PR body to a temporary file and use `--body-file path/to/file.md`.

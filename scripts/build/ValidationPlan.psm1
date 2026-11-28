@@ -75,6 +75,10 @@ function Get-ValidationPlan {
             $workflows = $true
             Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint."
         }
+        if ($path -cin @('.github/workflows/public-api-diff.yml', '.github/workflows/public-api-diff-publish.yml')) {
+            $null = $domains.Add('build')
+            Write-Verbose "'$path' is part of public API comment publication; selecting producer/publisher contract tests."
+        }
         if ($path -cmatch '^infra/azure-bench-history-(prod|test)/' -or
             $path -cmatch '^packages/cargo-bench-history/src/azure_bundle/' -or
             $path -cmatch '^packages/cargo-bench-history/tests/fixtures/.+\.ps(m1|d1|1)$' -or

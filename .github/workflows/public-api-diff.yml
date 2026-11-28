@@ -1,0 +1,47 @@
+name: Public API diff
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      # The producer runs PR code with read-only authority; the publisher runs separately.
+      # Ref: design.md#public-api-diff-publication.
+      - name: Checkout frozen PR head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Generate public API report
+        shell: pwsh
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          ARTIFACT_PATH: ${{ runner.temp }}/public-api-diff/public-api-diff.json
+        run: |
+          ./scripts/workflow/GeneratePublicApiDiff.ps1 -Repository $env:REPOSITORY `
+            -PullRequest $env:PULL_REQUEST -BaseSha $env:BASE_SHA -HeadSha $env:HEAD_SHA `
+            -RunId $env:RUN_ID -RunAttempt $env:RUN_ATTEMPT -ArtifactPath $env:ARTIFACT_PATH
+
+      - name: Upload public API report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: public-api-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/public-api-diff/public-api-diff.json
+          if-no-files-found: warn

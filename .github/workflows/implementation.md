@@ -536,6 +536,23 @@ does not replace declared dependencies.
 
 ### Public API diff publication
 
+`public-api-diff.yml` checks out the immutable PR head with full history and uses the
+event base and head to compute the merge base. The existing Cargo delta analysis selects
+affected packages against that commit. Live Cargo metadata limits the report to publishable
+workspace libraries present at either comparison revision. A temporary delta configuration
+binds its Git change detection to the same commit as the baseline snapshot, independent of the
+default `origin/main` setting.
+The pinned nightly and `cargo-public-api` compare each selected package with simplified output
+and all features. A library target present at only one revision is represented against an empty
+API, preserving additions and removals. Its in-place commit checkouts require temporary output
+files outside the checkout. The producer continues after package errors,
+writes their reports and then fails the job. Setup and selection failures leave no report,
+which the publisher reports as an incomplete run.
+
+The PowerShell producer shares the publisher's failure-reporting boundary: it must record
+individual Rust tool failures without depending on compiling another Rust helper. Its pure
+selection and report-shaping functions accept test data without Git or Cargo.
+
 `public-api-diff-publish.yml` listens only for completed `Public API diff` workflow
 runs. Its job accepts only pull-request runs, checks out
 `github.event.repository.default_branch` and requests Actions-read plus Pull-requests-write.
@@ -546,17 +563,20 @@ It downloads the run's `public-api-diff-<run>-<attempt>` artifact into the runne
 directory and never checks out or executes the producer head.
 
 `scripts/workflow/PublicApiComment.psm1` owns the version-one artifact contract:
-repository, PR number, base/head SHAs, workflow run/attempt and one package list entry
+repository, PR number, base, merge-base and head SHAs, workflow run/attempt and one package list entry
 with `name`, `status` (`changed`, `unchanged` or `error`) and bounded `output`. The
 publisher does not depend on `workflow_run.pull_requests`, which may be empty for forks.
 It resolves the one open PR whose live head repository and SHA match the completed run.
 The module compares artifact identity fields with immutable workflow inputs and rejects
-malformed text, duplicate package names, stale heads and duplicate publisher-owned marker
-comments. A marker qualifies as owned only when the body begins with it and
+malformed text, duplicate package names, stale heads or effective merge bases and duplicate
+publisher-owned marker comments. A base-tip change does not invalidate a report when its merge
+base is unchanged. A marker qualifies as owned only when the body begins with it and
 `github-actions[bot]` authored the comment. Tool output is rendered through a code fence
 longer than any backtick sequence it contains. Runs larger than the comment limit retain
 bounded scope counts and links to the authoritative artifact; unsuccessful producers keep
-any valid evidence but qualify it as non-authoritative.
+any valid evidence but qualify it as non-authoritative. The generated run link establishes
+report order so an older run cannot replace a newer result. When a producer has no verifiable
+comparison, the publisher preserves any newer or unidentifiable owned result.
 
 `PublishPublicApiComment.ps1` is the thin workflow entry point. GitHub CLI owns the
 paginated API reads and single create/update write; a failed ambiguous write is

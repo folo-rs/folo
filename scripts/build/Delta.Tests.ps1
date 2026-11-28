@@ -100,17 +100,22 @@ Describe 'Invoke-CargoDelta baseline revision validation' {
 
 Describe 'Invoke-CargoDelta worktree cleanup' {
     It 'handles <Scenario>' -TestCases @(
-        @{ Scenario = 'success'; FailureStage = ''; CleanupFails = $false }
+        @{ Scenario = 'success'; FailureStage = ''; CleanupFails = $false; IncludeRemoved = $false }
+        @{ Scenario = 'success retaining removed packages'; FailureStage = ''; CleanupFails = $false; IncludeRemoved = $true }
         @{ Scenario = 'current analysis failure'; FailureStage = 'current'; CleanupFails = $false }
         @{ Scenario = 'creation failure'; FailureStage = 'creation'; CleanupFails = $false }
         @{ Scenario = 'baseline analysis failure'; FailureStage = 'baseline'; CleanupFails = $false }
         @{ Scenario = 'analysis and cleanup failure'; FailureStage = 'baseline'; CleanupFails = $true }
         @{ Scenario = 'cleanup-only failure'; FailureStage = ''; CleanupFails = $true }
     ) {
-        param($FailureStage, $CleanupFails)
+        param($FailureStage, $CleanupFails, $IncludeRemoved)
 
-        InModuleScope Delta -Parameters @{ FailureStage = $FailureStage; CleanupFails = $CleanupFails } {
-            param($FailureStage, $CleanupFails)
+        InModuleScope Delta -Parameters @{
+            FailureStage = $FailureStage
+            CleanupFails = $CleanupFails
+            IncludeRemoved = $IncludeRemoved
+        } {
+            param($FailureStage, $CleanupFails, $IncludeRemoved)
 
             $state = @{ AnalysisCount = 0; Worktree = $null }
             $operationException = [InvalidOperationException]::new('Operation canary')
@@ -152,7 +157,8 @@ Describe 'Invoke-CargoDelta worktree cleanup' {
             $failure = $null
             $result = @()
             try {
-                $result = @(Invoke-CargoDelta -ConfigPath 'test-config' -SkipFetch)
+                $result = @(Invoke-CargoDelta -ConfigPath 'test-config' -SkipFetch `
+                    -IncludeRemovedPackages:$IncludeRemoved)
             } catch {
                 $failure = $_
             }
@@ -170,7 +176,8 @@ Describe 'Invoke-CargoDelta worktree cleanup' {
                 [object]::ReferenceEquals($failure.Exception, $cleanupException) | Should -BeTrue
             } else {
                 $failure | Should -BeNullOrEmpty
-                $result | Should -Be @('present')
+                if ($IncludeRemoved) { $result | Should -Be @('present', 'removed') }
+                else { $result | Should -Be @('present') }
             }
 
             (Get-Location).Path | Should -Be $originalLocation
